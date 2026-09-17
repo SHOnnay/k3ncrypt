@@ -38,8 +38,8 @@ export const JoinHashView: React.FC<JoinHashViewProps> = ({
     <div className="join-hash-view">
       <Input
         id="channel-hash"
-        label="Invitation Link"
-        placeholder="Paste the invite link you were sent..."
+        label="Private invitation"
+        placeholder="Paste the full invitation link"
         value={inviteInput}
         onChange={onInviteInputChange}
       />
@@ -49,7 +49,7 @@ export const JoinHashView: React.FC<JoinHashViewProps> = ({
           Back
         </Button>
         <Button id="join-btn" variant="primary" onClick={onJoin} disabled={!inviteInput.trim()}>
-          Connect Securely
+          Join conversation
         </Button>
       </div>
     </div>

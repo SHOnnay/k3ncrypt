@@ -72,12 +72,17 @@ function uninstallWebRtcGlobals() {
     delete (globalThis as any).navigator;
 }
 
-async function createPeer(subs: Map<callEvents, Set<Function>> = new Map()): Promise<{ peer: Peer; pc: FakeRTCPeerConnection; sendSignal: jest.Mock }> {
+async function createPeer(
+    subs: Map<callEvents, Set<Function>> = new Map(),
+    rtcConfig?: RTCConfiguration,
+): Promise<{ peer: Peer; pc: FakeRTCPeerConnection; sendSignal: jest.Mock }> {
     const sendSignal = jest.fn().mockResolvedValue(undefined);
     const peer = new Peer(
         () => subs,
         sendSignal,
         new Logger('test'),
+        undefined,
+        rtcConfig,
     );
     // Flush the local-stream-acquisition promise kicked off by the constructor.
     await Promise.resolve();
@@ -110,6 +115,20 @@ describe('Peer', () => {
     it('constructs the RTCPeerConnection without the legacy encodedInsertableStreams option', async () => {
         const { pc } = await createPeer();
         expect((pc.config as any).encodedInsertableStreams).toBeUndefined();
+    });
+
+    it('uses no external ICE servers unless they are explicitly configured', async () => {
+        const { pc } = await createPeer();
+        expect(pc.config).toEqual({ iceServers: [], iceTransportPolicy: 'all' });
+    });
+
+    it('passes explicit STUN/TURN and relay-only policy to RTCPeerConnection', async () => {
+        const config: RTCConfiguration = {
+            iceServers: [{ urls: 'turn:turn.example.test', username: 'user', credential: 'secret' }],
+            iceTransportPolicy: 'relay',
+        };
+        const { pc } = await createPeer(new Map(), config);
+        expect(pc.config).toEqual(config);
     });
 
     it('createAndSendOffer() creates + sets a local offer and sends it via the injected sendSignal', async () => {

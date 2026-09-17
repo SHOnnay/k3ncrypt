@@ -7,6 +7,7 @@ import { useChat } from '../../context/ChatContext';
 import { Button } from '../common/Button';
 import { CopyIcon, ShareIcon, PhoneIcon, TrashIcon } from '../common/icons';
 import './ChatHeader.css';
+import { debugError } from '../../utils/debug';
 
 interface ChatHeaderProps {
   onStartCall: () => void;
@@ -27,8 +28,8 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({ onStartCall, disableStar
     if ('share' in navigator) {
       navigator
         .share({
-          title: 'Chat E2EE',
-          text: 'Join my end-to-end encrypted chat',
+          title: 'K3ncrypt invitation',
+          text: 'Join my private conversation',
           url: window.location.href,
         })
         .catch(() => {
@@ -44,7 +45,7 @@ const handleDelete = async () => {
     await deleteChannel();
     window.location.hash = ''; // Clear URL hash
   } catch (err) {
-    console.error('Failed to delete channel:', err);
+    debugError('Conversation deletion failed', err);
     alert((err as any).message || 'Failed to delete channel');
   }
 };
@@ -54,8 +55,8 @@ const handleDelete = async () => {
       <div className="header-info">
         <div className="title-row">
           <span className={`status-dot ${isConnected ? 'connected' : ''}`}></span>
-          <h2 className="channel-title">Secure Channel</h2>
-          <span className="badge">E2EE</span>
+          <h2 className="channel-title">Private conversation</h2>
+          <span className="badge">Encrypted</span>
         </div>
         {channelHash && (
           <div className="hash-badge-container">
@@ -72,7 +73,7 @@ const handleDelete = async () => {
           </div>
         )}
         <p id="participant-info" className="participant-info">
-          {isConnected ? 'Peer joined. Communication is encrypted.' : 'Waiting for someone to join...'}
+          {isConnected ? 'Peer joined. Communication is encrypted.' : 'Waiting for your peer to join'}
         </p>
       </div>
       <div className="header-actions">

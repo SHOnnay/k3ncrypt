@@ -1,15 +1,15 @@
+import type { EncryptedEnvelope } from '../core/contracts';
+
 /**
  * Generic, application-agnostic encryption-strategy abstraction.
  *
  * The SDK never talks to a concrete cryptographic primitive (HKDF, AES-GCM,
- * `CryptoKey`, ...) directly. Instead, `ChatE2EE` owns two independent
- * `EncryptionStrategy` instances (one per logical channel it maintains
- * internally) and drives them itself — sealing/opening envelopes, JSON<->byte
- * serialization, routing, and replay/protocol validation all live in
- * `ChatE2EE`, never inside a strategy. A strategy itself knows nothing about
- * rooms, users, chat, signaling, WebRTC, application payloads, sessions, or
- * key exchange: it only ever sees an opaque `secret` string (already
- * domain-separated by whoever constructed it) and raw bytes to seal/open.
+ * `CryptoKey`, ...) directly. A `CryptoSession` adapter owns independent
+ * `EncryptionStrategy` instances for the logical channels and the
+ * application façade owns JSON serialization and routing. A strategy itself
+ * knows nothing about rooms, users, chat, signaling, WebRTC, payload shapes,
+ * sessions, or key exchange: it only sees an opaque, already
+ * domain-separated secret and raw bytes to seal/open.
  *
  * This keeps:
  *
@@ -38,14 +38,7 @@
  * initializing distinct strategy instances with distinct, already
  * domain-separated secrets.
  */
-export interface EncryptionEnvelope {
-    /** Protocol version, namespaced per-strategy (each strategy owns its own version sequence). */
-    version: number;
-    /** Stable id of the strategy that produced this envelope (see `EncryptionStrategy.id`). */
-    strategy: string;
-    /** Strategy-specific opaque payload. */
-    data: unknown;
-}
+export type EncryptionEnvelope = EncryptedEnvelope;
 
 /**
  * A pluggable, stateful encryption strategy.

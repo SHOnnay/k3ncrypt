@@ -24,7 +24,7 @@ type emitDataTypes = {
   // `sender`/`id`/`timestamp` are assigned by the server from the
   // authenticated socket, never taken from client input. `envelope` is
   // opaque — the server relays it verbatim.
-  [SOCKET_TOPIC.CHAT_MESSAGE]: { id: number, timestamp: number, sender: string, envelope: WireEnvelope },
+  [SOCKET_TOPIC.CHAT_MESSAGE]: { id: string, timestamp: number, sender: string, envelope: WireEnvelope },
   [SOCKET_TOPIC.LIMIT_REACHED]: null,
   [SOCKET_TOPIC.DELIVERED]: string | number,
   [SOCKET_TOPIC.ON_ALICE_DISCONNECTED]: null,
@@ -51,7 +51,6 @@ export const initSocket = (server) => {
       credentials: true
     }
   });
-  // eslint-disable-next-line no-console
   console.log("Websocket is up!");
 
   // add listeners

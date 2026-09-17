@@ -5,8 +5,9 @@
 import React, { useState, useRef } from 'react';
 import { useChat } from '../../context/ChatContext';
 import { Button } from '../common/Button';
-import { SendIcon } from '../common/icons';
+import { MicIcon, PaperclipIcon, SendIcon } from '../common/icons';
 import './ChatFooter.css';
+import { debugError } from '../../utils/debug';
 
 export const ChatFooter: React.FC = () => {
   const { sendMessage } = useChat();
@@ -23,7 +24,7 @@ export const ChatFooter: React.FC = () => {
       setMessage('');
       inputRef.current?.focus();
     } catch (err) {
-      console.error('Failed to send message:', err);
+      debugError('Message send failed', err);
     } finally {
       setIsSending(false);
     }
@@ -39,6 +40,7 @@ export const ChatFooter: React.FC = () => {
   return (
     <footer className="chat-footer glass">
       <div className="input-container">
+        <button className="composer-tool" type="button" disabled title="Encrypted attachments are coming later" aria-label="Attach a file (coming later)"><PaperclipIcon size={19} /></button>
         <input
           ref={inputRef}
           type="text"
@@ -50,6 +52,7 @@ export const ChatFooter: React.FC = () => {
           onKeyDown={handleKeyPress}
           disabled={isSending}
         />
+        <button className="composer-tool" type="button" disabled title="Voice messages are coming later" aria-label="Record a voice message (coming later)"><MicIcon size={19} /></button>
         <Button
           id="send-btn"
           variant="primary"

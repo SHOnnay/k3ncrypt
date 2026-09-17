@@ -22,6 +22,13 @@ async function openUser(browser: Browser): Promise<{ ctx: BrowserContext; page: 
   return { ctx, page };
 }
 
+async function createInvite(page: Page): Promise<string> {
+  await page.click('#show-create-hash');
+  const field = page.locator('#generated-hash-display');
+  await expect(field).toHaveValue(/#room=[^&]+&secret=[A-Za-z0-9_-]{40,}/);
+  return field.inputValue();
+}
+
 test.describe('Two-user invite-link join', () => {
   test('user B joins via the invitation link and both are connected', async ({ browser }) => {
     const userA = await openUser(browser);
@@ -30,9 +37,7 @@ test.describe('Two-user invite-link join', () => {
     // ── User A: create an invitation ─────────────────────────────────────────
     await test.step('User A creates an invitation link', async () => {
       await userA.page.click('#show-create-hash');
-      // Wait until the invite link field is populated (not still "Generating...")
-      await expect(userA.page.locator('#generated-hash-display')).not.toHaveValue('');
-      await expect(userA.page.locator('#generated-hash-display')).not.toHaveValue('Generating...');
+      await expect(userA.page.locator('#generated-hash-display')).toHaveValue(/#room=[^&]+&secret=[A-Za-z0-9_-]{40,}/);
     });
 
     const inviteLink = await userA.page.locator('#generated-hash-display').inputValue();
@@ -80,9 +85,7 @@ test.describe('Two-user invite-link join', () => {
     const userB = await openUser(browser);
 
     // User A creates and joins
-    await userA.page.click('#show-create-hash');
-    await expect(userA.page.locator('#generated-hash-display')).not.toHaveValue('Generating...');
-    const inviteLink = await userA.page.locator('#generated-hash-display').inputValue();
+    const inviteLink = await createInvite(userA.page);
     await userA.page.click('#join-btn');
     await expect(userA.page.locator('#chat-container')).toBeVisible();
 
@@ -101,9 +104,7 @@ test.describe('Two-user invite-link join', () => {
     const userB2 = await openUser(browser);
     const userA2 = await openUser(browser);
 
-    await userA2.page.click('#show-create-hash');
-    await expect(userA2.page.locator('#generated-hash-display')).not.toHaveValue('Generating...');
-    const inviteLink2 = await userA2.page.locator('#generated-hash-display').inputValue();
+    const inviteLink2 = await createInvite(userA2.page);
     await userA2.page.click('#join-btn');
     await expect(userA2.page.locator('#chat-container')).toBeVisible();
 
@@ -129,9 +130,7 @@ test.describe('Two-user invite-link join', () => {
     const userB = await openUser(browser);
 
     // Setup
-    await userA.page.click('#show-create-hash');
-    await expect(userA.page.locator('#generated-hash-display')).not.toHaveValue('Generating...');
-    const inviteLink = await userA.page.locator('#generated-hash-display').inputValue();
+    const inviteLink = await createInvite(userA.page);
     await userA.page.click('#join-btn');
     await expect(userA.page.locator('#chat-container')).toBeVisible();
 
@@ -166,9 +165,7 @@ test.describe('Two-user invite-link join', () => {
     const userA = await openUser(browser);
     const userB = await openUser(browser);
 
-    await userA.page.click('#show-create-hash');
-    await expect(userA.page.locator('#generated-hash-display')).not.toHaveValue('Generating...');
-    const inviteLink = await userA.page.locator('#generated-hash-display').inputValue();
+    const inviteLink = await createInvite(userA.page);
     await userA.page.click('#join-btn');
     await expect(userA.page.locator('#chat-container')).toBeVisible();
 

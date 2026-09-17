@@ -68,11 +68,19 @@ export type EncryptionConfig = {
     strategy?: string | EncryptionStrategyFactory,
 }
 
+export type WebRtcConfig = {
+    /** Explicit ICE infrastructure. Empty by default to avoid hidden third-party traffic. */
+    iceServers?: RTCIceServer[],
+    /** Use `relay` only with an explicitly configured TURN server. */
+    iceTransportPolicy?: RTCIceTransportPolicy,
+}
+
 export type configType = {
     settings: {
         disableLog: boolean,
     },
     baseUrl?: string,
     encryption?: EncryptionConfig,
+    webrtc?: WebRtcConfig,
 }
 export type SetConfigType = (config: Partial<configType>) => void;

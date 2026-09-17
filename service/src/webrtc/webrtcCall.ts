@@ -9,6 +9,7 @@ import {
     type PeerConnectionEventType,
     peerConnectionEvents,
 } from "./types";
+import type { WebRtcConfig } from '../public/types';
 
 export type { WebRtcSignalPayload, callEvents, PeerConnectionEventType };
 export { peerConnectionEvents };
@@ -48,6 +49,7 @@ export class WebRTCCall {
         sendSignal: SignalSender,
         private logger: Logger,
         private signalMetadataProvider?: () => SignalMetadata,
+        rtcConfig?: WebRtcConfig,
     ) {
         this.logger.log('Creating WebRTCCall');
         this.peer = new Peer(
@@ -55,6 +57,7 @@ export class WebRTCCall {
             sendSignal,
             this.logger.createChild('Peer'),
             this.signalMetadataProvider,
+            rtcConfig,
         );
     }
 

@@ -24,10 +24,10 @@ const connectDb = async (): Promise<void> => {
     await client.connect();
     db = client.db(dbName);
   } catch (err) {
-    console.error({ err })
     inMem = true;
-    // eslint-disable-next-line no-console
-    console.error("MONGO DB ERROR!", "Using in-memory DB - Not reliable!!");
+    if (process.env.NODE_ENV !== 'test') {
+      console.error("Database unavailable; using volatile in-memory room storage.");
+    }
   }
 };
 

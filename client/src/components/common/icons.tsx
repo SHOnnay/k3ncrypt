@@ -9,6 +9,20 @@ interface IconProps {
   className?: string;
 }
 
+const Icon: React.FC<IconProps & { children: React.ReactNode }> = ({ size = 24, className = '', children }) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" width={size} height={size} className={className} aria-hidden="true">
+    {children}
+  </svg>
+);
+
+export const PlusIcon: React.FC<IconProps> = (props) => <Icon {...props}><path d="M12 5v14M5 12h14" /></Icon>;
+export const SettingsIcon: React.FC<IconProps> = (props) => <Icon {...props}><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06-2.83 2.83-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21h-4v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06-2.83-2.83.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3v-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06 2.83-2.83.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3h4v.09A1.65 1.65 0 0 0 15 4.6a1.65 1.65 0 0 0 1.82-.33l.06-.06 2.83 2.83-.06.06A1.65 1.65 0 0 0 19.4 9c.12.6.65 1 1.26 1H21v4h-.34c-.61 0-1.14.4-1.26 1Z" /></Icon>;
+export const ShieldIcon: React.FC<IconProps> = (props) => <Icon {...props}><path d="M12 3 5 6v5c0 4.6 2.9 8 7 10 4.1-2 7-5.4 7-10V6l-7-3Z" /><path d="m9.5 12 1.7 1.7 3.6-4" /></Icon>;
+export const LockIcon: React.FC<IconProps> = (props) => <Icon {...props}><rect x="5" y="10" width="14" height="10" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></Icon>;
+export const CloseIcon: React.FC<IconProps> = (props) => <Icon {...props}><path d="m6 6 12 12M18 6 6 18" /></Icon>;
+export const PaperclipIcon: React.FC<IconProps> = (props) => <Icon {...props}><path d="m21.4 11.6-8.8 8.8a6 6 0 0 1-8.5-8.5l9.5-9.5a4 4 0 0 1 5.7 5.7l-9.5 9.5a2 2 0 0 1-2.8-2.8l8.8-8.8" /></Icon>;
+export const MicIcon: React.FC<IconProps> = (props) => <Icon {...props}><rect x="9" y="2" width="6" height="12" rx="3" /><path d="M5 10a7 7 0 0 0 14 0M12 17v4M8 21h8" /></Icon>;
+
 export const CopyIcon: React.FC<IconProps> = ({ size = 24, className = '' }) => (
   <svg
     viewBox="0 0 24 24"

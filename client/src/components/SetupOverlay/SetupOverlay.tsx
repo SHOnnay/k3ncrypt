@@ -9,6 +9,8 @@ import { InitialActions } from './InitialActions';
 import { CreateHashView } from './CreateHashView';
 import { JoinHashView } from './JoinHashView';
 import './SetupOverlay.css';
+import { ShieldIcon } from '../common/icons';
+import { debugError } from '../../utils/debug';
 
 interface SetupOverlayProps {
   onSetupComplete: (roomId: string, secret: string) => Promise<void>;
@@ -34,7 +36,7 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, isH
       setStatus('');
     } catch (err) {
       setStatus('Failed to generate invitation. Please try again.');
-      console.error('Invite generation error:', err);
+      debugError('Invitation generation failed', err);
     }
   }, [createNewChannel]);
 
@@ -76,7 +78,7 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, isH
       await onSetupComplete(invite.roomId, invite.secret);
     } catch (err) {
       setStatus('Failed to connect. Please try again.');
-      console.error('Setup error:', err);
+      debugError('Conversation setup failed', err);
     } finally {
       setIsLoading(false);
     }
@@ -99,7 +101,7 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, isH
       } else {
         setStatus('Failed to join channel. Please check the invitation link and try again.');
       }
-      console.error('Join error:', err);
+      debugError('Conversation join failed', err);
     } finally {
       setIsLoading(false);
     }
@@ -107,9 +109,11 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, isH
 
   return (
     <div className={`overlay ${isHidden ? 'hidden' : ''}`}>
-      <div className="overlay-content glass">
-        <h1>CHAT_E2EE</h1>
-        <p>// end-to-end encrypted · zero knowledge · ephemeral</p>
+      <div className="overlay-content">
+        <div className="welcome-icon" aria-hidden="true"><ShieldIcon size={25} /></div>
+        <span className="welcome-kicker">Private by design</span>
+        <h1>Welcome to K3ncrypt</h1>
+        <p>Start an encrypted conversation or use an invitation from someone you trust.</p>
 
         {view === 'initial' && (
           <InitialActions
@@ -137,9 +141,9 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, isH
         )}
 
         {view === 'deleted' && (
-          <div style={{ textAlign: 'center', margin: '2rem 0' }}>
-            <h2 style={{ color: '#ef4444', marginBottom: '1rem' }}>Channel Deleted</h2>
-            <p style={{ opacity: 0.8, marginBottom: '2rem' }}>This secure channel has been permanently deleted and can no longer be accessed.</p>
+          <div className="deleted-state">
+            <h2>Conversation deleted</h2>
+            <p>This invitation is no longer available.</p>
             <button className="btn btn--primary" onClick={handleBack}>
               Return Home
             </button>

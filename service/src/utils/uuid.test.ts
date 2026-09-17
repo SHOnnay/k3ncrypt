@@ -12,4 +12,11 @@ describe('generateUUID()', () => {
         const uuids = new Set(Array.from({ length: 1000 }, () => generateUUID()));
         expect(uuids.size).toBe(1000);
     });
+
+    it('uses the platform CSPRNG-backed randomUUID implementation', () => {
+        const spy = jest.spyOn(globalThis.crypto, 'randomUUID');
+        generateUUID();
+        expect(spy).toHaveBeenCalled();
+        spy.mockRestore();
+    });
 });

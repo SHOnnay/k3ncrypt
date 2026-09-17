@@ -9,6 +9,7 @@ import { MessagesArea } from './MessagesArea';
 import { ChatFooter } from './ChatFooter';
 import { CallOverlay } from '../CallOverlay/CallOverlay';
 import './ChatContainer.css';
+import { debugError } from '../../utils/debug';
 
 interface ChatContainerProps {
   isHidden: boolean;
@@ -24,7 +25,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ isHidden }) => {
       setIsStartingCall(true);
       await startCall();
     } catch (err) {
-      console.error('Failed to start call:', err);
+      debugError('Call start failed', err);
       alert((err as any).message || 'Failed to start call');
     } finally {
       setIsStartingCall(false);

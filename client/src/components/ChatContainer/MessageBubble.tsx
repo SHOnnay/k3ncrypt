@@ -16,7 +16,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
     <div className={`message ${message.type}`}>
       <div className="message-text">{message.text}</div>
       <div className="message-meta">
-        <span>{message.sender.substring(0, 8)}...</span>
+        <span>{message.type === 'sent' ? 'You' : 'Peer'}</span>
         <span>{formatMessageTime(message.timestamp)}</span>
       </div>
     </div>

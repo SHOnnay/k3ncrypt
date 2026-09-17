@@ -1,4 +1,4 @@
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
 
 const { CHAT_LINK_DOMAIN } = process.env;
 
@@ -17,10 +17,9 @@ export type LinkType = {
  * PIN would have defeated that guarantee.
  */
 const generateHash = (): LinkType => {
-  const hash = uuidv4();
+  const hash = randomUUID();
 
   if (!CHAT_LINK_DOMAIN) {
-    // eslint-disable-next-line no-console
     console.warn('CHAT_LINK_DOMAIN not found in env');
   }
 

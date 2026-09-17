@@ -405,6 +405,29 @@ describe('receiving chat-message', () => {
         expect(cb).toHaveBeenCalledTimes(1);
     });
 
+    it('accepts valid out-of-order messages while still rejecting a duplicate', async () => {
+        const instance = await buildInitializedInstance();
+        await instance.setChannel(ROOM_ID, SECRET, USER_ID);
+        const cb = jest.fn();
+        instance.on('chat-message', cb);
+        const handler = wireHandlerFor('chat-message');
+
+        const one = await sealWithDefaultStrategy('chat', { seq: 1, timestamp: 1, text: 'one', image: '' });
+        const three = await sealWithDefaultStrategy('chat', { seq: 3, timestamp: 3, text: 'three', image: '' });
+        const two = await sealWithDefaultStrategy('chat', { seq: 2, timestamp: 2, text: 'two', image: '' });
+
+        handler({ id: 'm1', timestamp: 1, sender: 'bob', envelope: one });
+        await flushAsync();
+        handler({ id: 'm3', timestamp: 3, sender: 'bob', envelope: three });
+        await flushAsync();
+        handler({ id: 'm2', timestamp: 2, sender: 'bob', envelope: two });
+        await flushAsync();
+        handler({ id: 'm2-replay', timestamp: 4, sender: 'bob', envelope: two });
+        await flushAsync();
+
+        expect(cb.mock.calls.map(([message]) => message.message)).toEqual(['one', 'three', 'two']);
+    });
+
     it('drops an envelope produced by a different encryption strategy (no cross-strategy fallback)', async () => {
         const instance = await buildInitializedInstance();
         await instance.setChannel(ROOM_ID, SECRET, USER_ID);

@@ -12,6 +12,9 @@ client.pnp.js
 
 # testing
 client/coverage
+coverage
+test-results
+playwright-report
 
 # production
 client/build

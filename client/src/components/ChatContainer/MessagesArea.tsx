@@ -20,7 +20,9 @@ export const MessagesArea: React.FC = () => {
     <main id="messages-area" className="messages-area">
       {messages.length === 0 ? (
         <div className="empty-state">
-          <p>No messages yet. Start the conversation!</p>
+          <div className="empty-lock" aria-hidden="true">✓</div>
+          <strong>This conversation is ready</strong>
+          <p>Only encrypted envelopes are relayed. Send the first message when your peer arrives.</p>
         </div>
       ) : (
         <>

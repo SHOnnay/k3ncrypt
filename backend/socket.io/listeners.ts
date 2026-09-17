@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import getClientInstance from "./clients";
 import channelValid from "../api/chatHash/utils/validateChannel";
 import { socketEmit, SOCKET_TOPIC, CustomSocket, WireEnvelope } from "./index";
@@ -46,7 +47,7 @@ const connectionListener = (socket: CustomSocket, io) => {
 
     const { valid } = await channelValid(channelID);
     if (!valid) {
-      console.error("Invalid channelID - ", channelID);
+      console.error("Rejected invalid channel join");
       return;
     }
     const usersInChannel = clients.getClientsByChannel(channelID) || {};
@@ -91,8 +92,8 @@ const connectionListener = (socket: CustomSocket, io) => {
       return;
     }
 
-    const id = Date.now();
-    const timestamp = id;
+    const id = randomUUID();
+    const timestamp = Date.now();
     socketEmit<SOCKET_TOPIC.CHAT_MESSAGE>(SOCKET_TOPIC.CHAT_MESSAGE, receiverSid, {
       id,
       timestamp,
@@ -146,9 +147,8 @@ const connectionListener = (socket: CustomSocket, io) => {
       if (receiver) {
         socketEmit<SOCKET_TOPIC.ON_ALICE_DISCONNECTED>(SOCKET_TOPIC.ON_ALICE_DISCONNECTED, receiver, null);
       }
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.log(err);
+    } catch {
+      console.warn('Socket cleanup failed');
     }
   });
 

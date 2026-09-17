@@ -14,10 +14,35 @@ describe('ReplayGuard', () => {
         expect(guard.accept('ctx', 3)).toBe(false);
     });
 
-    it('rejects an out-of-order (older) sequence number', () => {
+    it('accepts valid messages arriving 1, 3, 2', () => {
         const guard = new ReplayGuard();
-        expect(guard.accept('ctx', 5)).toBe(true);
+        expect(guard.accept('ctx', 1)).toBe(true);
+        expect(guard.accept('ctx', 3)).toBe(true);
+        expect(guard.accept('ctx', 2)).toBe(true);
+    });
+
+    it('rejects duplicates after out-of-order acceptance', () => {
+        const guard = new ReplayGuard();
+        expect(guard.accept('ctx', 1)).toBe(true);
+        expect(guard.accept('ctx', 3)).toBe(true);
+        expect(guard.accept('ctx', 2)).toBe(true);
         expect(guard.accept('ctx', 2)).toBe(false);
+        expect(guard.accept('ctx', 3)).toBe(false);
+    });
+
+    it('rejects values older than the bounded replay window', () => {
+        const guard = new ReplayGuard(4);
+        expect(guard.accept('ctx', 1)).toBe(true);
+        expect(guard.accept('ctx', 6)).toBe(true);
+        expect(guard.accept('ctx', 2)).toBe(false);
+    });
+
+    it('rejects invalid sequence numbers', () => {
+        const guard = new ReplayGuard();
+        expect(guard.accept('ctx', 0)).toBe(false);
+        expect(guard.accept('ctx', -1)).toBe(false);
+        expect(guard.accept('ctx', 1.5)).toBe(false);
+        expect(guard.accept('ctx', Number.NaN)).toBe(false);
     });
 
     it('tracks each context independently', () => {
@@ -36,7 +61,7 @@ describe('ReplayGuard', () => {
         guard.reset('ctx-a');
 
         expect(guard.accept('ctx-a', 1)).toBe(true); // forgotten, accepts a lower seq again
-        expect(guard.accept('ctx-b', 1)).toBe(false); // still remembered
+        expect(guard.accept('ctx-b', 5)).toBe(false); // duplicate is still remembered
     });
 
     it('clear() resets every context', () => {

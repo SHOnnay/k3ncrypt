@@ -1,29 +1,47 @@
-/**
- * Global CSS variables – hacker / terminal dark theme
- */
-
 :root {
-  /* Palette */
-  --primary: #00ff41;
-  --primary-hover: #33ff6a;
-  --primary-dim: rgba(0, 255, 65, 0.12);
-  --bg: #080808;
-  --surface: #0d0d0d;
-  --surface-alt: #111111;
-  --text: #d4ffd4;
-  --text-bright: #00ff41;
-  --text-muted: #4d8c5e;
-  --danger: #ff2244;
-  --danger-hover: #cc1133;
-  --success: #00ff41;
-  --accent: #00ccff;
-  --glass: rgba(0, 255, 65, 0.03);
-  --glass-border: rgba(0, 255, 65, 0.18);
-
-  /* Glows */
-  --glow-sm: 0 0 6px rgba(0, 255, 65, 0.25);
-  --glow-md: 0 0 14px rgba(0, 255, 65, 0.35);
-  --glow-lg: 0 0 28px rgba(0, 255, 65, 0.4);
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #18231f;
+  background: #edf1ef;
+  font-synthesis: none;
+  --brand: #176b52;
+  --brand-strong: #105540;
+  --accent: var(--brand);
+  --accent-hover: var(--brand-strong);
+  --brand-soft: #e7f2ed;
+  --surface: #ffffff;
+  --surface-muted: #f4f6f5;
+  --canvas: #edf1ef;
+  --ink: #18231f;
+  --ink-soft: #35463f;
+  --muted: #798780;
+  --muted-strong: #5e6d66;
+  --border: #dde4e0;
+  --border-strong: #bec9c3;
+  --danger: #ba3e4a;
+  --danger-soft: #fff0f1;
+  --success: #22a06b;
+  --warning: #a66a18;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --radius-control: 10px;
+  --radius-card: 16px;
+  --radius-sheet: 20px;
+  --font-xs: .75rem;
+  --font-sm: .875rem;
+  --font-md: 1rem;
+  --font-lg: 1.125rem;
+  --font-display: 1.75rem;
+  --weight-medium: 500;
+  --weight-semibold: 650;
+  --weight-bold: 750;
+  --motion-fast: 140ms;
+  --motion-normal: 200ms;
+  --shadow-sm: 0 2px 8px rgba(30, 51, 43, .08);
+  --shadow-lg: 0 24px 70px rgba(29, 45, 39, .16);
 }
 
 *,
@@ -41,50 +59,19 @@ body {
 }
 
 body {
-  font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
-  background-color: var(--bg);
-  color: var(--text);
+  font-family: inherit;
+  background: var(--canvas);
+  color: var(--ink);
   height: 100vh;
   height: 100dvh;
   overflow: hidden;
 
-  /* Subtle terminal grid */
-  background-image:
-    linear-gradient(rgba(0, 255, 65, 0.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0, 255, 65, 0.025) 1px, transparent 1px);
-  background-size: 40px 40px;
-}
-
-/* CRT scanline overlay */
-body::after {
-  content: '';
-  position: fixed;
-  inset: 0;
-  background: repeating-linear-gradient(
-    0deg,
-    transparent,
-    transparent 3px,
-    rgba(0, 0, 0, 0.06) 3px,
-    rgba(0, 0, 0, 0.06) 4px
-  );
-  pointer-events: none;
-  z-index: 9999;
 }
 
 #root,
 #app {
   height: 100%;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  padding: 20px;
-}
-
-/* Terminal surface (replaces glassmorphism) */
-.glass {
-  background: rgba(0, 10, 0, 0.92);
-  border: 1px solid var(--glass-border);
-  box-shadow: var(--glow-sm), inset 0 0 40px rgba(0, 0, 0, 0.5);
+  min-width: 0;
 }
 
 .hidden {
@@ -93,32 +80,36 @@ body::after {
 
 /* Scrollbar */
 ::-webkit-scrollbar {
-  width: 6px;
+  width: 7px;
 }
 
 ::-webkit-scrollbar-track {
-  background: rgba(0, 255, 65, 0.03);
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(0, 255, 65, 0.25);
-  border-radius: 3px;
+  background: #cbd4cf;
+  border-radius: 8px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 255, 65, 0.45);
+  background: #aebbb4;
 }
+
+button, input { font: inherit; }
+button:focus-visible, input:focus-visible { outline: 3px solid rgba(23, 107, 82, .2); outline-offset: 2px; }
+
+.app-shell { height: 100%; display: flex; overflow: hidden; background: var(--canvas); }
+.conversation-workspace { flex: 1; min-width: 0; height: 100%; padding: 18px; }
+.app-error { position: fixed; z-index: 999; top: 18px; right: 18px; max-width: 360px; padding: 12px 14px; border: 1px solid #ecc8cc; border-radius: 10px; color: #8d2f39; background: var(--danger-soft); box-shadow: var(--shadow-sm); font-size: .82rem; }
+
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; } }
 
 /* Mobile */
 @media (max-width: 480px) {
-  #root,
-  #app {
-    padding: 0;
-    align-items: stretch;
-  }
-
   body {
     height: 100vh;
     height: 100dvh;
   }
+  .conversation-workspace { padding: 0 0 64px; }
 }

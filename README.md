@@ -1,118 +1,56 @@
-## chat-e2ee
-**Disposable chat session**: this app will allow two mutually agreed users to have a chat in _end-to-end_ encrypted environment. The app itself doesn't track you or ask for any information from you. Data is owned by **only you** and **only while chatting**. Your private key is generated on your device and never leaves your device. This is not a replacement for your usual chat application.  
+# K3ncrypt
 
-The project is still in **development** phase and open for contribution.  
-Demo: https://chat-e2ee-2.azurewebsites.net  
+K3ncrypt is an experimental two-person private messenger. It currently offers disposable invite-based conversations, authenticated encrypted message/signaling envelopes, and WebRTC audio calls.
 
-[![Open in Gitpod](https://gitpod.io/button/open-in-gitpod.svg)](https://gitpod.io/#https://github.com/muke1908/chat-e2ee)
+> K3ncrypt is under active security architecture work. The current legacy invite session uses HKDF-SHA-256 and AES-256-GCM, but it does **not** yet provide cryptographic identities, forward secrecy, post-compromise recovery, encrypted history, or account recovery. Read [the architecture](docs/ARCHITECTURE.md) and [initial audit](docs/SECURITY_AUDIT_INITIAL.md) before relying on it.
 
----
-  
+## What works
 
-[![Code Smells](https://sonarcloud.io/api/project_badges/measure?project=muke1908_chat-e2ee&metric=code_smells)](https://sonarcloud.io/project/issues?id=muke1908_chat-e2ee&resolved=false&types=CODE_SMELL)  [![](https://img.shields.io/github/issues/muke1908/chat-e2ee?style=flat)](https://github.com/muke1908/chat-e2ee/issues) 
+- Two-person invitation flow; the 256-bit secret is generated in the browser and carried in the URL fragment.
+- Separate message and signaling keys derived with HKDF-SHA-256.
+- AES-256-GCM authenticated envelopes with no plaintext fallback.
+- Authentication and replay validation before delivery acknowledgement.
+- Bounded out-of-order delivery handling.
+- Opaque Socket.IO relay with payload bounds and rate limiting.
+- Explicit WebRTC ICE/TURN configuration; no public STUN server by default.
+- No analytics, remote fonts, or third-party media uploads.
 
-## Features
+## Run locally
 
-1. :negative_squared_cross_mark: No login/signup - the end users **don't identify** themselves.
-2. :closed_lock_with_key:	Audio calls, signaled over an end-to-end encrypted channel (invite-derived AES-GCM key + HKDF-SHA256). Media itself relies on WebRTC's standard mandatory DTLS-SRTP transport encryption — there is no custom per-frame encryption layer or encoded-transform capability gate any more, so calls work in any standards-compliant WebRTC browser.
-4. :no_entry_sign: Data is **not** stored on any remote server, encrypted data is just relayed to other users, the data can't be decrypted by any man in the middle. **No history** i.e. once chat is closed the data is not recoverable, however encrypted data can be found on memory trace. [Read More](https://github.com/muke1908/chat-e2ee/wiki/How-and-when-your-data-can-be-compromised%3F)  
+Requirements: Node.js 22.12+ (required by the current Vite toolchain) and npm.
 
-## :star: JS SDK 
-[<img align="center" width="200" src="https://i.imgur.com/O3Wr6fK.png">](https://github.com/muke1908/chat-e2ee/tree/master/service)  
+```sh
+cp .env.sample .env
+npm install
+npm run build-service-sdk
+npm run dev
+```
 
-**Spin up your own frontend**: 
-JS SDK and use chat-e2ee backend as service - `@chate2ee/service`  
-[ :page_with_curl: Documentation](https://github.com/muke1908/chat-e2ee/tree/master/service)
+The client runs at `http://localhost:5173`; the relay/API defaults to `http://localhost:3001`.
 
-This is a client-side SDK to interact with chat-e2ee service. It allows dev to build own chat client on top of chate2ee service. It uses socket.io for websocket connection and webrtc to facilitate 1-1 audio call.   
+For TURN or relay-only calling, configure the values documented in [network privacy](docs/NETWORK_PRIVACY.md).
 
+## Verify
 
----
+```sh
+npm test -- --runInBand
+npm run build-service-sdk
+npm run client:build
+npx playwright test
+npm audit
+```
 
-For installation instruction, go to [developer section](https://github.com/muke1908/chat-e2ee#computer-for-developers).  
+## Architecture and roadmap
 
-### How to initiate chat
+- [Current boundaries](docs/ARCHITECTURE.md)
+- [Phase 1 completion](docs/PHASE1_COMPLETION.md)
+- [Design system](docs/DESIGN_SYSTEM.md)
+- [Network privacy](docs/NETWORK_PRIVACY.md)
+- [Dependency security](docs/DEPENDENCY_SECURITY.md)
+- [Vodozemac integration plan](docs/VODOZEMAC_INTEGRATION.md)
 
-1. Generate a unique invitation link.
-2. Share the link with the person you want to chat with.
-3. Start chatting.
-4. Messages and WebRTC call signaling are end-to-end encrypted; no one but the two participants can decrypt them.
+Persistent identity, secure storage, recovery, attachments, offline mailboxes, native clients, and reviewed ratcheted messaging are future phases. Tor, Bluetooth, Wi-Fi Direct, LAN transport, MLS groups, and biometrics are not implemented.
 
-**How the encryption works**
+## Provenance and license
 
-1. The device creating the room generates a 256-bit secret locally and never sends it anywhere. It is only carried in the invitation link's URL fragment — `#room=<public-room-id>&secret=<secret>` — which browsers never transmit as part of an HTTP request.
-2. Both participants derive the same pair of AES-256-GCM keys from that shared secret via HKDF-SHA256: one key for chat messages, one for WebRTC signaling (offer/answer/ICE candidates), so a compromise of one cannot be used to attack the other.
-3. Every message/signal is sealed into a versioned envelope before it ever reaches the server. The server relays this opaque envelope between the two sockets in the room — it cannot read or modify it, and the receiver rejects outright (no plaintext fallback) anything that doesn't match the expected protocol version or encryption strategy.
-
-In this way, no one else can decrypt anything because the secret is never exposed to, or stored by, the server.
-
-> We are using the browser [window.crypto library](https://developer.mozilla.org/en-US/docs/Web/API/crypto_property) (AES-GCM + HKDF-SHA256) for encryption.
-
----
-
-### Flow
-
-![flow](https://i.imgur.com/2GrBQMz.jpg)
-
----
-
-### :computer:	 For developers
-![Open Source Love](https://img.shields.io/badge/Open%20Source-with%20love-CRIMSON.svg) ![GitHub last commit](https://img.shields.io/github/last-commit/muke1908/chat-e2ee) [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=muke1908_chat-e2ee&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=muke1908_chat-e2ee) [![Gitter](https://badges.gitter.im/chat-e2ee/community.svg)](https://gitter.im/chat-e2ee/community?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge)
-
-**Frontend (UI):**  
-This project includes a light weight frontend UI - bootstrapped with [create-react-app](https://reactjs.org/docs/create-a-new-react-app.html). The FE client is located in `./client` folder.  
-
-**Backend:**  
-The backend runs on express/nodejs. In production mode, express server exposes the API endpoints and serves the static frontend from `./client/build`.   
-
-**JS SDK:**  
-`@chat-e2ee/service` - located in `./service` - A SDK that client uses to interact with backend. More info: [Readme](https://github.com/muke1908/chat-e2ee/tree/master/service)
-
-**Custom frontend**  
-Import `@chat-e2ee/service` SDK in your client project and build your own chat client.
-
-### Installation
-
-1. Fork this repository by clicking on the fork button on the top of this page. This will create a copy of this repository in your account.
-2. Now clone the forked repository to your machine. 
-3. Run `npm install` in root dir i.e. inside cloned repo.
-4. Run `npm run dev` to spin up your client/server. This will run your react app in dev mode and server in watch mode by nodemon.
-
-:exclamation::exclamation:**Important:**
-If you are making changes to `./service` i.e. `@chat-e2ee/service`, make sure you run `npm run build-service-sdk` to reflect changes.
-
-NOTE: by default, `create-react-app` runs webpack-dev-server on port `3000`. The server is configured to run on `3001` port. So, make sure that these ports are not blocked on your system.
-
-**Important:**  
-Check `.env.sample` to configure your `.env` file.  
-Please use node 16 or above.   
-
-To start with docker read the [instructions](https://github.com/muke1908/chat-e2ee/tree/master/docker).   
-For native build read the [instructions](https://github.com/muke1908/chat-e2ee/tree/master/native).
-
-### Folder structure
-
-- The FE client is located in `./client` which is coupled with the backend.
-- All the backend controllers go to `./backend` folder.
-- Client uses a package `@chate2ee/service` to communicate with the backend. Located in `./service`.  
-- Express instance is on `./app.js`.
-- Entry point is `./index.js`.
-
-
-Please follow the convention for the commit message.  
-https://github.com/conventional-changelog/commitlint/#what-is-commitlint
-
-Example:  
-`git commit -m"feat: some relevant message"`
-
----
-
-## ✨ Contributors
-
- <img src="https://contributors-img.web.app/image?repo=muke1908/chat-e2ee" />
-
----
-## :closed_lock_with_key:	 Cryptographic notice
-This distribution includes cryptographic software. The country in which you currently reside may have restrictions on the import, possession, use, and/or re-export to another country, of encryption software. BEFORE using any encryption software, please check your country's laws, regulations and policies concerning the import, possession, or use, and re-export of encryption software, to see if this is permitted. See http://www.wassenaar.org/ for more information.
-
-The U.S. Government Department of Commerce, Bureau of Industry and Security (BIS) has classified this software as Export Commodity Control Number (ECCN) 5D002.C.1, which includes information security software using or performing cryptographic functions with asymmetric algorithms. The form and manner of this distribution makes it eligible for export under the License Exception ENC Technology Software Unrestricted (TSU) exception (see the BIS Export Administration Regulations, Section 740.13) for both object code and source code.
+K3ncrypt preserves the history and required notices of its historical base, [muke1908/chat-e2ee](https://github.com/muke1908/chat-e2ee). The project is licensed under Apache-2.0; see [LICENSE](LICENSE).

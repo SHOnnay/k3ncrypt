@@ -9,20 +9,7 @@ import {
     type SignalMetadata,
 } from "./types";
 import { AudioSink } from "./audioSink";
-
-/** Public STUN servers used for ICE candidate gathering. */
-const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
-    { urls: "stun:stun.l.google.com:19302" },
-    { urls: "stun:stun.l.google.com:5349" },
-    { urls: "stun:stun1.l.google.com:3478" },
-    { urls: "stun:stun1.l.google.com:5349" },
-    { urls: "stun:stun2.l.google.com:19302" },
-    { urls: "stun:stun2.l.google.com:5349" },
-    { urls: "stun:stun3.l.google.com:3478" },
-    { urls: "stun:stun3.l.google.com:5349" },
-    { urls: "stun:stun4.l.google.com:19302" },
-    { urls: "stun:stun4.l.google.com:5349" }
-];
+import type { WebRtcConfig } from '../public/types';
 
 /**
  * Seals and sends a signaling payload (offer/answer/ICE candidate/call
@@ -47,13 +34,17 @@ export class Peer {
         private sendSignal: SignalSender,
         private logger: Logger,
         private signalMetadataProvider?: () => SignalMetadata,
+        private rtcConfig: WebRtcConfig = { iceServers: [], iceTransportPolicy: 'all' },
     ) {
         this.audioSink = new AudioSink(this.logger.createChild('AudioSink'));
 
         // Media is protected exclusively by WebRTC's mandatory DTLS-SRTP
         // transport encryption; no custom per-frame encryption is layered on
         // top (see the signaling envelope for the E2E-encrypted layer).
-        this.pc = new RTCPeerConnection({ iceServers: DEFAULT_ICE_SERVERS });
+        this.pc = new RTCPeerConnection({
+            iceServers: this.rtcConfig.iceServers ?? [],
+            iceTransportPolicy: this.rtcConfig.iceTransportPolicy ?? 'all',
+        });
 
         this.pc.onconnectionstatechange = () => {
             this.logger.log('Peer Connection State: ', this.pc.connectionState);
@@ -126,7 +117,7 @@ export class Peer {
         } else if (data.type === 'candidate') {
             this.logger.log('Signal, candidate');
             const candidate = new RTCIceCandidate(data.candidate);
-            this.pc.addIceCandidate(candidate).catch(e => console.error('Error adding ICE candidate:', e));
+            this.pc.addIceCandidate(candidate).catch(() => this.logger.log('Unable to add ICE candidate'));
         }
     }
 

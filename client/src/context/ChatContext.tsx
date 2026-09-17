@@ -9,6 +9,8 @@ import type { IChatE2EE, IE2ECall, CallLifecycleState, CallLifecycleUpdate } fro
 import { ChatContextType, InviteInfo, Message } from '../types/index';
 import { createMessage } from '../utils/messageHandling';
 import { playBeep } from '../utils/audioNotification';
+import { getRuntimeConfig } from '../config/runtimeConfig';
+import { debugError } from '../utils/debug';
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
 
@@ -29,13 +31,11 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   // Initialize chat service (no modifications)
   const initializeChat = useCallback(async () => {
     try {
-      const chatInstance = createChatInstance({
-        baseUrl: process.env.CHATE2EE_API_URL || 'http://localhost:3001',
-      });
+      const chatInstance = createChatInstance(getRuntimeConfig());
       await chatInstance.init();
       setChat(chatInstance);
     } catch (err) {
-      console.error('Chat initialization failed:', err);
+      debugError('Chat initialization failed', err);
       throw err;
     }
   }, []);
@@ -49,7 +49,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const linkObj = await chat.getLink();
       return { roomId: linkObj.hash, secret: linkObj.secret, link: linkObj.link, absoluteLink: linkObj.absoluteLink };
     } catch (err) {
-      console.error('Failed to create channel:', err);
+      debugError('Conversation creation failed', err);
       throw err;
     }
   }, [chat]);
@@ -60,7 +60,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (!chat) throw new Error('Chat not initialized');
       try {
         // Check for channel status before joining
-        const baseUrl = process.env.CHATE2EE_API_URL || 'http://localhost:3001';
+        const baseUrl = getRuntimeConfig().baseUrl;
         const statusRes = await fetch(`${baseUrl}/api/chat-link/status/${encodeURIComponent(roomId)}`);
         if (statusRes.status === 410) {
           throw new Error('CHANNEL_DELETED');
@@ -83,7 +83,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         // Check for existing users
         await checkExistingUsers(chat);
       } catch (err) {
-        console.error('Failed to join channel:', err);
+        debugError('Conversation join failed', err);
         throw err;
       }
     },
@@ -99,7 +99,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         addMessage(message);
         await chat.encrypt({ text, image: '' }).send();
       } catch (err) {
-        console.error('Failed to send message:', err);
+        debugError('Message send failed', err);
         throw err;
       }
     },
@@ -117,7 +117,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setCallStatus('Ringing...');
       setupCallListeners(call);
     } catch (err) {
-      console.error('Failed to start call:', err);
+      debugError('Call start failed', err);
       throw err;
     }
   }, [chat]);
@@ -131,7 +131,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setCallLifecycleState('connecting');
       setCallStatus('Connecting...');
     } catch (err) {
-      console.error('Failed to accept call:', err);
+      debugError('Call acceptance failed', err);
       throw err;
     }
   }, [chat]);
@@ -145,7 +145,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setCallLifecycleState('rejected');
       setCallStatus('Call Rejected');
     } catch (err) {
-      console.error('Failed to reject call:', err);
+      debugError('Call rejection failed', err);
       throw err;
     }
   }, [chat]);
@@ -158,7 +158,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setIsIncomingCall(false);
       setCallStatus('Call Cancelled');
     } catch (err) {
-      console.error('Failed to cancel call:', err);
+      debugError('Call cancellation failed', err);
       throw err;
     }
   }, [chat]);
@@ -175,7 +175,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setCallLifecycleState('ended');
       setCallStatus('Call Ended');
     } catch (err) {
-      console.error('Failed to end call:', err);
+      debugError('Call end failed', err);
     }
   }, [chat]);
 
@@ -282,7 +282,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         setIsConnected(true);
       }
     } catch (err) {
-      console.error('Error checking users:', err);
+      debugError('Peer availability check failed', err);
     }
   };
 
@@ -295,7 +295,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setChannelHash('');
       setMessages([]);
     } catch (err) {
-      console.error('Failed to delete channel:', err);
+      debugError('Conversation deletion failed', err);
       throw err;
     }
   }, [chat]);

@@ -37,7 +37,7 @@ export const CreateHashView: React.FC<CreateHashViewProps> = ({
   return (
     <div className="create-hash-view">
       <div className="input-group">
-        <label>Your Invitation Link</label>
+        <label>Your private invitation</label>
         <div className="copy-input">
           <Input
             id="generated-hash-display"
@@ -63,7 +63,7 @@ export const CreateHashView: React.FC<CreateHashViewProps> = ({
           Back
         </Button>
         <Button id="join-btn" variant="primary" onClick={onNext} disabled={!inviteLink}>
-          Connect Securely
+          Open conversation
         </Button>
       </div>
     </div>

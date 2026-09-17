@@ -20,6 +20,7 @@ export function playBeep() {
     oscillator.start(ctx.currentTime);
     oscillator.stop(ctx.currentTime + 0.4);
   } catch (err) {
-    console.warn('Audio notification not available:', err);
+    debugWarn('Audio notification unavailable', err);
   }
 }
+import { debugWarn } from './debug';

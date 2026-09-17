@@ -6,7 +6,6 @@ import { initSocket } from './backend/socket.io';
 const PORT = process.env.PORT || 3001;
 
 const server = app.listen(PORT, () => {
-  // eslint-disable-next-line no-console
   console.log(`Server running at ${PORT}`);
   db.connectDb();
 });

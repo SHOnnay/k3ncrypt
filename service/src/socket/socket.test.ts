@@ -15,7 +15,7 @@ jest.mock('../configContext', () => ({
     configContext: () => ({ baseUrl: 'http://localhost:3000' }),
 }));
 
-import { SocketInstance, SubscriptionType } from './socket';
+import { SocketIoRelayTransport, SubscriptionType } from './socket';
 
 const createLogger = (): any => {
     const logger: any = {
@@ -38,14 +38,14 @@ describe('SocketInstance', () => {
     let logger: any;
     let subscription: SubscriptionType;
     const subscriptionContext = () => subscription;
-    let rawHandlers: { onRawChatMessage: jest.Mock; onRawWebrtcSignal: jest.Mock };
-    const createInstance = () => new SocketInstance(subscriptionContext, logger, rawHandlers);
+    let onEnvelope: jest.Mock;
+    const createInstance = () => new SocketIoRelayTransport(subscriptionContext, logger, onEnvelope);
 
     beforeEach(() => {
         jest.clearAllMocks();
         logger = createLogger();
         subscription = new Map();
-        rawHandlers = { onRawChatMessage: jest.fn(), onRawWebrtcSignal: jest.fn() };
+        onEnvelope = jest.fn().mockResolvedValue(true);
     });
 
     describe('constructor', () => {
@@ -101,21 +101,46 @@ describe('SocketInstance', () => {
     });
 
     describe('incoming chat-message (still-encrypted, routed to onRawChatMessage)', () => {
-        it('hands the raw envelope to onRawChatMessage without touching the generic subscription map', () => {
+        it('hands an opaque transport envelope to the acceptance handler', async () => {
             createInstance();
-            const raw = { id: 1, timestamp: 123, sender: 'alice', envelope: { version: 1, strategy: 'test-strategy', data: { iv: 'i', ct: 'c' } } };
+            const raw = { id: 'message-1', timestamp: 123, sender: 'alice', envelope: { version: 1, strategy: 'test-strategy', data: { iv: 'i', ct: 'c' } } };
 
             handlerFor('chat-message')(raw);
+            await Promise.resolve();
 
-            expect(rawHandlers.onRawChatMessage).toHaveBeenCalledWith(raw);
+            expect(onEnvelope).toHaveBeenCalledWith({
+                channel: 'message',
+                envelope: raw.envelope,
+                messageId: raw.id,
+                senderRoutingId: raw.sender,
+                timestamp: raw.timestamp,
+            });
         });
 
-        it('acknowledges delivery by emitting "received" with just the message id', () => {
+        it('acknowledges only after authentication/protocol acceptance resolves true', async () => {
+            let accept: (accepted: boolean) => void = () => undefined;
+            onEnvelope.mockReturnValue(new Promise<boolean>((resolve) => { accept = resolve; }));
             createInstance();
 
             handlerFor('chat-message')({ id: 'msg-1', timestamp: 1, sender: 'alice', envelope: {} });
+            expect(mockSocket.emit).not.toHaveBeenCalledWith('received', expect.anything());
+
+            accept(true);
+            await Promise.resolve();
+            await Promise.resolve();
 
             expect(mockSocket.emit).toHaveBeenCalledWith('received', { id: 'msg-1' });
+        });
+
+        it('does not acknowledge rejected or malformed ciphertext', async () => {
+            onEnvelope.mockResolvedValue(false);
+            createInstance();
+
+            handlerFor('chat-message')({ id: 'msg-2', timestamp: 1, sender: 'alice', envelope: {} });
+            await Promise.resolve();
+            await Promise.resolve();
+
+            expect(mockSocket.emit).not.toHaveBeenCalledWith('received', expect.anything());
         });
     });
 
@@ -126,24 +151,24 @@ describe('SocketInstance', () => {
 
             handlerFor('webrtc-session-description')(raw);
 
-            expect(rawHandlers.onRawWebrtcSignal).toHaveBeenCalledWith(raw);
+            expect(onEnvelope).toHaveBeenCalledWith({ channel: 'signaling', envelope: raw.envelope });
         });
     });
 
     describe('joinChat()', () => {
         it('emits "chat-join" with only channelID/userID — no key material', () => {
             const payload = { channelID: 'chan-1', userID: 'alice' };
-            createInstance().joinChat(payload);
+            createInstance().join(payload.channelID, payload.userID);
             expect(mockSocket.emit).toHaveBeenCalledWith('chat-join', payload);
         });
     });
 
-    describe('sendChatMessage()', () => {
+    describe('sendEnvelope(message)', () => {
         it('emits "chat-message" with the envelope and resolves with the ack payload', async () => {
             mockSocket.emit.mockImplementation((_event, _payload, ack) => ack({ id: 5, timestamp: 999 }));
             const instance = createInstance();
 
-            const result = await instance.sendChatMessage({ version: 1, strategy: 'test-strategy', data: { iv: 'i', ct: 'c' } });
+            const result = await instance.sendEnvelope('message', { version: 1, strategy: 'test-strategy', data: { iv: 'i', ct: 'c' } });
 
             expect(mockSocket.emit).toHaveBeenCalledWith('chat-message', { envelope: { version: 1, strategy: 'test-strategy', data: { iv: 'i', ct: 'c' } } }, expect.any(Function));
             expect(result).toEqual({ id: 5, timestamp: 999 });
@@ -153,16 +178,16 @@ describe('SocketInstance', () => {
             mockSocket.emit.mockImplementation((_event, _payload, ack) => ack({ error: 'Rate limit exceeded' }));
             const instance = createInstance();
 
-            await expect(instance.sendChatMessage({ version: 1, strategy: 'test-strategy', data: { iv: 'i', ct: 'c' } })).rejects.toThrow('Rate limit exceeded');
+            await expect(instance.sendEnvelope('message', { version: 1, strategy: 'test-strategy', data: { iv: 'i', ct: 'c' } })).rejects.toThrow('Rate limit exceeded');
         });
     });
 
-    describe('sendWebrtcSignal()', () => {
+    describe('sendEnvelope(signaling)', () => {
         it('emits "webrtc-signal" with the envelope', async () => {
             mockSocket.emit.mockImplementation((_event, _payload, ack) => ack({ status: 'ok' }));
             const instance = createInstance();
 
-            await instance.sendWebrtcSignal({ version: 1, strategy: 'test-strategy', data: { iv: 'i', ct: 'c' } });
+            await instance.sendEnvelope('signaling', { version: 1, strategy: 'test-strategy', data: { iv: 'i', ct: 'c' } });
 
             expect(mockSocket.emit).toHaveBeenCalledWith('webrtc-signal', { envelope: { version: 1, strategy: 'test-strategy', data: { iv: 'i', ct: 'c' } } }, expect.any(Function));
         });
@@ -171,13 +196,13 @@ describe('SocketInstance', () => {
             mockSocket.emit.mockImplementation((_event, _payload, ack) => ack({ error: 'No receiver is in the channel' }));
             const instance = createInstance();
 
-            await expect(instance.sendWebrtcSignal({ version: 1, strategy: 'test-strategy', data: { iv: 'i', ct: 'c' } })).rejects.toThrow('No receiver is in the channel');
+            await expect(instance.sendEnvelope('signaling', { version: 1, strategy: 'test-strategy', data: { iv: 'i', ct: 'c' } })).rejects.toThrow('No receiver is in the channel');
         });
     });
 
-    describe('dispose()', () => {
-        it('disconnects the socket', () => {
-            createInstance().dispose();
+    describe('stop()', () => {
+        it('disconnects the socket', async () => {
+            await createInstance().stop();
             expect(mockSocket.disconnect).toHaveBeenCalledTimes(1);
         });
     });
