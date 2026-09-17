@@ -64,22 +64,22 @@ Express exposes:
 - `DELETE /api/chat-link/:channel`: mark a room deleted;
 - `GET /api/chat/get-users-in-channel?channel=...`: return current transient user IDs.
 
-Socket.IO accepts `chat-join`, `chat-message`, `webrtc-signal`, and `received`. It keeps a process-memory map from room ID to user ID to socket ID and relays opaque envelopes to the other connected participant. A token-bucket limiter and 32 KiB application payload cap are present. There is no authentication, offline queue, TTL, mailbox rotation, durable delivery record, or multi-instance coordination.
+Socket.IO accepts `chat-join`, `chat-message`, `webrtc-signal`, and `received`. It keeps a process-memory map from room ID to user ID to socket ID and relays opaque envelopes to the other connected participant. Joining and REST control operations require a separate 256-bit bearer capability whose SHA-256 verifier is stored with the room. Token-bucket limits and strict envelope/size checks are present. There is no user account, offline queue, TTL, mailbox rotation, durable delivery record, or multi-instance coordination.
 
-Room records use MongoDB when `MONGO_URI` exists, otherwise an in-process object. Records contain the room UUID and `expired`/`deleted` flags. Messages are not stored by the current server.
+Room records use MongoDB when `MONGO_URI` exists, otherwise an in-process object. Records contain the room UUID, capability verifier, and `expired`/`deleted` flags. Messages are not stored by the current server.
 
 ## Invitation and key flow
 
-1. The creator calls `POST /api/chat-link`.
-2. The server generates and stores a UUID room ID. It returns no key material.
-3. The creator generates 32 random bytes with Web Crypto and base64url-encodes them.
-4. The client puts the room ID and secret in `#room=...&secret=...`.
+1. The creator generates independent 32-byte invitation and room-control secrets.
+2. The creator calls `POST /api/chat-link` with only the SHA-256 control verifier.
+3. The server generates/stores a UUID room ID and verifier. It returns no raw key material.
+4. The client puts all invitation values in `#room=...&secret=...&control=...`.
 5. The whole invitation is copied out of band. URL fragments are not included in normal HTTP requests, but they remain visible to browser history, clipboard managers, screenshots, extensions, and anyone receiving the link.
 6. Both clients derive two 256-bit values with HKDF-SHA-256 using a fixed protocol salt and distinct chat/signaling `info` labels.
 7. Each derived value is imported directly as a non-extractable browser AES-256-GCM key.
-8. Only room ID and transient user ID are sent in `chat-join`.
+8. Room ID, transient routing ID, and the independent control bearer are sent in `chat-join`; the message secret is not.
 
-There is no cryptographic identity, authenticated key agreement, pre-key, safety number, identity-change detection, forward secrecy, or post-compromise recovery. Possession of the invitation secret is both authorization and the entire long-term cryptographic basis for that disposable room.
+The isolated vodozemac prototype now has persistent identities, pre-key session tests, fingerprints, and identity-change detection, but production conversations still use the legacy invite session. Production still lacks an authenticated pre-key directory, verification UI, forward secrecy, and post-compromise recovery. The separate control capability is authorization for the disposable room.
 
 ## Message flow
 
@@ -98,7 +98,7 @@ Consequences:
 - counters restart at one on a client restart or room rejoin;
 - a static room key protects every message, so compromise reveals all captured room ciphertext and enables future decryption until the room changes;
 - exact plaintext/ciphertext sizes are not padded;
-- server message IDs are predictable timestamps.
+- server delivery IDs are random UUIDs while timestamps remain visible routing metadata.
 
 ## WebRTC signaling and media flow
 
@@ -116,10 +116,10 @@ Call invites, accept/reject/cancel/end controls, SDP offers/answers, and ICE can
 | Room/user/socket mapping | Relay process memory | SENSITIVE metadata | None |
 | Room UUID and state | MongoDB or relay process memory | SENSITIVE metadata | Database/operator dependent |
 | Logs and browser console | Client/server console | SENSITIVE metadata | None |
-| Identity keys, ratchet state, contacts, drafts | Not implemented | SECRET/SENSITIVE | Not applicable |
+| Prototype identity keys, Olm state, contacts | Encrypted IndexedDB records | SECRET/SENSITIVE | Until explicit deletion; UI integration pending |
 | Attachments, thumbnails, voice notes | Not implemented in active UI/path | SENSITIVE | Not applicable |
 
-No `localStorage`, `sessionStorage`, IndexedDB, SQLite, cookie storage, cache storage, or Android preferences usage was found. This avoids current plaintext persistence but does not satisfy the required durable encrypted messenger storage model.
+No secret writes to `localStorage`, `sessionStorage`, cookies, or cache storage are present. Phase 2 adds an encrypted IndexedDB adapter behind `SecureStorage`; public preferences use a separate plaintext IndexedDB database. The live production conversation path does not yet persist conversations automatically.
 
 ## Server-visible metadata
 
@@ -130,8 +130,7 @@ The relay can observe client IP and connection timing, Socket.IO/socket identifi
 Runtime application requests are:
 
 - configured relay origin: REST and Socket.IO;
-- `fonts.googleapis.com` and `fonts.gstatic.com`: automatic font/preconnect requests from `client/index.html`;
-- `stun.l.google.com` and `stun1` through `stun4.l.google.com`: automatic ICE discovery when a call object is created;
+- operator-configured STUN/TURN endpoints only, when calling is explicitly configured;
 - configured MongoDB endpoint from the server when enabled.
 
 The source also contains imgbb and imgur upload clients, but no active route imports or calls them. They remain a dangerous dormant path because they upload plaintext base64 image data to third parties if wired back in. Documentation pages embed remote badges/images; those are not production-app runtime requests.

@@ -39,7 +39,8 @@ jest.mock('./api/links', () => ({
     getLink: jest.fn().mockResolvedValue({
         hash: 'server-issued-room-id',
         secret: 'client-generated-secret',
-        link: '#room=server-issued-room-id&secret=client-generated-secret',
+        controlCapability: 'client-generated-control-capability',
+        link: '#room=server-issued-room-id&secret=client-generated-secret&control=client-generated-control-capability',
         absoluteLink: undefined,
         expired: false,
         deleted: false,
@@ -60,6 +61,7 @@ import type { EncryptionEnvelope, EncryptionStrategyFactory } from './crypto/str
 const ROOM_ID = 'test-room-id';
 const SECRET = generateInviteSecret();
 const USER_ID = 'test-user-id';
+const CONTROL_CAPABILITY = generateInviteSecret();
 
 async function buildInitializedInstance() {
     const instance = createChatInstance();
@@ -176,7 +178,7 @@ describe('methods called before init() throw descriptive error', () => {
 
     it('setChannel() throws', async () => {
         const instance = createChatInstance();
-        await expect(instance.setChannel(ROOM_ID, SECRET, USER_ID)).rejects.toThrow(NOT_INITIALIZED_MSG);
+        await expect(instance.setChannel(ROOM_ID, SECRET, USER_ID, CONTROL_CAPABILITY)).rejects.toThrow(NOT_INITIALIZED_MSG);
     });
 });
 
@@ -188,30 +190,30 @@ describe('setChannel() / isEncrypted()', () => {
         const instance = await buildInitializedInstance();
         expect(instance.isEncrypted()).toBe(false);
 
-        await instance.setChannel(ROOM_ID, SECRET, USER_ID);
+        await instance.setChannel(ROOM_ID, SECRET, USER_ID, CONTROL_CAPABILITY);
 
         expect(instance.isEncrypted()).toBe(true);
     });
 
-    it('joins via the socket with only channelID/userID — no key material is ever sent', async () => {
+    it('joins with a separate control capability and never sends the message-encryption secret', async () => {
         mockSocket.emit.mockClear();
         const instance = await buildInitializedInstance();
 
-        await instance.setChannel(ROOM_ID, SECRET, USER_ID);
+        await instance.setChannel(ROOM_ID, SECRET, USER_ID, CONTROL_CAPABILITY);
 
-        expect(mockSocket.emit).toHaveBeenCalledWith('chat-join', { userID: USER_ID, channelID: ROOM_ID });
+        expect(mockSocket.emit).toHaveBeenCalledWith('chat-join', { userID: USER_ID, channelID: ROOM_ID, controlCapability: CONTROL_CAPABILITY });
         const [, joinPayload] = mockSocket.emit.mock.calls.find(([event]) => event === 'chat-join')!;
         expect(JSON.stringify(joinPayload)).not.toContain(SECRET);
     });
 
     it('rejects when roomId is missing', async () => {
         const instance = await buildInitializedInstance();
-        await expect(instance.setChannel('', SECRET, USER_ID)).rejects.toThrow(/roomId.*secret|secret.*roomId/i);
+        await expect(instance.setChannel('', SECRET, USER_ID, CONTROL_CAPABILITY)).rejects.toThrow(/roomId.*secret|secret.*roomId/i);
     });
 
     it('rejects when secret is missing', async () => {
         const instance = await buildInitializedInstance();
-        await expect(instance.setChannel(ROOM_ID, '', USER_ID)).rejects.toThrow(/roomId.*secret|secret.*roomId/i);
+        await expect(instance.setChannel(ROOM_ID, '', USER_ID, CONTROL_CAPABILITY)).rejects.toThrow(/roomId.*secret|secret.*roomId/i);
     });
 });
 
@@ -284,12 +286,12 @@ describe('getLink()', () => {
 describe('delete()', () => {
     it('calls deleteLink with the roomId after setChannel()', async () => {
         const instance = await buildInitializedInstance();
-        await instance.setChannel(ROOM_ID, SECRET, USER_ID);
+        await instance.setChannel(ROOM_ID, SECRET, USER_ID, CONTROL_CAPABILITY);
 
         const { deleteLink } = require('./api/links');
         await instance.delete();
 
-        expect(deleteLink).toHaveBeenCalledWith({ channelID: ROOM_ID });
+        expect(deleteLink).toHaveBeenCalledWith({ channelID: ROOM_ID, controlCapability: CONTROL_CAPABILITY });
     });
 });
 
@@ -299,7 +301,7 @@ describe('delete()', () => {
 describe('encrypt()', () => {
     it('returns an object with a send() function', async () => {
         const instance = await buildInitializedInstance();
-        await instance.setChannel(ROOM_ID, SECRET, USER_ID);
+        await instance.setChannel(ROOM_ID, SECRET, USER_ID, CONTROL_CAPABILITY);
 
         const builder = instance.encrypt({ image: '', text: 'hello' });
         expect(typeof builder.send).toBe('function');
@@ -319,7 +321,7 @@ describe('encrypt()', () => {
         });
 
         const instance = await buildInitializedInstance();
-        await instance.setChannel(ROOM_ID, SECRET, USER_ID);
+        await instance.setChannel(ROOM_ID, SECRET, USER_ID, CONTROL_CAPABILITY);
 
         const result = await instance.encrypt({ image: '', text: 'hello' }).send();
 
@@ -341,7 +343,7 @@ describe('encrypt()', () => {
             }
         });
         const instance = await buildInitializedInstance();
-        await instance.setChannel(ROOM_ID, SECRET, USER_ID);
+        await instance.setChannel(ROOM_ID, SECRET, USER_ID, CONTROL_CAPABILITY);
 
         await instance.encrypt({ image: '', text: 'one' }).send();
         await instance.encrypt({ image: '', text: 'two' }).send();
@@ -360,7 +362,7 @@ describe('encrypt()', () => {
 describe('receiving chat-message', () => {
     it('decrypts the envelope and delivers plaintext to subscribers', async () => {
         const instance = await buildInitializedInstance();
-        await instance.setChannel(ROOM_ID, SECRET, USER_ID);
+        await instance.setChannel(ROOM_ID, SECRET, USER_ID, CONTROL_CAPABILITY);
         const cb = jest.fn();
         instance.on('chat-message', cb);
 
@@ -374,7 +376,7 @@ describe('receiving chat-message', () => {
 
     it('drops (never delivers) a message that fails to decrypt — no plaintext fallback', async () => {
         const instance = await buildInitializedInstance();
-        await instance.setChannel(ROOM_ID, SECRET, USER_ID);
+        await instance.setChannel(ROOM_ID, SECRET, USER_ID, CONTROL_CAPABILITY);
         const cb = jest.fn();
         instance.on('chat-message', cb);
 
@@ -390,7 +392,7 @@ describe('receiving chat-message', () => {
 
     it('drops a replayed/duplicate message (same sequence number twice)', async () => {
         const instance = await buildInitializedInstance();
-        await instance.setChannel(ROOM_ID, SECRET, USER_ID);
+        await instance.setChannel(ROOM_ID, SECRET, USER_ID, CONTROL_CAPABILITY);
         const cb = jest.fn();
         instance.on('chat-message', cb);
 
@@ -407,7 +409,7 @@ describe('receiving chat-message', () => {
 
     it('accepts valid out-of-order messages while still rejecting a duplicate', async () => {
         const instance = await buildInitializedInstance();
-        await instance.setChannel(ROOM_ID, SECRET, USER_ID);
+        await instance.setChannel(ROOM_ID, SECRET, USER_ID, CONTROL_CAPABILITY);
         const cb = jest.fn();
         instance.on('chat-message', cb);
         const handler = wireHandlerFor('chat-message');
@@ -430,7 +432,7 @@ describe('receiving chat-message', () => {
 
     it('drops an envelope produced by a different encryption strategy (no cross-strategy fallback)', async () => {
         const instance = await buildInitializedInstance();
-        await instance.setChannel(ROOM_ID, SECRET, USER_ID);
+        await instance.setChannel(ROOM_ID, SECRET, USER_ID, CONTROL_CAPABILITY);
         const cb = jest.fn();
         instance.on('chat-message', cb);
 
@@ -445,7 +447,7 @@ describe('receiving chat-message', () => {
 
     it('drops an envelope sealed for the wrong logical channel (signaling secret used for a chat message) — domain separation holds even within the same room', async () => {
         const instance = await buildInitializedInstance();
-        await instance.setChannel(ROOM_ID, SECRET, USER_ID);
+        await instance.setChannel(ROOM_ID, SECRET, USER_ID, CONTROL_CAPABILITY);
         const cb = jest.fn();
         instance.on('chat-message', cb);
 
@@ -465,7 +467,7 @@ describe('receiving chat-message', () => {
 describe('receiving webrtc signal', () => {
     it('decrypts the envelope and delivers it to call-invite subscribers', async () => {
         const instance = await buildInitializedInstance();
-        await instance.setChannel(ROOM_ID, SECRET, USER_ID);
+        await instance.setChannel(ROOM_ID, SECRET, USER_ID, CONTROL_CAPABILITY);
         const cb = jest.fn();
         instance.on('call-invite', cb);
 
@@ -479,7 +481,7 @@ describe('receiving webrtc signal', () => {
 
     it('drops a replayed/duplicate signal (same sequence number twice for the same call)', async () => {
         const instance = await buildInitializedInstance();
-        await instance.setChannel(ROOM_ID, SECRET, USER_ID);
+        await instance.setChannel(ROOM_ID, SECRET, USER_ID, CONTROL_CAPABILITY);
         const cb = jest.fn();
         instance.on('call-invite', cb);
 
@@ -496,7 +498,7 @@ describe('receiving webrtc signal', () => {
 
     it('drops an out-of-order/lower sequence number signal for the same call', async () => {
         const instance = await buildInitializedInstance();
-        await instance.setChannel(ROOM_ID, SECRET, USER_ID);
+        await instance.setChannel(ROOM_ID, SECRET, USER_ID, CONTROL_CAPABILITY);
         const cb = jest.fn();
         instance.on('call-invite', cb);
         const handler = wireHandlerFor('webrtc-session-description');
@@ -514,7 +516,7 @@ describe('receiving webrtc signal', () => {
 
     it('does not drop a signal for a different call id, even with a lower/equal sequence number', async () => {
         const instance = await buildInitializedInstance();
-        await instance.setChannel(ROOM_ID, SECRET, USER_ID);
+        await instance.setChannel(ROOM_ID, SECRET, USER_ID, CONTROL_CAPABILITY);
         const cb = jest.fn();
         instance.on('call-invite', cb);
         const handler = wireHandlerFor('webrtc-session-description');
@@ -581,7 +583,7 @@ describe('createChatInstance() encryption strategy selection', () => {
             if (event === 'chat-message') ack?.({ id: 1, timestamp: 1 });
         });
         const instance = await buildInitializedInstance();
-        await instance.setChannel(ROOM_ID, SECRET, USER_ID);
+        await instance.setChannel(ROOM_ID, SECRET, USER_ID, CONTROL_CAPABILITY);
         expect(instance.isEncrypted()).toBe(true);
 
         await instance.encrypt({ image: '', text: 'hello' }).send();
@@ -599,7 +601,7 @@ describe('createChatInstance() encryption strategy selection', () => {
 
         const instance = createChatInstance({ encryption: { strategy: CUSTOM_STRATEGY_ID } });
         await instance.init();
-        await instance.setChannel(ROOM_ID, SECRET, USER_ID);
+        await instance.setChannel(ROOM_ID, SECRET, USER_ID, CONTROL_CAPABILITY);
         expect(instance.isEncrypted()).toBe(true);
 
         const cb = jest.fn();
@@ -624,7 +626,7 @@ describe('createChatInstance() encryption strategy selection', () => {
         const factory = jest.fn(buildCustomStrategyFactory);
         const instance = createChatInstance({ encryption: { strategy: factory } });
         await instance.init();
-        await expect(instance.setChannel(ROOM_ID, SECRET, USER_ID)).resolves.toBeUndefined();
+        await expect(instance.setChannel(ROOM_ID, SECRET, USER_ID, CONTROL_CAPABILITY)).resolves.toBeUndefined();
         expect(instance.isEncrypted()).toBe(true);
         expect(factory).toHaveBeenCalledTimes(2);
     });
@@ -636,7 +638,7 @@ describe('createChatInstance() encryption strategy selection', () => {
         });
         const instance = createChatInstance({ encryption: { strategy: NO_ENCRYPTION_STRATEGY_ID } });
         await instance.init();
-        await instance.setChannel(ROOM_ID, SECRET, USER_ID);
+        await instance.setChannel(ROOM_ID, SECRET, USER_ID, CONTROL_CAPABILITY);
 
         // isEncrypted() must report false even though the channel is ready.
         expect(instance.isEncrypted()).toBe(false);
@@ -662,7 +664,7 @@ describe('createChatInstance() encryption strategy selection', () => {
     it('disabled strategy rejects an envelope with an unsupported protocol version (no silent fallback)', async () => {
         const instance = createChatInstance({ encryption: { strategy: NO_ENCRYPTION_STRATEGY_ID } });
         await instance.init();
-        await instance.setChannel(ROOM_ID, SECRET, USER_ID);
+        await instance.setChannel(ROOM_ID, SECRET, USER_ID, CONTROL_CAPABILITY);
         const cb = jest.fn();
         instance.on('chat-message', cb);
 
@@ -677,7 +679,7 @@ describe('createChatInstance() encryption strategy selection', () => {
     it('rejects an envelope sealed by the secure strategy when configured for disabled mode (no cross-mode fallback)', async () => {
         const instance = createChatInstance({ encryption: { strategy: NO_ENCRYPTION_STRATEGY_ID } });
         await instance.init();
-        await instance.setChannel(ROOM_ID, SECRET, USER_ID);
+        await instance.setChannel(ROOM_ID, SECRET, USER_ID, CONTROL_CAPABILITY);
         const cb = jest.fn();
         instance.on('chat-message', cb);
 
@@ -706,7 +708,7 @@ describe('startCall()', () => {
     it('throws when WebRTC is not supported by the environment', async () => {
         delete (globalThis as any).RTCPeerConnection;
         const instance = await buildInitializedInstance();
-        await instance.setChannel(ROOM_ID, SECRET, USER_ID);
+        await instance.setChannel(ROOM_ID, SECRET, USER_ID, CONTROL_CAPABILITY);
 
         await expect(instance.startCall()).rejects.toThrow('WebRTC is not supported');
     });
@@ -714,7 +716,7 @@ describe('startCall()', () => {
     it('throws when no peer is available in the channel', async () => {
         (globalThis as any).RTCPeerConnection = function () {};
         const instance = await buildInitializedInstance();
-        await instance.setChannel(ROOM_ID, SECRET, USER_ID);
+        await instance.setChannel(ROOM_ID, SECRET, USER_ID, CONTROL_CAPABILITY);
 
         await expect(instance.startCall()).rejects.toThrow('No user available to accept call');
     });

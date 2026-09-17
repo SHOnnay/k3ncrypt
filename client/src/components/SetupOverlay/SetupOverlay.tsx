@@ -13,7 +13,7 @@ import { ShieldIcon } from '../common/icons';
 import { debugError } from '../../utils/debug';
 
 interface SetupOverlayProps {
-  onSetupComplete: (roomId: string, secret: string) => Promise<void>;
+  onSetupComplete: (roomId: string, secret: string, controlCapability: string) => Promise<void>;
   isHidden: boolean;
 }
 
@@ -22,7 +22,7 @@ type ViewType = 'initial' | 'create' | 'join' | 'deleted';
 export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, isHidden }) => {
   const { createNewChannel } = useChat();
   const [view, setView] = useState<ViewType>('initial');
-  const [invite, setInvite] = useState<{ roomId: string; secret: string; link: string } | null>(null);
+  const [invite, setInvite] = useState<{ roomId: string; secret: string; controlCapability: string; link: string } | null>(null);
   const [joinInput, setJoinInput] = useState<string>('');
   const [status, setStatus] = useState<string>('');
   const [, setIsLoading] = useState<boolean>(false);
@@ -32,7 +32,7 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, isH
     try {
       setStatus('Generating a secure invitation...');
       const created = await createNewChannel();
-      setInvite({ roomId: created.roomId, secret: created.secret, link: created.absoluteLink || created.link });
+      setInvite({ roomId: created.roomId, secret: created.secret, controlCapability: created.controlCapability, link: created.absoluteLink || created.link });
       setStatus('');
     } catch (err) {
       setStatus('Failed to generate invitation. Please try again.');
@@ -75,7 +75,7 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, isH
     try {
       setIsLoading(true);
       setStatus('Connecting...');
-      await onSetupComplete(invite.roomId, invite.secret);
+      await onSetupComplete(invite.roomId, invite.secret, invite.controlCapability);
     } catch (err) {
       setStatus('Failed to connect. Please try again.');
       debugError('Conversation setup failed', err);
@@ -93,7 +93,7 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, isH
     try {
       setIsLoading(true);
       setStatus('Connecting...');
-      await onSetupComplete(parsed.roomId, parsed.secret);
+      await onSetupComplete(parsed.roomId, parsed.secret, parsed.controlCapability);
     } catch (err: any) {
       if (err.message === 'CHANNEL_DELETED') {
         setView('deleted');

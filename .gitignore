@@ -13,6 +13,7 @@ client.pnp.js
 # testing
 client/coverage
 coverage
+crypto-wasm/target
 test-results
 playwright-report
 

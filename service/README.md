@@ -23,8 +23,8 @@ npm i @chat-e2ee/service
 
 There is no key exchange handshake and no PIN. Instead:
 
-1. The device that creates a room asks the server for a public room id, then generates a **256-bit secret entirely on the client** (`window.crypto.getRandomValues`). The secret is only ever carried in the invitation link's URL fragment — `#room=<public-room-id>&secret=<base64url-secret>` — which browsers never send as part of an HTTP request. It is never transmitted to, or stored on, the server.
-2. Both participants call `setChannel(roomId, secret, userId)` with the same `roomId`/`secret`. `ChatE2EE` derives two opaque, domain-separated secrets from the invitation `secret` alone via HKDF-SHA256 — one for chat messages, one for WebRTC signaling — entirely *outside* the encryption strategy layer, and hands each one to its own independent **encryption strategy** instance (secure default, disabled, or a custom registered strategy). A compromise of one derived secret cannot be used to attack the other (domain separation). `roomId` is never folded into this derivation — it remains purely routing state, known to (and used by) the server to place both participants in the same room, with no cryptographic role. See [Encryption strategies](#encryption-strategies) below for how to select or supply a different strategy (including an explicit no-encryption mode).
+1. The device creating a room generates independent 256-bit message and room-control secrets with `window.crypto.getRandomValues`. It submits only the control secret's SHA-256 verifier, receives a public room id, and carries all raw values in `#room=...&secret=...&control=...`. The message secret is never transmitted to or stored on the server.
+2. Both participants call `setChannel(roomId, secret, userId, controlCapability)`. The SDK derives independent chat/signaling keys from `secret`; the control capability is sent only to authorize room status, presence, deletion, and join.
 3. Every chat message and WebRTC signal (offer/answer/ICE candidate/call control) is sealed into a versioned, strategy-tagged envelope (`{ version, strategy, data }`) before it ever reaches the socket. `ChatE2EE` — never the strategy itself — checks the protocol version and strategy id on receipt, and rejects (drops) anything that doesn't match the active strategy instance for that channel; there is no fallback to a different strategy or envelope version. The server only ever relays this opaque envelope between the two sockets in a room — it cannot read, modify, or replay it elsewhere. Any failure to open an envelope (wrong secret, unsupported version, unexpected strategy, tampered ciphertext) or a replayed/duplicate sequence number causes the message to be dropped outright; there is **no plaintext fallback** — not even when the configured strategy is the explicit "disabled" one (see below).
 4. Audio call media itself relies on WebRTC's mandatory DTLS-SRTP transport encryption. There is no custom per-frame encryption layered on top, and therefore no encoded-transform capability gate — calls work in any standards-compliant WebRTC browser.
 
@@ -174,10 +174,10 @@ const disabledChat = createChatInstance({ baseUrl: '...', encryption: { strategy
 Establishes the socket connection and sets up internal WebRTC/signal listeners. No key material is generated up front — the configured encryption strategy's session is established per-room in `setChannel()`.
 
 #### `await getLink(): Promise<LinkObjType>`
-Asks the server for a new public room id, generates a fresh 256-bit invitation secret locally, and returns both together with a ready-to-share invitation link.
+Generates independent 256-bit message and room-control secrets locally, sends only the control capability's SHA-256 verifier while requesting a new public room id, and returns all three values in a ready-to-share fragment link.
 
-#### `await setChannel(roomId: string, secret: string, userId: string, userName?: string): Promise<void>`
-Derives domain-separated chat/signaling secrets from `secret` (HKDF-SHA256), initializes the two independent encryption strategy instances with them (AES-256-GCM by default), and joins the room. `secret` is never sent to the server — only `roomId` and `userId` are.
+#### `await setChannel(roomId: string, secret: string, userId: string, controlCapability: string, userName?: string): Promise<void>`
+Derives domain-separated chat/signaling secrets from `secret` (HKDF-SHA256), initializes the two independent encryption strategy instances with them (AES-256-GCM by default), and joins the room using the separate bearer control capability. The message-encryption `secret` is never sent to the server; the control capability is sent only where room authorization is required.
 
 #### `isEncrypted(): boolean`
 Returns `true` once `setChannel()` has resolved *and* the configured strategy actually provides confidentiality. Always `false` when the explicit `disabled` strategy is selected, even though the channel is otherwise ready and functional. Unlike the old RSA handshake, this does not depend on the peer having joined yet.
@@ -237,7 +237,8 @@ Helper function to generate a unique user or channel identifier.
 {
     hash: string;          // public room id
     secret: string;        // client-generated 256-bit secret, base64url — never sent to the server
-    link: string;           // relative path + `#room=<hash>&secret=<secret>` fragment
+    controlCapability: string; // independent 256-bit room-control bearer
+    link: string;           // relative path + `#room=...&secret=...&control=...` fragment
     absoluteLink: string | undefined;
     expired: boolean;
     deleted: boolean;

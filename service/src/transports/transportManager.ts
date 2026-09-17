@@ -20,8 +20,8 @@ export class DefaultTransportManager implements TransportManager {
         return this.transport.stop();
     }
 
-    public join(conversationId: string, peerRoutingId: string): void {
-        this.transport.join(conversationId, peerRoutingId);
+    public join(conversationId: string, peerRoutingId: string, controlCapability: string): void {
+        this.transport.join(conversationId, peerRoutingId, controlCapability);
     }
 
     public sendEnvelope(

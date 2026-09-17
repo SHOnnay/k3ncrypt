@@ -10,6 +10,17 @@ import { SocketIoRelayTransport, type SubscriptionType } from './transports/sock
 import { DefaultTransportManager } from './transports/transportManager';
 import { Logger } from './utils/logger';
 export { setConfig } from './configContext';
+export { BrowserSecureStorage, PRODUCTION_ARGON2ID_PARAMETERS } from './storage/secureVault';
+export { IndexedDbVaultPersistence, MemoryVaultPersistence } from './storage/persistence';
+export { IndexedDbPublicPreferences } from './storage/publicPreferences';
+export { VodozemacCryptoSession, VODOZEMAC_ENVELOPE_VERSION, VODOZEMAC_STRATEGY_ID } from './core/vodozemacCryptoSession';
+export type { VodozemacSessionHandle } from './core/vodozemacCryptoSession';
+export { PersistentVodozemacIdentity, fingerprintVodozemacIdentity } from './identity/vodozemacIdentity';
+export type { VodozemacAccountFactory, VodozemacAccountHandle, VodozemacPublicIdentity } from './identity/vodozemacIdentity';
+export { ContactIdentityRegistry } from './identity/contactIdentityRegistry';
+export type { ContactIdentityEvent, IdentityChangeStatus, StoredContactIdentity } from './identity/contactIdentityRegistry';
+export { VodozemacSessionStore } from './identity/vodozemacSessionStore';
+export type { VodozemacSessionFactory } from './identity/vodozemacSessionStore';
 import { generateUUID } from './utils/uuid';
 import {
     WebRTCCall,
@@ -44,6 +55,7 @@ const decodePayload = <T>(bytes: ArrayBuffer): T => JSON.parse(new TextDecoder()
 class ChatE2EE implements IChatE2EE {
     private roomId?: string;
     private userId?: string;
+    private controlCapability?: string;
 
     /** Transport-independent crypto lifecycle; currently backed by the explicitly legacy invite adapter. */
     private cryptoSession: CryptoSession;
@@ -143,24 +155,25 @@ class ChatE2EE implements IChatE2EE {
      * `secret` never leaves this device — only `roomId` and `userId` are
      * sent to the server.
      */
-    public async setChannel(roomId: string, secret: string, userId: string, _userName?: string): Promise<void> {
+    public async setChannel(roomId: string, secret: string, userId: string, controlCapability: string, _userName?: string): Promise<void> {
         this.checkInitialized();
         logger.log('setChannel()');
-        if (!roomId || !secret) {
-            throw new Error('setChannel() requires both a roomId and an invitation secret.');
+        if (!roomId || !secret || !controlCapability) {
+            throw new Error('setChannel() requires a roomId, invitation secret, and control capability.');
         }
         // The crypto-session boundary owns key derivation and strategy state;
         // this application façade only supplies the legacy invite secret.
         await this.cryptoSession.initialize(secret);
         this.roomId = roomId;
         this.userId = userId;
+        this.controlCapability = controlCapability;
         // A fresh room join starts a fresh sequence-number space: forget any
         // sequence numbers remembered from a previous setChannel() call on
         // this instance, otherwise a peer restarting their own counter would
         // have every message rejected as a replay.
         this.chatSeq = 0;
         this.chatReplayGuard.clear();
-        this.transportManager.join(this.roomId, this.userId);
+        this.transportManager.join(this.roomId, this.userId, this.controlCapability);
         return;
     }
 
@@ -179,14 +192,14 @@ class ChatE2EE implements IChatE2EE {
     public async delete(): Promise<void> {
         logger.log(`delete()`);
         this.checkInitialized();
-        await deleteLink({ channelID: this.roomId });
+        await deleteLink({ channelID: this.roomId, controlCapability: this.controlCapability });
         this.clearChannelSecrets();
     }
 
     public async getUsersInChannel(): Promise<TypeUsersInChannel> {
         logger.log(`getUsersInChannel()`);
         this.checkInitialized();
-        return getUsersInChannel({ channelID: this.roomId });
+        return getUsersInChannel({ channelID: this.roomId, controlCapability: this.controlCapability });
     }
 
     public encrypt({ image, text }: { image: string, text: string }): { send: () => Promise<ISendMessageReturn> } {
@@ -539,6 +552,7 @@ class ChatE2EE implements IChatE2EE {
         }
         this.roomId = undefined;
         this.userId = undefined;
+        this.controlCapability = undefined;
         this.chatSeq = 0;
         this.signalSeq = 0;
         this.chatReplayGuard.clear();

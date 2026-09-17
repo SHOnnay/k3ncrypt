@@ -8,12 +8,13 @@ import type { EncryptionStrategyFactory } from "../crypto/strategy";
  *
  * `secret` is generated entirely on this device and is never sent to the
  * server — it only ever leaves via the URL fragment portion of `link` /
- * `absoluteLink` (`#room=<hash>&secret=<secret>`), which browsers do not
+ * `absoluteLink` (`#room=<hash>&secret=<secret>&control=<capability>`), which browsers do not
  * transmit as part of an HTTP request.
  */
 export type LinkObjType = {
     hash: string,
     secret: string,
+    controlCapability: string,
     link: string,
     absoluteLink: string | undefined,
     expired: boolean,
@@ -23,10 +24,11 @@ export type LinkObjType = {
 export interface ISendMessageReturn { id: string, timestamp: string };
 export type TypeUsersInChannel = { "uuid": string }[];
 
-/** Payload sent to the server when a user joins a chat channel. Contains no key material. */
+/** The control capability authorizes room membership but is independent from message encryption keys. */
 export type chatJoinPayloadType = {
     channelID: string,
     userID: string,
+    controlCapability: string,
 }
 
 export interface IChatE2EE {
@@ -34,7 +36,7 @@ export interface IChatE2EE {
     isEncrypted(): boolean;
     getLink(): Promise<LinkObjType>;
     /** Derive session keys from the invitation `secret` and join the room. `secret` is never transmitted. */
-    setChannel(roomId: string, secret: string, userId: string, userName?: string): Promise<void>;
+    setChannel(roomId: string, secret: string, userId: string, controlCapability: string, userName?: string): Promise<void>;
     delete(): Promise<void>;
     getUsersInChannel(): Promise<TypeUsersInChannel>;
     dispose(): void;

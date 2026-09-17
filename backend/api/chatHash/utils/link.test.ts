@@ -7,11 +7,12 @@ jest.mock('crypto', () => ({
 }));
 
 test('chat link generation', () => {
-  const generatedLink = generateLink();
+  const generatedLink = generateLink('a'.repeat(64));
   expect(generatedLink).toMatchObject({
     hash: 'hash',
     expired: false,
     deleted: false,
+    controlCapabilityHash: 'a'.repeat(64),
   });
   expect(generatedLink).not.toHaveProperty('pin');
   expect(generatedLink).not.toHaveProperty('pinCreatedAt');

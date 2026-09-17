@@ -26,11 +26,11 @@ const AppContent: React.FC = () => {
     });
   }, [initializeChat]);
 
-  const handleSetupComplete = async (roomId: string, secret: string) => {
+  const handleSetupComplete = async (roomId: string, secret: string, controlCapability: string) => {
     try {
       setError('');
-      await joinChannel(roomId, secret);
-      updateUrlInvite(roomId, secret);
+      await joinChannel(roomId, secret, controlCapability);
+      updateUrlInvite(roomId, secret, controlCapability);
       setShowSetup(false);
     } catch (err) {
       setError((err as any).message || 'Failed to connect. Please try again.');

@@ -1,9 +1,9 @@
 /**
  * Join-by-invite view component.
  *
- * Accepts a full invitation link/fragment (`#room=...&secret=...`) rather
- * than a bare room id — joining requires the secret, which never touches
- * the server.
+ * Accepts a full invitation fragment with independent message and control
+ * secrets rather than a bare room id. The message secret never reaches the
+ * relay; the control bearer authorizes membership.
  */
 
 import React, { useEffect } from 'react';
@@ -30,7 +30,7 @@ export const JoinHashView: React.FC<JoinHashViewProps> = ({
   // Auto-populate from the URL invite fragment if available
   useEffect(() => {
     if (invite && !inviteInput) {
-      onInviteInputChange(`room=${invite.roomId}&secret=${invite.secret}`);
+      onInviteInputChange(`room=${invite.roomId}&secret=${invite.secret}&control=${invite.controlCapability}`);
     }
   }, [invite, inviteInput, onInviteInputChange]);
 

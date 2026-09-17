@@ -2,9 +2,9 @@
  * Create-invite view component.
  *
  * Displays the shareable invitation link
- * (`#room=<public-room-id>&secret=<secret>`). The secret is generated on
- * this device and is only ever carried in the link's URL fragment — never
- * sent to the server.
+ * (`#room=<public-room-id>&secret=<secret>&control=<capability>`). Both
+ * values are generated on this device and carried in the URL fragment; only
+ * the control bearer is presented to the relay for authorization.
  */
 
 import React, { useState } from 'react';

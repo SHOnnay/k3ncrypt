@@ -15,12 +15,12 @@ describe('DefaultTransportManager', () => {
         const envelope = { version: 1, strategy: 'test', data: { ciphertext: 'opaque' } };
 
         await manager.start();
-        manager.join('conversation', 'routing-peer');
+        manager.join('conversation', 'routing-peer', 'control-capability');
         await expect(manager.sendEnvelope('message', envelope)).resolves.toEqual({ id: 'message-id', timestamp: 1 });
         await manager.stop();
 
         expect(manager.activeTransport()).toBe(transport);
-        expect(transport.join).toHaveBeenCalledWith('conversation', 'routing-peer');
+        expect(transport.join).toHaveBeenCalledWith('conversation', 'routing-peer', 'control-capability');
         expect(transport.sendEnvelope).toHaveBeenCalledWith('message', envelope);
     });
 });

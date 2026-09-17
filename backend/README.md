@@ -3,10 +3,10 @@
 
 | url                              | method   | payload                         | filename                        | description                                   |
 | -------------------------------- | -------- | ------------------------------- | -------------------------------- | --------------------------------------------- |
-| `/chat-link`                      | `POST`   |                                  | `/api/chatHash/index.ts`         | generate a new public room id (no PIN)        |
-| `/chat-link/status/:channel`      | `GET`    |                                  | `/api/chatHash/index.ts`         | check if a channel is valid                   |
-| `/chat-link/:channel`             | `DELETE` |                                  | `/api/chatHash/index.ts`         | delete a channel                              |
-| `/chat/get-users-in-channel`      | `GET`    |                                  | `/api/messaging/index.ts`        | list users currently present in a channel     |
+| `/chat-link`                      | `POST`   | `{ controlCapabilityHash }`      | `/api/chatHash/index.ts`         | generate a capability-bound public room id    |
+| `/chat-link/status/:channel`      | `GET`    | control-capability header         | `/api/chatHash/index.ts`         | authorized room status                        |
+| `/chat-link/:channel`             | `DELETE` | control-capability header         | `/api/chatHash/index.ts`         | capability-authorized soft deletion           |
+| `/chat/get-users-in-channel`      | `GET`    | query + control-capability header | `/api/messaging/index.ts`        | authorized transient presence                 |
 
 ---
 
@@ -21,7 +21,7 @@ server never decrypts or inspects its contents.
 
 | event (client → server) | payload                | ack                                    | description                                        |
 | ------------------------ | ----------------------- | --------------------------------------- | --------------------------------------------------- |
-| `chat-join`               | `{ userID, channelID }` | —                                       | join a room (max 2 participants); no key material   |
+| `chat-join`               | `{ userID, channelID, controlCapability }` | —                         | authorize and join a room (max 2 participants)      |
 | `chat-message`            | `{ envelope }`          | `{ id, timestamp }` or `{ error }`      | relay an opaque chat envelope to the other peer      |
 | `webrtc-signal`           | `{ envelope }`          | `{ status: 'ok' }` or `{ error }`       | relay an opaque WebRTC signaling envelope            |
 | `received`                | `{ id }`                | —                                       | acknowledge delivery of a chat message               |
@@ -39,5 +39,7 @@ Both `chat-message` and `webrtc-signal` are rate-limited per socket (token
 bucket) and size-checked (rejecting oversized payloads) before being
 relayed; `initSocket()` also caps the transport-level packet size via
 Socket.IO's `maxHttpBufferSize`.
+
+See `docs/SERVER_SECURITY.md` for capability, rate-limit, metadata, and CORS details.
 
 ---

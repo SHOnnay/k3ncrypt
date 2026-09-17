@@ -84,7 +84,7 @@ export interface TransportCapabilities {
 export interface Transport {
     start(): Promise<void>;
     stop(): Promise<void>;
-    join(conversationId: string, peerRoutingId: string): void;
+    join(conversationId: string, peerRoutingId: string, controlCapability: string): void;
     sendEnvelope(channel: CryptoChannel, envelope: EncryptedEnvelope): Promise<{ id?: string; timestamp?: number }>;
     sendBlob?(ciphertext: ArrayBuffer): Promise<void>;
     connectionState(): TransportConnectionState;
@@ -95,7 +95,7 @@ export interface Transport {
 export interface TransportManager {
     start(): Promise<void>;
     stop(): Promise<void>;
-    join(conversationId: string, peerRoutingId: string): void;
+    join(conversationId: string, peerRoutingId: string, controlCapability: string): void;
     sendEnvelope(channel: CryptoChannel, envelope: EncryptedEnvelope): Promise<{ id?: string; timestamp?: number }>;
     activeTransport(): Transport | undefined;
 }
@@ -104,10 +104,18 @@ export interface TransportManager {
  * Storage port for encrypted-at-rest records. Implementations must not accept
  * plaintext secret records unless their encryption boundary is explicit.
  */
+export type UnlockSecretType = 'passphrase' | 'password' | 'pin';
+
 export interface SecureStorage {
-    readCiphertext(key: string): Promise<ArrayBuffer | undefined>;
-    writeCiphertext(key: string, value: ArrayBuffer): Promise<void>;
-    delete(key: string): Promise<void>;
+    initializeWithPassphrase(secret: string, type?: UnlockSecretType): Promise<void>;
+    unlock(secret: string): Promise<void>;
+    lock(): void;
+    changeUnlockSecret(currentSecret: string, nextSecret: string, nextType: UnlockSecretType): Promise<void>;
+    isLocked(): boolean;
+    read(recordType: string, recordId: string): Promise<ArrayBuffer | undefined>;
+    write(recordType: string, recordId: string, plaintext: ArrayBuffer): Promise<void>;
+    delete(recordType: string, recordId: string): Promise<void>;
+    withVodozemacPickleKey<T>(operation: (key: Uint8Array) => Promise<T>): Promise<T>;
 }
 
 /** Non-secret preferences have a separate port so they cannot be mistaken for encrypted records. */

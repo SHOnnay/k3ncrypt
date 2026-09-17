@@ -1,7 +1,8 @@
 /**
  * Invitation-fragment URL handling utilities.
  *
- * Invitations are carried as `#room=<public-room-id>&secret=<base64url secret>`.
+ * Invitations carry a room id, message secret, and independent room-control
+ * capability in the URL fragment. Browsers do not send fragments to servers.
  * Browsers never send the URL fragment as part of an HTTP request, so the
  * secret parsed/written here never reaches the server.
  */
@@ -9,36 +10,46 @@
 export interface ParsedInvite {
   roomId: string;
   secret: string;
+  controlCapability: string;
 }
 
-/** Parse `#room=...&secret=...` from the current URL, if present. */
+const ROOM_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const SECRET_256 = /^[A-Za-z0-9_-]{43}$/;
+
+/** Parse `#room=...&secret=...&control=...` from the current URL, if present. */
 export function getUrlInvite(): ParsedInvite | null {
   return parseInviteFragment(window.location.hash);
 }
 
-/** Parse a raw fragment string (with or without the leading `#`) into a room id + secret. */
+/** Parse a raw fragment string into a room id, message secret, and control capability. */
 export function parseInviteFragment(fragment: string): ParsedInvite | null {
-  if (!fragment) {
+  if (!fragment || fragment.length > 2048) {
     return null;
   }
   const raw = fragment.startsWith('#') ? fragment.slice(1) : fragment;
   const params = new URLSearchParams(raw);
-  const roomId = params.get('room');
-  const secret = params.get('secret');
-  if (!roomId || !secret) {
+  const keys = Array.from(params.keys());
+  if (keys.length !== 3 || new Set(keys).size !== 3 || keys.some((key) => !['room', 'secret', 'control'].includes(key))) {
     return null;
   }
-  return { roomId, secret };
+  const roomId = params.get('room');
+  const secret = params.get('secret');
+  const controlCapability = params.get('control');
+  if (!roomId || !secret || !controlCapability || !ROOM_ID.test(roomId) ||
+      !SECRET_256.test(secret) || !SECRET_256.test(controlCapability)) {
+    return null;
+  }
+  return { roomId, secret, controlCapability };
 }
 
 /**
  * Parse a full invite string, which may be:
- *  - a full URL (e.g. pasted from the address bar) with a `#room=...&secret=...` fragment,
- *  - or a bare fragment (e.g. `room=...&secret=...` or `#room=...&secret=...`).
+ *  - a full URL with a `#room=...&secret=...&control=...` fragment,
+ *  - or the same fragment with or without the leading `#`.
  */
 export function parseInviteInput(input: string): ParsedInvite | null {
   const trimmed = input.trim();
-  if (!trimmed) {
+  if (!trimmed || trimmed.length > 4096) {
     return null;
   }
   const hashIndex = trimmed.indexOf('#');
@@ -47,11 +58,11 @@ export function parseInviteInput(input: string): ParsedInvite | null {
 }
 
 /** Update the URL with the invitation fragment, without a page reload. */
-export function updateUrlInvite(roomId: string, secret: string): void {
-  if (!roomId || !secret) {
+export function updateUrlInvite(roomId: string, secret: string, controlCapability: string): void {
+  if (!roomId || !secret || !controlCapability) {
     return;
   }
-  window.location.hash = `room=${encodeURIComponent(roomId)}&secret=${encodeURIComponent(secret)}`;
+  window.location.hash = `room=${encodeURIComponent(roomId)}&secret=${encodeURIComponent(secret)}&control=${encodeURIComponent(controlCapability)}`;
 }
 
 /** Whether the current URL contains a parseable invite fragment. */

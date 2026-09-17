@@ -47,7 +47,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (!chat) throw new Error('Chat not initialized');
     try {
       const linkObj = await chat.getLink();
-      return { roomId: linkObj.hash, secret: linkObj.secret, link: linkObj.link, absoluteLink: linkObj.absoluteLink };
+      return { roomId: linkObj.hash, secret: linkObj.secret, controlCapability: linkObj.controlCapability, link: linkObj.link, absoluteLink: linkObj.absoluteLink };
     } catch (err) {
       debugError('Conversation creation failed', err);
       throw err;
@@ -56,12 +56,14 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   // Join existing channel using the invitation's roomId + secret
   const joinChannel = useCallback(
-    async (roomId: string, secret: string) => {
+    async (roomId: string, secret: string, controlCapability: string) => {
       if (!chat) throw new Error('Chat not initialized');
       try {
         // Check for channel status before joining
         const baseUrl = getRuntimeConfig().baseUrl;
-        const statusRes = await fetch(`${baseUrl}/api/chat-link/status/${encodeURIComponent(roomId)}`);
+        const statusRes = await fetch(`${baseUrl}/api/chat-link/status/${encodeURIComponent(roomId)}`, {
+          headers: { 'X-K3ncrypt-Control-Capability': controlCapability },
+        });
         if (statusRes.status === 410) {
           throw new Error('CHANNEL_DELETED');
         }
@@ -73,7 +75,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         const newUserId = (utils as any).generateUUID();
         setUserId(newUserId);
 
-        await chat.setChannel(roomId, secret, newUserId);
+        await chat.setChannel(roomId, secret, newUserId, controlCapability);
         setChannelHash(roomId);
         setIsConnected(true);
 

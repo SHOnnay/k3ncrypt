@@ -94,7 +94,7 @@ App
 - ✅ Glass-morphism UI design
 - ✅ Mobile-responsive layout
 - ✅ Native share API integration
-- ✅ Invitation-link (`#room=...&secret=...`) auto-population for channel joining
+- ✅ Invitation-link (`#room=...&secret=...&control=...`) auto-population for channel joining
 
 ## 🔒 Security & Backend Integration
 

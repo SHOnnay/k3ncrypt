@@ -47,9 +47,12 @@ npm audit
 - [Design system](docs/DESIGN_SYSTEM.md)
 - [Network privacy](docs/NETWORK_PRIVACY.md)
 - [Dependency security](docs/DEPENDENCY_SECURITY.md)
-- [Vodozemac integration plan](docs/VODOZEMAC_INTEGRATION.md)
+- [Secure storage](docs/SECURE_STORAGE.md)
+- [Key hierarchy](docs/KEY_HIERARCHY.md)
+- [Server security](docs/SERVER_SECURITY.md)
+- [Vodozemac prototype](docs/VODOZEMAC_INTEGRATION.md)
 
-Persistent identity, secure storage, recovery, attachments, offline mailboxes, native clients, and reviewed ratcheted messaging are future phases. Tor, Bluetooth, Wi-Fi Direct, LAN transport, MLS groups, and biometrics are not implemented.
+Phase 2 includes encrypted browser storage, persistent prototype identity, and isolated vodozemac validation. Recovery, attachments, offline mailboxes, native clients, and production ratcheted messaging remain future phases. Tor, Bluetooth, Wi-Fi Direct, LAN transport, MLS groups, and biometrics are not implemented.
 
 ## Provenance and license
 

@@ -3,6 +3,7 @@ import getClientInstance from "./clients";
 import channelValid from "../api/chatHash/utils/validateChannel";
 import { socketEmit, SOCKET_TOPIC, CustomSocket, WireEnvelope } from "./index";
 import { RateLimiter } from "./rateLimiter";
+import { authorizeRoomControl, isValidControlCapability, isValidRoomId } from '../security/controlCapability';
 
 const clients = getClientInstance();
 
@@ -22,6 +23,25 @@ const isPayloadTooLarge = (payload: unknown): boolean => {
   }
 };
 
+const exactKeys = (value: Record<string, unknown>, expected: string[]): boolean =>
+  Object.keys(value).sort().join('\0') === [...expected].sort().join('\0');
+
+export const isValidWireEnvelope = (value: unknown): value is WireEnvelope => {
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+      !exactKeys(value as Record<string, unknown>, ['version', 'strategy', 'data'])) {
+    return false;
+  }
+  const envelope = value as WireEnvelope;
+  return Number.isInteger(envelope.version) && envelope.version >= 1 && envelope.version <= 16 &&
+    typeof envelope.strategy === 'string' && /^[A-Za-z0-9._-]{1,64}$/.test(envelope.strategy) &&
+    envelope.data !== undefined && envelope.data !== null;
+};
+
+const validEnvelopePayload = (payload: unknown): payload is { envelope: WireEnvelope } =>
+  !!payload && typeof payload === 'object' && !Array.isArray(payload) &&
+  exactKeys(payload as Record<string, unknown>, ['envelope']) &&
+  isValidWireEnvelope((payload as { envelope?: unknown }).envelope);
+
 /**
  * Resolves the socket id of "the other participant" in `socket`'s channel,
  * using the identity bound to the socket at `chat-join` time — never a
@@ -39,12 +59,19 @@ const findPeerSid = (socket: CustomSocket): string | undefined => {
 
 const connectionListener = (socket: CustomSocket, io) => {
   socket.on("chat-join", async (data) => {
-    const { userID, channelID } = data || {};
-    if (!userID || !channelID) {
-      console.error("chat-join missing userID/channelID");
+    const { userID, channelID, controlCapability } = data || {};
+    if (!data || typeof data !== 'object' || Array.isArray(data) ||
+        !exactKeys(data, ['userID', 'channelID', 'controlCapability']) ||
+        !isValidRoomId(userID) ||
+        !isValidRoomId(channelID) || !isValidControlCapability(controlCapability)) {
+      console.error("Rejected malformed channel join");
       return;
     }
 
+    if (!await authorizeRoomControl(channelID, controlCapability)) {
+      console.error('Rejected unauthorized channel join');
+      return;
+    }
     const { valid } = await channelValid(channelID);
     if (!valid) {
       console.error("Rejected invalid channel join");
@@ -63,9 +90,9 @@ const connectionListener = (socket: CustomSocket, io) => {
     socket.channelID = channelID;
     socket.userID = userID;
 
-    // Notify the other participant (if any) that someone joined. No key
-    // material is exchanged here any more — participants already share the
-    // invite secret out of band, and derive their keys from it locally.
+    // Notify the other participant. The independent room-control capability
+    // was consumed for authorization above; message-encryption keys never
+    // reach this relay.
     const receiverId = clients.getReceiverIDBySenderID(userID, channelID);
     const receiver = receiverId && clients.getSIDByIDs(receiverId, channelID);
     if (receiver) {
@@ -82,8 +109,8 @@ const connectionListener = (socket: CustomSocket, io) => {
       ack({ error: "Rate limit exceeded." });
       return;
     }
-    if (isPayloadTooLarge(payload)) {
-      ack({ error: "Payload too large." });
+    if (isPayloadTooLarge(payload) || !validEnvelopePayload(payload)) {
+      ack({ error: "Invalid or oversized encrypted envelope." });
       return;
     }
     const receiverSid = findPeerSid(socket);
@@ -112,8 +139,8 @@ const connectionListener = (socket: CustomSocket, io) => {
       ack({ error: "Rate limit exceeded." });
       return;
     }
-    if (isPayloadTooLarge(payload)) {
-      ack({ error: "Payload too large." });
+    if (isPayloadTooLarge(payload) || !validEnvelopePayload(payload)) {
+      ack({ error: "Invalid or oversized encrypted envelope." });
       return;
     }
     const receiverSid = findPeerSid(socket);
@@ -128,7 +155,12 @@ const connectionListener = (socket: CustomSocket, io) => {
     ack({ status: "ok" });
   });
 
-  socket.on("received", ({ id }: { id: string | number }) => {
+  socket.on("received", (payload: { id?: unknown }) => {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload) ||
+        !exactKeys(payload, ['id']) || !isValidRoomId(payload.id)) {
+      return;
+    }
+    const { id } = payload as { id: string };
     const receiverSid = findPeerSid(socket);
     if (receiverSid) {
       socketEmit<SOCKET_TOPIC.DELIVERED>(SOCKET_TOPIC.DELIVERED, receiverSid, id);

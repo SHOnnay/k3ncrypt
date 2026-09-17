@@ -156,9 +156,9 @@ describe('SocketInstance', () => {
     });
 
     describe('joinChat()', () => {
-        it('emits "chat-join" with only channelID/userID — no key material', () => {
-            const payload = { channelID: 'chan-1', userID: 'alice' };
-            createInstance().join(payload.channelID, payload.userID);
+        it('emits "chat-join" with the room control capability but no message key', () => {
+            const payload = { channelID: 'chan-1', userID: 'alice', controlCapability: 'control-capability' };
+            createInstance().join(payload.channelID, payload.userID, payload.controlCapability);
             expect(mockSocket.emit).toHaveBeenCalledWith('chat-join', payload);
         });
     });

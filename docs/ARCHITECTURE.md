@@ -18,12 +18,13 @@ The relay transport receives only `EncryptedEnvelope` objects. It never receives
 ## Implemented boundaries
 
 - `LegacyInviteCryptoSession` preserves the existing invite secret, HKDF-SHA-256 domain separation, and AES-256-GCM wire format. Its name deliberately records that it has no forward secrecy or post-compromise recovery.
+- `VodozemacCryptoSession` is an isolated, explicit version-2 Olm adapter backed by the Rust/WASM handle; it is test/development only and not selected by the production facade.
 - `DefaultTransportManager` owns transport lifecycle, room routing, and opaque-envelope delivery. It does not create or reset crypto state.
 - `SocketIoRelayTransport` contains all Socket.IO event and acknowledgement behavior.
 - `CryptoSession`, `Transport`, `TransportManager`, `SecureStorage`, `PublicPreferences`, and `AttachmentStore` are protocol-facing ports.
 - `MessagingIdentity`, `ContactIdentity`, `TransportPeer`, and `LegacyRoutingIdentity` prevent relay addresses from being presented as user identity.
 
-`SecureStorage`, `PublicPreferences`, and `AttachmentStore` intentionally have no browser implementation yet. There is no current durable client state to migrate, and mapping secrets to localStorage would create false security. They are contract boundaries for the later encrypted database design.
+`BrowserSecureStorage` and `IndexedDbVaultPersistence` now implement the secret-storage boundary with Argon2id, a wrapped random SMK, HKDF-separated keys, and per-record AES-GCM. `IndexedDbPublicPreferences` remains a separate plaintext port. `AttachmentStore` is still only a future boundary.
 
 ## Envelope acceptance
 
@@ -41,13 +42,13 @@ The replay window records accepted sequence numbers within the latest 1,024 posi
 ## Identity model
 
 - **AppLocalIdentity**: device-local record that owns a messaging identity without becoming a server account.
-- **MessagingIdentity**: future stable public cryptographic identity.
-- **ContactIdentity**: a peer's public identity plus local verification status.
+- **MessagingIdentity**: stable vodozemac public device identity persisted through encrypted Account state.
+- **ContactIdentity**: a peer's public identity plus local verification and change-review status.
 - **TransportPeer**: ephemeral network/routing address.
 - **LegacyRoutingIdentity**: compatibility label for the current random per-page user ID.
 - Room IDs and Socket.IO IDs are never identity IDs.
 
-No identity key generation or verification is claimed in Phase 1.
+The Phase 2 crypto core generates identities and detects changes; final verification UI is not implemented.
 
 ## State and trust
 

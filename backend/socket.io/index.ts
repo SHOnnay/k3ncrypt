@@ -1,5 +1,6 @@
 import { Server, Socket } from "socket.io";
 import connectionListener from "./listeners";
+import { allowedCorsOrigins } from '../security/cors';
 
 export interface CustomSocket extends Socket {
   userID: string,
@@ -47,8 +48,8 @@ export const initSocket = (server) => {
     allowEIO3: true,
     maxHttpBufferSize: MAX_HTTP_BUFFER_SIZE,
     cors: {
-      origin: "*",
-      credentials: true
+      origin: allowedCorsOrigins(),
+      credentials: false,
     }
   });
   console.log("Websocket is up!");

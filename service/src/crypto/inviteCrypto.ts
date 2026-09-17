@@ -5,7 +5,8 @@ import { fromBase64Url, toBase64Url } from './base64url';
  *
  * The invitation secret is a 256-bit random value generated entirely on the
  * device that creates a room. It is carried only in the URL fragment
- * (`#room=<public-room-id>&secret=<base64url-secret>`) and is never
+ * (`#room=<public-room-id>&secret=<base64url-secret>&control=<separate-capability>`)
+ * and is never
  * transmitted to, or stored on, the signaling server — fragments are not
  * sent as part of an HTTP request by browsers.
  *

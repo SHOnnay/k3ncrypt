@@ -5,7 +5,7 @@ import { test, expect, Browser, BrowserContext, Page } from '@playwright/test';
  *
  * Regression coverage for the invite-secret redesign:
  *   - User A creates a room and receives an invitation link containing
- *     `#room=<public-room-id>&secret=<client-generated-secret>`.
+ *     `#room=<public-room-id>&secret=<client-generated-secret>&control=<independent-capability>`.
  *   - User B joins by pasting that invitation link (or just its fragment).
  *   - Both derive the same signaling/chat keys locally via HKDF — the
  *     secret is never sent to, or seen by, the server.
@@ -25,7 +25,7 @@ async function openUser(browser: Browser): Promise<{ ctx: BrowserContext; page: 
 async function createInvite(page: Page): Promise<string> {
   await page.click('#show-create-hash');
   const field = page.locator('#generated-hash-display');
-  await expect(field).toHaveValue(/#room=[^&]+&secret=[A-Za-z0-9_-]{40,}/);
+  await expect(field).toHaveValue(/#room=[^&]+&secret=[A-Za-z0-9_-]{43}&control=[A-Za-z0-9_-]{43}/);
   return field.inputValue();
 }
 
@@ -37,12 +37,13 @@ test.describe('Two-user invite-link join', () => {
     // ── User A: create an invitation ─────────────────────────────────────────
     await test.step('User A creates an invitation link', async () => {
       await userA.page.click('#show-create-hash');
-      await expect(userA.page.locator('#generated-hash-display')).toHaveValue(/#room=[^&]+&secret=[A-Za-z0-9_-]{40,}/);
+      await expect(userA.page.locator('#generated-hash-display')).toHaveValue(/#room=[^&]+&secret=[A-Za-z0-9_-]{43}&control=[A-Za-z0-9_-]{43}/);
     });
 
     const inviteLink = await userA.page.locator('#generated-hash-display').inputValue();
     expect(inviteLink).toContain('#room=');
     expect(inviteLink).toContain('secret=');
+    expect(inviteLink).toContain('control=');
 
     // ── User A: joins their own channel ───────────────────────────────────────
     await test.step('User A joins the channel', async () => {

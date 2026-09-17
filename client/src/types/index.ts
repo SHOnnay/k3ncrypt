@@ -21,6 +21,7 @@ export type SetupView = 'initial' | 'create' | 'join';
 export interface InviteInfo {
   roomId: string;
   secret: string;
+  controlCapability: string;
   link: string;
   absoluteLink: string | undefined;
 }
@@ -53,7 +54,7 @@ export interface ChatContextType {
   // Methods
   initializeChat: () => Promise<void>;
   createNewChannel: () => Promise<InviteInfo>;
-  joinChannel: (roomId: string, secret: string) => Promise<void>;
+  joinChannel: (roomId: string, secret: string, controlCapability: string) => Promise<void>;
   sendMessage: (text: string) => Promise<void>;
   startCall: () => Promise<void>;
   acceptCall: () => Promise<void>;
@@ -89,6 +90,6 @@ export interface InputProps {
 export interface SetupOverlayProps {
   setupView: SetupView;
   onViewChange: (view: SetupView) => void;
-  onChannelJoin: (roomId: string, secret: string) => Promise<void>;
+  onChannelJoin: (roomId: string, secret: string, controlCapability: string) => Promise<void>;
   status?: string;
 }

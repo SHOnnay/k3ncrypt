@@ -1,63 +1,51 @@
 # Vodozemac integration boundary
 
-Research date: 2026-09-17. This is a design record, not a production crypto claim.
+Updated: 2026-09-17. Prototype status: implemented and tested, not production-selected.
 
-## Upstream status
+## Implementation
 
-The current upstream crate is `vodozemac 0.11.0`, Apache-2.0, Rust edition 2024, with minimum Rust 1.89. It implements Olm (a Double Ratchet), Megolm, SAS, and modern encrypted pickles. The upstream manifest includes a `wasm_js` feature for browser randomness. Upstream reports an external Least Authority audit with no significant findings.
+`crypto-wasm/` pins Apache-2.0 `vodozemac = 0.11.0`, Rust edition 2024/MSRV 1.89, and compiles as both `rlib` and `cdylib` for `wasm32-unknown-unknown`. It disables default features and enables only `precomputed-tables` plus `wasm_js`; `low-level-api`, `libolm-compat`, `experimental-session-config`, and `insecure-pk-encryption` are not enabled.
 
-Primary sources:
+The `wasm-bindgen` API is K3ncrypt-specific: opaque Account and Session handles expose creation/load, public identity keys, one-time/fallback generation, supported Olm session establishment, encryption/decryption, and persistence. There is no private identity-key getter.
 
-- https://github.com/matrix-org/vodozemac
-- https://docs.rs/vodozemac/latest/vodozemac/olm/
-- https://docs.rs/vodozemac/latest/vodozemac/
-- https://github.com/matrix-org/vodozemac/blob/main/Cargo.toml
-- https://github.com/matrix-org/vodozemac-bindings
+Boundary secret copies:
 
-The old general-purpose `vodozemac-bindings` repository is marked unmaintained. K3ncrypt must not depend on an unreviewed third-party npm wrapper merely to shorten integration work.
+- a 32-byte HKDF-separated pickle key crosses JS→WASM for encrypted Account save/load and each JS copy is overwritten after the callback;
+- encrypted Account pickle text crosses WASM→JS and is then encrypted again by `SecureStorage`;
+- `SessionPickle` has no modern direct encryption helper, so transient Serde bytes cross WASM→JS and must immediately enter `SecureStorage`;
+- decrypted message bytes necessarily cross WASM→the application layer while unlocked.
 
-## Proposed build approach
+## Protocol adapter
 
-Create a separate Rust workspace package only after the TypeScript boundary is stable. Pin the crate version and Rust toolchain, enable `wasm_js`, expose a deliberately small `wasm-bindgen` API, produce deterministic release WASM, record checksums/SBOM, and test both browser and native Rust vectors. Do not enable the low-level API.
+`VodozemacCryptoSession` is an explicit second implementation of `CryptoSession`. It requires an already established opaque Session handle and expected session ID. Its envelope is unambiguously `{version:2,strategy:"vodozemac-olm-v1",data:{version:1,olmMessage}}`; legacy ciphertext remains version 1 with its own strategy. There is no heuristic fallback between them.
 
-The JS wrapper should satisfy `CryptoSession`; no UI, transport, or relay code may reach vodozemac objects directly. The TypeScript boundary should pass bytes and versioned envelopes, never serialized secret internals.
+The adapter cryptographically frames plaintext with an internal version and logical channel byte before Olm encryption, so message/signaling ciphertext cannot be swapped. Strict schemas, size limits, supported-version checks, and unknown-field rejection run before the Rust parser.
 
-## Account and session lifecycle
+`createChatInstance()` still constructs `LegacyInviteCryptoSession`. The vodozemac adapter is available only through direct test/development construction. Production conversations are not migrated or silently switched.
 
-An Olm account owns an Ed25519 signing identity, a Curve25519 sender identity, one-time keys, and fallback keys. An outbound session needs the recipient's Curve25519 identity key and one-time key. The first outbound ciphertext is a pre-key message. The recipient creates the matching inbound session from that pre-key message plus the initiator identity key.
+## Proven behavior
 
-K3ncrypt therefore needs more than replacing `encrypt()`: it needs an authenticated identity and pre-key distribution design, key exhaustion/replenishment, identity-change handling, concurrent-session selection, and transactional persistence. The present room relay is not yet a trustworthy key server.
+Native vodozemac tests use the supported high-level flow: Bob publishes a one-time/fallback key; Alice creates an outbound v1 session; Alice's first ciphertext is a pre-key message; Bob creates an inbound session while authenticating Alice's Curve25519 identity; replies become normal Olm messages.
 
-## Persistence and serialization
+The tests prove:
 
-`Account::pickle()` and `Session::pickle()` yield serializable state. Modern pickle encoding is Serde-format independent; serialization alone is not encryption. Vodozemac supports encrypting pickles with a 32-byte pickle key. K3ncrypt must place only encrypted pickle bytes in `SecureStorage`, protect the independent database master/pickle key, version records, and atomically commit ratchet advancement before acknowledgement.
+- bidirectional Alice/Bob pre-key and normal messages;
+- modern encrypted Account pickle round-trip with a 32-byte key;
+- modern Session pickle round-trip, destruction of all original instances, stable public identities, and continued post-restart decryption;
+- legitimate receive order 1, 3, 2 through vodozemac's ratchet;
+- tampered ciphertext, malformed/unsupported messages, wrong message type/identity flow, corrupt Account pickle, and corrupt Session pickle fail closed;
+- the crate compiles as optimized browser WASM.
 
-Browser work requires an encrypted database design and a user unlock KDF. Android can reuse the Rust core and store an app-generated database key under Android Keystore without biometrics, but native FFI/WASM parity and memory/zeroization limitations require review.
+Transport delivery IDs remain a separate duplicate-processing boundary. The legacy 1,024-sequence replay window is not applied inside the Olm ratchet; vodozemac owns ratchet/message-key ordering semantics.
 
-## Required prototype tests
+## Remaining production blockers
 
-Before production selection:
+- reviewed authenticated pre-key distribution and replenishment over the capability relay;
+- generated JS glue packaging, CSP/browser runtime tests, and WASM supply-chain artifacts/checksums;
+- transactional ratchet-state commit before network acknowledgement and crash/rollback tests;
+- concurrent/multiple-session selection, lost-message policy, and multi-device semantics;
+- verification UX and authenticated identity binding;
+- browser interoperability vectors, broader fuzzing, mobile/native parity, and performance/bundle review;
+- an explicit new-conversation negotiation design and separately reviewed legacy migration plan.
 
-- official/interoperability vectors for outbound pre-key and inbound creation;
-- bidirectional ratchet, delayed/out-of-order, duplicate, and lost-message behavior;
-- account/session encrypted-pickle round trip;
-- wrong/corrupt pickle rejection;
-- transactional crash recovery without ratchet rollback;
-- multiple sessions and identity changes;
-- WASM randomness and CSP-compatible loading;
-- bundle size/performance and memory lifecycle;
-- Android/native and browser envelope compatibility;
-- downgrade rejection and legacy/new-session migration isolation.
-
-## Migration from the legacy adapter
-
-1. Add an isolated Rust/WASM package and adapter named `VodozemacCryptoSession`.
-2. Introduce a new envelope version and explicit capability negotiation authenticated by the new session.
-3. Create messaging identities and a reviewed pre-key publication/authentication flow.
-4. Implement encrypted transactional state storage.
-5. Run two implementations in test fixtures; do not decrypt a vodozemac failure as legacy plaintext.
-6. Allow only new conversations to select the new protocol initially.
-7. Retire legacy invitations after a measured compatibility period.
-
-Existing legacy conversations cannot be silently converted into authenticated ratchet sessions because the invite secret is not a verified identity. The UI must show identity verification separately.
-
+Primary references: vodozemac upstream repository and 0.11 docs at https://github.com/matrix-org/vodozemac and https://docs.rs/vodozemac/0.11.0/vodozemac/olm/.

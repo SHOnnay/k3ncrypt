@@ -1,6 +1,6 @@
 /**
  * Custom hook for invite-fragment URL management
- * (`#room=<public-room-id>&secret=<secret>`).
+ * (`#room=<public-room-id>&secret=<secret>&control=<capability>`).
  */
 
 import { useEffect, useState } from 'react';
@@ -15,9 +15,9 @@ export const useUrlHash = () => {
     }
   }, []);
 
-  const updateInvite = (roomId: string, secret: string) => {
-    setInvite({ roomId, secret });
-    updateUrlInvite(roomId, secret);
+  const updateInvite = (roomId: string, secret: string, controlCapability: string) => {
+    setInvite({ roomId, secret, controlCapability });
+    updateUrlInvite(roomId, secret, controlCapability);
   };
 
   return {
