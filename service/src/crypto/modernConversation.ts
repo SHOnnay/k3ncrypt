@@ -117,9 +117,13 @@ export class ModernConversation {
             catch { throw new Error('This private invitation expired. Create a fresh conversation to continue.'); }
             const localBundle = await this.runtime.getPublicBundle();
             if (localBundle.oneTimeKeys.length < 10) {
-                await this.runtime.replenishOneTimeKeys(20);
-                await renewVodozemacBundle(roomId, capability, localAddress, await this.runtime.getPublicBundle());
-                await this.runtime.markPublicKeysPublished();
+                try {
+                    await this.runtime.replenishOneTimeKeys(20);
+                    await renewVodozemacBundle(roomId, capability, localAddress, await this.runtime.getPublicBundle());
+                    await this.runtime.markPublicKeysPublished();
+                } catch {
+                    // Renewal is availability work. Keep the existing identity/session usable and retry on a later open.
+                }
             }
         }
         if (!localAddress) {
