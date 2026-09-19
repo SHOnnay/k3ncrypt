@@ -51,6 +51,8 @@ export { createEncryptedMediaMessage, parseEncryptedMediaMessage, serializeEncry
 export type { EncryptedMediaMessage } from './media';
 export { MemoryAttachmentDeliveryStore } from './attachments';
 export type { AttachmentDeliveryRecord, AttachmentDeliveryStore, AttachmentMetadataStore, AttachmentStatus, AttachmentStatusView, CiphertextChunkStore } from './attachments';
+export { AttachmentService } from './attachments';
+export type { AttachmentConversationContext, CreateAttachmentUpload, CreatedAttachmentUpload } from './attachments';
 export { MediaPermissionTracker } from './permissions';
 export type { MediaPermissionKind, MediaPermissionState } from './permissions';
 import { generateUUID } from './utils/uuid';

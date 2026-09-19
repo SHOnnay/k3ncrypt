@@ -16,6 +16,7 @@ export interface CiphertextChunkStore {
 }
 export type AttachmentDeliveryStore = AttachmentMetadataStore & CiphertextChunkStore;
 const hash = async (token: string): Promise<string> => { if (!globalThis.crypto?.subtle) throw new Error('Attachment authorization is unavailable.'); const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(token)); return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, '0')).join(''); };
+const constantTimeEqual = (left: string, right: string): boolean => { if (left.length !== right.length) return false; let difference = 0; for (let index = 0; index < left.length; index += 1) difference |= left.charCodeAt(index) ^ right.charCodeAt(index); return difference === 0; };
 type RecordState = { record: AttachmentDeliveryRecord; accessHash: string; chunks: Map<number, EncryptedAttachmentChunk> };
 
 /** Storage-only delivery service; it never decrypts or interprets ciphertext. */
@@ -28,5 +29,5 @@ export class MemoryAttachmentDeliveryStore implements AttachmentDeliveryStore {
     async getAttachmentStatus(id: AttachmentId, accessToken: string): Promise<AttachmentStatusView> { const state = await this.authorized(id, accessToken); return { ...state.record, receivedChunks: state.chunks.size }; }
     async deleteAttachment(id: AttachmentId, accessToken: string): Promise<void> { const state = await this.authorized(id, accessToken); state.record.status = 'deleted'; state.chunks.clear(); }
     async expireAttachments(now = Date.now()): Promise<number> { let count = 0; for (const state of this.records.values()) if (state.record.expiresAt <= now && state.record.status !== 'expired') { state.record.status = 'expired'; state.chunks.clear(); count += 1; } return count; }
-    private async authorized(id: string, token: string): Promise<RecordState> { const state = this.records.get(id); if (!state || state.record.status === 'deleted' || state.record.status === 'expired' || state.accessHash !== await hash(token)) throw new Error('Attachment is unavailable.'); if (state.record.expiresAt <= Date.now()) { state.record.status = 'expired'; state.chunks.clear(); throw new Error('Attachment has expired.'); } return state; }
+    private async authorized(id: string, token: string): Promise<RecordState> { const state = this.records.get(id); const presentedHash = await hash(token); if (!state || state.record.status === 'deleted' || state.record.status === 'expired' || !constantTimeEqual(state.accessHash, presentedHash)) throw new Error('Attachment is unavailable.'); if (state.record.expiresAt <= Date.now()) { state.record.status = 'expired'; state.chunks.clear(); throw new Error('Attachment has expired.'); } return state; }
 }
