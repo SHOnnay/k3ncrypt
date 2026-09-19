@@ -22,6 +22,18 @@ export const LockIcon: React.FC<IconProps> = (props) => <Icon {...props}><rect x
 export const CloseIcon: React.FC<IconProps> = (props) => <Icon {...props}><path d="m6 6 12 12M18 6 6 18" /></Icon>;
 export const PaperclipIcon: React.FC<IconProps> = (props) => <Icon {...props}><path d="m21.4 11.6-8.8 8.8a6 6 0 0 1-8.5-8.5l9.5-9.5a4 4 0 0 1 5.7 5.7l-9.5 9.5a2 2 0 0 1-2.8-2.8l8.8-8.8" /></Icon>;
 export const MicIcon: React.FC<IconProps> = (props) => <Icon {...props}><rect x="9" y="2" width="6" height="12" rx="3" /><path d="M5 10a7 7 0 0 0 14 0M12 17v4M8 21h8" /></Icon>;
+export const VolumeIcon: React.FC<IconProps> = (props) => <Icon {...props}><path d="M11 5 6 9H2v6h4l5 4V5Z" /><path d="M15.5 8.5a5 5 0 0 1 0 7M18 6a8.5 8.5 0 0 1 0 12" /></Icon>;
+export const CheckIcon: React.FC<IconProps> = (props) => <Icon {...props}><path d="m5 12 4 4L19 6" /></Icon>;
+export const ChevronRightIcon: React.FC<IconProps> = (props) => <Icon {...props}><path d="m9 18 6-6-6-6" /></Icon>;
+export const ArrowLeftIcon: React.FC<IconProps> = (props) => <Icon {...props}><path d="m15 18-6-6 6-6" /></Icon>;
+export const SunIcon: React.FC<IconProps> = (props) => <Icon {...props}><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.66 6.34l1.41-1.41" /></Icon>;
+export const MoonIcon: React.FC<IconProps> = (props) => <Icon {...props}><path d="M20.5 14.3A8 8 0 0 1 9.7 3.5 8.5 8.5 0 1 0 20.5 14.3Z" /></Icon>;
+export const UserIcon: React.FC<IconProps> = (props) => <Icon {...props}><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></Icon>;
+export const BellIcon: React.FC<IconProps> = (props) => <Icon {...props}><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" /></Icon>;
+export const StorageIcon: React.FC<IconProps> = (props) => <Icon {...props}><ellipse cx="12" cy="5" rx="8" ry="3" /><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6" /></Icon>;
+export const NetworkIcon: React.FC<IconProps> = (props) => <Icon {...props}><circle cx="12" cy="5" r="2" /><circle cx="5" cy="18" r="2" /><circle cx="19" cy="18" r="2" /><path d="M12 7v4M5 16v-2h14v2" /></Icon>;
+export const PaletteIcon: React.FC<IconProps> = (props) => <Icon {...props}><path d="M12 3a9 9 0 0 0 0 18h1.5a1.5 1.5 0 0 0 0-3H12a2 2 0 0 1 0-4h2.5A6.5 6.5 0 0 0 21 7.5C21 5 17 3 12 3Z" /><circle cx="7.5" cy="10" r=".7" fill="currentColor" /><circle cx="10" cy="6.5" r=".7" fill="currentColor" /><circle cx="15" cy="7" r=".7" fill="currentColor" /></Icon>;
+export const InfoIcon: React.FC<IconProps> = (props) => <Icon {...props}><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7h.01" /></Icon>;
 
 export const CopyIcon: React.FC<IconProps> = ({ size = 24, className = '' }) => (
   <svg

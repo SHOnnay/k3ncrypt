@@ -1,115 +1,35 @@
-:root {
-  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: #18231f;
-  background: #edf1ef;
-  font-synthesis: none;
-  --brand: #176b52;
-  --brand-strong: #105540;
-  --accent: var(--brand);
-  --accent-hover: var(--brand-strong);
-  --brand-soft: #e7f2ed;
-  --surface: #ffffff;
-  --surface-muted: #f4f6f5;
-  --canvas: #edf1ef;
-  --ink: #18231f;
-  --ink-soft: #35463f;
-  --muted: #798780;
-  --muted-strong: #5e6d66;
-  --border: #dde4e0;
-  --border-strong: #bec9c3;
-  --danger: #ba3e4a;
-  --danger-soft: #fff0f1;
-  --success: #22a06b;
-  --warning: #a66a18;
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 24px;
-  --space-6: 32px;
-  --radius-control: 10px;
-  --radius-card: 16px;
-  --radius-sheet: 20px;
-  --font-xs: .75rem;
-  --font-sm: .875rem;
-  --font-md: 1rem;
-  --font-lg: 1.125rem;
-  --font-display: 1.75rem;
-  --weight-medium: 500;
-  --weight-semibold: 650;
-  --weight-bold: 750;
-  --motion-fast: 140ms;
-  --motion-normal: 200ms;
-  --shadow-sm: 0 2px 8px rgba(30, 51, 43, .08);
-  --shadow-lg: 0 24px 70px rgba(29, 45, 39, .16);
-}
+@import '../theme/tokens.css';
 
 *,
 *::before,
-*::after {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
+*::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-html,
-body {
-  height: 100%;
-  width: 100%;
-}
+html, body { width: 100%; height: 100%; }
 
 body {
-  font-family: inherit;
-  background: var(--canvas);
-  color: var(--ink);
   height: 100vh;
   height: 100dvh;
   overflow: hidden;
-
+  color: var(--ink);
+  background: var(--canvas);
+  font-family: var(--font-interface);
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+  transition: color var(--motion-normal), background var(--motion-normal);
 }
 
-#root,
-#app {
-  height: 100%;
-  min-width: 0;
-}
+#root, #app { height: 100%; min-width: 0; }
+.hidden { display: none !important; }
+button, input, textarea { font: inherit; }
+button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px solid color-mix(in srgb, var(--brand) 24%, transparent); outline-offset: 2px; }
 
-.hidden {
-  display: none !important;
-}
-
-/* Scrollbar */
-::-webkit-scrollbar {
-  width: 7px;
-}
-
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-  background: #cbd4cf;
-  border-radius: 8px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: #aebbb4;
-}
-
-button, input { font: inherit; }
-button:focus-visible, input:focus-visible { outline: 3px solid rgba(23, 107, 82, .2); outline-offset: 2px; }
+::-webkit-scrollbar { width: 7px; height: 7px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { border-radius: var(--radius-round); background: var(--border-strong); }
 
 .app-shell { height: 100%; display: flex; overflow: hidden; background: var(--canvas); }
-.conversation-workspace { flex: 1; min-width: 0; height: 100%; padding: 18px; }
-.app-error { position: fixed; z-index: 999; top: 18px; right: 18px; max-width: 360px; padding: 12px 14px; border: 1px solid #ecc8cc; border-radius: 10px; color: #8d2f39; background: var(--danger-soft); box-shadow: var(--shadow-sm); font-size: .82rem; }
+.conversation-workspace { flex: 1; min-width: 0; height: 100%; padding: 16px; }
+.app-error { position: fixed; z-index: 999; top: 18px; right: 18px; max-width: 360px; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border)); border-radius: 12px; color: var(--danger); background: var(--danger-soft); box-shadow: var(--shadow-sm); font-size: .78rem; }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; } }
-
-/* Mobile */
-@media (max-width: 480px) {
-  body {
-    height: 100vh;
-    height: 100dvh;
-  }
-  .conversation-workspace { padding: 0 0 64px; }
-}
+@media (max-width: 620px) { .conversation-workspace { padding: 0 0 calc(68px + env(safe-area-inset-bottom)); } }

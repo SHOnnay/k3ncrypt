@@ -1,10 +1,10 @@
-.overlay { height: 100%; display: grid; place-items: center; padding: 32px; background: radial-gradient(circle at 50% 34%, #f8faf9 0, var(--canvas) 62%); }
+.overlay { height: 100%; display: grid; place-items: center; padding: 32px; overflow-y: auto; background: radial-gradient(circle at 50% 34%, var(--surface-raised) 0, var(--canvas-soft) 50%, var(--canvas) 100%); }
 .overlay.hidden { display: none; }
-.overlay-content { width: min(100%, 460px); padding: 38px; border: 1px solid var(--border); border-radius: 18px; text-align: center; background: rgba(255, 255, 255, .9); box-shadow: var(--shadow-lg); }
-.welcome-icon { width: 52px; height: 52px; display: grid; place-items: center; margin: 0 auto 18px; color: white; background: var(--brand); border-radius: 15px; box-shadow: 0 10px 24px rgba(23, 107, 82, .22); }
-.welcome-kicker { display: block; margin-bottom: 8px; color: var(--brand); font-size: .69rem; font-weight: 750; letter-spacing: .1em; text-transform: uppercase; }
-.overlay-content h1 { color: var(--ink); font-size: clamp(1.65rem, 4vw, 2.05rem); letter-spacing: -.04em; }
-.overlay-content > p { max-width: 350px; margin: 10px auto 28px; color: var(--muted-strong); font-size: .88rem; line-height: 1.55; }
-.setup-status { margin-top: 18px; padding: 10px 12px; border-radius: 9px; color: var(--brand-strong); background: var(--brand-soft); font-size: .78rem; text-align: left; }
-.deleted-state h2 { color: var(--danger); margin-bottom: 8px; }.deleted-state p { margin-bottom: 20px; color: var(--muted-strong); }
-@media (max-width: 620px) { .overlay { padding: 18px; align-items: center; }.overlay-content { padding: 28px 20px; border-radius: 15px; }.overlay-content > p { margin-bottom: 22px; } }
+.overlay-content { width: min(100%, 500px); padding: 46px; border: 1px solid var(--border); border-radius: var(--radius-xl); text-align: center; background: color-mix(in srgb, var(--surface) 94%, transparent); box-shadow: var(--shadow-md); }
+.welcome-wordmark { width: 58px; height: 58px; display: grid; place-items: center; margin: 0 auto 22px; border-radius: 19px; color: var(--brand-contrast); background: var(--brand); font-family: var(--font-display); font-size: 1.5rem; font-weight: 700; box-shadow: 0 12px 28px color-mix(in srgb, var(--brand) 20%, transparent); }
+.welcome-kicker { display: block; margin-bottom: 10px; color: var(--brand); font-size: .65rem; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+.overlay-content h1 { color: var(--ink); font-family: var(--font-display); font-size: clamp(2rem, 5vw, 2.6rem); font-weight: 500; letter-spacing: -.045em; line-height: 1.05; }
+.overlay-content > p { max-width: 360px; margin: 14px auto 30px; color: var(--muted-strong); font-size: .87rem; line-height: 1.65; }
+.setup-status { margin-top: 18px; padding: 11px 13px; border: 1px solid color-mix(in srgb, var(--brand) 22%, var(--border)); border-radius: 11px; color: var(--brand-strong); background: var(--brand-soft); font-size: .76rem; text-align: left; }
+.deleted-state { display: flex; justify-content: center; }
+@media (max-width: 620px) { .overlay { padding: 16px 16px calc(84px + env(safe-area-inset-bottom)); align-items: center; }.overlay-content { padding: 34px 22px; border-radius: 22px; }.overlay-content > p { margin-bottom: 24px; }.welcome-wordmark { margin-bottom: 18px; } }

@@ -8,7 +8,7 @@ import { SetupOverlay } from './components/SetupOverlay/SetupOverlay';
 import { ChatContainer } from './components/ChatContainer/ChatContainer';
 import { updateUrlInvite } from './utils/urlHash';
 import { Sidebar } from './components/AppShell/Sidebar';
-import { PrivacyPanel } from './components/AppShell/PrivacyPanel';
+import { SettingsPanel } from './components/Settings/SettingsPanel';
 import './styles/global.css';
 import { debugError } from './utils/debug';
 
@@ -16,7 +16,7 @@ const AppContent: React.FC = () => {
   const { initializeChat, joinChannel } = useChat();
   const [showSetup, setShowSetup] = useState(true);
   const [error, setError] = useState<string>('');
-  const [showPrivacy, setShowPrivacy] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
 
   // Initialize chat on mount
   useEffect(() => {
@@ -39,18 +39,18 @@ const AppContent: React.FC = () => {
   };
 
   return (
-    <div className={`app-shell ${showPrivacy ? 'privacy-open' : ''}`}>
+    <div className="app-shell">
       <Sidebar
         isWelcomeActive={showSetup}
         onNewConversation={() => setShowSetup(true)}
         onOpenConversation={() => setShowSetup(false)}
-        onOpenPrivacy={() => setShowPrivacy((current) => !current)}
+        onOpenSettings={() => setShowSettings(true)}
       />
       <section className="conversation-workspace" aria-label="Conversation workspace">
         <SetupOverlay onSetupComplete={handleSetupComplete} isHidden={!showSetup} />
         <ChatContainer isHidden={showSetup} />
       </section>
-      <PrivacyPanel isOpen={showPrivacy} onClose={() => setShowPrivacy(false)} />
+      <SettingsPanel isOpen={showSettings} onClose={() => setShowSettings(false)} />
       {error && (
         <div className="app-error" role="alert">
           {error}

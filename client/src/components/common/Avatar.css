@@ -1,0 +1,7 @@
+.avatar { position: relative; flex: none; display: inline-grid; place-items: center; border: 1px solid color-mix(in srgb, var(--brand) 24%, var(--border)); color: var(--brand-strong); background: linear-gradient(145deg, var(--brand-soft), var(--surface-tint)); font-family: var(--font-display); font-weight: 700; box-shadow: inset 0 1px rgba(255, 255, 255, .25); }
+.avatar--small { width: 34px; height: 34px; border-radius: 11px; font-size: .82rem; }
+.avatar--medium { width: 44px; height: 44px; border-radius: 15px; font-size: 1rem; }
+.avatar--large { width: 58px; height: 58px; border-radius: 19px; font-size: 1.25rem; }
+.avatar--hero { width: 104px; height: 104px; border-radius: 34px; font-size: 2.35rem; }
+.avatar__status { position: absolute; right: -1px; bottom: -1px; width: 11px; height: 11px; border: 2px solid var(--surface); border-radius: 50%; background: var(--border-strong); }
+.avatar__status--online { background: var(--success); }

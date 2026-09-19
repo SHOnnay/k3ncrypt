@@ -1,10 +1,10 @@
-.btn { min-height: 40px; padding: 0 16px; border: 1px solid transparent; border-radius: 10px; font: inherit; font-size: .83rem; font-weight: 650; cursor: pointer; transition: background .16s ease, border-color .16s ease, color .16s ease, transform .16s ease; }
+.btn { min-height: 41px; padding: 0 16px; border: 1px solid transparent; border-radius: 12px; font: inherit; font-size: .8rem; font-weight: 700; cursor: pointer; transition: background var(--motion-fast), border-color var(--motion-fast), color var(--motion-fast), transform var(--motion-fast); }
 .btn:hover:not(:disabled) { transform: translateY(-1px); }.btn:active:not(:disabled) { transform: translateY(0); }.btn:disabled { opacity: .43; cursor: not-allowed; }
-.btn--primary { color: white; background: var(--brand); }.btn--primary:hover:not(:disabled) { background: var(--brand-strong); }
-.btn--secondary { color: var(--ink-soft); background: white; border-color: var(--border); }.btn--secondary:hover:not(:disabled) { color: var(--brand); border-color: #b6cdc3; background: #fafcfb; }
-.btn--danger { color: var(--danger); background: var(--danger-soft); border-color: #f0ced2; }
+.btn--primary { color: var(--brand-contrast); background: var(--brand); }.btn--primary:hover:not(:disabled) { background: var(--brand-strong); }
+.btn--secondary { color: var(--ink-soft); background: var(--surface-raised); border-color: var(--border); }.btn--secondary:hover:not(:disabled) { color: var(--brand); border-color: var(--border-strong); background: var(--surface-muted); }
+.btn--danger { color: var(--danger); background: var(--danger-soft); border-color: color-mix(in srgb, var(--danger) 24%, var(--border)); }
 .btn--small { min-height: 36px; padding: 0 11px; font-size: .76rem; }.btn--large { min-height: 47px; font-size: .87rem; }
 .btn--circle { width: 42px; height: 42px; min-height: 42px; padding: 0; display: grid; place-items: center; border-radius: 50%; }
 .btn--circle.btn--large { width: 58px; height: 58px; }.btn svg { flex: none; }
-.btn--icon { min-height: 36px; width: 36px; padding: 0; display: grid; place-items: center; background: white; color: var(--muted-strong); border-color: var(--border); }
+.btn--icon { min-height: 36px; width: 36px; padding: 0; display: grid; place-items: center; background: var(--surface-raised); color: var(--muted-strong); border-color: var(--border); }
 .btn--icon.btn--tiny { min-height: 28px; width: 28px; }.btn--icon:hover:not(:disabled) { color: var(--brand); background: var(--brand-soft); transform: none; }

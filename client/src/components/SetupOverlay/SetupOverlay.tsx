@@ -9,8 +9,8 @@ import { InitialActions } from './InitialActions';
 import { CreateHashView } from './CreateHashView';
 import { JoinHashView } from './JoinHashView';
 import './SetupOverlay.css';
-import { ShieldIcon } from '../common/icons';
 import { debugError } from '../../utils/debug';
+import { copy } from '../../content/copy';
 
 interface SetupOverlayProps {
   onSetupComplete: (roomId: string, secret: string, controlCapability: string) => Promise<void>;
@@ -107,13 +107,22 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, isH
     }
   };
 
+  const heading = view === 'initial' ? copy.welcome.title : view === 'create' ? copy.contact.title : view === 'join' ? 'Open an invitation' : 'Conversation closed';
+  const description = view === 'initial'
+    ? copy.welcome.tagline
+    : view === 'create'
+      ? 'Share this invitation with one person you trust.'
+      : view === 'join'
+        ? 'Paste the invitation someone shared with you.'
+        : 'This invitation is no longer available.';
+
   return (
     <div className={`overlay ${isHidden ? 'hidden' : ''}`}>
       <div className="overlay-content">
-        <div className="welcome-icon" aria-hidden="true"><ShieldIcon size={25} /></div>
-        <span className="welcome-kicker">Private by design</span>
-        <h1>Welcome to K3ncrypt</h1>
-        <p>Start an encrypted conversation or use an invitation from someone you trust.</p>
+        <div className="welcome-wordmark" aria-hidden="true">K</div>
+        <span className="welcome-kicker">A place for your people</span>
+        <h1>{heading}</h1>
+        <p>{description}</p>
 
         {view === 'initial' && (
           <InitialActions
@@ -142,10 +151,8 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, isH
 
         {view === 'deleted' && (
           <div className="deleted-state">
-            <h2>Conversation deleted</h2>
-            <p>This invitation is no longer available.</p>
             <button className="btn btn--primary" onClick={handleBack}>
-              Return Home
+              Return home
             </button>
           </div>
         )}

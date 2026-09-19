@@ -6,6 +6,8 @@ import React, { useState } from 'react';
 import { useChat } from '../../context/ChatContext';
 import { Button } from '../common/Button';
 import { CopyIcon, ShareIcon, PhoneIcon, TrashIcon } from '../common/icons';
+import { Avatar } from '../common/Avatar';
+import { StatusPill } from '../common/StatusPill';
 import './ChatHeader.css';
 import { debugError } from '../../utils/debug';
 
@@ -52,11 +54,11 @@ const handleDelete = async () => {
 
   return (
     <header className={`chat-header glass ${isConnected ? 'active' : ''}`}>
+      <Avatar label="Private conversation" size="medium" status={isConnected ? 'online' : 'offline'} />
       <div className="header-info">
         <div className="title-row">
-          <span className={`status-dot ${isConnected ? 'connected' : ''}`}></span>
           <h2 className="channel-title">Private conversation</h2>
-          <span className="badge">Encrypted</span>
+          <StatusPill tone="positive">Private</StatusPill>
         </div>
         {channelHash && (
           <div className="hash-badge-container">
@@ -73,7 +75,7 @@ const handleDelete = async () => {
           </div>
         )}
         <p id="participant-info" className="participant-info">
-          {isConnected ? 'Peer joined. Communication is encrypted.' : 'Waiting for your peer to join'}
+          {isConnected ? 'Peer joined. Communication is encrypted.' : 'Waiting for someone you trust'}
         </p>
       </div>
       <div className="header-actions">

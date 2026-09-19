@@ -8,5 +8,5 @@
   gap: 10px;
 }
 
-.restore-identity { margin-top: 5px; border: 0; background: transparent; color: var(--muted); font: inherit; font-size: .76rem; cursor: not-allowed; }
-.restore-identity span { margin-left: 6px; padding: 2px 6px; border: 1px solid var(--border); border-radius: 999px; font-size: .63rem; }
+.restore-identity { margin-top: 8px; border: 0; background: transparent; color: var(--muted); font: inherit; font-size: .74rem; cursor: not-allowed; }
+.restore-identity span { margin-left: 6px; padding: 3px 7px; border: 1px solid var(--border); border-radius: var(--radius-round); font-size: .58rem; }

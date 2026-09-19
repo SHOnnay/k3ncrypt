@@ -6,7 +6,8 @@ import React, { useEffect } from 'react';
 import { useChat } from '../../context/ChatContext';
 import { useCallTimer } from '../../hooks/useCallTimer';
 import { Button } from '../common/Button';
-import { EndCallIcon } from '../common/icons';
+import { EndCallIcon, MicIcon, VolumeIcon } from '../common/icons';
+import { Avatar } from '../common/Avatar';
 import './CallOverlay.css';
 
 export const CallOverlay: React.FC = () => {
@@ -42,7 +43,8 @@ export const CallOverlay: React.FC = () => {
   return (
     <div className="blur-overlay">
       <div className="call-info">
-        <div className="call-avatar shimmer"></div>
+        <div className="call-avatar shimmer"><Avatar label="Private conversation" size="hero" /></div>
+        <span className="call-kicker">Private audio call</span>
         <h3 id="call-status" className="call-status">
           {callStatus || 'Calling...'}
         </h3>
@@ -50,7 +52,7 @@ export const CallOverlay: React.FC = () => {
           {formatDuration(duration)}
         </p>
         {isIncomingCall ? (
-          <div style={{ display: 'flex', gap: '0.75rem' }}>
+          <div className="incoming-call-actions">
             <Button variant="secondary" size="medium" onClick={handleAcceptCall} title="Accept Call">
               Accept
             </Button>
@@ -59,16 +61,11 @@ export const CallOverlay: React.FC = () => {
             </Button>
           </div>
         ) : (
-          <Button
-            id="end-call-btn"
-            variant="danger"
-            circle
-            size="large"
-            onClick={handleEndCall}
-            title={callLifecycleState === 'ringing' ? 'Cancel Call' : 'End Call'}
-          >
-            <EndCallIcon size={32} />
-          </Button>
+          <div className="call-controls">
+            <div className="call-control"><Button variant="secondary" circle disabled title="Mute is not available yet"><MicIcon size={20} /></Button><span>Mute</span><small>Later</small></div>
+            <div className="call-control"><Button id="end-call-btn" variant="danger" circle size="large" onClick={handleEndCall} title={callLifecycleState === 'ringing' ? 'Cancel Call' : 'End Call'}><EndCallIcon size={27} /></Button><span>{callLifecycleState === 'ringing' ? 'Cancel' : 'End'}</span></div>
+            <div className="call-control"><Button variant="secondary" circle disabled title="Speaker control is not available yet"><VolumeIcon size={20} /></Button><span>Speaker</span><small>Later</small></div>
+          </div>
         )}
       </div>
     </div>

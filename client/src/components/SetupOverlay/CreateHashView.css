@@ -1,11 +1,7 @@
-/**
- * Create hash view styles – terminal theme
- */
-
 .create-hash-view {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 16px;
 }
 
 .copy-feedback {
@@ -13,16 +9,15 @@
   color: var(--success);
   margin-top: 0.35rem;
   display: block;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.02em;
 }
 
-.copy-feedback::before {
-  content: '✓ ';
-}
+.copy-feedback::before { content: '✓ '; }
+.invite-note { margin: -5px 2px 0; color: var(--muted); font-size: .69rem; line-height: 1.5; text-align: left; }
 
 .button-group {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
-  margin-top: 0.5rem;
+  margin-top: 0.35rem;
 }

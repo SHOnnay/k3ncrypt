@@ -37,7 +37,7 @@ export const CreateHashView: React.FC<CreateHashViewProps> = ({
   return (
     <div className="create-hash-view">
       <div className="input-group">
-        <label>Your private invitation</label>
+        <label>Private invitation</label>
         <div className="copy-input">
           <Input
             id="generated-hash-display"
@@ -55,15 +55,17 @@ export const CreateHashView: React.FC<CreateHashViewProps> = ({
             <CopyIcon size={20} />
           </Button>
         </div>
-        {copied && <span className="copy-feedback">Copied!</span>}
+        {copied && <span className="copy-feedback">Invitation copied</span>}
       </div>
+
+      <p className="invite-note">Anyone with this invitation can enter this space. Share it privately.</p>
 
       <div className="button-group">
         <Button id="back-btn" variant="secondary" onClick={onBack}>
           Back
         </Button>
         <Button id="join-btn" variant="primary" onClick={onNext} disabled={!inviteLink}>
-          Open conversation
+          Continue to conversation
         </Button>
       </div>
     </div>

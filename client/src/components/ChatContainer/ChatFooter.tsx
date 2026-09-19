@@ -46,7 +46,7 @@ export const ChatFooter: React.FC = () => {
           type="text"
           id="msg-input"
           className="message-input"
-          placeholder="Type a secure message..."
+          placeholder="Write a message"
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           onKeyDown={handleKeyPress}
