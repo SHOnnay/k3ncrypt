@@ -7,11 +7,10 @@ import ReactDOM from 'react-dom/client';
 import { ChatProvider } from './context/ChatContext';
 import { ThemeProvider } from './theme/ThemeContext';
 import App from './App';
-import { VODOZEMAC_WASM_URL } from './crypto/vodozemacArtifact';
-
-// Keep the audited local crypto artifact in the production asset graph without
-// initializing or selecting the modern protocol for existing conversations.
-void VODOZEMAC_WASM_URL;
+import { loadVodozemacBindings } from './crypto/vodozemacModule';
+// Initialize the local generated module at application startup. The modern
+// protocol remains opt-in; no identity or session is created by this probe.
+void loadVodozemacBindings().catch(() => undefined);
 
 const root = ReactDOM.createRoot(document.getElementById('app')!);
 root.render(

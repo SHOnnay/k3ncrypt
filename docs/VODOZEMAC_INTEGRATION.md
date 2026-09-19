@@ -53,11 +53,14 @@ legacy invite protocol. Encrypt/decrypt are rejected unless the state is
 `active`. Account and session persistence continue through `SecureStorage`,
 including the existing Vodozemac pickle-key boundary.
 
-The client artifact is `crypto-wasm/pkg/k3ncrypt_vodozemac_bg.wasm`, pinned to
-the Phase 2 build and accompanied by a SHA-256 manifest. The loader accepts
-only a caller-supplied bundled URL and reports a typed `WASM_INIT_FAILED` when
-the local module or bindings cannot initialize. No CDN, remote downloader, or
-dynamic dependency is used.
+The client package is generated into `crypto-wasm/pkg/` by the pinned
+`wasm-bindgen-cli 0.2.128` tool and includes the JS glue, TypeScript
+declarations, and WASM binary. Vite bundles the glue and emits the local WASM
+asset under `client/dist/assets/`. Application startup initializes this local
+module; no identity or session is selected for the existing legacy path. A
+missing or corrupt artifact rejects initialization and never triggers a
+protocol downgrade. No CDN, remote downloader, or external crypto host is
+used.
 
 ## Public boundary
 
@@ -70,8 +73,8 @@ non-sensitive: they do not include ciphertext, plaintext, keys, or pickles.
 ## Remaining production blockers
 
 - reviewed authenticated pre-key distribution and replenishment over the capability relay;
-- generated `wasm-bindgen` JS glue packaging, CSP/browser runtime tests, and
-  browser supply-chain verification (the WASM artifact checksum is now tracked);
+- CSP/browser runtime hardening and browser supply-chain verification (the
+  WASM artifact checksum is tracked as release provenance, not runtime-checked);
 - transactional ratchet-state commit before network acknowledgement and crash/rollback tests;
 - concurrent/multiple-session selection, lost-message policy, and multi-device semantics;
 - verification UX and authenticated identity binding;

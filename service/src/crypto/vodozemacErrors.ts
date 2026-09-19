@@ -13,7 +13,7 @@ export type VodozemacErrorCode =
 export class VodozemacBoundaryError extends Error {
     public readonly name = 'VodozemacBoundaryError';
 
-    constructor(public readonly code: VodozemacErrorCode, message: string, options?: ErrorOptions) {
-        super(message, options);
+    constructor(public readonly code: VodozemacErrorCode, message: string) {
+        super(message);
     }
 }

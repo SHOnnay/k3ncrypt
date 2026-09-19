@@ -12,6 +12,10 @@
         "jsx": "react-jsx",
         /* Bundler mode */
         "moduleResolution": "bundler",
+        "baseUrl": ".",
+        "paths": {
+            "@k3ncrypt-vodozemac": ["../crypto-wasm/pkg/k3ncrypt_vodozemac.d.ts"]
+        },
         "allowImportingTsExtensions": true,
         "resolveJsonModule": true,
         "isolatedModules": true,

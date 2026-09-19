@@ -1,0 +1,32 @@
+/* tslint:disable */
+/* eslint-disable */
+export const memory: WebAssembly.Memory;
+export const __wbg_inboundsessionresult_free: (a: number, b: number) => void;
+export const __wbg_k3ncryptaccount_free: (a: number, b: number) => void;
+export const __wbg_k3ncryptsession_free: (a: number, b: number) => void;
+export const inboundsessionresult_plaintext: (a: number) => [number, number];
+export const inboundsessionresult_takeSession: (a: number) => [number, number, number];
+export const k3ncryptaccount_createAccount: () => number;
+export const k3ncryptaccount_createInboundSession: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
+export const k3ncryptaccount_createOutboundSession: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
+export const k3ncryptaccount_fallbackKey: (a: number) => [number, number, number, number];
+export const k3ncryptaccount_firstOneTimeKey: (a: number) => [number, number, number, number];
+export const k3ncryptaccount_generateFallbackKey: (a: number) => void;
+export const k3ncryptaccount_generateOneTimeKeys: (a: number, b: number) => [number, number];
+export const k3ncryptaccount_identityKeys: (a: number) => [number, number, number, number];
+export const k3ncryptaccount_loadAccount: (a: number, b: number, c: number, d: number) => [number, number, number];
+export const k3ncryptaccount_markKeysAsPublished: (a: number) => void;
+export const k3ncryptaccount_saveAccount: (a: number, b: number, c: number) => [number, number, number, number];
+export const k3ncryptsession_decrypt: (a: number, b: number, c: number) => [number, number, number, number];
+export const k3ncryptsession_encrypt: (a: number, b: number, c: number) => [number, number, number, number];
+export const k3ncryptsession_loadSession: (a: number, b: number) => [number, number, number];
+export const k3ncryptsession_saveSession: (a: number) => [number, number, number, number];
+export const k3ncryptsession_sessionId: (a: number) => [number, number];
+export const __wbindgen_exn_store: (a: number) => void;
+export const __externref_table_alloc: () => number;
+export const __wbindgen_externrefs: WebAssembly.Table;
+export const __wbindgen_free: (a: number, b: number, c: number) => void;
+export const __externref_table_dealloc: (a: number) => void;
+export const __wbindgen_malloc: (a: number, b: number) => number;
+export const __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
+export const __wbindgen_start: () => void;

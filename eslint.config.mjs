@@ -18,6 +18,7 @@ export default [
       '**/playwright-report/**',
       '**/test-results/**',
       'client/public/**',
+      'crypto-wasm/pkg/**/*.d.ts',
     ],
   },
   {
