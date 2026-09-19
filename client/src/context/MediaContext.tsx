@@ -21,7 +21,7 @@ export const MediaProvider: React.FC<{ children: ReactNode; workflow?: MediaMess
 
   const sendFile = useCallback(async (kind: Exclude<MediaKind, 'voice'>, file: { arrayBuffer: () => Promise<ArrayBuffer>; type: string }) => {
     if (!workflow || protocolMode !== 'modern' || !context.conversationId || !context.participantId) {
-      setTransfer({ state: 'failed', error: 'Protected media is not available in this conversation yet.' });
+      setTransfer({ state: 'failed', error: 'Protected media is temporarily unavailable.' });
       return;
     }
     setTransfer({ state: 'uploading' });
@@ -35,7 +35,7 @@ export const MediaProvider: React.FC<{ children: ReactNode; workflow?: MediaMess
 
   const receive = useCallback(async (serialized: string) => {
     if (!workflow || protocolMode !== 'modern' || !context.conversationId || !context.participantId) {
-      setTransfer({ state: 'failed', error: 'Protected media is not available in this conversation yet.' });
+      setTransfer({ state: 'failed', error: 'Protected media is temporarily unavailable.' });
       return undefined;
     }
     setTransfer({ state: 'downloading' });
@@ -51,7 +51,7 @@ export const MediaProvider: React.FC<{ children: ReactNode; workflow?: MediaMess
 
   const sendVoice = useCallback(async (bytes: Uint8Array, durationMs: number) => {
     if (!workflow || protocolMode !== 'modern' || !context.conversationId || !context.participantId) {
-      setTransfer({ state: 'failed', error: 'Protected voice messages are not available in this conversation yet.' });
+      setTransfer({ state: 'failed', error: 'Protected media is temporarily unavailable.' });
       return;
     }
     setTransfer({ state: 'uploading' });
