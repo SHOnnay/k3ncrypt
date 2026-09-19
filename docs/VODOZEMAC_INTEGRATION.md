@@ -330,3 +330,35 @@ retaining the named Mongo volume. The current development host has Docker CLI
 but no running Docker daemon, so this process-restart procedure could not be
 executed here. MongoDB remains the production authority for pre-key and offline
 mailbox state; volatile in-memory mode is test/development only.
+
+## Phase 3I deployment validation (2026-09-19)
+
+The Phase 3I gate was run from the development checkout. Docker CLI and
+Compose are installed, but the Docker daemon was not running, so the Mongo
+service could not be started. Consequently the Mongo integration suite stayed
+skipped and no real relay/Mongo restart, index, quota, claim/ACK, OTK
+concurrency, storage-inspection, or Mongo failure-injection evidence was
+available. Browser runs therefore used the explicitly development-only
+volatile store.
+
+The configured Chromium Playwright suite passed all 8 tests. Firefox and
+WebKit binaries were installed from the official Playwright distribution;
+WebKit passed 7/8 tests, with the modern restart flow failing because the chat
+container remained hidden after reopening. Firefox could not complete even the
+Vodozemac smoke test in this host environment and was interrupted after the
+browser worker failed to make progress. These results do not establish the
+cross-browser production gate.
+
+The full Jest suite passed 260 tests with 1 Mongo integration test skipped.
+The service TypeScript check and client production build passed. The root
+TypeScript check still reports existing workspace/module-resolution errors;
+Rust tooling (`cargo` and `wasm-pack`) is unavailable on this host, so Rust,
+WASM, and cargo-audit validation were not run.
+
+**Phase 3I readiness decision: NO.** Modern conversations must not be made
+the default until a Docker-backed Mongo run, relay/Mongo restart evidence,
+storage and concurrency checks, and a passing supported-browser matrix are
+available. Existing legacy conversations remain unchanged. The future switch,
+once those blockers are cleared, is limited to changing the new-conversation
+policy from `legacy-default` to `modern-default`; persisted conversation modes
+remain authoritative.
