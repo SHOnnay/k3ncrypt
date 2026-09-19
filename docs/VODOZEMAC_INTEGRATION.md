@@ -230,3 +230,50 @@ Phase 3E still leaves product work before modern can become the default:
 cross-device support, a reviewed identity-change recovery flow, server-side
 offline delivery, long-lived bundle renewal, durable delivery receipts,
 multi-tab coordination, and production deployment/operational review.
+
+## Phase 3F: offline delivery and messaging readiness
+
+Modern message envelopes may now be retained by the relay when the recipient
+is offline. The mailbox key is the recipient's opaque routing address scoped to
+the room capability; it is not a username or cryptographic identity. Each
+record contains only a generated delivery ID, sender and recipient routing
+addresses, room scope, timestamps/expiry, a dedupe digest, and the opaque
+encrypted envelope. The relay never receives plaintext, ratchet state, keys, or
+private identity material. It still learns room membership, routing addresses,
+message timing, envelope size, and delivery/retry correlation.
+
+Offline records are bounded to 32 KiB per envelope, 64 envelopes per mailbox,
+and a seven-day TTL. MongoDB uses TTL and unique dedupe indexes; in-memory mode
+is explicitly volatile development/test behavior. Retrieval is bounded to 64
+records per join and uses a short atomic claim lease. The recipient ACKs only
+after modern decryption, duplicate-state persistence, and ratchet persistence;
+the ACK means application acceptance, never that a human read the message.
+Unknown or duplicate ACKs are harmless. Missing ACKs cause the sender to retry
+the same persisted ciphertext, while the mailbox dedupe key prevents duplicate
+storage. Expired records are removed and are not served.
+
+The current Socket.IO room map remains process-local. MongoDB makes pre-key and
+offline-record claims durable and conditional across instances, but live socket
+routing still requires sticky/single-instance routing or a separately reviewed
+Socket.IO adapter. This is not claimed as complete cluster delivery.
+
+Modern crypto mutations use the browser Web Locks API when available, scoped to
+the conversation. Browsers without Web Locks continue in a documented limited
+mode and should not open the same identity in multiple active tabs.
+
+If a pinned contact changes identity, prior verification is invalidated and the
+session is blocked. The user may explicitly accept the pending identity; this
+discards the old session and requires a fresh pre-key/session establishment.
+The new identity remains unverified. There is no automatic trust carryover.
+
+Active published bundles renew in place before use when their one-time-key pool
+falls below ten keys. Renewal preserves the long-term identity, replenishes up
+to twenty keys, and resets the seven-day server expiry. Renewal failures leave
+the local identity/session intact and are retried on a later open.
+
+Lost-message policy is intentionally at-least-once at the network layer and
+exactly-once for user-visible plaintext through the encrypted digest cache:
+local persistence failure prevents submission; relay response/ACK loss retries
+the same envelope; receiver persistence failure withholds ACK; relay TTL expiry
+leaves the sender's pending item to fail/retry without ratchet rollback; and a
+recipient crash before ACK permits a later redelivery that is safely deduped.
