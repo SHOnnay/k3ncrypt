@@ -17,6 +17,7 @@ const SEEN_RECORD = 'modern-seen';
 const PUBLICATION_RECORD = 'modern-publication';
 const MAX_PENDING = 32;
 const MAX_SEEN = 1024;
+const TAB_LEASE_MS = 15_000;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -72,6 +73,7 @@ export class ModernConversation {
     private retryTimer?: ReturnType<typeof setInterval>;
     private onMessage?: (text: string) => void;
     private onContactChange?: (contact: StoredContactIdentity) => void;
+    private readonly tabOwnerId = `${Math.random().toString(36).slice(2)}-${Date.now()}`;
 
     constructor(private readonly storage: SecureStorage, loader: VodozemacBindingsLoader, transportManager?: TransportManager) {
         this.runtime = new VodozemacRuntime(storage, loader);
@@ -270,8 +272,25 @@ export class ModernConversation {
 
     private async withTabLock<T>(conversationId: string, operation: () => Promise<T>): Promise<T> {
         const locks = (globalThis as typeof globalThis & { navigator?: { locks?: { request: (name: string, callback: () => Promise<T>) => Promise<T> } } }).navigator?.locks;
-        if (!locks) return operation();
-        return locks.request(`k3ncrypt-modern:${conversationId}`, operation);
+        if (locks) return locks.request(`k3ncrypt-modern:${conversationId}`, operation);
+        if (typeof (globalThis as typeof globalThis & { window?: unknown }).window === 'undefined') return operation();
+        const browser = globalThis as typeof globalThis & { localStorage?: Storage };
+        if (!browser.localStorage) {
+            if (typeof process !== 'undefined' && process.env.NODE_ENV === 'test') return operation();
+            throw new Error('Secure conversation requires a browser tab lock.');
+        }
+        const key = `k3ncrypt-tab-lease:${conversationId}`;
+        const now = Date.now();
+        const current = browser.localStorage.getItem(key);
+        if (current) {
+            const [owner, expires] = current.split(':');
+            if (owner !== this.tabOwnerId && Number(expires) > now) throw new Error('This secure conversation is active in another tab.');
+        }
+        browser.localStorage.setItem(key, `${this.tabOwnerId}:${now + TAB_LEASE_MS}`);
+        try { return await operation(); }
+        finally {
+            if (browser.localStorage.getItem(key)?.startsWith(`${this.tabOwnerId}:`)) browser.localStorage.removeItem(key);
+        }
     }
 
     private async observe(address: string, identity: VodozemacPublicIdentity): Promise<void> {

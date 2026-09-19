@@ -35,6 +35,7 @@ const connectDb = async (): Promise<void> => {
         ? 'Database unavailable; using volatile in-memory room storage. Modern pre-key publication is disabled.'
         : 'Database unavailable; using volatile in-memory room storage.');
     }
+    if (process.env.NODE_ENV === 'production') throw new Error('Persistent database is unavailable in production.');
   }
 };
 
@@ -80,6 +81,7 @@ export const claimOneTimeKey = async <T>(condition, keyId: string, collectionNam
 };
 
 export const prekeyStorageReady = (): boolean => process.env.NODE_ENV !== 'production' || !inMem;
+export const persistentStorageReady = (): boolean => !inMem;
 export const cleanupExpiredPrekeyBundles = (now = Date.now()): number =>
   inMem ? _deleteExpiredPrekeyBundles(now, PREKEY_COLLECTION) : 0;
 
@@ -124,4 +126,5 @@ export default {
   ackOfflineMessage,
   cleanupExpiredOfflineMessages,
   countOfflineMessages,
+  persistentStorageReady,
 };

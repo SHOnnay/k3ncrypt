@@ -9,9 +9,9 @@ import db from '../db';
 const clients = getClientInstance();
 
 /** Generous enough for SDP/ICE candidates and chat text, but bounds abusive payloads. */
-const MAX_ENVELOPE_BYTES = 32 * 1024;
-const MAX_OFFLINE_PER_MAILBOX = 64;
-const OFFLINE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+export const MAX_ENVELOPE_BYTES = 32 * 1024;
+export const MAX_OFFLINE_PER_MAILBOX = 64;
+export const OFFLINE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const OFFLINE_LEASE_MS = 30 * 1000;
 /** Burst of 40 messages, refilling at 10/s — plenty for normal signaling/chat traffic. */
 const rateLimiter = new RateLimiter({ capacity: 40, refillPerSecond: 10 });
@@ -52,6 +52,7 @@ const envelopeDedupeKey = (channel: string, mailbox: string, sender: string, env
 
 const deliverOffline = async (socket: CustomSocket): Promise<void> => {
   if (!socket.userID || !socket.channelID) return;
+  db.cleanupExpiredOfflineMessages();
   for (let count = 0; count < MAX_OFFLINE_PER_MAILBOX; count += 1) {
     const message = await db.claimOfflineMessage<{ id: string; timestamp: number; sender: string; envelope: WireEnvelope; mailbox: string; channel: string }>(
       socket.userID, socket.channelID, new Date(Date.now() + OFFLINE_LEASE_MS));
@@ -134,6 +135,8 @@ const connectionListener = (socket: CustomSocket, io) => {
     }
     const receiverSid = findPeerSid(socket);
     if (!receiverSid) {
+      if (process.env.NODE_ENV === 'production' && !db.persistentStorageReady()) { ack({ error: "Offline delivery is unavailable." }); return; }
+      db.cleanupExpiredOfflineMessages();
       const id = randomUUID();
       const timestamp = Date.now();
       const mailbox = payload.recipientRoutingId;
