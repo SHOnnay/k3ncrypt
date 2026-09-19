@@ -4,6 +4,8 @@ import { PersistentVodozemacIdentity, type VodozemacAccountFactory } from '../id
 import { VodozemacSessionStore, type VodozemacSessionFactory } from '../identity/vodozemacSessionStore';
 import type { MessagingIdentity } from '../core/contracts';
 import { VodozemacBoundaryError } from './vodozemacErrors';
+import { AsyncMutex } from '../utils/asyncMutex';
+import type { VodozemacPublicBundle } from '../identity/vodozemacBundle';
 
 export type VodozemacLifecycleState =
     | 'uninitialized'
@@ -34,6 +36,7 @@ export class VodozemacRuntime {
     private session?: VodozemacCryptoSession;
     private conversationId?: string;
     private sessionStore?: VodozemacSessionStore;
+    private readonly sessionMutex = new AsyncMutex();
 
     constructor(
         private readonly storage: SecureStorage,
@@ -81,6 +84,22 @@ export class VodozemacRuntime {
         catch { throw new VodozemacBoundaryError('CORRUPTED_ACCOUNT', 'The private identity could not be persisted.'); }
     }
 
+    /** Returns public pre-key material for explicit publication by the caller. */
+    public async getPublicBundle(): Promise<VodozemacPublicBundle> {
+        this.requireState('identity-restored', 'active', 'persisted');
+        if (!this.identity) throw new VodozemacBoundaryError('CORRUPTED_ACCOUNT', 'The private identity is unavailable.');
+        try { return await this.identity.getPublicBundle(); }
+        catch { throw new VodozemacBoundaryError('CORRUPTED_ACCOUNT', 'The public identity could not be read.'); }
+    }
+
+    /** Marks the current public pre-key set as published and persists the account. */
+    public async markPublicKeysPublished(): Promise<void> {
+        this.requireState('identity-restored', 'active', 'persisted');
+        if (!this.identity) throw new VodozemacBoundaryError('CORRUPTED_ACCOUNT', 'The private identity is unavailable.');
+        try { await this.identity.markPublicKeysPublished(); }
+        catch { throw new VodozemacBoundaryError('CORRUPTED_ACCOUNT', 'The public keys could not be persisted.'); }
+    }
+
     /** Accepts an already-established opaque handle from the reviewed protocol flow. */
     public async establishSession(conversationId: string, handle: VodozemacSessionHandle, expectedSessionId: string): Promise<void> {
         this.requireState('identity-restored', 'persisted');
@@ -115,6 +134,8 @@ export class VodozemacRuntime {
                 return account.createOutboundSession(recipientIdentityKey, recipientOneTimeKey);
             });
             await this.establishSession(conversationId, handle, handle.sessionId());
+            await this.persistIdentity();
+            await this.persistSession();
         } catch (error) {
             if (error instanceof VodozemacBoundaryError) throw error;
             throw new VodozemacBoundaryError('IDENTITY_MISMATCH', 'The outbound session could not be established.');
@@ -137,6 +158,8 @@ export class VodozemacRuntime {
             });
             const handle = result.takeSession();
             await this.establishSession(conversationId, handle, handle.sessionId());
+            await this.persistIdentity();
+            await this.persistSession();
             const plaintext = result.plaintext();
             try { return plaintext.buffer.slice(plaintext.byteOffset, plaintext.byteOffset + plaintext.byteLength) as ArrayBuffer; }
             finally { plaintext.fill(0); }
@@ -160,30 +183,42 @@ export class VodozemacRuntime {
     }
 
     public async encrypt(channel: 'message' | 'signaling', plaintext: ArrayBuffer) {
-        this.requireState('active');
-        if (!this.session) throw new VodozemacBoundaryError('MISSING_SESSION', 'No active conversation session.');
-        try { return await this.session.encrypt(channel, plaintext); }
-        catch { throw new VodozemacBoundaryError('INVALID_CIPHERTEXT', 'The message could not be encrypted.'); }
+        return this.sessionMutex.runExclusive(async () => {
+            this.requireState('active', 'persisted');
+            if (!this.session) throw new VodozemacBoundaryError('MISSING_SESSION', 'No active conversation session.');
+            let envelope;
+            try { envelope = await this.session.encrypt(channel, plaintext); }
+            catch { throw new VodozemacBoundaryError('INVALID_CIPHERTEXT', 'The message could not be encrypted.'); }
+            try {
+                await this.persistSessionUnsafe();
+                return envelope;
+            } catch {
+                this.quarantineSession();
+                throw new VodozemacBoundaryError('CORRUPTED_SESSION', 'The message could not be safely persisted.');
+            }
+        });
     }
 
     public async decrypt(channel: 'message' | 'signaling', envelope: Parameters<VodozemacCryptoSession['decrypt']>[1]) {
-        this.requireState('active');
-        if (!this.session) throw new VodozemacBoundaryError('MISSING_SESSION', 'No active conversation session.');
-        try { return await this.session.decrypt(channel, envelope); }
-        catch { throw new VodozemacBoundaryError('INVALID_CIPHERTEXT', 'The message could not be decrypted.'); }
+        return this.sessionMutex.runExclusive(async () => {
+            this.requireState('active', 'persisted');
+            if (!this.session) throw new VodozemacBoundaryError('MISSING_SESSION', 'No active conversation session.');
+            let plaintext: ArrayBuffer | undefined;
+            try { plaintext = await this.session.decrypt(channel, envelope); }
+            catch { throw new VodozemacBoundaryError('INVALID_CIPHERTEXT', 'The message could not be decrypted.'); }
+            try {
+                await this.persistSessionUnsafe();
+                return plaintext;
+            } catch {
+                new Uint8Array(plaintext).fill(0);
+                this.quarantineSession();
+                throw new VodozemacBoundaryError('CORRUPTED_SESSION', 'The message could not be safely persisted.');
+            }
+        });
     }
 
     public async persistSession(): Promise<void> {
-        this.requireState('active');
-        if (!this.session || !this.conversationId || !this.sessionStore) {
-            throw new VodozemacBoundaryError('MISSING_SESSION', 'No active conversation session.');
-        }
-        try {
-            await this.sessionStore.save(this.conversationId, this.session);
-            this.state = 'persisted';
-        } catch {
-            throw new VodozemacBoundaryError('CORRUPTED_SESSION', 'The conversation session could not be persisted.');
-        }
+        await this.sessionMutex.runExclusive(() => this.persistSessionUnsafe(true));
     }
 
     public close(): void {
@@ -193,6 +228,21 @@ export class VodozemacRuntime {
         this.identity = undefined;
         this.bindings = undefined;
         this.state = 'closed';
+    }
+
+    private async persistSessionUnsafe(keepPersisted = false): Promise<void> {
+        this.requireState('active', 'persisted');
+        if (!this.session || !this.conversationId || !this.sessionStore) {
+            throw new VodozemacBoundaryError('MISSING_SESSION', 'No active conversation session.');
+        }
+        await this.sessionStore.save(this.conversationId, this.session);
+        this.state = keepPersisted ? 'persisted' : 'active';
+    }
+
+    private quarantineSession(): void {
+        this.session?.destroy();
+        this.session = undefined;
+        this.state = 'error';
     }
 
     private requireState(...allowed: VodozemacLifecycleState[]): void {
