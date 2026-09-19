@@ -47,6 +47,8 @@ export { BrowserVoiceRecorder, createEncryptedVoiceMessage } from './voice';
 export type { VoiceMessageReference, VoiceRecorder, VoiceRecordingState } from './voice';
 export { prepareEncryptedFile, prepareEncryptedMedia, MEDIA_LIMITS } from './media';
 export type { MediaKind, PreparedMedia } from './media';
+export { createEncryptedMediaMessage, parseEncryptedMediaMessage, serializeEncryptedMediaMessage } from './media';
+export type { EncryptedMediaMessage } from './media';
 export { MediaPermissionTracker } from './permissions';
 export type { MediaPermissionKind, MediaPermissionState } from './permissions';
 import { generateUUID } from './utils/uuid';
