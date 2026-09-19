@@ -58,7 +58,7 @@ const handleDelete = async () => {
       <div className="header-info">
         <div className="title-row">
           <h2 className="channel-title">Private conversation</h2>
-          <StatusPill tone="positive">Private</StatusPill>
+          <StatusPill tone="neutral">Private</StatusPill>
         </div>
         {channelHash && (
           <div className="hash-badge-container">
