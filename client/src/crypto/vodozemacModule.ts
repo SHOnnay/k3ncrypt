@@ -10,8 +10,8 @@ export const loadVodozemacBindings = (): Promise<VodozemacBindings> => {
         return {
             protocolVersion: 1 as const,
             accountFactory: {
-                createAccount: () => K3ncryptAccount.createAccount(),
-                loadAccount: (pickle: string, key: Uint8Array) => K3ncryptAccount.loadAccount(pickle, key),
+                createAccount: () => wrapAccount(K3ncryptAccount.createAccount()),
+                loadAccount: (pickle: string, key: Uint8Array) => wrapAccount(K3ncryptAccount.loadAccount(pickle, key)),
             },
             sessionFactory: {
                 loadSession: (serialized: Uint8Array) => K3ncryptSession.loadSession(serialized),
@@ -20,3 +20,17 @@ export const loadVodozemacBindings = (): Promise<VodozemacBindings> => {
     })();
     return initialization;
 };
+
+const wrapAccount = (account: K3ncryptAccount) => ({
+    identityKeys: () => account.identityKeys(),
+    availableOneTimeKeys: () => JSON.parse(account.oneTimeKeys()),
+    firstOneTimeKey: () => account.firstOneTimeKey(),
+    fallbackKey: () => account.fallbackKey(),
+    generateOneTimeKeys: (count: number) => account.generateOneTimeKeys(count),
+    generateFallbackKey: () => account.generateFallbackKey(),
+    markKeysAsPublished: () => account.markKeysAsPublished(),
+    saveAccount: (key: Uint8Array) => account.saveAccount(key),
+    createOutboundSession: (identity: string, oneTimeKey: string) => account.createOutboundSession(identity, oneTimeKey),
+    createInboundSession: (identity: string, message: string) => account.createInboundSession(identity, message),
+    free: () => account.free(),
+});

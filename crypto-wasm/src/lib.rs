@@ -146,6 +146,17 @@ impl K3ncryptAccount {
             .ok_or_else(|| js_error("No one-time key is available."))
     }
 
+    #[wasm_bindgen(js_name = oneTimeKeys)]
+    pub fn one_time_keys(&self) -> Result<String, JsValue> {
+        let keys: Vec<String> = self
+            .inner
+            .one_time_keys()
+            .values()
+            .map(Curve25519PublicKey::to_base64)
+            .collect();
+        serde_json::to_string(&keys).map_err(|_| js_error("Unable to encode one-time keys."))
+    }
+
     #[wasm_bindgen(js_name = generateFallbackKey)]
     pub fn generate_fallback_key(&mut self) {
         self.inner.generate_fallback_key();

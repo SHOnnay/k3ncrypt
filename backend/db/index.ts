@@ -1,7 +1,7 @@
 import { Db, MongoClient, ServerApiVersion } from 'mongodb';
 
 import {
-    findOneFromDB as _findOneFromDB, insertInDb as _insertInDb, updateOneFromDb as _updateOneFromDb
+    findOneFromDB as _findOneFromDB, insertInDb as _insertInDb, updateOneFromDb as _updateOneFromDb, claimOneTimeKey as _claimOneTimeKey
 } from './inMemDB';
 
 const uri = process.env.MONGO_URI;
@@ -56,10 +56,27 @@ const updateOneFromDb = async<T>(condition, data, collectionName: string): Promi
   return db.collection(collectionName).updateOne(condition, { $set: data })  as Promise<T>;
 }
 
+export const claimOneTimeKey = async <T>(condition, keyId: string, collectionName: string): Promise<T | undefined> => {
+  if (inMem) return _claimOneTimeKey(condition, keyId, collectionName) as T | undefined;
+  const result = await db.collection(collectionName).findOneAndUpdate(
+    { ...condition, 'bundle.oneTimeKeys.id': keyId },
+    { $pull: { 'bundle.oneTimeKeys': { id: keyId } } } as any,
+    { returnDocument: 'before' },
+  );
+  // mongodb v5 returns a FindAndModifyResult while mongodb v6 returns the
+  // document directly. Support both without weakening the single-claim
+  // conditional update above.
+  const value = ((result && typeof result === 'object' && 'value' in result)
+    ? (result as { value?: unknown }).value
+    : result) as { bundle?: { oneTimeKeys?: Array<{ id: string; key: string }> } } | null;
+  return value?.bundle?.oneTimeKeys?.find((key) => key.id === keyId) as T | undefined;
+};
+
 export default {
   db,
   connectDb,
   insertInDb,
   findOneFromDB,
   updateOneFromDb,
+  claimOneTimeKey,
 };

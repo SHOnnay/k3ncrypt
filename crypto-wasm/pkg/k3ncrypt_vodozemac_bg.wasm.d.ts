@@ -16,6 +16,7 @@ export const k3ncryptaccount_generateOneTimeKeys: (a: number, b: number) => [num
 export const k3ncryptaccount_identityKeys: (a: number) => [number, number, number, number];
 export const k3ncryptaccount_loadAccount: (a: number, b: number, c: number, d: number) => [number, number, number];
 export const k3ncryptaccount_markKeysAsPublished: (a: number) => void;
+export const k3ncryptaccount_oneTimeKeys: (a: number) => [number, number, number, number];
 export const k3ncryptaccount_saveAccount: (a: number, b: number, c: number) => [number, number, number, number];
 export const k3ncryptsession_decrypt: (a: number, b: number, c: number) => [number, number, number, number];
 export const k3ncryptsession_encrypt: (a: number, b: number, c: number) => [number, number, number, number];

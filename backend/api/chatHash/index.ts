@@ -13,8 +13,11 @@ import {
   isValidRoomId,
   readControlCapability,
 } from '../../security/controlCapability';
+import prekeysRouter from './prekeys';
 
 const router = express.Router({ mergeParams: true });
+
+router.use('/:channel/prekeys', prekeysRouter);
 
 router.post(
   "/",

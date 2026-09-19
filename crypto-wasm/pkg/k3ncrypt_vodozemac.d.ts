@@ -23,6 +23,7 @@ export class K3ncryptAccount {
     identityKeys(): string;
     static loadAccount(encrypted_pickle: string, pickle_key: Uint8Array): K3ncryptAccount;
     markKeysAsPublished(): void;
+    oneTimeKeys(): string;
     saveAccount(pickle_key: Uint8Array): string;
 }
 
@@ -60,6 +61,7 @@ export interface InitOutput {
     readonly k3ncryptaccount_identityKeys: (a: number) => [number, number, number, number];
     readonly k3ncryptaccount_loadAccount: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly k3ncryptaccount_markKeysAsPublished: (a: number) => void;
+    readonly k3ncryptaccount_oneTimeKeys: (a: number) => [number, number, number, number];
     readonly k3ncryptaccount_saveAccount: (a: number, b: number, c: number) => [number, number, number, number];
     readonly k3ncryptsession_decrypt: (a: number, b: number, c: number) => [number, number, number, number];
     readonly k3ncryptsession_encrypt: (a: number, b: number, c: number) => [number, number, number, number];

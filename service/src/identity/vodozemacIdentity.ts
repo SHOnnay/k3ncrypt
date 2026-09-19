@@ -1,5 +1,6 @@
 import type { IdentityManager, MessagingIdentity, SecureStorage } from '../core/contracts';
 import { toBase64Url } from '../crypto/base64url';
+import { createVodozemacPublicBundle, type VodozemacPublicBundle } from './vodozemacBundle';
 
 const ACCOUNT_RECORD_TYPE = 'vodozemac-account';
 const LOCAL_ACCOUNT_ID = 'local';
@@ -11,8 +12,12 @@ export interface VodozemacPublicIdentity {
 
 export interface VodozemacAccountHandle {
     identityKeys(): string;
+    availableOneTimeKeys?(): string[];
+    firstOneTimeKey?(): string;
+    fallbackKey?(): string;
     generateOneTimeKeys(count: number): void;
     generateFallbackKey(): void;
+    markKeysAsPublished?(): void;
     saveAccount(pickleKey: Uint8Array): string;
     /** High-level protocol entry points; raw WASM handles remain internal. */
     createOutboundSession?(recipientIdentityKey: string, recipientOneTimeKey: string): import('../core/vodozemacCryptoSession').VodozemacSessionHandle;
@@ -112,6 +117,18 @@ export class PersistentVodozemacIdentity implements IdentityManager<MessagingIde
             const encryptedPickle = this.account!.saveAccount(pickleKey);
             await this.storage.write(ACCOUNT_RECORD_TYPE, LOCAL_ACCOUNT_ID,
                 new TextEncoder().encode(encryptedPickle).buffer as ArrayBuffer);
+        });
+    }
+
+    /** Returns authenticated-by-identity public material only. */
+    public async getPublicBundle(): Promise<VodozemacPublicBundle> {
+        return this.withAccount((account) => createVodozemacPublicBundle(account));
+    }
+
+    public async markPublicKeysPublished(): Promise<void> {
+        await this.withAccount(async (account) => {
+            account.markKeysAsPublished?.();
+            await this.persistAccount();
         });
     }
 

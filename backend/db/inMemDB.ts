@@ -47,3 +47,17 @@ export const updateOneFromDb = (condition, data, collectionName: string): MongoD
 
   return originalData;
 };
+
+/** Process-local atomic claim used when Mongo is not configured. */
+export const claimOneTimeKey = (condition, keyId: string, collectionName: string): MongoDataType => {
+  const collection = storage[collectionName];
+  if (!collection) return null;
+  const record = collection.find((entry) => {
+    if (!Object.keys(condition).every((key) => entry[key] === condition[key])) return false;
+    return Array.isArray(entry.bundle?.oneTimeKeys) && entry.bundle.oneTimeKeys.some((key) => key.id === keyId);
+  });
+  if (!record) return null;
+  const index = record.bundle.oneTimeKeys.findIndex((key) => key.id === keyId);
+  const [claimed] = record.bundle.oneTimeKeys.splice(index, 1);
+  return { ...claimed };
+};
