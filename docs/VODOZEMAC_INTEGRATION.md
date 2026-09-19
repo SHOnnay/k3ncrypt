@@ -333,32 +333,40 @@ mailbox state; volatile in-memory mode is test/development only.
 
 ## Phase 3I deployment validation (2026-09-19)
 
-The Phase 3I gate was run from the development checkout. Docker CLI and
-Compose are installed, but the Docker daemon was not running, so the Mongo
-service could not be started. Consequently the Mongo integration suite stayed
-skipped and no real relay/Mongo restart, index, quota, claim/ACK, OTK
-concurrency, storage-inspection, or Mongo failure-injection evidence was
-available. Browser runs therefore used the explicitly development-only
-volatile store.
+The Phase 3I-R retry confirmed that the Docker CLI reaches Docker Desktop only
+with elevated host access through the existing `desktop-linux` context. The
+initial Compose command also exposed a deployment defect: `NODE_ENV=production`
+made `npm ci` omit the `cross-env` and `ts-node` runtime dependencies. The
+Compose relay command now uses `npm ci --include=dev`; the relay starts and
+connects to the persistent Mongo service without changing the Mongo volume.
 
-The configured Chromium Playwright suite passed all 8 tests. Firefox and
-WebKit binaries were installed from the official Playwright distribution;
-WebKit passed 7/8 tests, with the modern restart flow failing because the chat
-container remained hidden after reopening. Firefox could not complete even the
-Vodozemac smoke test in this host environment and was interrupted after the
-browser worker failed to make progress. These results do not establish the
-cross-browser production gate.
+The real Mongo integration test ran successfully (required indexes were
+created and re-opened idempotently). The canonical Jest run remains the
+in-memory test profile: 260 passed and 1 Mongo suite skipped. Running the full
+suite with `MONGO_URI` globally is not a valid combined profile because several
+unit tests intentionally exercise the in-memory backend and then fail when
+Mongo is forced globally.
 
-The full Jest suite passed 260 tests with 1 Mongo integration test skipped.
-The service TypeScript check and client production build passed. The root
-TypeScript check still reports existing workspace/module-resolution errors;
-Rust tooling (`cargo` and `wasm-pack`) is unavailable on this host, so Rust,
-WASM, and cargo-audit validation were not run.
+The Chromium Playwright suite passed all 8 tests against the Mongo-backed
+relay. Firefox binaries are installed, but Firefox cannot make progress even
+on the Vodozemac smoke test in this host environment. WebKit passes the other
+browser tests but the modern flow fails before invitation creation with an
+existing-passphrase error (and previously failed during restart hydration),
+reproducing serially. This is a genuine WebKit/browser-storage compatibility
+blocker, not a timeout or weakened assertion.
+
+The service TypeScript check, ESLint, client production build, diff check, and
+high-severity npm audit passed. The root `tsconfig.json` is an unsupported
+legacy CommonJS aggregation (it has no workspace includes or bundler
+resolution), so its alias/import errors are not a Phase 3 regression; the
+service and client workspace checks are canonical. Cargo/rustc are available
+via `$HOME/.cargo/bin` and fmt, clippy, and five Rust tests passed; `wasm-pack`
+is not installed, so the release packaging command was not run.
 
 **Phase 3I readiness decision: NO.** Modern conversations must not be made
-the default until a Docker-backed Mongo run, relay/Mongo restart evidence,
-storage and concurrency checks, and a passing supported-browser matrix are
-available. Existing legacy conversations remain unchanged. The future switch,
-once those blockers are cleared, is limited to changing the new-conversation
-policy from `legacy-default` to `modern-default`; persisted conversation modes
-remain authoritative.
+the default until relay/Mongo process-restart evidence, real mailbox/OTK
+concurrency and failure-injection checks, Firefox compatibility, and the
+WebKit modern-storage failure are resolved. Existing legacy conversations
+remain unchanged. The future switch, once those blockers are cleared, is
+limited to changing the new-conversation policy from `legacy-default` to
+`modern-default`; persisted conversation modes remain authoritative.
