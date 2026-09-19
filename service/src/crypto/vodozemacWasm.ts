@@ -11,7 +11,10 @@ export const loadLocalVodozemacBindings = async (
     loadModule: () => Promise<VodozemacGeneratedModule>,
     wasmUrl: URL,
 ): Promise<VodozemacBindings> => {
-    if (wasmUrl.protocol !== 'file:' && wasmUrl.protocol !== 'http:' && wasmUrl.protocol !== 'https:') {
+    const browserOrigin = typeof globalThis.location === 'object' ? globalThis.location.origin : undefined;
+    const sameOrigin = (wasmUrl.protocol === 'http:' || wasmUrl.protocol === 'https:') &&
+        browserOrigin !== undefined && wasmUrl.origin === browserOrigin;
+    if (wasmUrl.protocol !== 'file:' && !sameOrigin) {
         throw new VodozemacBoundaryError('WASM_INIT_FAILED', 'Modern crypto module URL is invalid.');
     }
     // The caller owns the bundled URL; this function never constructs a remote fallback.
