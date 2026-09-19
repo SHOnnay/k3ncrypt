@@ -146,7 +146,7 @@ const connectionListener = (socket: CustomSocket, io) => {
         const existing = await db.storeOfflineMessage({ id, dedupeKey, channel: socket.channelID, mailbox, sender: socket.userID, envelope: payload.envelope, timestamp, expiresAt: new Date(timestamp + OFFLINE_TTL_MS) });
         if (await db.countOfflineMessages({ channel: socket.channelID, mailbox }) > MAX_OFFLINE_PER_MAILBOX) { await db.ackOfflineMessage(existing.id, mailbox, socket.channelID); ack({ error: "Mailbox quota exceeded." }); return; }
         ack({ id: existing.id, timestamp: existing.timestamp, stored: true });
-      } catch { ack({ error: "Message could not be queued." }); }
+      } catch (error) { ack({ error: error instanceof Error && error.message === 'MAILBOX_QUOTA' ? "Mailbox quota exceeded." : "Message could not be queued." }); }
       return;
     }
 

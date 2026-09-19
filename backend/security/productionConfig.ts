@@ -8,4 +8,10 @@ export const validateProductionConfig = (env: NodeJS.ProcessEnv = process.env): 
   if (instances > 1) throw new Error('Multiple production instances are unsupported until a reviewed Socket.IO adapter is configured.');
   if (env.CHATE2EE_ENABLE_DEBUG_LOGS === 'true') throw new Error('Debug logging must be disabled in production.');
   if (!env.CHAT_LINK_DOMAIN) throw new Error('Production requires an explicit chat link domain.');
+  try {
+    const origin = new URL(env.CHAT_LINK_DOMAIN);
+    if (!['http:', 'https:'].includes(origin.protocol) || origin.pathname !== '/' || origin.search || origin.hash) throw new Error('invalid');
+  } catch {
+    throw new Error('Production chat link domain is invalid.');
+  }
 };

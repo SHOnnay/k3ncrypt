@@ -11,5 +11,6 @@ describe('production safety validation', () => {
   it('rejects debug logging in production and permits explicit single-instance mode', () => {
     expect(() => validateProductionConfig({ ...base, CHATE2EE_ENABLE_DEBUG_LOGS: 'true' })).toThrow('Debug logging');
     expect(() => validateProductionConfig({ ...base, K3NCRYPT_INSTANCE_COUNT: '1' })).not.toThrow();
+    expect(() => validateProductionConfig({ ...base, CHAT_LINK_DOMAIN: 'not-a-domain' })).toThrow('domain is invalid');
   });
 });

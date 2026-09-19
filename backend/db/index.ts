@@ -1,4 +1,5 @@
 import { Db, MongoClient, ServerApiVersion } from 'mongodb';
+import { randomInt } from 'crypto';
 
 import {
     findOneFromDB as _findOneFromDB, insertInDb as _insertInDb, updateOneFromDb as _updateOneFromDb, claimOneTimeKey as _claimOneTimeKey, deleteExpiredPrekeyBundles as _deleteExpiredPrekeyBundles
@@ -13,6 +14,7 @@ let db: Db = null;
 let inMem = uri ? false : true;
 
 const connectDb = async (): Promise<void> => {
+  if (db) return;
   try {
     if (!uri) throw new Error("No URI");
     const client = new MongoClient(uri, {
@@ -26,8 +28,11 @@ const connectDb = async (): Promise<void> => {
     await client.connect();
     db = client.db(dbName);
     await db.collection(PREKEY_COLLECTION).createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+    await db.collection(PREKEY_COLLECTION).createIndex({ channel: 1, address: 1 }, { unique: true });
     await db.collection(OFFLINE_MESSAGE_COLLECTION).createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
     await db.collection(OFFLINE_MESSAGE_COLLECTION).createIndex({ dedupeKey: 1 }, { unique: true });
+    await db.collection(OFFLINE_MESSAGE_COLLECTION).createIndex({ channel: 1, mailbox: 1, slot: 1 }, { unique: true });
+    await db.collection(OFFLINE_MESSAGE_COLLECTION).createIndex({ channel: 1, mailbox: 1, claimedUntil: 1, expiresAt: 1 });
   } catch (err) {
     inMem = true;
     if (process.env.NODE_ENV !== 'test') {
@@ -86,9 +91,26 @@ export const cleanupExpiredPrekeyBundles = (now = Date.now()): number =>
   inMem ? _deleteExpiredPrekeyBundles(now, PREKEY_COLLECTION) : 0;
 
 export const storeOfflineMessage = async <T extends Record<string, unknown>>(data: T): Promise<T> => {
-  if (inMem) return _insertOfflineMessage(data, OFFLINE_MESSAGE_COLLECTION) as T;
-  await db.collection(OFFLINE_MESSAGE_COLLECTION).updateOne({ dedupeKey: data.dedupeKey }, { $setOnInsert: data }, { upsert: true });
-  return (await db.collection(OFFLINE_MESSAGE_COLLECTION).findOne({ dedupeKey: data.dedupeKey })) as unknown as T;
+  if (inMem) {
+    const duplicate = _findOneFromDB({ dedupeKey: data.dedupeKey }, OFFLINE_MESSAGE_COLLECTION);
+    if (duplicate) return duplicate as T;
+    if (_countOfflineMessages({ channel: data.channel, mailbox: data.mailbox }, OFFLINE_MESSAGE_COLLECTION) >= 64) throw new Error('MAILBOX_QUOTA');
+    return _insertOfflineMessage(data, OFFLINE_MESSAGE_COLLECTION) as T;
+  }
+  const existing = await db.collection(OFFLINE_MESSAGE_COLLECTION).findOne({ dedupeKey: data.dedupeKey });
+  if (existing) return existing as unknown as T;
+  const start = randomInt(0, 64);
+  for (let offset = 0; offset < 64; offset += 1) {
+    const candidate = { ...data, slot: (start + offset) % 64 };
+    try {
+      await db.collection(OFFLINE_MESSAGE_COLLECTION).insertOne(candidate);
+      return candidate;
+    } catch {
+      const duplicate = await db.collection(OFFLINE_MESSAGE_COLLECTION).findOne({ dedupeKey: data.dedupeKey });
+      if (duplicate) return duplicate as unknown as T;
+    }
+  }
+  throw new Error('MAILBOX_QUOTA');
 };
 
 export const claimOfflineMessage = async <T>(mailbox: string, channel: string, leaseUntil: Date): Promise<T | undefined> => {

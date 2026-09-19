@@ -22,4 +22,10 @@ describe('opaque offline message mailbox', () => {
     expect(cleanupExpiredOfflineMessages()).toBeGreaterThanOrEqual(1);
     expect(await countOfflineMessages({ mailbox: message.mailbox, channel: message.channel })).toBe(0);
   });
+
+  it('enforces the mailbox bound in the active test storage', async () => {
+    const seed = base();
+    for (let index = 0; index < 64; index += 1) await storeOfflineMessage({ ...seed, id: randomUUID(), dedupeKey: `quota-${randomUUID()}` });
+    await expect(storeOfflineMessage({ ...seed, id: randomUUID(), dedupeKey: `quota-${randomUUID()}` })).rejects.toThrow('MAILBOX_QUOTA');
+  });
 });

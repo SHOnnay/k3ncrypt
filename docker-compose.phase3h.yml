@@ -1,0 +1,35 @@
+services:
+  mongo:
+    image: mongo:7.0
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - k3ncrypt-phase3h-mongo:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand({ ping: 1 }).ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  relay:
+    image: node:22-bookworm
+    working_dir: /app
+    volumes:
+      - .:/app
+    command: ["sh", "-c", "npm ci && npm run serve"]
+    ports:
+      - "3001:3001"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      MONGO_URI: mongodb://mongo:27017
+      MONGO_DB_NAME: k3ncrypt_phase3h
+      CHAT_LINK_DOMAIN: http://localhost:3001
+      K3NCRYPT_INSTANCE_COUNT: "1"
+
+volumes:
+  k3ncrypt-phase3h-mongo:

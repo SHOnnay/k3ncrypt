@@ -237,8 +237,8 @@ Modern message envelopes may now be retained by the relay when the recipient
 is offline. The mailbox key is the recipient's opaque routing address scoped to
 the room capability; it is not a username or cryptographic identity. Each
 record contains only a generated delivery ID, sender and recipient routing
-addresses, room scope, timestamps/expiry, a dedupe digest, and the opaque
-encrypted envelope. The relay never receives plaintext, ratchet state, keys, or
+addresses, room scope, timestamps/expiry, a dedupe digest, a bounded internal
+slot, and the opaque encrypted envelope. The relay never receives plaintext, ratchet state, keys, or
 private identity material. It still learns room membership, routing addresses,
 message timing, envelope size, and delivery/retry correlation.
 
@@ -251,6 +251,10 @@ the ACK means application acceptance, never that a human read the message.
 Unknown or duplicate ACKs are harmless. Missing ACKs cause the sender to retry
 the same persisted ciphertext, while the mailbox dedupe key prevents duplicate
 storage. Expired records are removed and are not served.
+
+Mongo startup creates idempotent indexes for pre-key expiry and
+`(channel,address)`, and for offline expiry, unique `dedupeKey`, unique
+`(channel,mailbox,slot)` quota allocation, and mailbox claim fields.
 
 The current Socket.IO room map remains process-local. MongoDB makes pre-key and
 offline-record claims durable and conditional across instances, but live socket
@@ -310,3 +314,19 @@ mailbox and pre-key operations use conditional database operations and TTL
 indexes. A real Mongo process-restart harness is not available in this
 repository environment, so the Playwright restart test covers application
 restart and the Mongo integration remains a deployment verification item.
+
+## Supported initial production profile
+
+The supported Phase 3H topology is one relay/backend process, one persistent
+MongoDB deployment, browser clients, and no horizontal Socket.IO scaling. A
+reproducible local environment is defined in `docker-compose.phase3h.yml`:
+
+```sh
+docker compose -f docker-compose.phase3h.yml up --build
+```
+
+Recreate only the `relay` service to exercise application-process restart while
+retaining the named Mongo volume. The current development host has Docker CLI
+but no running Docker daemon, so this process-restart procedure could not be
+executed here. MongoDB remains the production authority for pre-key and offline
+mailbox state; volatile in-memory mode is test/development only.
