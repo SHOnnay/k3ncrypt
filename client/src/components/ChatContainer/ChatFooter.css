@@ -1,5 +1,6 @@
 .chat-footer { flex: none; padding: 13px 16px; border-top: 1px solid var(--border); background: var(--surface); }.input-container { display: flex; align-items: center; gap: 7px; padding: 5px 6px; border: 1px solid var(--border); border-radius: 15px; background: var(--surface-muted); }
 .message-input { flex: 1; min-width: 0; height: 37px; padding: 0 7px; border: 0; outline: 0; color: var(--ink); background: transparent; font: inherit; font-size: .82rem; }.message-input::placeholder { color: var(--muted); }.message-input:disabled { opacity: .5; }
 .composer-tool { width: 34px; height: 34px; flex: none; display: grid; place-items: center; border: 0; border-radius: 10px; color: var(--muted); background: transparent; }.composer-tool:disabled { cursor: not-allowed; opacity: .56; }
+.media-transfer-status { display: flex; justify-content: space-between; gap: 10px; padding: 5px 4px 0; color: var(--muted); font-size: .7rem; }.media-transfer-status button { border: 0; padding: 0; color: var(--brand); background: transparent; font: inherit; cursor: pointer; }
 #send-btn { width: 38px; height: 38px; min-height: 38px; border-radius: 12px; }
 @media (max-width: 620px) { .chat-footer { padding: 9px 10px calc(9px + env(safe-area-inset-bottom)); }.composer-tool:first-child { display: none; } }

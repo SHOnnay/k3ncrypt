@@ -13,7 +13,7 @@ export interface Message {
   type: 'sent' | 'received';
   timestamp: Date;
   delivery?: 'pending' | 'accepted' | 'failed';
-  media?: { kind: 'image' | 'file' | 'voice' | 'video'; mimeType?: string; size?: number };
+  media?: { kind: 'image' | 'file' | 'voice' | 'video'; mimeType?: string; size?: number; reference?: string };
 }
 
 // Setup view states

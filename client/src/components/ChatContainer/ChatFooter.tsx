@@ -2,7 +2,7 @@
  * Chat footer component (message input)
  */
 
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useChat } from '../../context/ChatContext';
 import { Button } from '../common/Button';
 import { MicIcon, PaperclipIcon, SendIcon } from '../common/icons';
@@ -20,6 +20,8 @@ export const ChatFooter: React.FC = () => {
   const recorderRef = useRef<MediaRecorder | null>(null);
   const recordingStartedAt = useRef<number>(0);
   const [isRecording, setIsRecording] = useState(false);
+  const discardRecording = useRef(false);
+  const [lastAttachment, setLastAttachment] = useState<{ kind: 'image' | 'file'; file: File }>();
 
   const handleSend = async () => {
     if (!message.trim()) return;
@@ -40,8 +42,12 @@ export const ChatFooter: React.FC = () => {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
-    await sendFile(file.type.startsWith('image/') ? 'image' : 'file', file);
+    const kind = file.type.startsWith('image/') ? 'image' : 'file';
+    setLastAttachment({ kind, file });
+    await sendFile(kind, file);
   };
+
+  const retryAttachment = async () => { if (lastAttachment) await sendFile(lastAttachment.kind, lastAttachment.file); };
 
   const toggleRecording = async () => {
     if (isRecording) {
@@ -57,6 +63,7 @@ export const ChatFooter: React.FC = () => {
         stream.getTracks().forEach((track) => track.stop());
         setIsRecording(false);
         recorderRef.current = null;
+        if (discardRecording.current) { discardRecording.current = false; return; }
         const bytes = new Uint8Array(await new Blob(chunks, { type: recorder.mimeType }).arrayBuffer());
         await sendVoice(bytes, Date.now() - recordingStartedAt.current);
       };
@@ -68,6 +75,12 @@ export const ChatFooter: React.FC = () => {
       setIsRecording(false);
     }
   };
+
+  useEffect(() => {
+    const cancelOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape' && isRecording) { discardRecording.current = true; recorderRef.current?.stop(); } };
+    window.addEventListener('keydown', cancelOnEscape);
+    return () => window.removeEventListener('keydown', cancelOnEscape);
+  }, [isRecording]);
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -103,6 +116,7 @@ export const ChatFooter: React.FC = () => {
           <SendIcon size={20} />
         </Button>
       </div>
+      {transfer.state !== 'idle' && <div className="media-transfer-status" role="status"><span>{transfer.error ?? ({ uploading: 'Uploading protected data…', downloading: 'Opening protected media…', ready: 'Protected media ready.', failed: 'Unable to send protected media.', idle: '' } as Record<string, string>)[transfer.state]}</span>{transfer.state === 'failed' && lastAttachment && <button type="button" onClick={retryAttachment}>Try again</button>}</div>}
     </footer>
   );
 };

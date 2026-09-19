@@ -18,7 +18,7 @@ const displayMessage = (sender: string, text: string, type: Message['type']): Me
   try {
     const media = parseEncryptedMediaMessage(text);
     if (!media) throw new Error('not media');
-    return { ...createMessage(sender, `Protected ${media.kind}`, type), media: { kind: media.kind, mimeType: media.mimeType, size: media.size } };
+    return { ...createMessage(sender, `Protected ${media.kind}`, type), media: { kind: media.kind, mimeType: media.mimeType, size: media.size, reference: text } };
   } catch {
     if (text.startsWith('k3ncrypt-media-v1:')) return { ...createMessage(sender, 'Protected media unavailable', type), media: { kind: 'file' } };
     return createMessage(sender, text, type);
@@ -103,7 +103,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const vault = await openModernVault(passphrase);
     const conversation = new ModernConversation(vault, loadVodozemacBindings);
     const details = await conversation.connect(roomId, capability, address, (text) => {
-      setMessages((previous) => [...previous, createMessage('contact', text, 'received')]);
+      setMessages((previous) => [...previous, displayMessage('contact', text, 'received')]);
     }, setContactIdentity);
     setModern(conversation);
     setProtocolMode('modern');
