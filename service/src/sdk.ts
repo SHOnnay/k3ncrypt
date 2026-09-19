@@ -49,6 +49,8 @@ export { prepareEncryptedFile, prepareEncryptedMedia, MEDIA_LIMITS } from './med
 export type { MediaKind, PreparedMedia } from './media';
 export { createEncryptedMediaMessage, parseEncryptedMediaMessage, serializeEncryptedMediaMessage } from './media';
 export type { EncryptedMediaMessage } from './media';
+export { MemoryAttachmentDeliveryStore } from './attachments';
+export type { AttachmentDeliveryRecord, AttachmentStatus, AttachmentStatusView } from './attachments';
 export { MediaPermissionTracker } from './permissions';
 export type { MediaPermissionKind, MediaPermissionState } from './permissions';
 import { generateUUID } from './utils/uuid';
