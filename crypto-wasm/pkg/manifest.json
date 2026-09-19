@@ -1,0 +1,7 @@
+{
+  "package": "k3ncrypt-vodozemac",
+  "protocolVersion": 1,
+  "vodozemacVersion": "0.11.0",
+  "wasm": "k3ncrypt_vodozemac_bg.wasm",
+  "sha256": "50e3f86f954f3489d960c66e38b8cc8d54ebde6ef2b93b5cc48614e2f6c98ba4"
+}

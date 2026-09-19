@@ -11,7 +11,7 @@ export interface VodozemacSessionFactory {
 export class VodozemacSessionStore {
     constructor(private readonly storage: SecureStorage, private readonly factory: VodozemacSessionFactory) {}
 
-    public async save(conversationId: string, session: VodozemacSessionHandle): Promise<void> {
+    public async save(conversationId: string, session: Pick<VodozemacSessionHandle, 'saveSession'>): Promise<void> {
         const serialized = session.saveSession();
         try {
             const bytes = serialized.buffer.slice(serialized.byteOffset, serialized.byteOffset + serialized.byteLength) as ArrayBuffer;

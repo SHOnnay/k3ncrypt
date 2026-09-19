@@ -14,7 +14,15 @@ export interface VodozemacAccountHandle {
     generateOneTimeKeys(count: number): void;
     generateFallbackKey(): void;
     saveAccount(pickleKey: Uint8Array): string;
+    /** High-level protocol entry points; raw WASM handles remain internal. */
+    createOutboundSession?(recipientIdentityKey: string, recipientOneTimeKey: string): import('../core/vodozemacCryptoSession').VodozemacSessionHandle;
+    createInboundSession?(senderIdentityKey: string, preKeyMessage: string): VodozemacInboundSessionResult;
     free?(): void;
+}
+
+export interface VodozemacInboundSessionResult {
+    takeSession(): import('../core/vodozemacCryptoSession').VodozemacSessionHandle;
+    plaintext(): Uint8Array;
 }
 
 export interface VodozemacAccountFactory {

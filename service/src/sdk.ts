@@ -16,11 +16,21 @@ export { IndexedDbPublicPreferences } from './storage/publicPreferences';
 export { VodozemacCryptoSession, VODOZEMAC_ENVELOPE_VERSION, VODOZEMAC_STRATEGY_ID } from './core/vodozemacCryptoSession';
 export type { VodozemacSessionHandle } from './core/vodozemacCryptoSession';
 export { PersistentVodozemacIdentity, fingerprintVodozemacIdentity } from './identity/vodozemacIdentity';
-export type { VodozemacAccountFactory, VodozemacAccountHandle, VodozemacPublicIdentity } from './identity/vodozemacIdentity';
+export type { VodozemacAccountFactory, VodozemacAccountHandle, VodozemacInboundSessionResult, VodozemacPublicIdentity } from './identity/vodozemacIdentity';
 export { ContactIdentityRegistry } from './identity/contactIdentityRegistry';
 export type { ContactIdentityEvent, IdentityChangeStatus, StoredContactIdentity } from './identity/contactIdentityRegistry';
 export { VodozemacSessionStore } from './identity/vodozemacSessionStore';
 export type { VodozemacSessionFactory } from './identity/vodozemacSessionStore';
+export { VodozemacRuntime } from './crypto/vodozemacRuntime';
+export type {
+    VodozemacBindings,
+    VodozemacBindingsLoader,
+    VodozemacLifecycleState,
+} from './crypto/vodozemacRuntime';
+export { VodozemacBoundaryError } from './crypto/vodozemacErrors';
+export type { VodozemacErrorCode } from './crypto/vodozemacErrors';
+export { loadLocalVodozemacBindings } from './crypto/vodozemacWasm';
+export type { VodozemacGeneratedModule } from './crypto/vodozemacWasm';
 import { generateUUID } from './utils/uuid';
 import {
     WebRTCCall,

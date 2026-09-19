@@ -108,6 +108,12 @@ export class VodozemacCryptoSession implements CryptoSession {
         this.initialized = false;
     }
 
+    /** Crypto-core-only persistence hook; the opaque handle never leaves this boundary. */
+    public saveSession(): Uint8Array {
+        this.assertReady();
+        return this.session.saveSession();
+    }
+
     private assertReady(): void {
         if (!this.ready) {
             throw new Error('Vodozemac session is not initialized.');

@@ -1,6 +1,6 @@
 # Vodozemac integration boundary
 
-Updated: 2026-09-17. Prototype status: implemented and tested, not production-selected.
+Updated: 2026-09-19. Phase 3A status: boundary implemented; protocol remains opt-in.
 
 ## Implementation
 
@@ -38,10 +38,40 @@ The tests prove:
 
 Transport delivery IDs remain a separate duplicate-processing boundary. The legacy 1,024-sequence replay window is not applied inside the Olm ratchet; vodozemac owns ratchet/message-key ordering semantics.
 
+## Phase 3A client boundary
+
+`VodozemacRuntime` is the only lifecycle owner for the modern client path. It
+accepts a local generated-bindings loader and opaque account/session factories;
+it never returns a private key, pickle, or low-level WASM object to UI code.
+
+The lifecycle is explicit:
+
+`uninitialized -> crypto-ready -> identity-restored -> session-establishing -> active -> persisted -> closed`.
+
+Initialization failure enters `error` and cannot silently fall back to the
+legacy invite protocol. Encrypt/decrypt are rejected unless the state is
+`active`. Account and session persistence continue through `SecureStorage`,
+including the existing Vodozemac pickle-key boundary.
+
+The client artifact is `crypto-wasm/pkg/k3ncrypt_vodozemac_bg.wasm`, pinned to
+the Phase 2 build and accompanied by a SHA-256 manifest. The loader accepts
+only a caller-supplied bundled URL and reports a typed `WASM_INIT_FAILED` when
+the local module or bindings cannot initialize. No CDN, remote downloader, or
+dynamic dependency is used.
+
+## Public boundary
+
+The service exports `VodozemacRuntime`, `VodozemacBoundaryError`, and the
+`loadLocalVodozemacBindings` contract. The runtime supports create/restore
+identity, persist identity, establish/restore a session from approved opaque
+inputs, encrypt/decrypt, persist session, and close. Error codes are stable and
+non-sensitive: they do not include ciphertext, plaintext, keys, or pickles.
+
 ## Remaining production blockers
 
 - reviewed authenticated pre-key distribution and replenishment over the capability relay;
-- generated JS glue packaging, CSP/browser runtime tests, and WASM supply-chain artifacts/checksums;
+- generated `wasm-bindgen` JS glue packaging, CSP/browser runtime tests, and
+  browser supply-chain verification (the WASM artifact checksum is now tracked);
 - transactional ratchet-state commit before network acknowledgement and crash/rollback tests;
 - concurrent/multiple-session selection, lost-message policy, and multi-device semantics;
 - verification UX and authenticated identity binding;
