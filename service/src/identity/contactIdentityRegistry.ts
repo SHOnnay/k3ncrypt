@@ -71,6 +71,10 @@ export class ContactIdentityRegistry {
         }
         const changed: StoredContactIdentity = {
             ...current,
+            // A changed key can never inherit a previous verification. The
+            // old verified state remains observable through the event, while
+            // the pending key requires a fresh explicit verification.
+            verification: current.verification === 'verified' ? 'unverified' : current.verification,
             changeStatus: 'changed-pending-review',
             identityChangedAt: this.now(),
             pendingIdentity: presentedRecord,

@@ -70,14 +70,46 @@ identity, persist identity, establish/restore a session from approved opaque
 inputs, encrypt/decrypt, persist session, and close. Error codes are stable and
 non-sensitive: they do not include ciphertext, plaintext, keys, or pickles.
 
+## Phase 3B–3D production foundation
+
+The modern path has a versioned public bundle containing only public identity
+material, one-time keys, and an optional fallback key. The bundle is strictly
+validated for protocol/version, exact fields, key encoding, size, count, and
+duplicate IDs before publication. It is published through an opaque,
+capability-authorized address. A conditional backend claim removes exactly one
+one-time key, including when requests race; the server never receives private
+identity state, pickles, plaintext, or display names.
+
+Publication and claiming are explicit service calls. A client fetches and
+validates a pinned bundle, claims one key, and establishes an outbound session
+through the reviewed vodozemac API. The recipient accepts the pre-key message
+through the matching inbound API. No invented X3DH, signature, ratchet, or key
+derivation is added. Session establishment authenticates the Curve25519
+identity; Ed25519/Curve25519 values are exposed for fingerprint display, not as
+an ad-hoc signed-bundle format.
+
+`ContactIdentityRegistry` provides first-seen trust-on-first-use (TOFU).
+Unchanged identities remain associated; changed identities become
+`changed-pending-review`, invalidate any previous `verified` state, and require
+explicit review and verification. No key change is silently accepted.
+
+Runtime encrypt/decrypt operations are serialized. Ratchet state is persisted
+before success is returned; persistence failure zeroes plaintext, destroys the
+session, and enters quarantine. `VodozemacSessionRepository` provides bounded
+multi-session encrypted storage with eight IDs per contact and oldest-session
+eviction. The modern protocol is explicit and pinned: legacy remains the
+default, and initialization/artifact failures never downgrade by guessing from
+ciphertext. Relay metadata remains opaque capability/address, envelope bytes,
+delivery ID, and timing.
+
 ## Remaining production blockers
 
-- reviewed authenticated pre-key distribution and replenishment over the capability relay;
+- production deployment review of authenticated pre-key distribution and replenishment over the capability relay;
 - CSP/browser runtime hardening and browser supply-chain verification (the
   WASM artifact checksum is tracked as release provenance, not runtime-checked);
-- transactional ratchet-state commit before network acknowledgement and crash/rollback tests;
-- concurrent/multiple-session selection, lost-message policy, and multi-device semantics;
-- verification UX and authenticated identity binding;
+- crash/rollback tests for the account-plus-session journal boundary;
+- lost-message policy, multi-device semantics, and product-level session selection UX;
+- verification UX beyond the registry/fingerprint foundation;
 - browser interoperability vectors, broader fuzzing, mobile/native parity, and performance/bundle review;
 - an explicit new-conversation negotiation design and separately reviewed legacy migration plan.
 

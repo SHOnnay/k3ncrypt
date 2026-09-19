@@ -92,7 +92,7 @@ describe('ContactIdentityRegistry', () => {
         expect(event.kind).toBe('identity-changed');
         if (event.kind === 'identity-changed') {
             expect(event.current.identityId).toBe('alice-key-1');
-            expect(event.current.verification).toBe('verified');
+            expect(event.current.verification).toBe('unverified');
             expect(event.current.pendingIdentity?.identityId).toBe('alice-key-2');
             expect(event.current.identityChangedAt).toBe(12345);
             expect(event.verifiedIdentityPreserved).toBe(true);
