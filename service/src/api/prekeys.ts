@@ -17,3 +17,9 @@ export const claimVodozemacOneTimeKey = async (channelId: string, controlCapabil
   makeRequest<VodozemacPublicKeyMaterial, { keyId: string }>(`chat-link/${encodeURIComponent(channelId)}/prekeys/${encodeURIComponent(address)}/claim`, {
     method: 'POST', body: { keyId }, headers: { [CONTROL_CAPABILITY_HEADER]: controlCapability },
   });
+
+export const renewVodozemacBundle = async (channelId: string, controlCapability: string, address: string, bundle: VodozemacPublicBundle): Promise<void> => {
+  await makeRequest<{ status: string }, VodozemacPublicBundle>(`chat-link/${encodeURIComponent(channelId)}/prekeys/${encodeURIComponent(address)}/renew`, {
+    method: 'POST', body: bundle, headers: { [CONTROL_CAPABILITY_HEADER]: controlCapability },
+  });
+};

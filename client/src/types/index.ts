@@ -12,6 +12,7 @@ export interface Message {
   text: string;
   type: 'sent' | 'received';
   timestamp: Date;
+  delivery?: 'pending' | 'accepted' | 'failed';
 }
 
 // Setup view states
@@ -61,6 +62,7 @@ export interface ChatContextType {
   createModernChannel: (passphrase: string) => Promise<string>;
   joinModernChannel: (roomId: string, controlCapability: string, address: string, passphrase: string) => Promise<void>;
   verifyContact: () => Promise<void>;
+  acceptChangedIdentity: () => Promise<void>;
   joinChannel: (roomId: string, secret: string, controlCapability: string) => Promise<void>;
   sendMessage: (text: string) => Promise<void>;
   startCall: () => Promise<void>;

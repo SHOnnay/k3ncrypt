@@ -75,4 +75,14 @@ describe('opaque Vodozemac pre-key service', () => {
     await request(app).delete(`/api/chat-link/${room}`).set(header, capability).expect(200);
     await request(app).get(`/api/chat-link/${room}/prekeys/${published.body.address}`).set(header, capability).expect(404);
   });
+
+  it('renews an existing opaque address without changing its identity', async () => {
+    const { room, capability } = await createRoom();
+    const original = bundle('otk-renew-original');
+    const published = await request(app).post(`/api/chat-link/${room}/prekeys`).set(header, capability).send(original).expect(201);
+    const replacement = bundle('otk-renew-replacement');
+    await request(app).post(`/api/chat-link/${room}/prekeys/${published.body.address}/renew`).set(header, capability).send(replacement).expect(200);
+    const fetched = await request(app).get(`/api/chat-link/${room}/prekeys/${published.body.address}`).set(header, capability).expect(200);
+    expect(fetched.body).toEqual(replacement);
+  });
 });

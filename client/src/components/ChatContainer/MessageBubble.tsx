@@ -18,6 +18,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
       <div className="message-meta">
         <span>{message.type === 'sent' ? 'You' : 'Peer'}</span>
         <span>{formatMessageTime(message.timestamp)}</span>
+        {message.type === 'sent' && message.delivery === 'pending' && <span>Pending delivery</span>}
       </div>
     </div>
   );

@@ -71,6 +71,18 @@ router.get('/:address', controlRateLimit, asyncHandler(async (req, res) => {
     ? res.send(record.bundle) : res.status(404).send({ error: 'Pre-key bundle unavailable' });
 }));
 
+router.post('/:address/renew', controlRateLimit, asyncHandler(async (req, res) => {
+  if (!ready()) return res.status(503).send({ error: 'Modern pre-key storage is unavailable' });
+  db.cleanupExpiredPrekeyBundles();
+  const { channel, address } = req.params;
+  const capability = readControlCapability(req);
+  if (!ADDRESS.test(address) || !await authorize(channel, capability) || !validBundle(req.body)) return res.status(404).send({ error: 'Pre-key bundle unavailable' });
+  const existing = await db.findOneFromDB({ channel, address }, PREKEY_COLLECTION);
+  if (!existing) return res.status(404).send({ error: 'Pre-key bundle unavailable' });
+  await db.updateOneFromDb({ channel, address }, { bundle: req.body, createdAt: new Date(), expiresAt: new Date(Date.now() + PREKEY_BUNDLE_TTL_MS) }, PREKEY_COLLECTION);
+  return res.status(200).send({ status: 'renewed' });
+}));
+
 router.post('/:address/claim', controlRateLimit, asyncHandler(async (req, res) => {
   if (!ready()) return res.status(503).send({ error: 'Modern pre-key storage is unavailable' });
   db.cleanupExpiredPrekeyBundles();

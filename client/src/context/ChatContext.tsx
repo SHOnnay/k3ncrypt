@@ -108,6 +108,12 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setContactIdentity(await modern.getContact());
   }, [modern]);
 
+  const acceptChangedIdentity = useCallback(async (): Promise<void> => {
+    if (!modern) throw new Error('No modern contact is open.');
+    await modern.acceptChangedIdentity();
+    setContactIdentity(await modern.getContact());
+  }, [modern]);
+
   // Join existing channel using the invitation's roomId + secret
   const joinChannel = useCallback(
     async (roomId: string, secret: string, controlCapability: string) => {
@@ -155,8 +161,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (!userId || (protocolMode === 'legacy' && !chat) || (protocolMode === 'modern' && !modern)) throw new Error('Chat not ready');
       try {
         if (protocolMode === 'modern') {
-          await modern!.send(text);
-          addMessage(createMessage(userId, text, 'sent'));
+          const delivery = await modern!.send(text);
+          addMessage({ ...createMessage(userId, text, 'sent'), delivery });
           return;
         }
         const message = createMessage(userId, text, 'sent');
@@ -392,6 +398,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     createModernChannel,
     joinModernChannel,
     verifyContact,
+    acceptChangedIdentity,
     joinChannel,
     sendMessage,
     startCall,

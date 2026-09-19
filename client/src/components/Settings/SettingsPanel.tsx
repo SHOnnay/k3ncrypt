@@ -37,7 +37,7 @@ const viewTitles: Record<SettingsView, string> = {
 
 export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose }) => {
   const [view, setView] = useState<SettingsView>('settings');
-  const { channelHash, isConnected, protocolMode, ownFingerprint, contactIdentity, verifyContact } = useChat();
+  const { channelHash, isConnected, protocolMode, ownFingerprint, contactIdentity, verifyContact, acceptChangedIdentity } = useChat();
   const [comparisonConfirmed, setComparisonConfirmed] = useState(false);
   const [verificationError, setVerificationError] = useState('');
   const { theme } = useTheme();
@@ -129,7 +129,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
                   <StatusPill tone={contactIdentity.verification === 'verified' && contactIdentity.changeStatus === 'unchanged' ? 'positive' : 'quiet'}>{contactIdentity.changeStatus === 'changed-pending-review' ? 'Identity changed · review required' : contactIdentity.verification === 'verified' ? 'Verified' : 'Unverified'}</StatusPill>
                   <strong>Contact fingerprint</strong><code className="verification-code">{contactIdentity.identityId}</code>
                   <button className="btn btn--secondary" type="button" onClick={() => navigator.clipboard.writeText(contactIdentity.identityId)}>Copy contact fingerprint</button>
-                  {contactIdentity.changeStatus === 'changed-pending-review' ? <p>This identity changed. Messages are paused until you review this contact in a future recovery flow.</p> : contactIdentity.verification !== 'verified' ? <>
+                  {contactIdentity.changeStatus === 'changed-pending-review' ? <><p>This identity changed. Your previous verification is no longer active.</p><button className="btn btn--secondary" type="button" onClick={() => acceptChangedIdentity().catch(() => setVerificationError('Could not accept this identity change.'))}>Accept new identity and start again</button></> : contactIdentity.verification !== 'verified' ? <>
                     <p>Compare this fingerprint with your contact through another trusted way before marking it verified.</p>
                     <label><input type="checkbox" checked={comparisonConfirmed} onChange={(event) => setComparisonConfirmed(event.target.checked)} /> I compared the fingerprints with my contact</label>
                     <button className="btn btn--primary" type="button" disabled={!comparisonConfirmed} onClick={() => {
