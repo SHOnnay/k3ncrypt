@@ -1,6 +1,6 @@
 # Vodozemac integration boundary
 
-Updated: 2026-09-19. Phase 3A status: boundary implemented; protocol remains opt-in.
+Updated: 2026-09-19. Phase 3E status: modern conversations are explicitly opt-in.
 
 ## Implementation
 
@@ -21,7 +21,7 @@ Boundary secret copies:
 
 The adapter cryptographically frames plaintext with an internal version and logical channel byte before Olm encryption, so message/signaling ciphertext cannot be swapped. Strict schemas, size limits, supported-version checks, and unknown-field rejection run before the Rust parser.
 
-`createChatInstance()` still constructs `LegacyInviteCryptoSession`. The vodozemac adapter is available only through direct test/development construction. Production conversations are not migrated or silently switched.
+`createChatInstance()` still constructs `LegacyInviteCryptoSession`. The explicit modern application path uses `ModernConversation` and Vodozemac; existing conversations are not migrated or silently switched.
 
 ## Proven behavior
 
@@ -127,14 +127,10 @@ Senders may retry through the existing duplicate-safe delivery boundary, but
 the application does not attempt unsafe ratchet rollback. Full delivery queue
 semantics remain outside this phase.
 
-Pre-key records are currently process-local in-memory records when Mongo is not
+Pre-key records use process-local memory in development when Mongo is not
 configured, or MongoDB documents otherwise. The in-memory claim is atomic only
-within one backend process. Mongo uses a conditional `findOneAndUpdate` pull,
-but deployment still requires a shared Mongo collection and appropriate
-indexes. There is no expiration/cleanup worker yet; bundle size is capped at
-32 KiB and one-time-key count at 100 per published record, with the existing
-control rate limiter applying per request. Multi-instance deployment without a
-shared Mongo store is not ready for modern pre-key use.
+within one backend process. Mongo uses a conditional `findOneAndUpdate` pull.
+Phase 3E expiry, cleanup, and production-store requirements are described below.
 
 TOFU pins the first observed identity and detects later changes; it does not
 prevent a first-contact man-in-the-middle. A changed identity invalidates prior
@@ -147,9 +143,90 @@ and version checked, and a modern failure never falls back to legacy.
 - CSP/browser runtime hardening and browser supply-chain verification (the
   WASM artifact checksum is tracked as release provenance, not runtime-checked);
 - crash/rollback tests for the account-plus-session journal boundary;
-- lost-message policy, multi-device semantics, and product-level session selection UX;
-- verification UX beyond the registry/fingerprint foundation;
+- server-side offline delivery, multi-device semantics, and product-level session selection UX;
+- identity-change recovery and authenticated first-contact verification beyond manual fingerprint comparison;
 - browser interoperability vectors, broader fuzzing, mobile/native parity, and performance/bundle review;
 - an explicit new-conversation negotiation design and separately reviewed legacy migration plan.
 
 Primary references: vodozemac upstream repository and 0.11 docs at https://github.com/matrix-org/vodozemac and https://docs.rs/vodozemac/0.11.0/vodozemac/olm/.
+
+## Phase 3E: explicit modern conversations
+
+The application now offers a separate **Create a private contact** action. A
+modern invitation carries a room ID, independent room-control capability, and
+opaque public-bundle address in the URL fragment. It carries no legacy message
+secret. Existing legacy invitations still enter the legacy SDK unchanged. A
+modern conversation record is encrypted in `SecureStorage` with mode, session
+ID, local address, and remote address; reopening restores that mode and session.
+Ciphertext format and relay messages never select or downgrade the protocol.
+There is no automatic migration for existing legacy rooms. A later default
+switch requires a reviewed migration UX, state transfer policy, compatibility
+testing, and explicit user consent for each existing conversation.
+
+`ModernConversation` is the application-facing adapter. It uses the same
+`DefaultTransportManager` and `SocketIoRelayTransport` as legacy chat, including
+the existing receive/ACK callback. Each participant publishes a public bundle,
+joins the room using that opaque address as its routing ID, and stores no
+private material on the server. The initiator validates and pins the remote
+bundle, atomically claims one OTK, establishes an outbound Vodozemac session,
+and persists it before sending. The recipient resolves the sender's public
+bundle from the sender routing address; inbound Vodozemac pre-key processing
+authenticates the sender's Curve25519 key before plaintext is accepted. The
+first message's internal channel/version frame is checked before delivery.
+Later messages use the persisted Olm session. The receiver returns acceptance
+to the relay only after ratchet persistence and encrypted duplicate metadata
+have been written.
+
+The verification view displays the local and contact public fingerprints. A
+contact starts unverified regardless of any presented status. Marking verified
+requires the user to check an explicit manual-comparison confirmation; that
+choice persists in the local encrypted vault. An identity change invalidates
+prior verification, creates a review-required state, and blocks new acceptance.
+The UI offers no QR code: a canonical QR bootstrap format and authentication
+story have not been reviewed. TOFU cannot detect a first-contact MITM.
+
+Modern delivery has a bounded encrypted local outbox (32 envelopes). Encryption
+and ratchet persistence finish before an envelope enters that outbox. `pending`
+means it has not been relayed; `sent` means the relay supplied a delivery ID;
+`accepted` means the receiver's ACK removed it. Missing ACK causes a retry of
+the **same persisted ciphertext**, never a new ratchet encryption. The
+receiver stores a bounded (1,024) encrypted digest list of accepted envelopes;
+duplicate ciphertext is acknowledged without decrypting or redisplaying it.
+If the recipient is offline, the sender retains the envelope and retries when
+the peer joins or while the sender is online. There is no server offline queue,
+so the sender must stay online or reopen the app for pending messages to move.
+If a storage write fails, ACK is withheld. Delivery receipts cannot prove the
+recipient read the message; the peer can choose not to acknowledge.
+
+The session repository retains eight sessions per contact. It records one
+active outbound session, never evicts that session, and moves successfully
+loaded inbound sessions to the recent end before evicting the least recently
+used non-active session. The current product path restores one active session
+per conversation; multiple-device and delayed-message session selection are
+not exposed in the UI.
+
+Public bundles expire after seven days. The in-memory backend removes expired
+bundles on pre-key requests. MongoDB creates a TTL index on `expiresAt`, while
+read and claim paths also reject expired records even before the TTL sweeper
+runs. Each publication is at most 32 KiB and 100 OTKs; request rate limiting
+still applies. Development/test may use one process's volatile in-memory store.
+Production pre-key publication returns 503 when MongoDB is unavailable, so a
+multi-instance deployment cannot silently use process-local OTK claims. A
+shared MongoDB is required for multi-instance pre-key claims. The existing
+Socket.IO room map is also process-local, so shared MongoDB alone does not
+make cross-instance delivery work. Modern multi-instance deployment remains
+not ready until relay routing is separately reviewed. Restarting
+an in-memory backend loses public bundles and room records; MongoDB retains
+them until expiry. Reopening an expired invitation fails closed and requires a
+fresh conversation rather than republishing possibly claimed keys.
+Publication has an encrypted local marker. The client writes it before the
+network request, records the returned address, then marks the account keys as
+published. If the request outcome is unknown and no address was saved, the
+identity refuses automatic republication; this avoids serving the same OTKs
+under another address after a lost response. Recovery of that availability
+case requires a separately reviewed key-rotation flow.
+
+Phase 3E still leaves product work before modern can become the default:
+cross-device support, a reviewed identity-change recovery flow, server-side
+offline delivery, long-lived bundle renewal, durable delivery receipts,
+multi-tab coordination, and production deployment/operational review.

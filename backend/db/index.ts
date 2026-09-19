@@ -1,8 +1,9 @@
 import { Db, MongoClient, ServerApiVersion } from 'mongodb';
 
 import {
-    findOneFromDB as _findOneFromDB, insertInDb as _insertInDb, updateOneFromDb as _updateOneFromDb, claimOneTimeKey as _claimOneTimeKey
+    findOneFromDB as _findOneFromDB, insertInDb as _insertInDb, updateOneFromDb as _updateOneFromDb, claimOneTimeKey as _claimOneTimeKey, deleteExpiredPrekeyBundles as _deleteExpiredPrekeyBundles
 } from './inMemDB';
+import { PREKEY_COLLECTION } from './const';
 
 const uri = process.env.MONGO_URI;
 const dbName = process.env.MONGO_DB_NAME;
@@ -23,10 +24,13 @@ const connectDb = async (): Promise<void> => {
     if (!client) throw new Error("No client");
     await client.connect();
     db = client.db(dbName);
+    await db.collection(PREKEY_COLLECTION).createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
   } catch (err) {
     inMem = true;
     if (process.env.NODE_ENV !== 'test') {
-      console.error("Database unavailable; using volatile in-memory room storage.");
+      console.error(process.env.NODE_ENV === 'production'
+        ? 'Database unavailable; using volatile in-memory room storage. Modern pre-key publication is disabled.'
+        : 'Database unavailable; using volatile in-memory room storage.');
     }
   }
 };
@@ -59,7 +63,7 @@ const updateOneFromDb = async<T>(condition, data, collectionName: string): Promi
 export const claimOneTimeKey = async <T>(condition, keyId: string, collectionName: string): Promise<T | undefined> => {
   if (inMem) return _claimOneTimeKey(condition, keyId, collectionName) as T | undefined;
   const result = await db.collection(collectionName).findOneAndUpdate(
-    { ...condition, 'bundle.oneTimeKeys.id': keyId },
+    { ...condition, expiresAt: { $gt: new Date() }, 'bundle.oneTimeKeys.id': keyId },
     { $pull: { 'bundle.oneTimeKeys': { id: keyId } } } as any,
     { returnDocument: 'before' },
   );
@@ -72,6 +76,10 @@ export const claimOneTimeKey = async <T>(condition, keyId: string, collectionNam
   return value?.bundle?.oneTimeKeys?.find((key) => key.id === keyId) as T | undefined;
 };
 
+export const prekeyStorageReady = (): boolean => process.env.NODE_ENV !== 'production' || !inMem;
+export const cleanupExpiredPrekeyBundles = (now = Date.now()): number =>
+  inMem ? _deleteExpiredPrekeyBundles(now, PREKEY_COLLECTION) : 0;
+
 export default {
   db,
   connectDb,
@@ -79,4 +87,6 @@ export default {
   findOneFromDB,
   updateOneFromDb,
   claimOneTimeKey,
+  prekeyStorageReady,
+  cleanupExpiredPrekeyBundles,
 };

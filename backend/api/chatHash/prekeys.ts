@@ -9,6 +9,7 @@ import { authorizeRoomControl, isValidControlCapability, isValidRoomId, readCont
 const router = express.Router({ mergeParams: true });
 const MAX_BUNDLE_BYTES = 32 * 1024;
 const MAX_KEYS = 100;
+export const PREKEY_BUNDLE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const BASE64_KEY = /^[A-Za-z0-9_-]{43}$/;
 const ADDRESS = /^[0-9a-f-]{36}$/i;
 
@@ -40,27 +41,39 @@ const validBundle = (value: unknown): boolean => {
   return true;
 };
 
-const authorize = async (channel: unknown, capability: string | undefined): Promise<boolean> =>
-  isValidRoomId(channel) && isValidControlCapability(capability) && !!await authorizeRoomControl(channel, capability);
+const authorize = async (channel: unknown, capability: string | undefined): Promise<boolean> => {
+  if (!isValidRoomId(channel) || !isValidControlCapability(capability)) return false;
+  const room = await authorizeRoomControl(channel, capability);
+  return !!room && !room.deleted && !room.expired;
+};
+
+const ready = (): boolean => db.prekeyStorageReady();
 
 router.post('/', controlRateLimit, asyncHandler(async (req, res) => {
+  if (!ready()) return res.status(503).send({ error: 'Modern pre-key storage is unavailable' });
+  db.cleanupExpiredPrekeyBundles();
   const channel = req.params.channel;
   const capability = readControlCapability(req);
   if (!await authorize(channel, capability) || !validBundle(req.body)) return res.status(400).send({ error: 'Invalid pre-key bundle' });
   const address = randomUUID();
-  await db.insertInDb({ channel, address, bundle: req.body, createdAt: Date.now() }, PREKEY_COLLECTION);
+  await db.insertInDb({ channel, address, bundle: req.body, createdAt: new Date(), expiresAt: new Date(Date.now() + PREKEY_BUNDLE_TTL_MS) }, PREKEY_COLLECTION);
   return res.status(201).send({ address });
 }));
 
 router.get('/:address', controlRateLimit, asyncHandler(async (req, res) => {
+  if (!ready()) return res.status(503).send({ error: 'Modern pre-key storage is unavailable' });
+  db.cleanupExpiredPrekeyBundles();
   const { channel, address } = req.params;
   const capability = readControlCapability(req);
   if (!ADDRESS.test(address) || !await authorize(channel, capability)) return res.status(404).send({ error: 'Pre-key bundle unavailable' });
-  const record = await db.findOneFromDB<{ bundle: unknown }>({ channel, address }, PREKEY_COLLECTION);
-  return record ? res.send(record.bundle) : res.status(404).send({ error: 'Pre-key bundle unavailable' });
+  const record = await db.findOneFromDB<{ bundle: unknown; expiresAt: Date }>({ channel, address }, PREKEY_COLLECTION);
+  return record && record.expiresAt instanceof Date && record.expiresAt.getTime() > Date.now()
+    ? res.send(record.bundle) : res.status(404).send({ error: 'Pre-key bundle unavailable' });
 }));
 
 router.post('/:address/claim', controlRateLimit, asyncHandler(async (req, res) => {
+  if (!ready()) return res.status(503).send({ error: 'Modern pre-key storage is unavailable' });
+  db.cleanupExpiredPrekeyBundles();
   const { channel, address } = req.params;
   const capability = readControlCapability(req);
   const keyId = req.body?.keyId;

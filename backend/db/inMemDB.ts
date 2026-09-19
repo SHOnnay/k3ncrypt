@@ -54,10 +54,20 @@ export const claimOneTimeKey = (condition, keyId: string, collectionName: string
   if (!collection) return null;
   const record = collection.find((entry) => {
     if (!Object.keys(condition).every((key) => entry[key] === condition[key])) return false;
+    if (!(entry.expiresAt instanceof Date) || entry.expiresAt.getTime() <= Date.now()) return false;
     return Array.isArray(entry.bundle?.oneTimeKeys) && entry.bundle.oneTimeKeys.some((key) => key.id === keyId);
   });
   if (!record) return null;
   const index = record.bundle.oneTimeKeys.findIndex((key) => key.id === keyId);
   const [claimed] = record.bundle.oneTimeKeys.splice(index, 1);
   return { ...claimed };
+};
+
+export const deleteExpiredPrekeyBundles = (now: number, collectionName: string): number => {
+  const collection = storage[collectionName];
+  if (!collection) return 0;
+  const retained = collection.filter((entry) => !(entry.expiresAt instanceof Date) || entry.expiresAt.getTime() > now);
+  const removed = collection.length - retained.length;
+  storage[collectionName] = retained;
+  return removed;
 };
