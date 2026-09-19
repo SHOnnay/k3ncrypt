@@ -74,6 +74,9 @@ export class ModernConversation {
     private onMessage?: (text: string) => void;
     private onContactChange?: (contact: StoredContactIdentity) => void;
     private readonly tabOwnerId = `${Math.random().toString(36).slice(2)}-${Date.now()}`;
+    private fallbackLeaseKey?: string;
+    private fallbackLeaseTimer?: ReturnType<typeof setInterval>;
+    private unloadHandler?: () => void;
 
     constructor(private readonly storage: SecureStorage, loader: VodozemacBindingsLoader, transportManager?: TransportManager) {
         this.runtime = new VodozemacRuntime(storage, loader);
@@ -87,7 +90,7 @@ export class ModernConversation {
     }
 
     public async connect(roomId: string, capability: string, remoteAddress?: string, onMessage?: (text: string) => void, onContactChange?: (contact: StoredContactIdentity) => void): Promise<ModernConnectionDetails> {
-        return this.withTabLock(roomId, () => this.connectUnlocked(roomId, capability, remoteAddress, onMessage, onContactChange));
+        return this.withTabLock(roomId, () => this.connectUnlocked(roomId, capability, remoteAddress, onMessage, onContactChange), true);
     }
 
     private async connectUnlocked(roomId: string, capability: string, remoteAddress?: string, onMessage?: (text: string) => void, onContactChange?: (contact: StoredContactIdentity) => void): Promise<ModernConnectionDetails> {
@@ -156,6 +159,12 @@ export class ModernConversation {
         await this.transport.start();
         this.transport.join(roomId, localAddress, capability);
         this.retryTimer = setInterval(() => { void this.retryPending(); }, 5000);
+        const browserWindow = (globalThis as typeof globalThis & { window?: { addEventListener?: (event: string, handler: () => void) => void } }).window;
+        if (browserWindow?.addEventListener) {
+            this.unloadHandler = () => this.releaseFallbackLease();
+            browserWindow.addEventListener('beforeunload', this.unloadHandler);
+            browserWindow.addEventListener('pagehide', this.unloadHandler);
+        }
         void this.retryPending();
         return { ownFingerprint: own.identityId, ownAddress: localAddress,
             contact: this.remoteAddress ? await this.registry.get(this.remoteAddress) : undefined };
@@ -228,6 +237,13 @@ export class ModernConversation {
         if (this.retryTimer) clearInterval(this.retryTimer);
         await this.transport.stop();
         this.runtime.close();
+        const browserWindow = (globalThis as typeof globalThis & { window?: { removeEventListener?: (event: string, handler: () => void) => void } }).window;
+        if (this.unloadHandler && browserWindow?.removeEventListener) {
+            browserWindow.removeEventListener('beforeunload', this.unloadHandler);
+            browserWindow.removeEventListener('pagehide', this.unloadHandler);
+        }
+        this.unloadHandler = undefined;
+        this.releaseFallbackLease();
         this.storage.lock();
     }
 
@@ -270,9 +286,8 @@ export class ModernConversation {
         return true;
     }
 
-    private async withTabLock<T>(conversationId: string, operation: () => Promise<T>): Promise<T> {
+    private async withTabLock<T>(conversationId: string, operation: () => Promise<T>, persistLease = false): Promise<T> {
         const locks = (globalThis as typeof globalThis & { navigator?: { locks?: { request: (name: string, callback: () => Promise<T>) => Promise<T> } } }).navigator?.locks;
-        if (locks) return locks.request(`k3ncrypt-modern:${conversationId}`, operation);
         if (typeof (globalThis as typeof globalThis & { window?: unknown }).window === 'undefined') return operation();
         const browser = globalThis as typeof globalThis & { localStorage?: Storage };
         if (!browser.localStorage) {
@@ -282,14 +297,37 @@ export class ModernConversation {
         const key = `k3ncrypt-tab-lease:${conversationId}`;
         const now = Date.now();
         const current = browser.localStorage.getItem(key);
-        if (current) {
-            const [owner, expires] = current.split(':');
-            if (owner !== this.tabOwnerId && Number(expires) > now) throw new Error('This secure conversation is active in another tab.');
+        const [owner, expires] = current?.split(':') ?? [];
+        if (owner && owner !== this.tabOwnerId && Number(expires) > now) throw new Error('This secure conversation is active in another tab.');
+        if (this.fallbackLeaseKey !== key) {
+            browser.localStorage.setItem(key, `${this.tabOwnerId}:${now + TAB_LEASE_MS}`);
+            this.fallbackLeaseKey = key;
         }
-        browser.localStorage.setItem(key, `${this.tabOwnerId}:${now + TAB_LEASE_MS}`);
-        try { return await operation(); }
-        finally {
-            if (browser.localStorage.getItem(key)?.startsWith(`${this.tabOwnerId}:`)) browser.localStorage.removeItem(key);
+        try {
+            const result = locks ? await locks.request(`k3ncrypt-modern:${conversationId}`, operation) : await operation();
+            if (persistLease) {
+                if (this.fallbackLeaseTimer) clearInterval(this.fallbackLeaseTimer);
+                this.fallbackLeaseTimer = setInterval(() => this.refreshFallbackLease(browser.localStorage!, key), TAB_LEASE_MS / 3);
+            } else this.refreshFallbackLease(browser.localStorage, key);
+            return result;
+        } catch (error) {
+            if (persistLease) this.releaseFallbackLease();
+            throw error;
+        }
+    }
+
+    private refreshFallbackLease(storage: Storage, key: string): void {
+        if (this.fallbackLeaseKey === key) storage.setItem(key, `${this.tabOwnerId}:${Date.now() + TAB_LEASE_MS}`);
+    }
+
+    private releaseFallbackLease(): void {
+        if (this.fallbackLeaseTimer) clearInterval(this.fallbackLeaseTimer);
+        this.fallbackLeaseTimer = undefined;
+        if (this.fallbackLeaseKey) {
+            const storage = (globalThis as typeof globalThis & { localStorage?: Storage }).localStorage;
+            const current = storage?.getItem(this.fallbackLeaseKey);
+            if (current?.startsWith(`${this.tabOwnerId}:`)) storage?.removeItem(this.fallbackLeaseKey);
+            this.fallbackLeaseKey = undefined;
         }
     }
 

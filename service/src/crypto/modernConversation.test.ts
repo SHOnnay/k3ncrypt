@@ -116,3 +116,24 @@ it('blocks a restored session when its pinned contact identity changes', async (
     const restored = new ModernConversation(storage, loader, fakeTransport().transport);
     await expect(restored.connect(room, key(9), remoteAddress)).rejects.toThrow('identity changed');
 });
+
+it('keeps a fallback tab lease for the conversation lifetime and releases it on close', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    const values = new Map<string, string>();
+    const localStorage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value), removeItem: (key: string) => values.delete(key) };
+    const previousWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
+    const previousStorage = (globalThis as typeof globalThis & { localStorage?: unknown }).localStorage;
+    Object.assign(globalThis, { window: { btoa: (value: string) => Buffer.from(value, 'binary').toString('base64'), atob: (value: string) => Buffer.from(value, 'base64').toString('binary') }, localStorage });
+    try {
+        const first = new ModernConversation(new Storage(), loader, fakeTransport().transport);
+        await first.connect(room, key(9));
+        const second = new ModernConversation(new Storage(), loader, fakeTransport().transport);
+        await expect(second.connect(room, key(9))).rejects.toThrow('active in another tab');
+        await first.close();
+        await expect(second.connect(room, key(9))).resolves.toBeDefined();
+        await second.close();
+    } finally {
+        Object.assign(globalThis, { window: previousWindow, localStorage: previousStorage });
+    }
+});
