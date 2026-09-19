@@ -43,6 +43,8 @@ export type { VodozemacGeneratedModule } from './crypto/vodozemacWasm';
 export { publishVodozemacBundle, fetchVodozemacBundle, claimVodozemacOneTimeKey } from './api/prekeys';
 export { ATTACHMENT_LIMITS, decryptAttachment, encryptAttachment, generateAttachmentKey, MemoryAttachmentStorage } from './attachments';
 export type { AttachmentId, AttachmentReference, AttachmentStorage, AttachmentUpload, EncryptedAttachmentChunk, EncryptedAttachmentMetadata } from './attachments';
+export { BrowserVoiceRecorder, createEncryptedVoiceMessage } from './voice';
+export type { VoiceMessageReference, VoiceRecorder, VoiceRecordingState } from './voice';
 import { generateUUID } from './utils/uuid';
 import {
     WebRTCCall,
