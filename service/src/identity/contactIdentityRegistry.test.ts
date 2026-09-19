@@ -16,6 +16,13 @@ const identity = (id: string, verification: 'unknown' | 'unverified' | 'verified
 });
 
 describe('ContactIdentityRegistry', () => {
+    it('never imports a presented verified flag as local trust', async () => {
+        const registry = new ContactIdentityRegistry(new MemoryStorage() as unknown as SecureStorage);
+        const first = await registry.observe('untrusted', identity('a', 'verified'));
+        expect(first.current.verification).toBe('unverified');
+        await registry.observe('untrusted', identity('b'));
+        await expect(registry.markVerified('untrusted')).rejects.toThrow('Review');
+    });
     it('uses TOFU and invalidates verification when a key changes', async () => {
         const registry = new ContactIdentityRegistry(new MemoryStorage() as unknown as SecureStorage);
         expect((await registry.observe('contact', identity('a'))).kind).toBe('first-seen');

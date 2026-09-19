@@ -25,6 +25,10 @@ export { VodozemacSessionStore } from './identity/vodozemacSessionStore';
 export type { VodozemacSessionFactory } from './identity/vodozemacSessionStore';
 export { VodozemacSessionRepository } from './identity/vodozemacSessionRepository';
 export { VodozemacRuntime } from './crypto/vodozemacRuntime';
+export { ModernConversation } from './crypto/modernConversation';
+export type { ModernConnectionDetails } from './crypto/modernConversation';
+export { ConversationModeStore } from './crypto/conversationMode';
+export type { ConversationProtocolMode, ModernConversationRecord } from './crypto/conversationMode';
 export type {
     VodozemacBindings,
     VodozemacBindingsLoader,

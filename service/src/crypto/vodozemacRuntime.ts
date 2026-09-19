@@ -48,6 +48,7 @@ export class VodozemacRuntime {
     ) {}
 
     public get lifecycle(): VodozemacLifecycleState { return this.state; }
+    public get activeSessionId(): string | undefined { return this.session?.sessionId(); }
 
     public async initialize(): Promise<void> {
         this.requireState('uninitialized');

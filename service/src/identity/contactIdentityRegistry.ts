@@ -58,7 +58,7 @@ export class ContactIdentityRegistry {
             const current: StoredContactIdentity = {
                 contactId,
                 ...presentedRecord,
-                verification: presented.verification,
+                verification: 'unverified',
                 changeStatus: 'unchanged',
             };
             await this.storage.write(RECORD_TYPE, contactId, encodeStored(current));
@@ -92,7 +92,13 @@ export class ContactIdentityRegistry {
         const bytes = await this.storage.read(RECORD_TYPE, contactId);
         if (!bytes) throw new Error('Unknown contact identity.');
         const current = parseStored(bytes);
+        if (current.changeStatus !== 'unchanged') throw new Error('Review the changed identity before verifying it.');
         await this.storage.write(RECORD_TYPE, contactId, encodeStored({ ...current, verification: 'verified' }));
+    }
+
+    public async get(contactId: string): Promise<StoredContactIdentity | undefined> {
+        const bytes = await this.storage.read(RECORD_TYPE, contactId);
+        return bytes ? parseStored(bytes) : undefined;
     }
 
     public async acceptPendingChange(contactId: string): Promise<void> {

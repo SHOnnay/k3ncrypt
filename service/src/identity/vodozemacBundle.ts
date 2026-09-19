@@ -32,6 +32,8 @@ const validKey = (value: unknown): value is string => {
     }
 };
 
+const canonicalPublicKey = (value: string): string => value.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
 const parseIdentity = (value: unknown): VodozemacPublicIdentity => {
     if (!value || typeof value !== 'object' || Array.isArray(value) ||
         !exactKeys(value as Record<string, unknown>, ['curve25519', 'ed25519'])) {
@@ -95,10 +97,12 @@ const keyId = async (key: string, kind: 'otk' | 'fallback'): Promise<string> => 
 export const createVodozemacPublicBundle = async (
     account: VodozemacAccountHandle,
 ): Promise<VodozemacPublicBundle> => {
-    const identity = parseIdentity(JSON.parse(account.identityKeys()));
-    const keys = account.availableOneTimeKeys?.() ?? [];
+    const accountIdentity = JSON.parse(account.identityKeys()) as VodozemacPublicIdentity;
+    const identity = parseIdentity({ curve25519: canonicalPublicKey(accountIdentity.curve25519), ed25519: canonicalPublicKey(accountIdentity.ed25519) });
+    const keys = (account.availableOneTimeKeys?.() ?? []).map(canonicalPublicKey);
     const oneTimeKeys = await Promise.all(keys.map(async (key) => ({ id: await keyId(key, 'otk'), key })));
-    const fallback = account.fallbackKey?.();
+    const fallbackValue = account.fallbackKey?.();
+    const fallback = fallbackValue ? canonicalPublicKey(fallbackValue) : undefined;
     const fallbackKey = fallback ? { id: await keyId(fallback, 'fallback'), key: fallback } : undefined;
     return validateVodozemacPublicBundle({
         version: 1,

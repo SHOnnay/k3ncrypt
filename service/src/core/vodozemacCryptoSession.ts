@@ -50,8 +50,8 @@ const parseEnvelopeData = (value: unknown): VodozemacEnvelopeData => {
 
 /**
  * Isolated second CryptoSession implementation. It is intentionally not
- * registered as the production default; callers must provide an established
- * Rust/WASM Olm session handle explicitly.
+ * registered as the legacy factory default; the explicit modern application
+ * path provides an established Rust/WASM Olm session handle.
  */
 export class VodozemacCryptoSession implements CryptoSession {
     public readonly encrypted = true;

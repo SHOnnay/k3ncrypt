@@ -14,7 +14,7 @@ export interface VodozemacAccountHandle {
     identityKeys(): string;
     availableOneTimeKeys?(): string[];
     firstOneTimeKey?(): string;
-    fallbackKey?(): string;
+    fallbackKey?(): string | undefined;
     generateOneTimeKeys(count: number): void;
     generateFallbackKey(): void;
     markKeysAsPublished?(): void;
@@ -51,8 +51,9 @@ const parsePublicIdentity = (value: string): VodozemacPublicIdentity => {
 };
 
 export const fingerprintVodozemacIdentity = async (identity: VodozemacPublicIdentity): Promise<string> => {
+    const normalizeKey = (key: string): string => key.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
     const canonical = new TextEncoder().encode(
-        `k3ncrypt:vodozemac-identity:v1\0${identity.curve25519}\0${identity.ed25519}`,
+        `k3ncrypt:vodozemac-identity:v1\0${normalizeKey(identity.curve25519)}\0${normalizeKey(identity.ed25519)}`,
     );
     const digest = new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', canonical));
     const grouped = toBase64Url(digest).toUpperCase().match(/.{1,4}/g)?.join(' ') ?? '';
