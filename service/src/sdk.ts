@@ -45,6 +45,10 @@ export { ATTACHMENT_LIMITS, decryptAttachment, encryptAttachment, generateAttach
 export type { AttachmentId, AttachmentReference, AttachmentStorage, AttachmentUpload, EncryptedAttachmentChunk, EncryptedAttachmentMetadata } from './attachments';
 export { BrowserVoiceRecorder, createEncryptedVoiceMessage } from './voice';
 export type { VoiceMessageReference, VoiceRecorder, VoiceRecordingState } from './voice';
+export { prepareEncryptedFile, prepareEncryptedMedia, MEDIA_LIMITS } from './media';
+export type { MediaKind, PreparedMedia } from './media';
+export { MediaPermissionTracker } from './permissions';
+export type { MediaPermissionKind, MediaPermissionState } from './permissions';
 import { generateUUID } from './utils/uuid';
 import {
     WebRTCCall,
