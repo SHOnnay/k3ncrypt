@@ -277,3 +277,36 @@ local persistence failure prevents submission; relay response/ACK loss retries
 the same envelope; receiver persistence failure withholds ACK; relay TTL expiry
 leaves the sender's pending item to fail/retry without ratchet rollback; and a
 recipient crash before ACK permits a later redelivery that is safely deduped.
+
+## Phase 3G production gate
+
+Production configuration validation requires MongoDB persistence, an explicit
+chat-link domain, debug logging disabled, and a reviewed Socket.IO adapter
+before `K3NCRYPT_INSTANCE_COUNT` may exceed one. Until that adapter is actually
+implemented, production startup rejects multi-instance configuration; the
+process-local live room map is not treated as cluster-safe. Development and
+test may continue with explicit volatile storage.
+
+The centralized conversation policy is `legacy-default` by default. It also
+recognizes `modern-explicit` and `modern-default` as deliberate policy values,
+but no policy value changes an existing conversation: the encrypted persisted
+conversation mode remains authoritative and relay responses cannot alter it.
+
+Threat model summary:
+
+- Protected: message contents from the relay/network observer, locked local
+  crypto material, ratchet state, offline ciphertext contents, pinned identity
+  changes after detection, and protocol downgrade attempts.
+- Not fully hidden: relay timing, IP/network metadata, mailbox activity,
+  message sizes, and first-contact identity authenticity before manual
+  verification.
+- Out of scope: a compromised unlocked endpoint, browser, operating system, or
+  malicious code executing in the application origin.
+
+The relay is not a zero-knowledge metadata service. It learns routing scope,
+opaque mailbox activity, message size/timing, and delivery correlation. The
+current multi-instance limitation is live Socket.IO routing; Mongo-backed
+mailbox and pre-key operations use conditional database operations and TTL
+indexes. A real Mongo process-restart harness is not available in this
+repository environment, so the Playwright restart test covers application
+restart and the Mongo integration remains a deployment verification item.

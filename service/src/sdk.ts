@@ -29,6 +29,8 @@ export { ModernConversation } from './crypto/modernConversation';
 export type { ModernConnectionDetails } from './crypto/modernConversation';
 export { ConversationModeStore } from './crypto/conversationMode';
 export type { ConversationProtocolMode, ModernConversationRecord } from './crypto/conversationMode';
+export { conversationCreationPolicy } from './crypto/conversationPolicy';
+export type { ConversationCreationPolicy } from './crypto/conversationPolicy';
 export type {
     VodozemacBindings,
     VodozemacBindingsLoader,
