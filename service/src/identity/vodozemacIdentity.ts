@@ -132,6 +132,16 @@ export class PersistentVodozemacIdentity implements IdentityManager<MessagingIde
         });
     }
 
+    /** Generates only the deficit needed to keep the published OTK pool healthy. */
+    public async replenishOneTimeKeys(minimum: number): Promise<void> {
+        if (!Number.isInteger(minimum) || minimum < 1 || minimum > 100) throw new Error('Invalid one-time-key target.');
+        await this.withAccount(async (account) => {
+            const available = account.availableOneTimeKeys?.().length ?? 0;
+            if (available < minimum) account.generateOneTimeKeys(minimum - available);
+            await this.persistAccount();
+        });
+    }
+
     public lock(): void {
         this.account?.free?.();
         this.account = undefined;

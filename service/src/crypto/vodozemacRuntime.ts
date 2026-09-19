@@ -7,6 +7,10 @@ import { VodozemacBoundaryError } from './vodozemacErrors';
 import { AsyncMutex } from '../utils/asyncMutex';
 import type { VodozemacPublicBundle } from '../identity/vodozemacBundle';
 
+const TRANSACTION_RECORD_TYPE = 'vodozemac-commit';
+type CommitPhase = 'prepared' | 'account-written' | 'committed';
+interface CommitMarker { version: 1; conversationId: string; sessionId: string; phase: CommitPhase; }
+
 export type VodozemacLifecycleState =
     | 'uninitialized'
     | 'crypto-ready'
@@ -52,9 +56,10 @@ export class VodozemacRuntime {
             if (bindings.protocolVersion !== 1) {
                 throw new VodozemacBoundaryError('UNSUPPORTED_PROTOCOL', 'Unsupported modern crypto protocol.');
             }
-            this.bindings = bindings;
-            this.sessionStore = new VodozemacSessionStore(this.storage, bindings.sessionFactory);
-            this.state = 'crypto-ready';
+        this.bindings = bindings;
+        this.sessionStore = new VodozemacSessionStore(this.storage, bindings.sessionFactory);
+        await this.recoverPendingCommit();
+        this.state = 'crypto-ready';
         } catch (error) {
             this.state = 'error';
             if (error instanceof VodozemacBoundaryError) throw error;
@@ -100,6 +105,13 @@ export class VodozemacRuntime {
         catch { throw new VodozemacBoundaryError('CORRUPTED_ACCOUNT', 'The public keys could not be persisted.'); }
     }
 
+    public async replenishOneTimeKeys(minimum = 10): Promise<void> {
+        this.requireState('identity-restored', 'active', 'persisted');
+        if (!this.identity) throw new VodozemacBoundaryError('CORRUPTED_ACCOUNT', 'The private identity is unavailable.');
+        try { await this.identity.replenishOneTimeKeys(minimum); }
+        catch { throw new VodozemacBoundaryError('CORRUPTED_ACCOUNT', 'The one-time keys could not be replenished.'); }
+    }
+
     /** Accepts an already-established opaque handle from the reviewed protocol flow. */
     public async establishSession(conversationId: string, handle: VodozemacSessionHandle, expectedSessionId: string): Promise<void> {
         this.requireState('identity-restored', 'persisted');
@@ -134,8 +146,7 @@ export class VodozemacRuntime {
                 return account.createOutboundSession(recipientIdentityKey, recipientOneTimeKey);
             });
             await this.establishSession(conversationId, handle, handle.sessionId());
-            await this.persistIdentity();
-            await this.persistSession();
+            await this.commitAccountAndSession();
         } catch (error) {
             if (error instanceof VodozemacBoundaryError) throw error;
             throw new VodozemacBoundaryError('IDENTITY_MISMATCH', 'The outbound session could not be established.');
@@ -158,8 +169,7 @@ export class VodozemacRuntime {
             });
             const handle = result.takeSession();
             await this.establishSession(conversationId, handle, handle.sessionId());
-            await this.persistIdentity();
-            await this.persistSession();
+            await this.commitAccountAndSession();
             const plaintext = result.plaintext();
             try { return plaintext.buffer.slice(plaintext.byteOffset, plaintext.byteOffset + plaintext.byteLength) as ArrayBuffer; }
             finally { plaintext.fill(0); }
@@ -237,6 +247,51 @@ export class VodozemacRuntime {
         }
         await this.sessionStore.save(this.conversationId, this.session);
         this.state = keepPersisted ? 'persisted' : 'active';
+    }
+
+    /**
+     * Commits an account mutation and its newly-created session with an
+     * encrypted metadata marker. The marker never contains a pickle, key, or
+     * plaintext. Recovery treats an incomplete commit as unsafe and discards
+     * only the session record; the account mutation is never rolled back.
+     */
+    private async commitAccountAndSession(): Promise<void> {
+        if (!this.identity || !this.session || !this.conversationId || !this.sessionStore) {
+            throw new VodozemacBoundaryError('MISSING_SESSION', 'No active conversation session.');
+        }
+        const markerId = 'local';
+        const writeMarker = async (phase: CommitPhase): Promise<void> => {
+            const marker: CommitMarker = { version: 1, conversationId: this.conversationId!, sessionId: this.session!.sessionId(), phase };
+            await this.storage.write(TRANSACTION_RECORD_TYPE, markerId,
+                new TextEncoder().encode(JSON.stringify(marker)).buffer as ArrayBuffer);
+        };
+        await writeMarker('prepared');
+        await this.persistIdentity();
+        await writeMarker('account-written');
+        await this.persistSessionUnsafe();
+        await writeMarker('committed');
+        await this.storage.delete(TRANSACTION_RECORD_TYPE, markerId);
+        this.state = 'persisted';
+    }
+
+    private async recoverPendingCommit(): Promise<void> {
+        const bytes = await this.storage.read(TRANSACTION_RECORD_TYPE, 'local');
+        if (!bytes) return;
+        let marker: CommitMarker;
+        try {
+            marker = JSON.parse(new TextDecoder().decode(bytes)) as CommitMarker;
+            if (marker?.version !== 1 || typeof marker.conversationId !== 'string' ||
+                typeof marker.sessionId !== 'string' || !['prepared', 'account-written', 'committed'].includes(marker.phase)) {
+                throw new Error('invalid marker');
+            }
+        } catch {
+            await this.storage.delete(TRANSACTION_RECORD_TYPE, 'local');
+            throw new VodozemacBoundaryError('CORRUPTED_SESSION', 'Modern crypto recovery metadata is invalid.');
+        }
+        if (marker.phase !== 'committed' && this.sessionStore) {
+            await this.sessionStore.delete(marker.conversationId);
+        }
+        await this.storage.delete(TRANSACTION_RECORD_TYPE, 'local');
     }
 
     private quarantineSession(): void {

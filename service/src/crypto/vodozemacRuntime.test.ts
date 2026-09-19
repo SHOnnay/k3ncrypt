@@ -23,6 +23,10 @@ class MemoryStorage implements SecureStorage {
         const key = new Uint8Array(32).fill(7);
         try { return await operation(key); } finally { key.fill(0); }
     }
+    public seed(type: string, id: string, value: unknown): void {
+        this.records.set(`${type}:${id}`, new TextEncoder().encode(JSON.stringify(value)).buffer as ArrayBuffer);
+    }
+    public has(type: string, id: string): boolean { return this.records.has(`${type}:${id}`); }
 }
 
 const account = (): VodozemacAccountHandle => ({
@@ -77,5 +81,31 @@ describe('VodozemacRuntime', () => {
         const runtime = new VodozemacRuntime(new MemoryStorage(), async () => ({ ...bindings, protocolVersion: 2 as 1 }));
         await expect(runtime.initialize()).rejects.toBeInstanceOf(VodozemacBoundaryError);
         await expect(runtime.initialize()).rejects.toMatchObject({ code: 'INVALID_LIFECYCLE' });
+    });
+
+    it('recovers an incomplete account/session commit deterministically without reusing the session', async () => {
+        const storage = new MemoryStorage();
+        storage.seed('vodozemac-commit', 'local', { version: 1, conversationId: 'conversation-1', sessionId: 'session-1', phase: 'account-written' });
+        await storage.write('vodozemac-session', 'conversation-1', new Uint8Array([1, 2, 3]).buffer);
+        const runtime = new VodozemacRuntime(storage, async () => bindings);
+        await runtime.initialize();
+        expect(storage.has('vodozemac-commit', 'local')).toBe(false);
+        await expect(storage.read('vodozemac-session', 'conversation-1')).resolves.toBeUndefined();
+    });
+
+    it('fails closed when ratchet persistence fails after encryption mutation', async () => {
+        class FailingStorage extends MemoryStorage {
+            public async write(type: string, id: string, value: ArrayBuffer): Promise<void> {
+                if (type === 'vodozemac-session') throw new Error('disk full');
+                return super.write(type, id, value);
+            }
+        }
+        const storage = new FailingStorage();
+        const runtime = new VodozemacRuntime(storage, async () => bindings);
+        await runtime.initialize();
+        await runtime.restoreOrCreateIdentity();
+        await runtime.establishSession('conversation-1', session(), 'session-1');
+        await expect(runtime.encrypt('message', new TextEncoder().encode('secret').buffer)).rejects.toMatchObject({ code: 'CORRUPTED_SESSION' });
+        expect(runtime.lifecycle).toBe('error');
     });
 });

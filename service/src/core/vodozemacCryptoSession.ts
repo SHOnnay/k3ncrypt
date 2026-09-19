@@ -64,6 +64,8 @@ export class VodozemacCryptoSession implements CryptoSession {
         return this.initialized && !this.destroyed;
     }
 
+    public sessionId(): string { return this.session.sessionId(); }
+
     /** Initialization binds this adapter to the expected, non-secret Olm session id. */
     public async initialize(expectedSessionId: string): Promise<void> {
         if (this.destroyed) {

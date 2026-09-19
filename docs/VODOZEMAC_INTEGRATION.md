@@ -88,6 +88,10 @@ derivation is added. Session establishment authenticates the Curve25519
 identity; Ed25519/Curve25519 values are exposed for fingerprint display, not as
 an ad-hoc signed-bundle format.
 
+The local identity can explicitly replenish the published pool to a bounded
+target (up to 100 keys) and then republish a fresh bundle. There is no automatic
+server-side key generation or private-key handling.
+
 `ContactIdentityRegistry` provides first-seen trust-on-first-use (TOFU).
 Unchanged identities remain associated; changed identities become
 `changed-pending-review`, invalidate any previous `verified` state, and require
@@ -101,6 +105,41 @@ eviction. The modern protocol is explicit and pinned: legacy remains the
 default, and initialization/artifact failures never downgrade by guessing from
 ciphertext. Relay metadata remains opaque capability/address, envelope bytes,
 delivery ID, and timing.
+
+### Account/session crash consistency
+
+Inbound pre-key handling can mutate both the account (one-time-key consumption)
+and a new session. Because the current `SecureStorage` port does not expose a
+single transaction spanning those records, the runtime writes an encrypted
+metadata-only commit marker (`prepared`, `account-written`, `committed`) around
+the two encrypted writes. The marker contains only a version, conversation ID,
+session ID, and phase—never a pickle, key, plaintext, or message. Startup
+recovery is deterministic: an incomplete marker deletes the associated session
+record and clears the marker, while a committed marker preserves both records
+and only clears the marker. Account mutations are never rolled back, so a
+consumed one-time key is never reused after a crash. A malformed marker fails
+closed with a corruption error.
+
+If persistence fails after a ratchet mutation, ciphertext is not released as a
+successful send and decrypted plaintext is zeroed before the error is surfaced;
+the session is quarantined. Receivers must withhold delivery acknowledgement.
+Senders may retry through the existing duplicate-safe delivery boundary, but
+the application does not attempt unsafe ratchet rollback. Full delivery queue
+semantics remain outside this phase.
+
+Pre-key records are currently process-local in-memory records when Mongo is not
+configured, or MongoDB documents otherwise. The in-memory claim is atomic only
+within one backend process. Mongo uses a conditional `findOneAndUpdate` pull,
+but deployment still requires a shared Mongo collection and appropriate
+indexes. There is no expiration/cleanup worker yet; bundle size is capped at
+32 KiB and one-time-key count at 100 per published record, with the existing
+control rate limiter applying per request. Multi-instance deployment without a
+shared Mongo store is not ready for modern pre-key use.
+
+TOFU pins the first observed identity and detects later changes; it does not
+prevent a first-contact man-in-the-middle. A changed identity invalidates prior
+verification and requires explicit review. Modern envelopes are discriminator
+and version checked, and a modern failure never falls back to legacy.
 
 ## Remaining production blockers
 
