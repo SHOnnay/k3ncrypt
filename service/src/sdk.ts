@@ -52,6 +52,8 @@ export { MediaMessageWorkflow } from './media';
 export type { MediaAttachmentGateway, MediaConversationContext, MediaReceiveResult, MediaSendResult } from './media';
 export type { EncryptedMediaMessage } from './media';
 export { MemoryAttachmentDeliveryStore } from './attachments';
+export { PersistentAttachmentDeliveryStore } from './attachments';
+export type { AttachmentMetadataPersistence, AttachmentChunkPersistence, PersistentAttachmentPersistence, PersistentAttachmentRecord } from './attachments';
 export type { AttachmentDeliveryRecord, AttachmentDeliveryStore, AttachmentMetadataStore, AttachmentStatus, AttachmentStatusView, CiphertextChunkStore } from './attachments';
 export { AttachmentService } from './attachments';
 export type { AttachmentConversationContext, CreateAttachmentUpload, CreatedAttachmentUpload } from './attachments';

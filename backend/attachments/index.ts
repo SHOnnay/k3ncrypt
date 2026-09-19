@@ -1,0 +1,1 @@
+export { MongoAttachmentPersistence } from './mongoAttachmentPersistence';
