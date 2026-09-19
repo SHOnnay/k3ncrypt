@@ -1,4 +1,4 @@
-import { conversationCreationPolicy } from './conversationPolicy';
+import { conversationCreationPolicy, modeForNewConversation, resolveConversationMode } from './conversationPolicy';
 
 describe('conversation creation policy', () => {
   const previous = process.env.K3NCRYPT_CONVERSATION_POLICY;
@@ -14,5 +14,17 @@ describe('conversation creation policy', () => {
     expect(conversationCreationPolicy()).toBe('modern-explicit');
     process.env.K3NCRYPT_CONVERSATION_POLICY = 'modern-default';
     expect(conversationCreationPolicy()).toBe('modern-default');
+  });
+
+  it('only applies modern-default to new conversations', () => {
+    expect(modeForNewConversation('modern-default')).toBe('modern');
+    expect(modeForNewConversation('modern-explicit')).toBe('legacy');
+    expect(modeForNewConversation('legacy-default')).toBe('legacy');
+  });
+
+  it('never migrates a persisted conversation when policy changes', () => {
+    expect(resolveConversationMode('modern-default', 'legacy')).toBe('legacy');
+    expect(resolveConversationMode('legacy-default', 'modern')).toBe('modern');
+    expect(resolveConversationMode('modern-default')).toBe('modern');
   });
 });
