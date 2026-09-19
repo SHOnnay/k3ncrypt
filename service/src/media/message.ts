@@ -10,6 +10,8 @@ export interface EncryptedMediaMessage {
     attachmentId: string;
     encryptedMetadata: { nonce: number[]; ciphertext: number[] };
     attachmentKey: number[];
+    /** Delivered inside the E2EE message; never exposed as a public URL or server token. */
+    attachmentCapability?: string;
 }
 
 export const createEncryptedMediaMessage = (media: PreparedMedia, durationMs?: number): EncryptedMediaMessage => ({
@@ -26,6 +28,7 @@ export const parseEncryptedMediaMessage = (text: string): EncryptedMediaMessage 
     try {
         const value = JSON.parse(text.slice('k3ncrypt-media-v1:'.length)) as EncryptedMediaMessage;
         if (value.version !== VERSION || !['image', 'video', 'file', 'voice'].includes(value.kind) || !value.attachmentId || !Array.isArray(value.attachmentKey) || value.attachmentKey.length !== 32) throw new Error('invalid');
+        if (value.attachmentCapability !== undefined && (typeof value.attachmentCapability !== 'string' || !/^[a-f0-9]{64}$/.test(value.attachmentCapability))) throw new Error('invalid');
         if (!value.encryptedMetadata || !Array.isArray(value.encryptedMetadata.nonce) || !Array.isArray(value.encryptedMetadata.ciphertext)) throw new Error('invalid');
         return value;
     } catch { throw new Error('Protected attachment message is invalid.'); }

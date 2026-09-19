@@ -11,6 +11,7 @@ import { Sidebar } from './components/AppShell/Sidebar';
 import { SettingsPanel } from './components/Settings/SettingsPanel';
 import './styles/global.css';
 import { debugError } from './utils/debug';
+import { MediaProvider } from './context/MediaContext';
 
 const AppContent: React.FC = () => {
   const { initializeChat, joinChannel } = useChat();
@@ -51,7 +52,9 @@ const AppContent: React.FC = () => {
           window.history.replaceState(null, '', inviteLink);
           setShowSetup(false);
         }} isHidden={!showSetup} />
-        <ChatContainer isHidden={showSetup} />
+        <MediaProvider>
+          <ChatContainer isHidden={showSetup} />
+        </MediaProvider>
       </section>
       <SettingsPanel isOpen={showSettings} onClose={() => setShowSettings(false)} />
       {error && (

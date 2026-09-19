@@ -48,6 +48,8 @@ export type { VoiceMessageReference, VoiceRecorder, VoiceRecordingState } from '
 export { prepareEncryptedFile, prepareEncryptedMedia, MEDIA_LIMITS } from './media';
 export type { MediaKind, PreparedMedia } from './media';
 export { createEncryptedMediaMessage, parseEncryptedMediaMessage, serializeEncryptedMediaMessage } from './media';
+export { MediaMessageWorkflow } from './media';
+export type { MediaAttachmentGateway, MediaConversationContext, MediaReceiveResult, MediaSendResult } from './media';
 export type { EncryptedMediaMessage } from './media';
 export { MemoryAttachmentDeliveryStore } from './attachments';
 export type { AttachmentDeliveryRecord, AttachmentDeliveryStore, AttachmentMetadataStore, AttachmentStatus, AttachmentStatusView, CiphertextChunkStore } from './attachments';

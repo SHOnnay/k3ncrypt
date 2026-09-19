@@ -3,7 +3,7 @@
  */
 
 import React, { createContext, useContext, ReactNode, useState, useCallback } from 'react';
-import { createChatInstance, utils, BrowserSecureStorage, IndexedDbVaultPersistence, ModernConversation } from '@chat-e2ee/service';
+import { createChatInstance, utils, BrowserSecureStorage, IndexedDbVaultPersistence, ModernConversation, parseEncryptedMediaMessage } from '@chat-e2ee/service';
 import type { IChatE2EE, IE2ECall, CallLifecycleState, CallLifecycleUpdate, StoredContactIdentity } from '@chat-e2ee/service';
 import { ChatContextType, InviteInfo, Message } from '../types/index';
 import { createMessage } from '../utils/messageHandling';
@@ -13,6 +13,17 @@ import { debugError } from '../utils/debug';
 import { loadVodozemacBindings } from '../crypto/vodozemacModule';
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
+
+const displayMessage = (sender: string, text: string, type: Message['type']): Message => {
+  try {
+    const media = parseEncryptedMediaMessage(text);
+    if (!media) throw new Error('not media');
+    return { ...createMessage(sender, `Protected ${media.kind}`, type), media: { kind: media.kind, mimeType: media.mimeType, size: media.size } };
+  } catch {
+    if (text.startsWith('k3ncrypt-media-v1:')) return { ...createMessage(sender, 'Protected media unavailable', type), media: { kind: 'file' } };
+    return createMessage(sender, text, type);
+  }
+};
 
 export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [chat, setChat] = useState<IChatE2EE | null>(null);
@@ -75,7 +86,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const vault = await openModernVault(passphrase);
     const conversation = new ModernConversation(vault, loadVodozemacBindings);
     const details = await conversation.connect(invite.hash, invite.controlCapability, undefined, (text) => {
-      setMessages((previous) => [...previous, createMessage('contact', text, 'received')]);
+      setMessages((previous) => [...previous, displayMessage('contact', text, 'received')]);
     }, setContactIdentity);
     setModern(conversation);
     setProtocolMode('modern');
@@ -162,7 +173,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       try {
         if (protocolMode === 'modern') {
           const delivery = await modern!.send(text);
-          addMessage({ ...createMessage(userId, text, 'sent'), delivery });
+      addMessage({ ...displayMessage(userId, text, 'sent'), delivery });
           return;
         }
         const message = createMessage(userId, text, 'sent');
@@ -269,7 +280,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     // The SDK has already decrypted (and replay-checked) the message before
     // this fires — `msg.message` is plaintext.
     chatInstance.on('chat-message', (msg: any) => {
-      const message = createMessage(msg.sender, msg.message, 'received');
+      const message = displayMessage(msg.sender, msg.message, 'received');
       addMessage(message);
     });
 
