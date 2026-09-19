@@ -73,9 +73,10 @@ export class SocketIoRelayTransport implements Transport {
     public async sendEnvelope(
         channel: CryptoChannel,
         envelope: EncryptedEnvelope,
+        recipientRoutingId?: string,
     ): Promise<{ id?: string; timestamp?: number }> {
         if (channel === 'message') {
-            return await this.emitWithAck<{ id: string; timestamp: number }>('chat-message', { envelope });
+            return await this.emitWithAck<{ id: string; timestamp: number }>('chat-message', { envelope, ...(recipientRoutingId ? { recipientRoutingId } : {}) });
         }
         await this.emitWithAck<{ status: string }>('webrtc-signal', { envelope });
         return {};

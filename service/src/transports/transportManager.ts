@@ -27,8 +27,11 @@ export class DefaultTransportManager implements TransportManager {
     public sendEnvelope(
         channel: CryptoChannel,
         envelope: EncryptedEnvelope,
+        recipientRoutingId?: string,
     ): Promise<{ id?: string; timestamp?: number }> {
-        return this.transport.sendEnvelope(channel, envelope);
+        return recipientRoutingId === undefined
+            ? this.transport.sendEnvelope(channel, envelope)
+            : this.transport.sendEnvelope(channel, envelope, recipientRoutingId);
     }
 
     public activeTransport(): Transport {

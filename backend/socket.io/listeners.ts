@@ -1,14 +1,18 @@
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import getClientInstance from "./clients";
 import channelValid from "../api/chatHash/utils/validateChannel";
 import { socketEmit, SOCKET_TOPIC, CustomSocket, WireEnvelope } from "./index";
 import { RateLimiter } from "./rateLimiter";
 import { authorizeRoomControl, isValidControlCapability, isValidRoomId } from '../security/controlCapability';
+import db from '../db';
 
 const clients = getClientInstance();
 
 /** Generous enough for SDP/ICE candidates and chat text, but bounds abusive payloads. */
 const MAX_ENVELOPE_BYTES = 32 * 1024;
+const MAX_OFFLINE_PER_MAILBOX = 64;
+const OFFLINE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const OFFLINE_LEASE_MS = 30 * 1000;
 /** Burst of 40 messages, refilling at 10/s — plenty for normal signaling/chat traffic. */
 const rateLimiter = new RateLimiter({ capacity: 40, refillPerSecond: 10 });
 
@@ -37,10 +41,24 @@ export const isValidWireEnvelope = (value: unknown): value is WireEnvelope => {
     envelope.data !== undefined && envelope.data !== null;
 };
 
-const validEnvelopePayload = (payload: unknown): payload is { envelope: WireEnvelope } =>
+const validEnvelopePayload = (payload: unknown): payload is { envelope: WireEnvelope; recipientRoutingId?: string } =>
   !!payload && typeof payload === 'object' && !Array.isArray(payload) &&
-  exactKeys(payload as Record<string, unknown>, ['envelope']) &&
-  isValidWireEnvelope((payload as { envelope?: unknown }).envelope);
+  (exactKeys(payload as Record<string, unknown>, ['envelope']) || exactKeys(payload as Record<string, unknown>, ['envelope', 'recipientRoutingId'])) &&
+  isValidWireEnvelope((payload as { envelope?: unknown }).envelope) &&
+  ((payload as { recipientRoutingId?: unknown }).recipientRoutingId === undefined || isValidRoomId((payload as { recipientRoutingId?: unknown }).recipientRoutingId));
+
+const envelopeDedupeKey = (channel: string, mailbox: string, sender: string, envelope: WireEnvelope): string =>
+  createHash('sha256').update(JSON.stringify({ channel, mailbox, sender, envelope })).digest('hex');
+
+const deliverOffline = async (socket: CustomSocket): Promise<void> => {
+  if (!socket.userID || !socket.channelID) return;
+  for (let count = 0; count < MAX_OFFLINE_PER_MAILBOX; count += 1) {
+    const message = await db.claimOfflineMessage<{ id: string; timestamp: number; sender: string; envelope: WireEnvelope; mailbox: string; channel: string }>(
+      socket.userID, socket.channelID, new Date(Date.now() + OFFLINE_LEASE_MS));
+    if (!message) return;
+    socket.emit(SOCKET_TOPIC.CHAT_MESSAGE, { id: message.id, timestamp: message.timestamp, sender: message.sender, envelope: message.envelope });
+  }
+};
 
 /**
  * Resolves the socket id of "the other participant" in `socket`'s channel,
@@ -98,9 +116,10 @@ const connectionListener = (socket: CustomSocket, io) => {
     if (receiver) {
       socketEmit<SOCKET_TOPIC.ON_ALICE_JOIN>(SOCKET_TOPIC.ON_ALICE_JOIN, receiver.sid, null);
     }
+    await deliverOffline(socket as CustomSocket);
   });
 
-  socket.on("chat-message", (payload: { envelope: WireEnvelope }, ack: Ack = noop) => {
+  socket.on("chat-message", async (payload: { envelope: WireEnvelope; recipientRoutingId?: string }, ack: Ack = noop) => {
     if (!socket.userID || !socket.channelID) {
       ack({ error: "Join a channel before sending messages." });
       return;
@@ -115,7 +134,16 @@ const connectionListener = (socket: CustomSocket, io) => {
     }
     const receiverSid = findPeerSid(socket);
     if (!receiverSid) {
-      ack({ error: "No receiver is in the channel." });
+      const id = randomUUID();
+      const timestamp = Date.now();
+      const mailbox = payload.recipientRoutingId;
+      if (!mailbox) { ack({ error: "No receiver is in the channel." }); return; }
+      const dedupeKey = envelopeDedupeKey(socket.channelID, mailbox, socket.userID, payload.envelope);
+      try {
+        const existing = await db.storeOfflineMessage({ id, dedupeKey, channel: socket.channelID, mailbox, sender: socket.userID, envelope: payload.envelope, timestamp, expiresAt: new Date(timestamp + OFFLINE_TTL_MS) });
+        if (await db.countOfflineMessages({ channel: socket.channelID, mailbox }) > MAX_OFFLINE_PER_MAILBOX) { await db.ackOfflineMessage(existing.id, mailbox, socket.channelID); ack({ error: "Mailbox quota exceeded." }); return; }
+        ack({ id: existing.id, timestamp: existing.timestamp, stored: true });
+      } catch { ack({ error: "Message could not be queued." }); }
       return;
     }
 
@@ -155,12 +183,13 @@ const connectionListener = (socket: CustomSocket, io) => {
     ack({ status: "ok" });
   });
 
-  socket.on("received", (payload: { id?: unknown }) => {
+  socket.on("received", async (payload: { id?: unknown }) => {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload) ||
         !exactKeys(payload, ['id']) || !isValidRoomId(payload.id)) {
       return;
     }
     const { id } = payload as { id: string };
+    await db.ackOfflineMessage(id, socket.userID, socket.channelID);
     const receiverSid = findPeerSid(socket);
     if (receiverSid) {
       socketEmit<SOCKET_TOPIC.DELIVERED>(SOCKET_TOPIC.DELIVERED, receiverSid, id);

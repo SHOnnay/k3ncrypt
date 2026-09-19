@@ -3,10 +3,10 @@ import type { SecureStorage, TransportManager, EncryptedEnvelope } from '../core
 import type { VodozemacAccountHandle } from '../identity/vodozemacIdentity';
 import type { VodozemacSessionHandle } from '../core/vodozemacCryptoSession';
 import { ModernConversation } from './modernConversation';
-import { publishVodozemacBundle, fetchVodozemacBundle, claimVodozemacOneTimeKey } from '../api/prekeys';
+import { publishVodozemacBundle, fetchVodozemacBundle, claimVodozemacOneTimeKey, renewVodozemacBundle } from '../api/prekeys';
 
 jest.mock('../api/prekeys', () => ({
-    publishVodozemacBundle: jest.fn(), fetchVodozemacBundle: jest.fn(), claimVodozemacOneTimeKey: jest.fn(),
+    publishVodozemacBundle: jest.fn(), fetchVodozemacBundle: jest.fn(), claimVodozemacOneTimeKey: jest.fn(), renewVodozemacBundle: jest.fn(),
 }));
 Object.assign(globalThis, { window: { btoa: (value: string) => Buffer.from(value, 'binary').toString('base64'), atob: (value: string) => Buffer.from(value, 'base64').toString('binary') } });
 if (!globalThis.crypto) Object.defineProperty(globalThis, 'crypto', { value: webcrypto });

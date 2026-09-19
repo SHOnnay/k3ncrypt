@@ -71,3 +71,43 @@ export const deleteExpiredPrekeyBundles = (now: number, collectionName: string):
   storage[collectionName] = retained;
   return removed;
 };
+
+export const findOfflineMessages = (condition: Record<string, unknown>, collectionName: string, limit: number): any[] => {
+  const collection = storage[collectionName] || [];
+  return collection.filter((entry) => Object.keys(condition).every((key) => entry[key] === condition[key]) &&
+    (!entry.expiresAt || entry.expiresAt.getTime() > Date.now()) && (!entry.claimedUntil || entry.claimedUntil.getTime() <= Date.now()))
+    .slice(0, limit);
+};
+
+export const insertOfflineMessage = (data: any, collectionName: string): any => {
+  const collection = storage[collectionName] || (storage[collectionName] = []);
+  const existing = collection.find((entry) => entry.dedupeKey === data.dedupeKey);
+  if (existing) return existing;
+  collection.push({ pk: pk++, ...data });
+  return data;
+};
+
+export const claimOfflineMessage = (condition: Record<string, unknown>, leaseUntil: Date, collectionName: string): any => {
+  const message = findOfflineMessages(condition, collectionName, 1)[0];
+  if (!message) return null;
+  message.claimedUntil = leaseUntil;
+  return message;
+};
+
+export const ackOfflineMessage = (condition: Record<string, unknown>, collectionName: string): boolean => {
+  const collection = storage[collectionName] || [];
+  const index = collection.findIndex((entry) => Object.keys(condition).every((key) => entry[key] === condition[key]));
+  if (index < 0) return false;
+  collection.splice(index, 1);
+  return true;
+};
+
+export const deleteExpiredOfflineMessages = (now: number, collectionName: string): number => {
+  const collection = storage[collectionName] || [];
+  const retained = collection.filter((entry) => !(entry.expiresAt instanceof Date) || entry.expiresAt.getTime() > now);
+  storage[collectionName] = retained;
+  return collection.length - retained.length;
+};
+
+export const countOfflineMessages = (condition: Record<string, unknown>, collectionName: string): number =>
+  (storage[collectionName] || []).filter((entry) => Object.keys(condition).every((key) => entry[key] === condition[key]) && (!entry.expiresAt || entry.expiresAt.getTime() > Date.now())).length;

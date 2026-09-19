@@ -1,6 +1,6 @@
 import type { EncryptedEnvelope, SecureStorage, TransportManager } from '../core/contracts';
 import { VODOZEMAC_ENVELOPE_VERSION, VODOZEMAC_STRATEGY_ID } from '../core/vodozemacCryptoSession';
-import { claimVodozemacOneTimeKey, fetchVodozemacBundle, publishVodozemacBundle } from '../api/prekeys';
+import { claimVodozemacOneTimeKey, fetchVodozemacBundle, publishVodozemacBundle, renewVodozemacBundle } from '../api/prekeys';
 import { deleteLink } from '../api/links';
 import { ContactIdentityRegistry, type StoredContactIdentity } from '../identity/contactIdentityRegistry';
 import { fingerprintVodozemacIdentity, type VodozemacPublicIdentity } from '../identity/vodozemacIdentity';
@@ -78,13 +78,17 @@ export class ModernConversation {
         this.registry = new ContactIdentityRegistry(storage);
         this.modes = new ConversationModeStore(storage);
         const relay = transportManager ? undefined : new SocketIoRelayTransport(() => this.subscriptions, new Logger('ModernConversation'),
-            async (message) => this.receiveMutex.runExclusive(() => this.receive(message.envelope, message.senderRoutingId)));
+            async (message) => this.receiveMutex.runExclusive(() => this.withTabLock(this.roomId ?? 'unknown', () => this.receive(message.envelope, message.senderRoutingId))));
         this.transport = transportManager ?? new DefaultTransportManager(relay!);
         this.subscriptions.set('on-alice-join', new Set([() => { void this.retryPending(); }]));
         this.subscriptions.set('delivered', new Set([(id: string) => { void this.acceptDelivery(id); }]));
     }
 
     public async connect(roomId: string, capability: string, remoteAddress?: string, onMessage?: (text: string) => void, onContactChange?: (contact: StoredContactIdentity) => void): Promise<ModernConnectionDetails> {
+        return this.withTabLock(roomId, () => this.connectUnlocked(roomId, capability, remoteAddress, onMessage, onContactChange));
+    }
+
+    private async connectUnlocked(roomId: string, capability: string, remoteAddress?: string, onMessage?: (text: string) => void, onContactChange?: (contact: StoredContactIdentity) => void): Promise<ModernConnectionDetails> {
         if (!/^[0-9a-f-]{36}$/i.test(roomId) || !capability) throw new Error('Invalid private conversation invitation.');
         this.roomId = roomId;
         this.capability = capability;
@@ -111,6 +115,12 @@ export class ModernConversation {
         if (localAddress) {
             try { await fetchVodozemacBundle(roomId, capability, localAddress); }
             catch { throw new Error('This private invitation expired. Create a fresh conversation to continue.'); }
+            const localBundle = await this.runtime.getPublicBundle();
+            if (localBundle.oneTimeKeys.length < 10) {
+                await this.runtime.replenishOneTimeKeys(20);
+                await renewVodozemacBundle(roomId, capability, localAddress, await this.runtime.getPublicBundle());
+                await this.runtime.markPublicKeysPublished();
+            }
         }
         if (!localAddress) {
             const ownBundle = await this.runtime.getPublicBundle();
@@ -145,7 +155,12 @@ export class ModernConversation {
             contact: this.remoteAddress ? await this.registry.get(this.remoteAddress) : undefined };
     }
 
-    public async send(text: string): Promise<void> {
+    public async send(text: string): Promise<'pending'> {
+        if (this.roomId) return this.withTabLock(this.roomId, () => this.sendUnlocked(text));
+        throw new Error('The private contact is not ready.');
+    }
+
+    private async sendUnlocked(text: string): Promise<'pending'> {
         if (!this.roomId || !this.runtime.activeSessionId || !text.trim()) throw new Error('The private contact is not ready.');
         const contact = await this.getContact();
         if (contact?.changeStatus !== 'unchanged') throw new Error('Review this contact’s changed identity before sending.');
@@ -157,6 +172,7 @@ export class ModernConversation {
             await this.storage.write(OUTBOX_RECORD, this.roomId!, asBytes(pending));
         });
         await this.retryPending();
+        return 'pending';
     }
 
     public async retryPending(): Promise<void> {
@@ -166,7 +182,7 @@ export class ModernConversation {
             for (const item of pending) {
                 if (item.relayId && item.sentAt && Date.now() - item.sentAt < 5000) continue;
                 try {
-                    const sent = await this.transport.sendEnvelope('message', item.envelope);
+                    const sent = await this.transport.sendEnvelope('message', item.envelope, this.remoteAddress);
                     item.relayId = sent.id;
                     item.sentAt = Date.now();
                     await this.storage.write(OUTBOX_RECORD, this.roomId!, asBytes(pending));
@@ -191,6 +207,15 @@ export class ModernConversation {
     public async verifyContact(confirmed: boolean): Promise<void> {
         if (!confirmed || !this.remoteAddress) throw new Error('Confirm the comparison before verifying this contact.');
         await this.registry.markVerified(this.remoteAddress);
+    }
+
+    /** Explicitly accepts a changed public identity; the prior session is discarded and a fresh pre-key flow is required. */
+    public async acceptChangedIdentity(): Promise<void> {
+        if (!this.roomId || !this.remoteAddress) throw new Error('No changed contact is open.');
+        await this.registry.acceptPendingChange(this.remoteAddress);
+        await this.storage.delete('vodozemac-session', this.roomId);
+        await this.modes.write(this.roomId, { sessionId: undefined });
+        this.runtime.close();
     }
 
     public async close(): Promise<void> {
@@ -237,6 +262,12 @@ export class ModernConversation {
         await this.storage.write(SEEN_RECORD, this.roomId, asBytes([...seen.slice(-(MAX_SEEN - 1)), digest]));
         this.onMessage?.(text);
         return true;
+    }
+
+    private async withTabLock<T>(conversationId: string, operation: () => Promise<T>): Promise<T> {
+        const locks = (globalThis as typeof globalThis & { navigator?: { locks?: { request: (name: string, callback: () => Promise<T>) => Promise<T> } } }).navigator?.locks;
+        if (!locks) return operation();
+        return locks.request(`k3ncrypt-modern:${conversationId}`, operation);
     }
 
     private async observe(address: string, identity: VodozemacPublicIdentity): Promise<void> {
