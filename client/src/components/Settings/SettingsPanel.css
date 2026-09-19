@@ -42,4 +42,5 @@ button.settings-row:hover { background: var(--surface-muted); }
 .unavailable-card strong { margin-top: 3px; font-size: .85rem; }
 .unavailable-card p { max-width: 310px; color: var(--muted); font-size: .74rem; line-height: 1.55; }
 .room-reference { color: var(--muted); font-size: .7rem; }.room-reference code { margin-left: 5px; color: var(--ink-soft); }
+.verification-code { max-width: 100%; overflow-wrap: anywhere; color: var(--ink); font-size: .75rem; line-height: 1.5; }
 @media (max-width: 620px) { .settings-panel { width: 100%; border-left: 0; }.settings-panel__header { padding-top: calc(16px + env(safe-area-inset-top)); }.settings-panel__body { padding-bottom: calc(90px + env(safe-area-inset-bottom)); } }

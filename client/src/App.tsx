@@ -47,7 +47,10 @@ const AppContent: React.FC = () => {
         onOpenSettings={() => setShowSettings(true)}
       />
       <section className="conversation-workspace" aria-label="Conversation workspace">
-        <SetupOverlay onSetupComplete={handleSetupComplete} isHidden={!showSetup} />
+        <SetupOverlay onSetupComplete={handleSetupComplete} onModernSetupComplete={(inviteLink) => {
+          window.history.replaceState(null, '', inviteLink);
+          setShowSetup(false);
+        }} isHidden={!showSetup} />
         <ChatContainer isHidden={showSetup} />
       </section>
       <SettingsPanel isOpen={showSettings} onClose={() => setShowSettings(false)} />

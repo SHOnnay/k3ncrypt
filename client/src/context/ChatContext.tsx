@@ -1,21 +1,25 @@
 /**
- * Chat context provider - wraps the existing @chat-e2ee/service
- * No modifications to the service itself
+ * Chat context provider for explicit legacy and modern service paths.
  */
 
 import React, { createContext, useContext, ReactNode, useState, useCallback } from 'react';
-import { createChatInstance, utils } from '@chat-e2ee/service';
-import type { IChatE2EE, IE2ECall, CallLifecycleState, CallLifecycleUpdate } from '@chat-e2ee/service';
+import { createChatInstance, utils, BrowserSecureStorage, IndexedDbVaultPersistence, ModernConversation } from '@chat-e2ee/service';
+import type { IChatE2EE, IE2ECall, CallLifecycleState, CallLifecycleUpdate, StoredContactIdentity } from '@chat-e2ee/service';
 import { ChatContextType, InviteInfo, Message } from '../types/index';
 import { createMessage } from '../utils/messageHandling';
 import { playBeep } from '../utils/audioNotification';
 import { getRuntimeConfig } from '../config/runtimeConfig';
 import { debugError } from '../utils/debug';
+import { loadVodozemacBindings } from '../crypto/vodozemacModule';
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
 
 export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [chat, setChat] = useState<IChatE2EE | null>(null);
+  const [modern, setModern] = useState<ModernConversation | null>(null);
+  const [protocolMode, setProtocolMode] = useState<'legacy' | 'modern'>('legacy');
+  const [ownFingerprint, setOwnFingerprint] = useState<string>();
+  const [contactIdentity, setContactIdentity] = useState<StoredContactIdentity>();
   const [userId, setUserId] = useState<string>('');
   const [channelHash, setChannelHash] = useState<string>('');
   const [messages, setMessages] = useState<Message[]>([]);
@@ -46,19 +50,71 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const createNewChannel = useCallback(async (): Promise<InviteInfo> => {
     if (!chat) throw new Error('Chat not initialized');
     try {
+      if (modern) await modern.close();
+      setModern(null);
       const linkObj = await chat.getLink();
       return { roomId: linkObj.hash, secret: linkObj.secret, controlCapability: linkObj.controlCapability, link: linkObj.link, absoluteLink: linkObj.absoluteLink };
     } catch (err) {
       debugError('Conversation creation failed', err);
       throw err;
     }
-  }, [chat]);
+  }, [chat, modern]);
+
+  const openModernVault = async (passphrase: string): Promise<BrowserSecureStorage> => {
+    const persistence = new IndexedDbVaultPersistence();
+    const vault = new BrowserSecureStorage(persistence);
+    if (await persistence.loadMetadata()) await vault.unlock(passphrase);
+    else await vault.initializeWithPassphrase(passphrase);
+    return vault;
+  };
+
+  const createModernChannel = useCallback(async (passphrase: string): Promise<string> => {
+    if (!chat) throw new Error('Chat not initialized');
+    if (modern) await modern.close();
+    const invite = await chat.getLink();
+    const vault = await openModernVault(passphrase);
+    const conversation = new ModernConversation(vault, loadVodozemacBindings);
+    const details = await conversation.connect(invite.hash, invite.controlCapability, undefined, (text) => {
+      setMessages((previous) => [...previous, createMessage('contact', text, 'received')]);
+    }, setContactIdentity);
+    setModern(conversation);
+    setProtocolMode('modern');
+    setChannelHash(invite.hash);
+    setOwnFingerprint(details.ownFingerprint);
+    setContactIdentity(details.contact);
+    setUserId(details.ownAddress);
+    const fragment = `modern=${encodeURIComponent(invite.hash)}&control=${encodeURIComponent(invite.controlCapability)}&address=${encodeURIComponent(details.ownAddress)}`;
+    return `${window.location.origin}${window.location.pathname}#${fragment}`;
+  }, [chat, modern]);
+
+  const joinModernChannel = useCallback(async (roomId: string, capability: string, address: string, passphrase: string): Promise<void> => {
+    if (modern) await modern.close();
+    const vault = await openModernVault(passphrase);
+    const conversation = new ModernConversation(vault, loadVodozemacBindings);
+    const details = await conversation.connect(roomId, capability, address, (text) => {
+      setMessages((previous) => [...previous, createMessage('contact', text, 'received')]);
+    }, setContactIdentity);
+    setModern(conversation);
+    setProtocolMode('modern');
+    setChannelHash(roomId);
+    setOwnFingerprint(details.ownFingerprint);
+    setContactIdentity(details.contact);
+    setUserId(details.ownAddress);
+  }, [modern]);
+
+  const verifyContact = useCallback(async (): Promise<void> => {
+    if (!modern) throw new Error('No modern contact is open.');
+    await modern.verifyContact(true);
+    setContactIdentity(await modern.getContact());
+  }, [modern]);
 
   // Join existing channel using the invitation's roomId + secret
   const joinChannel = useCallback(
     async (roomId: string, secret: string, controlCapability: string) => {
       if (!chat) throw new Error('Chat not initialized');
       try {
+        if (modern) await modern.close();
+        setModern(null);
         // Check for channel status before joining
         const baseUrl = getRuntimeConfig().baseUrl;
         const statusRes = await fetch(`${baseUrl}/api/chat-link/status/${encodeURIComponent(roomId)}`, {
@@ -76,6 +132,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         setUserId(newUserId);
 
         await chat.setChannel(roomId, secret, newUserId, controlCapability);
+        setProtocolMode('legacy');
         setChannelHash(roomId);
         setIsConnected(true);
 
@@ -89,27 +146,33 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         throw err;
       }
     },
-    [chat]
+    [chat, modern]
   );
 
   // Send message
   const sendMessage = useCallback(
     async (text: string) => {
-      if (!chat || !userId) throw new Error('Chat not ready');
+      if (!userId || (protocolMode === 'legacy' && !chat) || (protocolMode === 'modern' && !modern)) throw new Error('Chat not ready');
       try {
+        if (protocolMode === 'modern') {
+          await modern!.send(text);
+          addMessage(createMessage(userId, text, 'sent'));
+          return;
+        }
         const message = createMessage(userId, text, 'sent');
         addMessage(message);
-        await chat.encrypt({ text, image: '' }).send();
+        await chat!.encrypt({ text, image: '' }).send();
       } catch (err) {
         debugError('Message send failed', err);
         throw err;
       }
     },
-    [chat, userId]
+    [chat, modern, protocolMode, userId]
   );
 
   // Start call
   const startCall = useCallback(async () => {
+    if (protocolMode === 'modern') throw new Error('Calls are not available in modern conversations yet.');
     if (!chat) throw new Error('Chat not initialized');
     try {
       const call = await chat.startCall();
@@ -122,7 +185,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       debugError('Call start failed', err);
       throw err;
     }
-  }, [chat]);
+  }, [chat, protocolMode]);
 
   const acceptCall = useCallback(async () => {
     if (!chat) throw new Error('Chat not initialized');
@@ -290,6 +353,14 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   // Delete channel
   const deleteChannel = useCallback(async () => {
+    if (protocolMode === 'modern') {
+      await modern?.delete();
+      setModern(null);
+      setProtocolMode('legacy');
+      setChannelHash('');
+      setMessages([]);
+      return;
+    }
     if (!chat) return;
     try {
       await chat.delete();
@@ -300,7 +371,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       debugError('Conversation deletion failed', err);
       throw err;
     }
-  }, [chat]);
+  }, [chat, modern, protocolMode]);
 
   const value: ChatContextType = {
     chat,
@@ -313,8 +384,14 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     callDuration,
     callLifecycleState,
     isIncomingCall,
+    protocolMode,
+    ownFingerprint,
+    contactIdentity,
     initializeChat,
     createNewChannel,
+    createModernChannel,
+    joinModernChannel,
+    verifyContact,
     joinChannel,
     sendMessage,
     startCall,

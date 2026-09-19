@@ -4,6 +4,7 @@
 
 import type { IChatE2EE } from '@chat-e2ee/service';
 import type { CallLifecycleState } from '@chat-e2ee/service';
+import type { StoredContactIdentity } from '@chat-e2ee/service';
 
 // Message type
 export interface Message {
@@ -50,10 +51,16 @@ export interface ChatContextType {
   callDuration: number;
   callLifecycleState: CallLifecycleState;
   isIncomingCall: boolean;
+  protocolMode: 'legacy' | 'modern';
+  ownFingerprint?: string;
+  contactIdentity?: StoredContactIdentity;
 
   // Methods
   initializeChat: () => Promise<void>;
   createNewChannel: () => Promise<InviteInfo>;
+  createModernChannel: (passphrase: string) => Promise<string>;
+  joinModernChannel: (roomId: string, controlCapability: string, address: string, passphrase: string) => Promise<void>;
+  verifyContact: () => Promise<void>;
   joinChannel: (roomId: string, secret: string, controlCapability: string) => Promise<void>;
   sendMessage: (text: string) => Promise<void>;
   startCall: () => Promise<void>;

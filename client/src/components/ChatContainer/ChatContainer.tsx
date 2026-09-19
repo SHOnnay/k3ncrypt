@@ -16,7 +16,7 @@ interface ChatContainerProps {
 }
 
 export const ChatContainer: React.FC<ChatContainerProps> = ({ isHidden }) => {
-  const { startCall, callLifecycleState } = useChat();
+  const { startCall, callLifecycleState, protocolMode } = useChat();
   const [, setIsStartingCall] = useState<boolean>(false);
   const isCallBusy = ['initiating', 'ringing', 'incoming', 'connecting', 'connected', 'ending'].includes(callLifecycleState);
 
@@ -35,7 +35,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ isHidden }) => {
   return (
     <>
       <div id="chat-container" className={`chat-container ${isHidden ? 'hidden' : ''}`}>
-        <ChatHeader onStartCall={handleStartCall} disableStartCall={isCallBusy} />
+        <ChatHeader onStartCall={handleStartCall} disableStartCall={isCallBusy || protocolMode === 'modern'} />
         <MessagesArea />
         <ChatFooter />
       </div>

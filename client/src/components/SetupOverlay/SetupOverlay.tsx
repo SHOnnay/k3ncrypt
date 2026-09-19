@@ -2,9 +2,9 @@
  * Main SetupOverlay component
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useChat } from '../../context/ChatContext';
-import { parseInviteInput } from '../../utils/urlHash';
+import { parseInviteInput, parseModernInviteInput } from '../../utils/urlHash';
 import { InitialActions } from './InitialActions';
 import { CreateHashView } from './CreateHashView';
 import { JoinHashView } from './JoinHashView';
@@ -15,17 +15,20 @@ import { copy } from '../../content/copy';
 interface SetupOverlayProps {
   onSetupComplete: (roomId: string, secret: string, controlCapability: string) => Promise<void>;
   isHidden: boolean;
+  onModernSetupComplete: (inviteLink: string) => void;
 }
 
-type ViewType = 'initial' | 'create' | 'join' | 'deleted';
+type ViewType = 'initial' | 'create' | 'join' | 'modern' | 'deleted';
 
-export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, isHidden }) => {
-  const { createNewChannel } = useChat();
+export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onModernSetupComplete, isHidden }) => {
+  const { createNewChannel, createModernChannel, joinModernChannel } = useChat();
   const [view, setView] = useState<ViewType>('initial');
   const [invite, setInvite] = useState<{ roomId: string; secret: string; controlCapability: string; link: string } | null>(null);
   const [joinInput, setJoinInput] = useState<string>('');
   const [status, setStatus] = useState<string>('');
   const [, setIsLoading] = useState<boolean>(false);
+  const passphraseRef = useRef<HTMLInputElement>(null);
+  const [modernInvite, setModernInvite] = useState('');
 
   // Generate the invitation (room id from the server + a locally generated secret) when entering create view
   const generateInvite = useCallback(async () => {
@@ -46,6 +49,12 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, isH
     }
   }, [view, invite, generateInvite]);
 
+  useEffect(() => {
+    if (view === 'join' && !joinInput && parseModernInviteInput(window.location.hash)) {
+      setJoinInput(window.location.hash);
+    }
+  }, [view, joinInput]);
+
   const handleCreateClick = () => {
     setView('create');
   };
@@ -59,6 +68,7 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, isH
     setInvite(null);
     setJoinInput('');
     setStatus('');
+    setModernInvite('');
   };
 
   const handleCopyHash = () => {
@@ -85,6 +95,18 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, isH
   };
 
   const handleJoinNext = async () => {
+    const modern = parseModernInviteInput(joinInput);
+    if (modern) {
+      const passphrase = passphraseRef.current?.value ?? '';
+      if (passphraseRef.current) passphraseRef.current.value = '';
+      try {
+        setStatus('Opening your private contact…');
+        await joinModernChannel(modern.roomId, modern.controlCapability, modern.address, passphrase);
+        onModernSetupComplete(`${window.location.origin}${window.location.pathname}#modern=${encodeURIComponent(modern.roomId)}&control=${encodeURIComponent(modern.controlCapability)}&address=${encodeURIComponent(modern.address)}`);
+        setStatus('');
+      } catch { setStatus('Could not open this contact. Check the invitation and local passphrase.'); }
+      return;
+    }
     const parsed = parseInviteInput(joinInput);
     if (!parsed) {
       setStatus('Please enter a valid invitation link.');
@@ -107,13 +129,26 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, isH
     }
   };
 
-  const heading = view === 'initial' ? copy.welcome.title : view === 'create' ? copy.contact.title : view === 'join' ? 'Open an invitation' : 'Conversation closed';
+  const handleModernCreate = async () => {
+    const passphrase = passphraseRef.current?.value ?? '';
+    if (passphraseRef.current) passphraseRef.current.value = '';
+    try {
+      setStatus('Creating your private contact…');
+      const link = await createModernChannel(passphrase);
+      setModernInvite(link);
+      setStatus('Share this invitation with one person you trust.');
+    } catch { setStatus('Could not create this contact. Use a passphrase of at least 12 characters, or unlock this device with the existing one.'); }
+  };
+
+  const heading = view === 'initial' ? copy.welcome.title : view === 'create' ? copy.contact.title : view === 'join' ? 'Open an invitation' : view === 'modern' ? 'A private contact' : 'Conversation closed';
   const description = view === 'initial'
     ? copy.welcome.tagline
     : view === 'create'
       ? 'Share this invitation with one person you trust.'
       : view === 'join'
         ? 'Paste the invitation someone shared with you.'
+        : view === 'modern'
+          ? 'Start a new private conversation with a lasting identity on this device.'
         : 'This invitation is no longer available.';
 
   return (
@@ -130,6 +165,7 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, isH
             onJoinClick={handleJoinClick}
           />
         )}
+        {view === 'initial' && <button className="restore-identity" type="button" onClick={() => setView('modern')}>Create a private contact · modern mode</button>}
 
         {view === 'create' && (
           <CreateHashView
@@ -141,13 +177,18 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, isH
         )}
 
         {view === 'join' && (
-          <JoinHashView
-            inviteInput={joinInput}
-            onInviteInputChange={setJoinInput}
-            onBack={handleBack}
-            onJoin={handleJoinNext}
-          />
+          <>
+            <JoinHashView inviteInput={joinInput} onInviteInputChange={setJoinInput} onBack={handleBack} onJoin={handleJoinNext} />
+            {parseModernInviteInput(joinInput) && <label className="input-group">Local passphrase<input ref={passphraseRef} type="password" autoComplete="off" minLength={12} /></label>}
+          </>
         )}
+
+        {view === 'modern' && <div className="create-hash-view">
+          <label className="input-group">Local passphrase<input ref={passphraseRef} type="password" autoComplete="off" minLength={12} /></label>
+          <p className="invite-note">This passphrase unlocks your identity on this device. Keep it private.</p>
+          {modernInvite ? <><input className="message-input" readOnly value={modernInvite} aria-label="Modern invitation" /><button className="btn btn--secondary" type="button" onClick={() => navigator.clipboard.writeText(modernInvite)}>Copy invitation</button><button className="btn btn--primary" type="button" onClick={() => onModernSetupComplete(modernInvite)}>Continue to conversation</button></> : <button className="btn btn--primary" type="button" onClick={handleModernCreate}>Create private contact</button>}
+          <button className="btn btn--secondary" type="button" onClick={handleBack}>Back</button>
+        </div>}
 
         {view === 'deleted' && (
           <div className="deleted-state">

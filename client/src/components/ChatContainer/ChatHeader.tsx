@@ -17,7 +17,7 @@ interface ChatHeaderProps {
 }
 
 export const ChatHeader: React.FC<ChatHeaderProps> = ({ onStartCall, disableStartCall = false }) => {
-  const { isConnected, channelHash, deleteChannel } = useChat();
+  const { isConnected, channelHash, deleteChannel, protocolMode } = useChat();
   const [hashCopied, setHashCopied] = useState(false);
 
   const handleCopyHash = () => {
@@ -58,7 +58,7 @@ const handleDelete = async () => {
       <div className="header-info">
         <div className="title-row">
           <h2 className="channel-title">Private conversation</h2>
-          <StatusPill tone="neutral">Private</StatusPill>
+          <StatusPill tone="neutral">{protocolMode === 'modern' ? 'Modern private' : 'Private'}</StatusPill>
         </div>
         {channelHash && (
           <div className="hash-badge-container">

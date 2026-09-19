@@ -22,9 +22,6 @@ export const InitialActions: React.FC<InitialActionsProps> = ({ onCreateClick, o
       <Button id="show-join-hash" variant="secondary" size="large" onClick={onJoinClick}>
         Use an invitation
       </Button>
-      <button className="restore-identity" type="button" disabled title="Persistent identities are planned for a later phase">
-        {copy.welcome.restore} <span>Not available yet</span>
-      </button>
     </div>
   );
 };
