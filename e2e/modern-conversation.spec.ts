@@ -42,7 +42,7 @@ test('modern private contact works after offline recipient and both browser rest
   await expect(invitation).toHaveValue(/#modern=[^&]+&control=[^&]+&address=/);
   const link = await invitation.inputValue();
   await bob.page.getByRole('button', { name: 'Continue to conversation' }).click();
-  await bob.page.close();
+  await bob.page.close({ runBeforeUnload: true });
 
   const alice = await open(browser, link);
   await alice.page.click('#show-join-hash');
@@ -72,8 +72,8 @@ test('modern private contact works after offline recipient and both browser rest
   await bobReturned.locator('#send-btn').click();
   await expect(alice.page.locator('#messages-area')).toContainText('I am here now');
 
-  await bobReturned.close();
-  await alice.page.close();
+  await bobReturned.close({ runBeforeUnload: true });
+  await alice.page.close({ runBeforeUnload: true });
   const bobAgain = await resume(bob.context, link);
   const aliceAgain = await resume(alice.context, link);
   await bobAgain.getByRole('button', { name: 'Open settings' }).click();

@@ -1,6 +1,6 @@
 # Phase 4 milestone closure
 
-Date: 2026-09-20. Scope: Phase 4 foundations, product integration, security preparation, and the final Chromium validation gate. This is a milestone checkpoint, **not** a production-readiness certification or approval to enable `modern-default-beta`.
+Date: 2026-09-20. Scope: Phase 4 foundations, product integration, security preparation, and final local validation gates. This is a milestone checkpoint, **not** a production-readiness certification or approval to enable `modern-default-beta`.
 
 ## Completed work
 
@@ -42,12 +42,12 @@ Comparing the Phase 4 baseline (`4b61cbd`) through this checkpoint shows **no ch
 | Client production build | Passed |
 | npm audit, high severity threshold | 0 vulnerabilities |
 | Chromium Playwright matrix | 8/8 passed, including modern Alice/Bob creation, offline message, verification persistence, restart, two-way messaging, traffic/storage plaintext assertions |
-| WebKit Playwright matrix | 7/8 passed; modern recipient reopening failed after offline delivery (contact remained closed) |
-| Firefox Playwright matrix | Browser launched but could not start its first test on this host; run interrupted, 7 not run |
-| Rust fmt/test/clippy/WASM build | Not run: `cargo`, `rustc`, and `rustup` are absent on this host |
+| WebKit Playwright matrix | 8/8 passed, including recipient reopening after offline delivery |
+| Firefox Playwright matrix | Browser binary installed, but the macOS host denied the `plugin-container.app` sandbox extension (`Operation not permitted`); the process stalled before its first test action |
+| Rust fmt/test/clippy/WASM build | Passed with installed Rust 1.89.0 and `wasm32-unknown-unknown`: fmt check, 5 unit tests, clippy with warnings denied, release WASM build |
 | Git diff whitespace check | Passed |
 
-The Chromium E2E backend used volatile in-memory room storage because Mongo was unavailable in this local test environment. The prior invitation failure was caused by missing CORS allowlisting between the two isolated test ports; the Playwright configuration now specifies only its exact client origin. This did not loosen production CORS policy.
+The Chromium E2E backend used volatile in-memory room storage because Mongo was unavailable in this local test environment. The prior invitation failure was caused by missing CORS allowlisting between the two isolated test ports; the Playwright configuration now specifies only its exact client origin. This did not loosen production CORS policy. The WebKit reopen failure was traced to the browser test closing a tab without dispatching `beforeunload`: the application's 15-second local tab lease was therefore still active, producing “This secure conversation is active in another tab.” The test now closes with `runBeforeUnload: true`, exercising the existing application cleanup; no IndexedDB, cryptographic restore, or lock-security code was changed.
 
 ## Final security review
 
@@ -55,24 +55,24 @@ The default API router does not mount attachment routes, so no test-header authe
 
 Repository inspection found no Phase 4 debug bypass in the attachment path. Production configuration rejects enabled debug logging, and the Playwright CORS origin is supplied only to its child test backend (`NODE_ENV=test`); production CORS rules were not changed. Existing socket rejection logs are generic. Deployment log, secret-management, and credentials reviews remain required before enabling media routes.
 
-## Known limitations and decision
+## Remaining deployment requirements and limitations
 
 - The production attachment route factory is **not mounted** by the default app. It still needs composition with a deployment-provided authenticated session verifier, durable attachment-access registry, and persistent Mongo adapter. The new integration test uses a clearly isolated test context and durable in-memory fixture; it does not substitute for production Mongo/auth validation. Do not claim live production media delivery before that composition is deployed and tested.
-- Firefox and WebKit full modern-conversation flows have not passed this milestone gate. The WebKit failure is reproducible at recipient reopen, but its underlying browser/session cause is not yet confirmed; security internals were not changed speculatively. Rust validation was not performed locally because the toolchain is absent; CI has a pinned Rust toolchain and mandatory checks, but its run result is not asserted here.
-- Firefox launch diagnostics showed macOS denying the Playwright `plugin-container.app` sandbox extension (`Operation not permitted`) and a graphics-compositor framebuffer error. The browser process stalled before any test action, so this is a host/browser execution limitation rather than a demonstrated protocol failure. Rust reproduction requires Rustup with the repository-pinned 1.89.0 toolchain, `rustfmt`, `clippy`, and `wasm32-unknown-unknown`; then run `cargo fmt`, `cargo test`, `cargo clippy`, and the release WASM build as specified in the Phase 4.8 infrastructure guide.
+- Firefox browser binaries are present, but this macOS host denies Playwright Firefox's `plugin-container.app` sandbox extension (`Operation not permitted`) and reports a graphics-compositor framebuffer error. Both headless and headed runs stalled before test actions. This is an environment limitation, not evidence of a protocol failure; run the same unweakened suite on a supported CI host.
+- Rust tools were already installed under `~/.cargo/bin` but absent from the shell `PATH`. Local Rust 1.89.0 fmt, test, clippy, and WASM checks passed. Record the corresponding CI artifacts before deployment.
 - Production Mongo persistence, multi-instance/restart recovery, deployment log review, performance measurements, and multi-device enrollment/revocation require separate evidence. See [multi-device limitations](PHASE4_MULTI_DEVICE_LIMITATIONS.md).
 - The current UI offers canonical QR data for display/copy/paste; it does not generate a scannable QR image or request camera permission.
 - Verification depends on an independent comparison. A compromised endpoint, malicious browser extension, first-contact impersonation before verification, or traffic analysis remains outside this protection boundary.
 
-**Milestone state:** Phase 4 implementation and Chromium integration checkpoint complete. Keep `legacy-default` as the production fallback and `modern-explicit` for controlled validation. Do not enable `modern-default-beta` or start Phase 5 until the outstanding browser, Rust/CI, deployment-authentication, persistence, and recovery gates are reviewed.
+**Milestone state:** Phase 4 implementation and local Chromium, WebKit, and Rust validation are complete. Keep `legacy-default` as the production fallback and `modern-explicit` for controlled validation. Do not enable `modern-default-beta` or start Phase 5 until the outstanding Firefox/CI, deployment-authentication, persistence, and recovery gates are reviewed.
 
 ## Remaining roadmap
 
-1. Run the full browser matrix and Rust/WASM CI with recorded artifacts.
+1. Run Firefox on a supported CI host and retain browser-matrix and Rust/WASM CI artifacts.
 2. Validate the authenticated attachment gateway with production-equivalent session context and persistent Mongo, including restart/failover and data inspection.
 3. Complete identity-change recovery and multi-device acceptance criteria, then separately approve or reject a narrowly scoped modern-default-beta rollout.
 4. Only after these gates, conduct a separate security design review for any Phase 5 call work.
 
 ## Local milestone sequence
 
-The earlier Phase 4 foundation and media commits from `4b61cbd` through `873b15e` are already on `origin/main`. This checkpoint additionally includes the unpushed local sequence `95b181a` (beta readiness audit), `ffbaa92` (validation infrastructure), and `79cf3c6` (Chromium E2E CORS fix), followed by this documentation-only milestone commit. None is pushed by this closure task.
+The earlier Phase 4 foundation and media commits from `4b61cbd` through `873b15e` are already on `origin/main`. The local, unpushed sequence includes `95b181a` (beta readiness audit), `ffbaa92` (validation infrastructure), `79cf3c6` (Chromium E2E CORS fix), `bd98f11` (milestone documentation), and `d5e71f5` (security acceptance tests), followed by this final browser/Rust hardening checkpoint. None is pushed by this closure task.
