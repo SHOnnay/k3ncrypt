@@ -101,11 +101,11 @@ export class ModernConversation {
         const relay = transportManager ? undefined : new SocketIoRelayTransport(() => this.subscriptions, new Logger('ModernConversation'),
             async (message) => {
                 if (message.channel === 'signaling') {
-                    if (this.deviceControlChannel && this.callSignalTransport) {
+                    if (this.deviceControlChannel) {
                         const plaintext = await this.runtime.decrypt('signaling', message.envelope);
                         const control = this.deviceControlChannel.decode(plaintext);
                         if (control) await this.handleDeviceControl(control);
-                        else await this.callSignalTransport.receivePlaintext(plaintext);
+                        else if (this.callSignalTransport) await this.callSignalTransport.receivePlaintext(plaintext);
                     } else if (this.callSignalTransport) await this.callSignalTransport.receive(message.envelope);
                     return false;
                 }
