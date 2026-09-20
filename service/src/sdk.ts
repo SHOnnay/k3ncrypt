@@ -638,6 +638,7 @@ export {
     NO_ENCRYPTION_STRATEGY_ID,
 } from './crypto/registry';
 export type { EncryptionStrategy, EncryptionStrategyFactory, EncryptionEnvelope } from './crypto/strategy';
+export * from './devices';
 export type {
     AttachmentStore,
     AppLocalIdentity,
