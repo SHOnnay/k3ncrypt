@@ -30,6 +30,7 @@ export type { ModernConnectionDetails } from './crypto/modernConversation';
 export { ConversationModeStore } from './crypto/conversationMode';
 export type { ConversationProtocolMode, ModernConversationRecord } from './crypto/conversationMode';
 export { conversationCreationPolicy, modeForNewConversation, resolveConversationMode } from './crypto/conversationPolicy';
+export * from './calls';
 export type { ConversationCreationPolicy, PersistedConversationMode } from './crypto/conversationPolicy';
 export { encodeVerificationQrPayload, decodeVerificationQrPayload, verificationStateForContact } from './identity/verificationFoundation';
 export type { CanonicalVerificationQrPayload, VerificationState } from './identity/verificationFoundation';
