@@ -15,6 +15,7 @@ import { createAuthenticatedCallComposition, type AuthenticatedCallComposition }
 import { VerifiedCallIdentityVerifier } from '../calls/signalBinding';
 import type { CallParticipant } from '../calls/contracts';
 import { AuthenticatedDeviceControlChannel, SecureStorageDeviceLifecyclePersistence, type DeviceControlMessage } from '../devices/runtime';
+import { DeviceTrustEnforcer, type DeviceTrustDecision } from '../devices/trust';
 import { DeviceLifecycleService, createEnrollmentRequest, createEnrollmentConfirmation, createRevocationConfirmation, type AuthenticatedDeviceContext, type DeviceAuthorization, type EnrollmentRequest, type LifecycleStateSnapshot } from '../devices/lifecycle';
 import { createDeviceList } from '../devices/deviceList';
 import { createDeviceEntry } from '../devices/deviceIdentity';
@@ -85,6 +86,7 @@ export class ModernConversation {
     private deviceControlChannel?: AuthenticatedDeviceControlChannel;
     private deviceLifecycle?: DeviceLifecycleService;
     private deviceLifecyclePersistence?: SecureStorageDeviceLifecyclePersistence;
+    private deviceTrust?: DeviceTrustEnforcer;
     private retryTimer?: ReturnType<typeof setInterval>;
     private onMessage?: (text: string) => void;
     private onContactChange?: (contact: StoredContactIdentity) => void;
@@ -183,6 +185,7 @@ export class ModernConversation {
                 devices: [createDeviceEntry({ deviceId: localAddress, publicIdentityReference: this.localIdentityId, algorithm: 'Olm-Curve25519+Ed25519', state: 'active', createdAt: Date.now() })] });
             await this.deviceLifecyclePersistence.initialize(this.localIdentityId, initialList);
         }
+        this.deviceTrust = new DeviceTrustEnforcer(this.deviceLifecyclePersistence, this.localIdentityId, localAddress, this.localIdentityId);
         if (this.runtime.lifecycle === 'active' || this.runtime.lifecycle === 'persisted') {
             this.deviceControlChannel = new AuthenticatedDeviceControlChannel(this.runtime.getAuthenticatedSession(), this.transport);
             this.deviceLifecycle = new DeviceLifecycleService(this.deviceLifecyclePersistence, {
@@ -222,8 +225,14 @@ export class ModernConversation {
         return this.deviceLifecyclePersistence.read(this.localIdentityId);
     }
 
+    public async getDeviceTrust(): Promise<DeviceTrustDecision> {
+        if (!this.deviceTrust) return 'unavailable';
+        return this.deviceTrust.decision();
+    }
+
     public async requestDeviceEnrollment(input: { requestedDeviceId: string; requestedPublicIdentityReference: string; algorithm: string }): Promise<EnrollmentRequest> {
         if (!this.deviceControlChannel || !this.localIdentityId) throw new Error('Device enrollment requires a ready modern session.');
+        await this.deviceTrust?.assertTrusted();
         const state = await this.getDeviceLifecycleState();
         if (!state) throw new Error('Device lifecycle state unavailable.');
         const request = createEnrollmentRequest({ ...input, userScope: this.localIdentityId, knownEpoch: state.list.epoch });
@@ -232,6 +241,7 @@ export class ModernConversation {
     }
 
     public async approveDeviceEnrollment(request: EnrollmentRequest, confirmedTarget: { deviceId: string; publicIdentityReference: string }): Promise<DeviceAuthorization> {
+        await this.deviceTrust?.assertTrusted();
         const service = this.requireDeviceLifecycle();
         const authorization = await service.approveEnrollment(request, this.deviceContext(), confirmedTarget);
         await this.deviceControlChannel!.send({ type: 'enrollment-approval', payload: authorization });
@@ -240,6 +250,7 @@ export class ModernConversation {
     }
 
     public async confirmDeviceEnrollment(authorization: DeviceAuthorization): Promise<LifecycleStateSnapshot> {
+        await this.deviceTrust?.assertTrusted();
         const service = this.requireDeviceLifecycle();
         const confirmation = await createEnrollmentConfirmation({ version: 1, authorizationDigest: authorization.authorizationDigest,
             targetDeviceId: authorization.targetDeviceId, targetIdentityReference: authorization.targetPublicIdentityReference!,
@@ -250,10 +261,12 @@ export class ModernConversation {
 
     public async rejectDeviceEnrollment(request: EnrollmentRequest): Promise<void> {
         if (!this.deviceControlChannel) throw new Error('Device enrollment requires a ready modern session.');
+        await this.deviceTrust?.assertTrusted();
         await this.deviceControlChannel.send({ type: 'enrollment-rejection', payload: { version: 1, transactionNonce: request.transactionNonce, expiresAt: request.expiresAt } });
     }
 
     public async revokeDevice(deviceId: string): Promise<DeviceAuthorization> {
+        await this.deviceTrust?.assertTrusted();
         const service = this.requireDeviceLifecycle();
         const authorization = await service.approveRevocation(deviceId, this.deviceContext());
         await this.deviceControlChannel!.send({ type: 'revocation', payload: authorization });
@@ -270,6 +283,7 @@ export class ModernConversation {
 
     private async sendUnlocked(text: string): Promise<'pending'> {
         if (!this.roomId || !this.runtime.activeSessionId || !text.trim()) throw new Error('The private contact is not ready.');
+        await this.deviceTrust?.assertTrusted();
         const contact = await this.getContact();
         if (contact?.changeStatus !== 'unchanged') throw new Error('Review this contact’s changed identity before sending.');
         await this.deliveryMutex.runExclusive(async () => {
@@ -323,6 +337,7 @@ export class ModernConversation {
         if (!this.roomId || !this.localAddress || !this.localIdentityId || !this.remoteAddress) {
             throw new Error('Modern conversation is not ready for calling.');
         }
+        await this.deviceTrust?.assertTrusted();
         const contact = await this.getContact();
         if (!contact || contact.changeStatus !== 'unchanged' || contact.verification !== 'verified') {
             throw new Error('Verify this contact before starting a call.');
@@ -341,6 +356,7 @@ export class ModernConversation {
             localParticipantId: this.localAddress,
             remoteParticipant,
             identity,
+            deviceTrust: this.deviceTrust,
         });
         this.callComposition = composition;
         this.callSignalTransport = composition.signalTransport;

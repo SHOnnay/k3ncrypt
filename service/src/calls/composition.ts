@@ -18,6 +18,7 @@ export interface AuthenticatedCallCompositionInput {
   remoteParticipant: CallParticipant;
   identity: CallIdentityVerifier;
   replay?: ReplayProtectionStore;
+  deviceTrust?: { assertTrusted(): Promise<void> };
 }
 export interface AuthenticatedCallComposition {
   readonly service: CallService;
@@ -46,6 +47,7 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
     verification: 'verified',
   };
   const sendEvent = async (session: CallSession, event: CallEvent, sequence: number, kind: CallSignalKind = 'control', payload?: unknown): Promise<void> => {
+    await input.deviceTrust?.assertTrusted();
     if (event === 'heartbeat' || event === 'expire' || event === 'fail' || event === 'connect' || event === 'connected' || event === 'reconnect') {
       throw new Error('Unsupported call signal event.');
     }
@@ -87,6 +89,7 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
     notify(updated);
   });
   const invite = async (): Promise<CallSession> => {
+    await input.deviceTrust?.assertTrusted();
     const participants: readonly [CallParticipant, CallParticipant] = [
       localParticipant,
       input.remoteParticipant,
@@ -98,6 +101,7 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
     return session;
   };
   const respond = async (callId: string, event: 'accept' | 'reject' | 'cancel'): Promise<CallSession> => {
+    await input.deviceTrust?.assertTrusted();
     const session = await service.event(callId, event);
     await sendEvent(session, event, session.updatedAt === session.createdAt ? 1 : 2);
     notify(session);
