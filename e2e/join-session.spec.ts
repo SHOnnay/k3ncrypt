@@ -11,7 +11,7 @@ import { test, expect, Browser, BrowserContext, Page } from '@playwright/test';
  *     secret is never sent to, or seen by, the server.
  */
 
-const APP_URL = 'http://localhost:5173';
+const APP_URL = process.env.PLAYWRIGHT_BASE_URL ?? `http://127.0.0.1:${process.env.PLAYWRIGHT_CLIENT_PORT ?? '43102'}`;
 
 async function openUser(browser: Browser): Promise<{ ctx: BrowserContext; page: Page }> {
   const ctx = await browser.newContext();

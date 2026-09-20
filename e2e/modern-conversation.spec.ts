@@ -1,13 +1,14 @@
 import { test, expect, type Browser, type BrowserContext, type Page } from '@playwright/test';
 
 const PASSPHRASE = 'paper-ink-private-room-2026';
+const BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? `http://127.0.0.1:${process.env.PLAYWRIGHT_CLIENT_PORT ?? '43102'}`;
 
 const captureOutbound = (page: Page, bodies: string[]) => {
   page.on('request', (request) => { if (request.method() !== 'GET') bodies.push(request.postData() ?? ''); });
   page.on('websocket', (socket) => { socket.on('framesent', (frame) => bodies.push(String(frame.payload))); });
 };
 
-async function open(browser: Browser, link = 'http://localhost:5173'): Promise<{ context: BrowserContext; page: Page; outbound: string[] }> {
+async function open(browser: Browser, link = BASE_URL): Promise<{ context: BrowserContext; page: Page; outbound: string[] }> {
   const context = await browser.newContext();
   const page = await context.newPage();
   const outbound: string[] = [];

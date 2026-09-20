@@ -13,7 +13,7 @@ test.describe('local Vodozemac browser package', () => {
         await expect(smoke).toHaveAttribute('data-public-identity-length', /\d+/);
         await expect(smoke).toHaveAttribute('data-exposes-private-material', 'false');
         expect(wasmRequests).toHaveLength(1);
-        expect(wasmRequests[0]).toContain('localhost:5173');
+        expect(wasmRequests[0]).toContain(`127.0.0.1:${process.env.PLAYWRIGHT_CLIENT_PORT ?? '43102'}`);
     });
 
     test('fails closed for a missing local crypto artifact without exposing secrets', async ({ page }) => {
