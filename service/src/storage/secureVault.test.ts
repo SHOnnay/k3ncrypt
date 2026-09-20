@@ -71,7 +71,8 @@ describe('BrowserSecureStorage', () => {
         await vault.initializeWithPassphrase(passphrase);
         vault.lock();
         const metadata = JSON.parse((await persistence.loadMetadata())!);
-        metadata.wrappedMasterKey.ciphertext = `${metadata.wrappedMasterKey.ciphertext.slice(0, -1)}A`;
+        const ciphertext = metadata.wrappedMasterKey.ciphertext;
+        metadata.wrappedMasterKey.ciphertext = `${ciphertext[0] === 'A' ? 'B' : 'A'}${ciphertext.slice(1)}`;
         persistence.corruptMetadata(JSON.stringify(metadata));
 
         await expect(vault.unlock(passphrase)).rejects.toThrow(/Invalid unlock secret|Corrupted/);

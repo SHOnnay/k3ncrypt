@@ -1,0 +1,9 @@
+# Modern-default final readiness review
+
+Status: **do not enable `modern-default-beta` in production yet**. The repository's unconfigured policy is `legacy-default`; `modern-explicit` allows user-initiated modern conversations without changing the default.
+
+`service/src/crypto/conversationPolicy.ts` recognizes only `legacy-default`, `modern-explicit`, and `modern-default-beta`; unknown values fall back to legacy. `modeForNewConversation` selects modern automatically only for the beta value. `resolveConversationMode` gives persisted mode precedence, so changing the flag does not migrate an old legacy conversation or replace an established modern one. Existing policy tests assert these cases. Modern browser Alice/Bob/restart exchange and fail-closed downgrade/invariant tests provide local evidence, but do not constitute deployment acceptance.
+
+Before beta: run the unweakened Firefox flow on a working CI host and retain artifacts for Chromium/WebKit/Firefox and Rust/WASM; validate the real production session, mailbox, persistence, and restart topology; review first-contact verification and identity-change recovery in supported browsers; set rollout/rollback ownership, monitoring without content logging, compatibility and performance criteria, and independent security approval. A rollback changes only the default for **new** conversations; persisted modes remain authoritative. Do not silently downgrade modern conversations or enable a server-side feature flag that overrides local verification.
+
+Attachment delivery is a separate blocked production gate (see `ATTACHMENT_PRODUCTION_GATE.md`); neither its absence nor the browser host failure may be hidden by a beta flag. Multi-device enrollment/recovery is not implemented and needs its own reviewed protocol design. This document changes no default or security mechanism.
