@@ -1,21 +1,21 @@
 # K3ncrypt Phase 6B implementation-readiness gate
 
-Status: **NOT READY**. This is a review checklist derived from the existing Phase 6B design package. It does not introduce a new protocol or authorize implementation.
+Status: **READY FOR IMPLEMENTATION** for the scoped Phase 6B.1 local model and canonical validation work. This gate records the approved normative addenda; it does not authorize changes to Phase 1–5 protocols or cryptographic primitives.
 
 ## 1. Current status
 
-The Phase 6B architecture, enrollment ceremony, revocation policy, recovery direction, epoch model, and fail-closed conflict policy are documented. Implementation is blocked only where the existing documents leave a security authority or wire-level contract ambiguous. Items that can safely be resolved while implementing adapters are explicitly separated below.
+The Phase 6B architecture, enrollment ceremony, revocation policy, recovery behavior, epoch model, authority proof, canonical encoding, and fail-closed conflict policy are now normative. The approved decisions are recorded in [the authority specification](PHASE6B_DEVICE_LIST_AUTHORITY_SPEC.md), [the canonical encoding specification](PHASE6B_CANONICAL_ENCODING_SPEC.md), and [the epoch matrix](PHASE6B_EPOCH_ENFORCEMENT_MATRIX.md). Items that can safely be resolved while implementing deployment adapters remain non-blocking.
 
 ## 2. Blocking decisions
 
-Only classifications **A** and **B** block coding.
+The previously blocking A/B decisions are resolved by the approved addenda below. No A/B blocker remains for Phase 6B.1.
 
 | ID | Blocker | Class | Why it blocks implementation | Required decision | Who decides | Completion criteria |
 | --- | --- | --- | --- | --- | --- | --- |
-| B1 | Author proof for a device-list mutation is not concrete | A/B | The design chooses an existing verified device, but does not establish whether the current identity/session APIs can provide the required proof on every delivery path. A digest cannot authenticate an author. | Use the existing authenticated `CryptoSession` as the sole Phase 6B control-path proof; permit no offline/list-relay path until an existing identity signature capability is confirmed, or explicitly approve a reviewed existing capability if one is already exposed. | Security architect + identity/session owner | A written API-level proof contract names the exact existing primitive, covered bytes, expected author identity, and rejection behavior. No new key or detached signature is required. |
-| B2 | Canonical serialization and fingerprint encoding are unspecified | A/B | Different clients could compute different list commitments or show different enrollment fingerprints, causing split-brain membership or unsafe user confirmation. | Select one deterministic encoding, field order, integer/time representation, Unicode policy, hash/commitment algorithm already permitted by the frozen boundary, and human-display format. | Protocol architect + client/platform owner | Cross-platform test vectors are published; two independent implementations produce identical bytes, commitment, and displayed fingerprint; unknown fields and duplicate IDs fail closed. |
-| B3 | Full-device-loss identity continuity is not decided | A/B | Recovery changes every trust relationship. Engineers cannot safely decide whether the replacement is continuity of the same user grouping or a new identity without defining contact verification and old-device invalidation. | Recommended: generate a fresh device identity and new membership epoch; mark all prior devices `recovery-replaced`/revoked; require contacts to review and re-verify. Do not preserve prior verification silently. | Security architect + identity/verification owner | Recovery state transition, contact event, old-device invalidation, and “all recovery material lost” behavior are specified with deterministic tests and no server reset path. |
-| B4 | Epoch enforcement at existing adapters is not contractually bounded | A/B | Without a precise gate, one subsystem could accept stale membership while another rejects it, allowing revoked devices to send messages, retrieve attachments, or signal calls. | Define the adapter contract: current epoch is required for new admission/control authorization; stale state must reconcile or fail closed; existing ciphertext/session formats are not rewritten. | Phase 3–5 owners + security architect | Message/mailbox, attachment, call, and verification adapters each expose a documented stale/revoked outcome and integration test; no frozen protocol field changes. |
+| B1 | Author proof for a device-list mutation | Resolved | The authority addendum makes the existing authenticated `CryptoSession` the sole proof boundary and rejects digest-only or server authorization. | Implement only the session-bound control path. | Security architect + identity/session owner | See [device-list authority specification](PHASE6B_DEVICE_LIST_AUTHORITY_SPEC.md) and its proof/test contract. |
+| B2 | Canonical serialization and fingerprint encoding | Resolved | The encoding addendum fixes canonical JSON rules, SHA-256 commitment, fingerprint representation, versioning, and vector requirements. | Implement only the normative encoding. | Protocol architect + client/platform owner | See [canonical encoding specification](PHASE6B_CANONICAL_ENCODING_SPEC.md). |
+| B3 | Full-device-loss identity continuity | Resolved | Recovery is explicitly a fresh identity/new epoch event with old-device invalidation and contact re-verification. | Implement only the explicit replacement ceremony; no silent continuity. | Security architect + identity/verification owner | Recovery transitions and rejection cases are specified in the authority addendum. |
+| B4 | Epoch enforcement at existing adapters | Resolved | The epoch matrix fixes current-epoch requirements and stale/revoked outcomes for authorization, sessions, calls, attachments, verification, and historical data. | Implement adapter gates without changing frozen formats. | Phase 3–5 owners + security architect | See [epoch-enforcement matrix](PHASE6B_EPOCH_ENFORCEMENT_MATRIX.md). |
 
 ### Decision questions for A/B blockers
 
@@ -74,27 +74,27 @@ These do not prevent starting Phase 6B.1, provided their interfaces are recorded
 
 ## 4. Minimum design completion before Phase 6B.1
 
-The smallest safe remaining design work is **four short normative addenda**, not another architecture document:
+The four required normative addenda are now complete:
 
-1. **Proof contract:** record the answer to B1 against the actual existing identity/session API and explicitly prohibit every unauthenticated/list-relay path.
-2. **Canonical vectors:** record B2's serialization, hash input, QR fields, and cross-platform test vectors.
-3. **Recovery state table:** record B3's fresh-identity replacement, contact trust reset, and all-material-lost outcome.
-4. **Epoch adapter matrix:** record B4's accepted/reconcile/rejected result for each existing message, mailbox, attachment, call, and verification operation.
+1. **Proof contract:** `PHASE6B_DEVICE_LIST_AUTHORITY_SPEC.md`.
+2. **Canonical vectors/encoding contract:** `PHASE6B_CANONICAL_ENCODING_SPEC.md`.
+3. **Recovery state and authority contract:** `PHASE6B_DEVICE_LIST_AUTHORITY_SPEC.md`.
+4. **Epoch adapter matrix:** `PHASE6B_EPOCH_ENFORCEMENT_MATRIX.md`.
 
-Once these four addenda are reviewed and acceptance criteria are testable, engineers may begin **Phase 6B.1 local model and canonical validation**. Durable deployment persistence, notification operations, and browser-specific presentation remain later gates and must not be faked during 6B.1.
+Engineers may now begin **Phase 6B.1 local model and canonical validation**. Durable deployment persistence, notification operations, and browser-specific presentation remain later gates and must not be faked during 6B.1.
 
 ## 5. Final implementation checklist
 
-- [ ] Device authority finalized (B1 proof contract)
-- [ ] Enrollment protocol finalized (including proof, nonce, expiry, and pending/active transitions)
-- [ ] Revocation finalized (epoch advance, stale behavior, notification semantics)
-- [ ] Recovery finalized (fresh identity, trust reset, prior-device invalidation)
-- [ ] Encoding finalized (canonical bytes, commitment, fingerprint/QR vectors)
-- [ ] Epoch behavior finalized (adapter matrix and rollback/conflict outcomes)
-- [ ] Integration boundary finalized (existing identity/session APIs only; no new primitive)
+- [x] Device authority finalized (B1 proof contract)
+- [x] Enrollment protocol finalized (including proof, nonce, expiry, and pending/active transitions)
+- [x] Revocation finalized (epoch advance, stale behavior, notification semantics)
+- [x] Recovery finalized (fresh identity, trust reset, prior-device invalidation)
+- [x] Encoding finalized (canonical bytes, commitment, fingerprint/QR vectors)
+- [x] Epoch behavior finalized (adapter matrix and rollback/conflict outcomes)
+- [x] Integration boundary finalized (existing identity/session APIs only; no new primitive)
 
 ## 6. Final verdict
 
-**NOT READY.**
+**READY FOR IMPLEMENTATION** (Phase 6B.1 only).
 
-The next action is not to write Phase 6B code. The security and protocol owners must approve B1–B4, publish the four normative addenda listed above, and attach cross-platform vectors plus adapter acceptance tests. After that review passes, start only Phase 6B.1; do not begin enrollment/recovery integration or change any Phase 1–5 protocol until the later gates are separately satisfied.
+The next action is to implement and test only the local model, canonical serialization, commitments, lifecycle validation, and epoch invariants in Phase 6B.1. Before enrollment/recovery integration or deployment, publish the required canonical test vectors and satisfy the non-blocking persistence, notification, platform, and adapter test gates. No Phase 1–5 protocol or cryptographic primitive may change.
