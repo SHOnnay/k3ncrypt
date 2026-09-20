@@ -10,7 +10,8 @@ it('authorizes an existing conversation context through one upload capability', 
     await service.storeChunk(context, created.id, created.capability, { ...encrypted.chunks[0], attachmentId: created.id });
     await service.completeUpload(context, created.id, created.capability);
     await expect(service.getChunks({ ...context, participantId: 'unknown' }, created.id, created.capability)).rejects.toThrow('unavailable');
-    await expect(service.getChunks(context, created.id, `${created.capability.slice(0, -1)}0`)).rejects.toThrow('unavailable');
+    const wrongCapability = `${created.capability[0] === '0' ? '1' : '0'}${created.capability.slice(1)}`;
+    await expect(service.getChunks(context, created.id, wrongCapability)).rejects.toThrow('unavailable');
     expect((await service.getChunks(context, created.id, created.capability)).length).toBe(1);
 });
 
