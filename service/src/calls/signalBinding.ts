@@ -1,0 +1,4 @@
+import type { CallSignal } from './contracts';
+const canonical = (signal: Omit<CallSignal, 'payloadDigest'>): string => JSON.stringify({ callId: signal.callId, conversationId: signal.conversationId, sender: signal.sender, event: signal.event, kind: signal.kind ?? 'control', payload: signal.payload ?? null, sequence: signal.sequence, timestamp: signal.timestamp, expiresAt: signal.expiresAt, identityBinding: signal.identityBinding });
+export const signalDigest = async (signal: Omit<CallSignal, 'payloadDigest'>): Promise<string> => { const bytes = new TextEncoder().encode(canonical(signal)); const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)); return [...digest].map((byte) => byte.toString(16).padStart(2, '0')).join(''); };
+export const verifySignalDigest = async (signal: CallSignal): Promise<boolean> => signal.payloadDigest === await signalDigest(signal);

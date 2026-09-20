@@ -12,5 +12,5 @@ export interface CallIdentityVerifier {
 }
 
 export type CallSignalKind = 'control' | 'offer' | 'answer' | 'ice-candidate';
-export interface CallSignal { callId: string; conversationId: string; sender: CallParticipant; event: Exclude<CallEvent, 'heartbeat'>; kind?: CallSignalKind; payload?: unknown; sequence: number; expiresAt: number; identityBinding: string; }
+export interface CallSignal { callId: string; conversationId: string; sender: CallParticipant; event: Exclude<CallEvent, 'heartbeat'>; kind?: CallSignalKind; payload?: unknown; sequence: number; timestamp: number; expiresAt: number; identityBinding: string; payloadDigest: string; }
 export interface CallSignalTransport { send(signal: CallSignal): Promise<void>; onSignal(listener: (signal: CallSignal) => Promise<void>): () => void; }
