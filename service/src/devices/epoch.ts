@@ -1,5 +1,6 @@
 import type { DeviceList } from './deviceIdentity';
 import { createDeviceList } from './deviceList';
+import { canonicalDeviceListJson } from './canonicalEncoding';
 
 export type EpochValidation = 'current' | 'stale' | 'future';
 
@@ -23,6 +24,7 @@ export const assertNotRollback = (current: DeviceList, candidate: DeviceList): v
     const candidateList = createDeviceList(candidate);
     if (candidateList.identityReference !== currentList.identityReference) throw new Error('Device-list identity scope changed.');
     if (candidateList.epoch < currentList.epoch) throw new Error('Device-list rollback rejected.');
+    if (candidateList.epoch === currentList.epoch && canonicalDeviceListJson(candidateList) !== canonicalDeviceListJson(currentList)) throw new Error('Same-epoch device-list fork rejected.');
 };
 
 export const assertCurrentEpoch = (current: DeviceList, candidateEpoch: number): void => {

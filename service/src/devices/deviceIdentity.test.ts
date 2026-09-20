@@ -87,6 +87,7 @@ describe('Phase 6B.1 device identity foundation', () => {
     expect(() => assertNextEpoch(list, next)).not.toThrow();
     expect(() => assertNextEpoch(list, { ...next, epoch: 2 })).toThrow();
     expect(() => assertNotRollback(list, { ...list, epoch: 0 })).not.toThrow();
+    expect(() => assertNotRollback(list, { ...list, devices: [active] })).toThrow('fork');
     expect(() => assertNotRollback(next, list)).toThrow('rollback');
     expect(compareEpoch(2, 2)).toBe('current');
     expect(compareEpoch(2, 1)).toBe('stale');
