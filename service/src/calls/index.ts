@@ -12,3 +12,4 @@ export * from './media';
 export * from './signalBinding';
 export * from './replayProtection';
 export * from './authenticatedTransport';
+export * from './composition';

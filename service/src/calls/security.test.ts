@@ -3,6 +3,7 @@ import { MemoryReplayProtectionStore } from './replayProtection';
 import type { CallSignal } from './contracts';
 import { AuthenticatedCallSignalTransport } from './authenticatedTransport';
 import { VerifiedCallIdentityVerifier } from './signalBinding';
+import { createAuthenticatedCallComposition } from './composition';
 const base = (): Omit<CallSignal, 'payloadDigest'> => ({ callId: 'call', conversationId: '11111111-1111-4111-8111-111111111111', sender: { participantId: 'a', identityId: 'id', verification: 'verified' }, event: 'invite', kind: 'control', payload: { sdp: 'offer' }, sequence: 1, timestamp: 100, expiresAt: 1_000, identityBinding: 'binding' });
 describe('call signaling security', () => {
   it('detects modified SDP/ICE payloads through the authenticated envelope digest', async () => { const signal = { ...base(), payloadDigest: await signalDigest(base()) }; expect(await verifySignalDigest(signal)).toBe(true); const modified = { ...signal, payload: { sdp: 'tampered' } }; expect(await verifySignalDigest(modified)).toBe(false); });
@@ -16,5 +17,10 @@ describe('call signaling security', () => {
     signal.payloadDigest = await signalDigest(signal);
     const bound = new AuthenticatedCallSignalTransport(cryptoSession, transport as never, signal.conversationId, 'alice-id', participant, identity);
     await expect(bound.send(signal)).rejects.toThrow('origin rejected');
+  });
+  it('refuses to compose calls without an encrypted ready session', () => {
+    const identity = new VerifiedCallIdentityVerifier(new Set(['alice', 'bob']), new Map([['alice', 'verified'], ['bob', 'verified']]));
+    const session = { encrypted: false, ready: true } as never;
+    expect(() => createAuthenticatedCallComposition({ session, transport: {} as never, conversationId: 'room', localIdentityId: 'alice-id', remoteParticipant: { participantId: 'bob', identityId: 'bob-id', verification: 'verified' }, identity })).toThrow('not ready');
   });
 });
