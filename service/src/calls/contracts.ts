@@ -1,7 +1,7 @@
-export type CallState = 'idle' | 'inviting' | 'ringing' | 'accepted' | 'connecting' | 'connected' | 'ended' | 'rejected' | 'cancelled' | 'expired' | 'failed';
+export type CallState = 'idle' | 'inviting' | 'ringing' | 'accepted' | 'connecting' | 'connected' | 'reconnecting' | 'ended' | 'rejected' | 'cancelled' | 'expired' | 'failed';
 export type CallParticipant = { participantId: string; identityId: string; verification: 'unknown' | 'unverified' | 'verified' | 'changed-pending-review' };
 export type CallSession = { callId: string; conversationId: string; participants: readonly [CallParticipant, CallParticipant]; state: CallState; createdAt: number; updatedAt: number; expiresAt: number; identityBinding: string };
-export type CallEvent = 'invite' | 'accept' | 'reject' | 'cancel' | 'connect' | 'connected' | 'end' | 'expire' | 'fail' | 'heartbeat';
+export type CallEvent = 'invite' | 'accept' | 'reject' | 'cancel' | 'connect' | 'connected' | 'reconnect' | 'end' | 'expire' | 'fail' | 'heartbeat';
 export type PermissionState = 'unknown' | 'requested' | 'granted' | 'active' | 'released' | 'denied';
 export type CallPermissions = { microphone: PermissionState; camera: PermissionState };
 

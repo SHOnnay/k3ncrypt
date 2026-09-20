@@ -3,3 +3,8 @@ export * from './callSecurityPolicy';
 export * from './stateMachine';
 export * from './permissions';
 export * from './signaling';
+export * from './repository';
+export * from './authorization';
+export * from './eventProcessor';
+export * from './service';
+export * from './webrtc';
