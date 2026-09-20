@@ -1,4 +1,4 @@
-import type { SecureStorage } from '../core/contracts';
+import type { CryptoSession, SecureStorage } from '../core/contracts';
 import { VodozemacCryptoSession, type VodozemacSessionHandle } from '../core/vodozemacCryptoSession';
 import { PersistentVodozemacIdentity, type VodozemacAccountFactory } from '../identity/vodozemacIdentity';
 import { VodozemacSessionStore, type VodozemacSessionFactory } from '../identity/vodozemacSessionStore';
@@ -49,6 +49,18 @@ export class VodozemacRuntime {
 
     public get lifecycle(): VodozemacLifecycleState { return this.state; }
     public get activeSessionId(): string | undefined { return this.session?.sessionId(); }
+
+    /**
+     * Narrow application boundary for authenticated call composition. The
+     * opaque session adapter is returned only while the modern session is
+     * active; its identity/account handles and persistence keys never leave
+     * this runtime.
+     */
+    public getAuthenticatedSession(): CryptoSession {
+        this.requireState('active', 'persisted');
+        if (!this.session?.ready) throw new VodozemacBoundaryError('MISSING_SESSION', 'No active conversation session.');
+        return this.session;
+    }
 
     public async initialize(): Promise<void> {
         this.requireState('uninitialized');

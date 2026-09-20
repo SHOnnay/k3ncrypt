@@ -9,6 +9,10 @@ Phase 5 call control, authenticated signaling composition, WebRTC lifecycle adap
 ```text
 Call UI
   ↓
+ModernConversation
+  ↓
+createAuthenticatedCallComposition
+  ↓
 CallService + CallAuthorization
   ↓
 AuthenticatedCallSignalTransport
@@ -20,7 +24,7 @@ TransportManager / relay
 WebRTC peer transport
 ```
 
-`createAuthenticatedCallComposition` is the sole supported constructor: it refuses a session that is not encrypted and ready and returns the call service together with the authenticated signaling transport. Raw transport objects cannot satisfy this composition input. The current browser bootstrap creates the legacy `ChatE2EE` facade, while `ModernConversation` does not expose its authenticated session/transport pair to calls; therefore the production bootstrap must not silently adapt the legacy raw path. Until that explicit dependency is supplied, runtime call initialization must fail closed.
+`createAuthenticatedCallComposition` remains the sole supported constructor: it refuses a session that is not encrypted and ready and returns the call service together with the authenticated signaling transport. `ModernConversation.createAuthenticatedCallComposition()` is now the runtime boundary. It requires an active Vodozemac session, the conversation's authenticated `TransportManager`, stable routing identities, and an explicitly verified contact, then delegates to the factory. Raw transport objects and the legacy `ChatE2EE` path cannot create an authenticated modern call.
 
 ## Security guarantees
 
@@ -39,14 +43,15 @@ After: `ReplayProtectionStore` exposes TTL, atomic-claim, shared persistence req
 Status: remediated at interface boundary; production adapter and retry/outbox deployment remain required.
 
 N-01 — authenticated transport not composed  
-Before: transport class was exportable but not enforced by composition.  
-After: `createAuthenticatedCallComposition` requires an encrypted ready CryptoSession and constructs the only supported service/signaling bundle.  
-Status: factory boundary and regression test are complete; the current application bootstrap remains blocked from live authenticated calls until it can inject the modern session/transport pair. No insecure fallback is enabled.
+Before: transport class was exportable but not enforced by composition; the application bootstrap did not expose the modern session/transport pair.
+After: modern runtime creation flows through `ModernConversation.createAuthenticatedCallComposition()`, which fails closed until the Vodozemac session is ready and the contact is verified, and then delegates to `createAuthenticatedCallComposition`. The client uses that composition for modern call invitation; legacy call methods are not used in modern mode.
+Evidence: modern conversation integration tests cover pre-verification rejection, authenticated transport selection, and secure call invitation; the composition factory retains missing-session rejection coverage.
+Status: closed at runtime composition boundary. Incoming/media call signaling still requires the separately documented transport/WebRTC deployment work.
 
 ## Remaining production requirements
 
-Completed: call-domain validation, authenticated transport boundary, identity binding, replay interface, WebRTC/permission adapters, regression tests, and security documentation.
+Completed: call-domain validation, authenticated transport boundary, modern runtime composition, identity binding, replay interface, WebRTC/permission adapters, regression tests, and security documentation.
 
-Requires deployment: durable atomic replay store, real application session-to-composition wiring from the modern runtime, relay/TURN credentials and retention review, supported Firefox/CI browser evidence, and production log/database inspection.
+Requires deployment: durable atomic replay store, relay/TURN credentials and retention review, supported Firefox/CI browser evidence, production log/database inspection, and completion of incoming-call/media negotiation over the authenticated signaling channel.
 
 Future work: group calls, multi-device call identity, media-terminating SFU review, and any Phase 6 functionality. None is enabled here.

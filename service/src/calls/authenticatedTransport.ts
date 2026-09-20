@@ -1,6 +1,6 @@
 import type { CryptoSession, EncryptedEnvelope, TransportManager } from '../core/contracts';
 import type { CallIdentityVerifier, CallParticipant, CallSignal, CallSignalTransport } from './contracts';
-import { signalDigest, verifySignalDigest } from './signalBinding';
+import { verifySignalDigest } from './signalBinding';
 
 const encode = (signal: CallSignal): ArrayBuffer => new TextEncoder().encode(JSON.stringify(signal)).buffer as ArrayBuffer;
 const decode = (bytes: ArrayBuffer): CallSignal => JSON.parse(new TextDecoder().decode(bytes)) as CallSignal;

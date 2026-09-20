@@ -11,6 +11,9 @@ import { Logger } from '../utils/logger';
 import { AsyncMutex } from '../utils/asyncMutex';
 import { ConversationModeStore } from './conversationMode';
 import { VodozemacRuntime, type VodozemacBindingsLoader } from './vodozemacRuntime';
+import { createAuthenticatedCallComposition, type AuthenticatedCallComposition } from '../calls/composition';
+import { VerifiedCallIdentityVerifier } from '../calls/signalBinding';
+import type { CallParticipant } from '../calls/contracts';
 
 const OUTBOX_RECORD = 'modern-outbox';
 const SEEN_RECORD = 'modern-seen';
@@ -70,6 +73,8 @@ export class ModernConversation {
     private roomId?: string;
     private capability?: string;
     private remoteAddress?: string;
+    private localAddress?: string;
+    private localIdentityId?: string;
     private retryTimer?: ReturnType<typeof setInterval>;
     private onMessage?: (text: string) => void;
     private onContactChange?: (contact: StoredContactIdentity) => void;
@@ -101,6 +106,7 @@ export class ModernConversation {
         this.onContactChange = onContactChange;
         await this.runtime.initialize();
         const own = await this.runtime.restoreOrCreateIdentity();
+        this.localIdentityId = own.identityId;
         const publicationBytes = await this.storage.read(PUBLICATION_RECORD, 'local');
         const publication = publicationBytes ? JSON.parse(decoder.decode(publicationBytes)) as PublicationMarker : undefined;
         if (publication && (publication.version !== 1 || !publication.address || publication.roomId !== roomId)) {
@@ -145,6 +151,7 @@ export class ModernConversation {
             await this.storage.delete(PUBLICATION_RECORD, 'local');
         }
         await this.modes.write(roomId, { localAddress, remoteAddress: this.remoteAddress, sessionId: saved?.sessionId });
+        this.localAddress = localAddress;
 
         if (this.remoteAddress && !saved?.sessionId) {
             const contact = validateVodozemacPublicBundle(await fetchVodozemacBundle(roomId, capability, this.remoteAddress));
@@ -217,6 +224,37 @@ export class ModernConversation {
 
     public async getContact(): Promise<StoredContactIdentity | undefined> {
         return this.remoteAddress ? this.registry.get(this.remoteAddress) : undefined;
+    }
+
+    /**
+     * Creates the only call composition available to a modern conversation.
+     * A ready modern session, stable routing identities, and an explicitly
+     * verified contact are all required; legacy conversations cannot reach
+     * this boundary because they do not own a ModernConversation instance.
+     */
+    public async createAuthenticatedCallComposition(): Promise<AuthenticatedCallComposition> {
+        if (!this.roomId || !this.localAddress || !this.localIdentityId || !this.remoteAddress) {
+            throw new Error('Modern conversation is not ready for calling.');
+        }
+        const contact = await this.getContact();
+        if (!contact || contact.changeStatus !== 'unchanged' || contact.verification !== 'verified') {
+            throw new Error('Verify this contact before starting a call.');
+        }
+        const localParticipant: CallParticipant = { participantId: this.localAddress, identityId: this.localIdentityId, verification: 'verified' };
+        const remoteParticipant: CallParticipant = { participantId: this.remoteAddress, identityId: contact.identityId, verification: contact.verification };
+        const identity = new VerifiedCallIdentityVerifier(
+            new Set([localParticipant.participantId, remoteParticipant.participantId]),
+            new Map([[localParticipant.participantId, localParticipant.verification], [remoteParticipant.participantId, remoteParticipant.verification]]),
+        );
+        return createAuthenticatedCallComposition({
+            session: this.runtime.getAuthenticatedSession(),
+            transport: this.transport,
+            conversationId: this.roomId,
+            localIdentityId: this.localIdentityId,
+            localParticipantId: this.localAddress,
+            remoteParticipant,
+            identity,
+        });
     }
 
     public async verifyContact(confirmed: boolean): Promise<void> {

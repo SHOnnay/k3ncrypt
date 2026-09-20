@@ -4,6 +4,7 @@ import type { VodozemacAccountHandle } from '../identity/vodozemacIdentity';
 import type { VodozemacSessionHandle } from '../core/vodozemacCryptoSession';
 import { ModernConversation } from './modernConversation';
 import { publishVodozemacBundle, fetchVodozemacBundle, claimVodozemacOneTimeKey, renewVodozemacBundle } from '../api/prekeys';
+import { AuthenticatedCallSignalTransport } from '../calls/authenticatedTransport';
 
 jest.mock('../api/prekeys', () => ({
     publishVodozemacBundle: jest.fn(), fetchVodozemacBundle: jest.fn(), claimVodozemacOneTimeKey: jest.fn(), renewVodozemacBundle: jest.fn(),
@@ -136,4 +137,20 @@ it('keeps a fallback tab lease for the conversation lifetime and releases it on 
     } finally {
         Object.assign(globalThis, { window: previousWindow, localStorage: previousStorage });
     }
+});
+
+it('exposes authenticated call composition only after modern identity verification', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
+    const conversation = new ModernConversation(new Storage(), loader, fakeTransport().transport);
+    await conversation.connect(room, key(9), remoteAddress);
+    await expect(conversation.createAuthenticatedCallComposition()).rejects.toThrow('Verify this contact');
+    await conversation.verifyContact(true);
+    const composition = await conversation.createAuthenticatedCallComposition();
+    expect(composition.signalTransport).toBeInstanceOf(AuthenticatedCallSignalTransport);
+    expect(composition.service).toBeDefined();
+    const call = await composition.invite();
+    expect(call.state).toBe('inviting');
+    await conversation.close();
 });
