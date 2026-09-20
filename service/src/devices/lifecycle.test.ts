@@ -26,9 +26,7 @@ const context: AuthenticatedDeviceContext = {
   cryptoSession: session,
   conversationId: 'conversation-1',
   userScope: 'user-1',
-  authorDeviceId: 'device-a',
-  authorIdentityReference: 'identity-a',
-  verified: true,
+  authenticatedSender: { deviceId: 'device-a', identityReference: 'identity-a', userScope: 'user-1', verified: true },
 };
 
 class TestPersistence implements DeviceLifecyclePersistence {
@@ -57,7 +55,7 @@ describe('Phase 6B.2/6B.3 device lifecycle', () => {
   it('enrolls and then revokes a device with chained epochs and commitments', async () => {
     const persistence = await makePersistence();
     const verifier = { verify: async (candidate: AuthenticatedDeviceContext, authorization: DeviceAuthorization) => {
-      if (candidate.authorDeviceId !== authorization.authorDeviceId || !candidate.cryptoSession.ready) throw new Error('invalid issuer');
+      if (candidate.authenticatedSender.deviceId !== authorization.authorDeviceId || !candidate.cryptoSession.ready) throw new Error('invalid issuer');
     } };
     const service = new DeviceLifecycleService(persistence, verifier, () => 2_000);
     const request = createEnrollmentRequest({ userScope: 'user-1', requestedDeviceId: 'device-b', requestedPublicIdentityReference: 'identity-b', algorithm: 'vodozemac-v1', knownEpoch: 0, now: 1_500, transactionNonce: 'enrollment-nonce-1' });
@@ -77,7 +75,7 @@ describe('Phase 6B.2/6B.3 device lifecycle', () => {
   it('rejects fake issuers, fake targets, expiry, replay, epoch and commitment tampering', async () => {
     const persistence = await makePersistence();
     const verifier = { verify: async (candidate: AuthenticatedDeviceContext, authorization: DeviceAuthorization) => {
-      if (!candidate.verified || candidate.authorDeviceId !== authorization.authorDeviceId || candidate.authorIdentityReference !== authorization.authorIdentityReference) throw new Error('invalid issuer');
+      if (!candidate.authenticatedSender.verified || candidate.authenticatedSender.deviceId !== authorization.authorDeviceId || candidate.authenticatedSender.identityReference !== authorization.authorIdentityReference) throw new Error('invalid issuer');
     } };
     const service = new DeviceLifecycleService(persistence, verifier, () => 2_000);
     const request = createEnrollmentRequest({ userScope: 'user-1', requestedDeviceId: 'device-b', requestedPublicIdentityReference: 'identity-b', algorithm: 'vodozemac-v1', knownEpoch: 0, now: 1_000, ttlMs: 500, transactionNonce: 'enrollment-nonce-2' });
@@ -97,7 +95,7 @@ describe('Phase 6B.2/6B.3 device lifecycle', () => {
   it('rejects unauthorized, repeated, and rollback revocation', async () => {
     const persistence = await makePersistence();
     const verifier = { verify: async (candidate: AuthenticatedDeviceContext, authorization: DeviceAuthorization) => {
-      if (!candidate.verified || candidate.authorDeviceId !== authorization.authorDeviceId) throw new Error('invalid issuer');
+      if (!candidate.authenticatedSender.verified || candidate.authenticatedSender.deviceId !== authorization.authorDeviceId) throw new Error('invalid issuer');
     } };
     const service = new DeviceLifecycleService(persistence, verifier, () => 2_000);
     const req = createEnrollmentRequest({ userScope: 'user-1', requestedDeviceId: 'device-b', requestedPublicIdentityReference: 'identity-b', algorithm: 'vodozemac-v1', knownEpoch: 0, now: 1_500, transactionNonce: 'enrollment-nonce-4' });
@@ -107,5 +105,22 @@ describe('Phase 6B.2/6B.3 device lifecycle', () => {
     await service.applyRevocation(revoke, context);
     await expect(service.applyRevocation(revoke, context)).rejects.toThrow();
     expect(enrolled.list.epoch).toBe(1);
+  });
+
+  it('binds mutations to the authenticated sender and scope, not authorization fields', async () => {
+    const persistence = await makePersistence();
+    const verifier = { verify: async (candidate: AuthenticatedDeviceContext, authorization: DeviceAuthorization) => {
+      const sender = candidate.authenticatedSender;
+      if (!sender.verified || sender.deviceId !== authorization.authorDeviceId || sender.identityReference !== authorization.authorIdentityReference || sender.userScope !== candidate.userScope) throw new Error('invalid authenticated sender');
+    } };
+    const service = new DeviceLifecycleService(persistence, verifier, () => 2_000);
+    const request = createEnrollmentRequest({ userScope: 'user-1', requestedDeviceId: 'device-c', requestedPublicIdentityReference: 'identity-c', algorithm: 'vodozemac-v1', knownEpoch: 0, now: 1_500, transactionNonce: 'enrollment-nonce-5' });
+    const approval = await service.approveEnrollment(request, context, { deviceId: 'device-c', publicIdentityReference: 'identity-c' });
+    await expect(service.applyEnrollment(approval, { ...context, authenticatedSender: { ...context.authenticatedSender, deviceId: 'device-b' } })).rejects.toThrow('invalid authenticated sender');
+    await expect(service.applyEnrollment(approval, { ...context, userScope: 'other-user', authenticatedSender: { ...context.authenticatedSender, userScope: 'other-user' } })).rejects.toThrow('authorization');
+    await expect(service.applyEnrollment({ ...approval, authorIdentityReference: 'forged-identity' }, context)).rejects.toThrow('invalid authenticated sender');
+    await service.applyEnrollment(approval, context);
+    const revoke = await service.approveRevocation('device-c', context);
+    await expect(service.applyRevocation(revoke, { ...context, authenticatedSender: { ...context.authenticatedSender, verified: false } })).rejects.toThrow('Authenticated device context unavailable');
   });
 });

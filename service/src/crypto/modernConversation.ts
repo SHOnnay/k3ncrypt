@@ -187,7 +187,8 @@ export class ModernConversation {
             this.deviceControlChannel = new AuthenticatedDeviceControlChannel(this.runtime.getAuthenticatedSession(), this.transport);
             this.deviceLifecycle = new DeviceLifecycleService(this.deviceLifecyclePersistence, {
                 verify: async (context, authorization) => {
-                    if (!context.verified || context.authorDeviceId !== authorization.authorDeviceId || context.authorIdentityReference !== authorization.authorIdentityReference) throw new Error('Device authorization rejected.');
+                    const sender = context.authenticatedSender;
+                    if (!sender.verified || sender.userScope !== context.userScope || sender.deviceId !== authorization.authorDeviceId || sender.identityReference !== authorization.authorIdentityReference) throw new Error('Device authorization rejected.');
                 },
             });
         }
@@ -414,7 +415,7 @@ export class ModernConversation {
     private deviceContext(): AuthenticatedDeviceContext {
         if (!this.localIdentityId || !this.localAddress) throw new Error('Device lifecycle identity is unavailable.');
         return { cryptoSession: this.runtime.getAuthenticatedSession(), conversationId: this.roomId!, userScope: this.localIdentityId,
-            authorDeviceId: this.localAddress, authorIdentityReference: this.localIdentityId, verified: true };
+            authenticatedSender: { deviceId: this.localAddress, identityReference: this.localIdentityId, userScope: this.localIdentityId, verified: true } };
     }
 
     private async handleDeviceControl(message: DeviceControlMessage): Promise<void> {
