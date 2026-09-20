@@ -9,7 +9,8 @@ export class SecureCallSignaling {
     if (!(await this.identity.isParticipant(session.conversationId, signal.sender.participantId))) throw new Error('Unauthorized call participant.');
     if (signal.sender.verification === 'changed-pending-review') throw new Error('Call identity requires review.');
     const key = `${signal.callId}:${signal.sender.participantId}:${signal.sequence}`;
-    if (!(await this.replay.claim(key, signal.expiresAt, now))) throw new Error('Replayed call signal.');
+    const result = await this.replay.claim(key, signal.expiresAt, now);
+    if (result !== 'accepted') throw new Error(`Call signal rejected: ${result}.`);
     await this.transport.send(signal);
   }
 }
