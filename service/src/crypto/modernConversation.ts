@@ -75,6 +75,8 @@ export class ModernConversation {
     private remoteAddress?: string;
     private localAddress?: string;
     private localIdentityId?: string;
+    private callComposition?: AuthenticatedCallComposition;
+    private callSignalTransport?: AuthenticatedCallComposition['signalTransport'];
     private retryTimer?: ReturnType<typeof setInterval>;
     private onMessage?: (text: string) => void;
     private onContactChange?: (contact: StoredContactIdentity) => void;
@@ -88,7 +90,13 @@ export class ModernConversation {
         this.registry = new ContactIdentityRegistry(storage);
         this.modes = new ConversationModeStore(storage);
         const relay = transportManager ? undefined : new SocketIoRelayTransport(() => this.subscriptions, new Logger('ModernConversation'),
-            async (message) => this.receiveMutex.runExclusive(() => this.withTabLock(this.roomId ?? 'unknown', () => this.receive(message.envelope, message.senderRoutingId))));
+            async (message) => {
+                if (message.channel === 'signaling') {
+                    if (this.callSignalTransport) await this.callSignalTransport.receive(message.envelope);
+                    return false;
+                }
+                return this.receiveMutex.runExclusive(() => this.withTabLock(this.roomId ?? 'unknown', () => this.receive(message.envelope, message.senderRoutingId)));
+            });
         this.transport = transportManager ?? new DefaultTransportManager(relay!);
         this.subscriptions.set('on-alice-join', new Set([() => { void this.retryPending(); }]));
         this.subscriptions.set('delivered', new Set([(id: string) => { void this.acceptDelivery(id); }]));
@@ -233,6 +241,7 @@ export class ModernConversation {
      * this boundary because they do not own a ModernConversation instance.
      */
     public async createAuthenticatedCallComposition(): Promise<AuthenticatedCallComposition> {
+        if (this.callComposition) return this.callComposition;
         if (!this.roomId || !this.localAddress || !this.localIdentityId || !this.remoteAddress) {
             throw new Error('Modern conversation is not ready for calling.');
         }
@@ -246,7 +255,7 @@ export class ModernConversation {
             new Set([localParticipant.participantId, remoteParticipant.participantId]),
             new Map([[localParticipant.participantId, localParticipant.verification], [remoteParticipant.participantId, remoteParticipant.verification]]),
         );
-        return createAuthenticatedCallComposition({
+        const composition = createAuthenticatedCallComposition({
             session: this.runtime.getAuthenticatedSession(),
             transport: this.transport,
             conversationId: this.roomId,
@@ -255,6 +264,9 @@ export class ModernConversation {
             remoteParticipant,
             identity,
         });
+        this.callComposition = composition;
+        this.callSignalTransport = composition.signalTransport;
+        return composition;
     }
 
     public async verifyContact(confirmed: boolean): Promise<void> {
@@ -269,12 +281,16 @@ export class ModernConversation {
         await this.storage.delete('vodozemac-session', this.roomId);
         await this.modes.write(this.roomId, { sessionId: undefined });
         this.runtime.close();
+        this.callComposition = undefined;
+        this.callSignalTransport = undefined;
     }
 
     public async close(): Promise<void> {
         if (this.retryTimer) clearInterval(this.retryTimer);
         await this.transport.stop();
         this.runtime.close();
+        this.callComposition = undefined;
+        this.callSignalTransport = undefined;
         const browserWindow = (globalThis as typeof globalThis & { window?: { removeEventListener?: (event: string, handler: () => void) => void } }).window;
         if (this.unloadHandler && browserWindow?.removeEventListener) {
             browserWindow.removeEventListener('beforeunload', this.unloadHandler);

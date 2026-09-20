@@ -29,6 +29,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [chat, setChat] = useState<IChatE2EE | null>(null);
   const [modern, setModern] = useState<ModernConversation | null>(null);
   const [modernCallComposition, setModernCallComposition] = useState<AuthenticatedCallComposition | null>(null);
+  const [modernCallId, setModernCallId] = useState<string>();
   const [protocolMode, setProtocolMode] = useState<'legacy' | 'modern'>('legacy');
   const [ownFingerprint, setOwnFingerprint] = useState<string>();
   const [contactIdentity, setContactIdentity] = useState<StoredContactIdentity>();
@@ -65,6 +66,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (modern) await modern.close();
       setModern(null);
       setModernCallComposition(null);
+      setModernCallId(undefined);
       const linkObj = await chat.getLink();
       return { roomId: linkObj.hash, secret: linkObj.secret, controlCapability: linkObj.controlCapability, link: linkObj.link, absoluteLink: linkObj.absoluteLink };
     } catch (err) {
@@ -92,6 +94,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }, setContactIdentity);
     setModern(conversation);
     setModernCallComposition(null);
+    setModernCallId(undefined);
     setProtocolMode('modern');
     setChannelHash(invite.hash);
     setOwnFingerprint(details.ownFingerprint);
@@ -110,6 +113,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }, setContactIdentity);
     setModern(conversation);
     setModernCallComposition(null);
+    setModernCallId(undefined);
     setProtocolMode('modern');
     setChannelHash(roomId);
     setOwnFingerprint(details.ownFingerprint);
@@ -121,7 +125,15 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (!modern) throw new Error('No modern contact is open.');
     await modern.verifyContact(true);
     setContactIdentity(await modern.getContact());
-    setModernCallComposition(await modern.createAuthenticatedCallComposition());
+    const composition = await modern.createAuthenticatedCallComposition();
+    setModernCallComposition(composition);
+    composition.onCallUpdate((session) => {
+      setModernCallId(session.callId);
+      setCallLifecycleState(session.state === 'inviting' ? 'ringing' : session.state === 'rejected' ? 'rejected' : session.state === 'cancelled' ? 'cancelled' : session.state === 'ended' ? 'ended' : session.state === 'accepted' ? 'connecting' : 'ringing');
+      setIsIncomingCall(session.state === 'ringing');
+      setCallActive(!['rejected', 'cancelled', 'ended', 'expired', 'failed'].includes(session.state));
+      setCallStatus(session.state === 'ringing' ? 'Incoming Call...' : session.state.charAt(0).toUpperCase() + session.state.slice(1));
+    });
   }, [modern]);
 
   const acceptChangedIdentity = useCallback(async (): Promise<void> => {
@@ -200,7 +212,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (!modern) throw new Error('Modern conversation is not ready for calling.');
       const composition = modernCallComposition ?? await modern.createAuthenticatedCallComposition();
       setModernCallComposition(composition);
-      await composition.invite();
+      const call = await composition.invite();
+      setModernCallId(call.callId);
       setCallActive(true);
       setIsIncomingCall(false);
       setCallLifecycleState('ringing');
@@ -222,7 +235,11 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, [chat, modern, modernCallComposition, protocolMode]);
 
   const acceptCall = useCallback(async () => {
-    if (protocolMode === 'modern') throw new Error('Modern call signaling is not connected to an incoming call yet.');
+    if (protocolMode === 'modern') {
+      if (!modernCallComposition || !modernCallId) throw new Error('No authenticated incoming call is available.');
+      await modernCallComposition.accept(modernCallId);
+      return;
+    }
     if (!chat) throw new Error('Chat not initialized');
     try {
       await chat.acceptCall();
@@ -234,10 +251,16 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       debugError('Call acceptance failed', err);
       throw err;
     }
-  }, [chat, protocolMode]);
+  }, [chat, modernCallComposition, modernCallId, protocolMode]);
 
   const rejectCall = useCallback(async () => {
-    if (protocolMode === 'modern') throw new Error('Modern call signaling is not connected to an incoming call yet.');
+    if (protocolMode === 'modern') {
+      if (!modernCallComposition || !modernCallId) throw new Error('No authenticated incoming call is available.');
+      await modernCallComposition.reject(modernCallId);
+      setCallActive(false);
+      setIsIncomingCall(false);
+      return;
+    }
     if (!chat) throw new Error('Chat not initialized');
     try {
       await chat.rejectCall();
@@ -249,10 +272,16 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       debugError('Call rejection failed', err);
       throw err;
     }
-  }, [chat, protocolMode]);
+  }, [chat, modernCallComposition, modernCallId, protocolMode]);
 
   const cancelCall = useCallback(async () => {
-    if (protocolMode === 'modern') throw new Error('Modern call signaling is not connected to an outgoing call yet.');
+    if (protocolMode === 'modern') {
+      if (!modernCallComposition || !modernCallId) throw new Error('No authenticated outgoing call is available.');
+      await modernCallComposition.cancel(modernCallId);
+      setCallActive(false);
+      setIsIncomingCall(false);
+      return;
+    }
     if (!chat) throw new Error('Chat not initialized');
     try {
       await chat.cancelCall();
@@ -263,12 +292,14 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       debugError('Call cancellation failed', err);
       throw err;
     }
-  }, [chat, protocolMode]);
+  }, [chat, modernCallComposition, modernCallId, protocolMode]);
 
   // End call
   const endCall = useCallback(async () => {
     try {
-      if (chat && protocolMode === 'legacy') {
+      if (protocolMode === 'modern' && modernCallComposition && modernCallId) {
+        await modernCallComposition.cancel(modernCallId);
+      } else if (chat && protocolMode === 'legacy') {
         await chat.endCall();
       }
       setCallActive(false);
@@ -279,7 +310,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     } catch (err) {
       debugError('Call end failed', err);
     }
-  }, [chat, protocolMode]);
+  }, [chat, modernCallComposition, modernCallId, protocolMode]);
 
   // Add message to state
   const addMessage = useCallback((message: Message) => {
@@ -394,6 +425,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       await modern?.delete();
       setModern(null);
       setModernCallComposition(null);
+      setModernCallId(undefined);
       setProtocolMode('legacy');
       setChannelHash('');
       setMessages([]);

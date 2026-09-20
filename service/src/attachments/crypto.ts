@@ -11,8 +11,13 @@ const cryptoApi = (): Crypto => {
 const randomUUID = (): string => cryptoApi().randomUUID();
 
 const copy = (value: Uint8Array): Uint8Array => new Uint8Array(value);
+const asArrayBuffer = (value: Uint8Array): ArrayBuffer => {
+    const buffer = new ArrayBuffer(value.byteLength);
+    new Uint8Array(buffer).set(value);
+    return buffer;
+};
 
-const importKey = async (raw: Uint8Array): Promise<CryptoKey> => cryptoApi().subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']);
+const importKey = async (raw: Uint8Array): Promise<CryptoKey> => cryptoApi().subtle.importKey('raw', asArrayBuffer(raw), 'AES-GCM', false, ['encrypt', 'decrypt']);
 
 const aadFor = (id: string, index: number, total: number): Uint8Array => encoder.encode(`k3ncrypt-attachment-v1:${id}:${index}:${total}`);
 
@@ -31,14 +36,14 @@ export const encryptAttachment = async (bytes: Uint8Array, key: Uint8Array, atta
     for (let index = 0; index < total; index += 1) {
         const part = bytes.slice(index * ATTACHMENT_LIMITS.maxChunkBytes, (index + 1) * ATTACHMENT_LIMITS.maxChunkBytes);
         const nonce = cryptoApi().getRandomValues(new Uint8Array(NONCE_BYTES));
-        const ciphertext = new Uint8Array(await cryptoApi().subtle.encrypt({ name: 'AES-GCM', iv: nonce, additionalData: aadFor(attachmentId, index, total) }, cryptoKey, part));
+        const ciphertext = new Uint8Array(await cryptoApi().subtle.encrypt({ name: 'AES-GCM', iv: asArrayBuffer(nonce), additionalData: asArrayBuffer(aadFor(attachmentId, index, total)) }, cryptoKey, asArrayBuffer(part)));
         chunks.push({ attachmentId, index, total, nonce: copy(nonce), ciphertext });
     }
     const createdAt = Date.now();
     const expiresAt = createdAt + ATTACHMENT_LIMITS.ttlMs;
     const metadataNonce = cryptoApi().getRandomValues(new Uint8Array(NONCE_BYTES));
     const metadataPlaintext = encoder.encode(JSON.stringify({ size: bytes.byteLength, chunkCount: total, createdAt, expiresAt }));
-    const metadataCiphertext = new Uint8Array(await cryptoApi().subtle.encrypt({ name: 'AES-GCM', iv: metadataNonce, additionalData: encoder.encode(`k3ncrypt-attachment-metadata-v1:${attachmentId}`) }, cryptoKey, metadataPlaintext));
+    const metadataCiphertext = new Uint8Array(await cryptoApi().subtle.encrypt({ name: 'AES-GCM', iv: asArrayBuffer(metadataNonce), additionalData: asArrayBuffer(encoder.encode(`k3ncrypt-attachment-metadata-v1:${attachmentId}`)) }, cryptoKey, asArrayBuffer(metadataPlaintext)));
     const metadata: EncryptedAttachmentMetadata = { nonce: copy(metadataNonce), ciphertext: metadataCiphertext };
     return { reference: { id: attachmentId, size: bytes.byteLength, chunkCount: total, createdAt, expiresAt, encryptedMetadata: metadata }, chunks };
 };
@@ -50,7 +55,7 @@ export const decryptAttachment = async (reference: AttachmentReference, chunks: 
     const cryptoKey = await importKey(key);
     const parts: Uint8Array[] = [];
     for (const chunk of ordered) {
-        try { parts.push(new Uint8Array(await cryptoApi().subtle.decrypt({ name: 'AES-GCM', iv: chunk.nonce, additionalData: aadFor(reference.id, chunk.index, chunk.total) }, cryptoKey, chunk.ciphertext))); }
+        try { parts.push(new Uint8Array(await cryptoApi().subtle.decrypt({ name: 'AES-GCM', iv: asArrayBuffer(chunk.nonce), additionalData: asArrayBuffer(aadFor(reference.id, chunk.index, chunk.total)) }, cryptoKey, asArrayBuffer(chunk.ciphertext)))); }
         catch { throw new Error('Attachment integrity check failed.'); }
     }
     const result = new Uint8Array(parts.reduce((sum, part) => sum + part.byteLength, 0));

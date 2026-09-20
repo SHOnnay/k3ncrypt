@@ -24,7 +24,7 @@ TransportManager / relay
 WebRTC peer transport
 ```
 
-`createAuthenticatedCallComposition` remains the sole supported constructor: it refuses a session that is not encrypted and ready and returns the call service together with the authenticated signaling transport. `ModernConversation.createAuthenticatedCallComposition()` is now the runtime boundary. It requires an active Vodozemac session, the conversation's authenticated `TransportManager`, stable routing identities, and an explicitly verified contact, then delegates to the factory. Raw transport objects and the legacy `ChatE2EE` path cannot create an authenticated modern call.
+`createAuthenticatedCallComposition` remains the sole supported constructor: it refuses a session that is not encrypted and ready and returns the call service together with the authenticated signaling transport. `ModernConversation.createAuthenticatedCallComposition()` is now the runtime boundary. It requires an active Vodozemac session, the conversation's authenticated `TransportManager`, stable routing identities, and an explicitly verified contact, then delegates to the factory. Raw transport objects and the legacy `ChatE2EE` path cannot create an authenticated modern call. The composition subscribes to authenticated inbound envelopes, validates replay, expiry, and binding, creates incoming ringing sessions, and routes accept/reject/cancel events through the same encrypted channel.
 
 ## Security guarantees
 
@@ -35,7 +35,7 @@ Signaling is confidential through the existing CryptoSession. Signals are bound 
 F-01 — signaling digest without authenticated context  
 Before: a relay could recompute a digest after modifying payload content.  
 After: the complete signal is encrypted through the existing authenticated conversation session and origin-checked by `AuthenticatedCallSignalTransport`; digest remains tamper detection.  
-Status: remediated at code boundary; deployed wiring requires the composition factory.
+Status: closed at the authenticated runtime boundary.
 
 F-02 — process-local replay state  
 Before: restart erased replay claims.  
@@ -45,13 +45,13 @@ Status: remediated at interface boundary; production adapter and retry/outbox de
 N-01 — authenticated transport not composed  
 Before: transport class was exportable but not enforced by composition; the application bootstrap did not expose the modern session/transport pair.
 After: modern runtime creation flows through `ModernConversation.createAuthenticatedCallComposition()`, which fails closed until the Vodozemac session is ready and the contact is verified, and then delegates to `createAuthenticatedCallComposition`. The client uses that composition for modern call invitation; legacy call methods are not used in modern mode.
-Evidence: modern conversation integration tests cover pre-verification rejection, authenticated transport selection, and secure call invitation; the composition factory retains missing-session rejection coverage.
-Status: closed at runtime composition boundary. Incoming/media call signaling still requires the separately documented transport/WebRTC deployment work.
+Evidence: modern conversation integration tests cover pre-verification rejection, authenticated transport selection, and secure call invitation; bidirectional integration tests cover Alice invite, Bob ringing/acceptance, tampered/cross-conversation signaling rejection, and lifecycle routing; the composition factory retains missing-session rejection coverage.
+Status: closed at runtime composition boundary for bidirectional call-control signaling. WebRTC media negotiation remains a separate deployment boundary.
 
 ## Remaining production requirements
 
-Completed: call-domain validation, authenticated transport boundary, modern runtime composition, identity binding, replay interface, WebRTC/permission adapters, regression tests, and security documentation.
+Completed: call-domain validation, bidirectional authenticated call-control signaling, modern runtime composition, identity binding, replay interface, WebRTC/permission adapters, regression tests, clean-install WebCrypto typing, and security documentation.
 
-Requires deployment: durable atomic replay store, relay/TURN credentials and retention review, supported Firefox/CI browser evidence, production log/database inspection, and completion of incoming-call/media negotiation over the authenticated signaling channel.
+Requires deployment: durable atomic replay store, relay/TURN credentials and retention review, production log/database inspection, and browser/CI evidence for Firefox (the local Firefox run did not complete within the validation window). WebRTC media negotiation and permission UI remain deployment work beyond the control-plane closure.
 
 Future work: group calls, multi-device call identity, media-terminating SFU review, and any Phase 6 functionality. None is enabled here.
