@@ -8,6 +8,7 @@ if (!globalThis.crypto) Object.defineProperty(globalThis, 'crypto', { value: web
 
 const conversationId = '11111111-1111-4111-8111-111111111111';
 const participant = (participantId: string, identityId: string) => ({ participantId, identityId, verification: 'verified' as const });
+const deviceTrust = { assertTrusted: async () => undefined };
 
 const session = (): CryptoSession => ({
   encrypted: true,
@@ -49,8 +50,8 @@ describe('authenticated bidirectional call flow', () => {
     const transports = connectedTransports();
     const aliceIdentity = identity('alice', 'bob');
     const bobIdentity = identity('bob', 'alice');
-    const alice = createAuthenticatedCallComposition({ session: session(), transport: transports.alice, conversationId, localIdentityId: 'alice-id', localParticipantId: 'alice', remoteParticipant: participant('bob', 'bob-id'), identity: aliceIdentity });
-    const bob = createAuthenticatedCallComposition({ session: session(), transport: transports.bob, conversationId, localIdentityId: 'bob-id', localParticipantId: 'bob', remoteParticipant: participant('alice', 'alice-id'), identity: bobIdentity });
+    const alice = createAuthenticatedCallComposition({ session: session(), transport: transports.alice, conversationId, localIdentityId: 'alice-id', localParticipantId: 'alice', remoteParticipant: participant('bob', 'bob-id'), identity: aliceIdentity, deviceTrust });
+    const bob = createAuthenticatedCallComposition({ session: session(), transport: transports.bob, conversationId, localIdentityId: 'bob-id', localParticipantId: 'bob', remoteParticipant: participant('alice', 'alice-id'), identity: bobIdentity, deviceTrust });
     transports.connect(alice.signalTransport, bob.signalTransport);
     const bobStates: string[] = [];
     bob.onCallUpdate((call) => bobStates.push(call.state));
@@ -64,8 +65,8 @@ describe('authenticated bidirectional call flow', () => {
 
   it('rejects a replayed or cross-conversation signal before lifecycle processing', async () => {
     const transports = connectedTransports();
-    const alice = createAuthenticatedCallComposition({ session: session(), transport: transports.alice, conversationId, localIdentityId: 'alice-id', localParticipantId: 'alice', remoteParticipant: participant('bob', 'bob-id'), identity: identity('alice', 'bob') });
-    const bob = createAuthenticatedCallComposition({ session: session(), transport: transports.bob, conversationId, localIdentityId: 'bob-id', localParticipantId: 'bob', remoteParticipant: participant('alice', 'alice-id'), identity: identity('bob', 'alice') });
+    const alice = createAuthenticatedCallComposition({ session: session(), transport: transports.alice, conversationId, localIdentityId: 'alice-id', localParticipantId: 'alice', remoteParticipant: participant('bob', 'bob-id'), identity: identity('alice', 'bob'), deviceTrust });
+    const bob = createAuthenticatedCallComposition({ session: session(), transport: transports.bob, conversationId, localIdentityId: 'bob-id', localParticipantId: 'bob', remoteParticipant: participant('alice', 'alice-id'), identity: identity('bob', 'alice'), deviceTrust });
     transports.connect(alice.signalTransport, bob.signalTransport);
     const call = await alice.invite();
     const unsigned: Omit<CallSignal, 'payloadDigest'> = {

@@ -186,6 +186,7 @@ export class ModernConversation {
             await this.deviceLifecyclePersistence.initialize(this.localIdentityId, initialList);
         }
         this.deviceTrust = new DeviceTrustEnforcer(this.deviceLifecyclePersistence, this.localIdentityId, localAddress, this.localIdentityId);
+        await this.deviceTrust.assertTrusted();
         if (this.runtime.lifecycle === 'active' || this.runtime.lifecycle === 'persisted') {
             this.deviceControlChannel = new AuthenticatedDeviceControlChannel(this.runtime.getAuthenticatedSession(), this.transport);
             this.deviceLifecycle = new DeviceLifecycleService(this.deviceLifecyclePersistence, {
@@ -356,7 +357,7 @@ export class ModernConversation {
             localParticipantId: this.localAddress,
             remoteParticipant,
             identity,
-            deviceTrust: this.deviceTrust,
+            deviceTrust: this.deviceTrust!,
         });
         this.callComposition = composition;
         this.callSignalTransport = composition.signalTransport;
@@ -407,6 +408,7 @@ export class ModernConversation {
     }
 
     private async receive(envelope: EncryptedEnvelope, senderAddress?: string): Promise<boolean> {
+        await this.deviceTrust?.assertTrusted();
         if (!this.roomId || !this.capability || !senderAddress ||
             (this.remoteAddress && senderAddress !== this.remoteAddress)) return false;
         const digest = await this.digest(envelope);

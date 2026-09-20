@@ -48,7 +48,7 @@ it('keeps the authenticated route-to-persistent-store path ciphertext-only and f
     return { sessionId: 'test-session', participantId, conversationId: req.get('X-Test-Conversation') ?? room,
       permissions: ['attachment:create', 'attachment:write', 'attachment:read', 'attachment:delete'],
       requestId: `22222222-2222-4222-8222-${String(sequence).padStart(12, '0')}`,
-      createdAt: Date.now() - 1000, expiresAt: Date.now() + 60_000 };
+      createdAt: Date.now() - 1000, expiresAt: Date.now() + 60_000, deviceTrust: { assertTrusted: async () => undefined } };
   };
   const testApp = express();
   testApp.use(express.json());

@@ -11,7 +11,7 @@ let requestNumber = 0;
 const contextFor = (req: express.Request): AuthenticatedContext | undefined => {
     if (req.get('X-Test-Participant') === 'unknown') return undefined;
     requestNumber += 1;
-    return { sessionId: 'test-session', participantId: req.get('X-Test-Participant') ?? 'alice', conversationId: req.get('X-Test-Conversation') ?? room, permissions: ['attachment:create', 'attachment:write', 'attachment:read', 'attachment:delete'], requestId: `22222222-2222-4222-8222-${String(requestNumber).padStart(12, '0')}`, createdAt: Date.now() - 1_000, expiresAt: Date.now() + 60_000 };
+    return { sessionId: 'test-session', participantId: req.get('X-Test-Participant') ?? 'alice', conversationId: req.get('X-Test-Conversation') ?? room, permissions: ['attachment:create', 'attachment:write', 'attachment:read', 'attachment:delete'], requestId: `22222222-2222-4222-8222-${String(requestNumber).padStart(12, '0')}`, createdAt: Date.now() - 1_000, expiresAt: Date.now() + 60_000, deviceTrust: { assertTrusted: async () => undefined } };
 };
 
 const setup = () => {

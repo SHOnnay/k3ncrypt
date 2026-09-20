@@ -18,7 +18,7 @@ export interface AuthenticatedCallCompositionInput {
   remoteParticipant: CallParticipant;
   identity: CallIdentityVerifier;
   replay?: ReplayProtectionStore;
-  deviceTrust?: { assertTrusted(): Promise<void> };
+  deviceTrust: { assertTrusted(): Promise<void> };
 }
 export interface AuthenticatedCallComposition {
   readonly service: CallService;
@@ -36,6 +36,7 @@ export interface AuthenticatedCallComposition {
 /** Sole composition point for calls: raw transports cannot satisfy this boundary. */
 export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompositionInput): AuthenticatedCallComposition => {
   if (!input.session.encrypted || !input.session.ready) throw new Error('Authenticated call session is not ready.');
+  if (!input.deviceTrust) throw new Error('Authenticated device trust is unavailable.');
   const signalTransport = new AuthenticatedCallSignalTransport(input.session, input.transport, input.conversationId, input.localIdentityId, input.remoteParticipant, input.identity);
   const signaling = new SecureCallSignaling(input.identity, signalTransport, input.replay);
   const repository = new MemoryCallRepository();

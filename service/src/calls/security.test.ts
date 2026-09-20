@@ -29,6 +29,6 @@ describe('call signaling security', () => {
   it('refuses to compose calls without an encrypted ready session', () => {
     const identity = new VerifiedCallIdentityVerifier(new Set(['alice', 'bob']), new Map([['alice', 'verified'], ['bob', 'verified']]));
     const session = { encrypted: false, ready: true } as never;
-    expect(() => createAuthenticatedCallComposition({ session, transport: {} as never, conversationId: 'room', localIdentityId: 'alice-id', remoteParticipant: { participantId: 'bob', identityId: 'bob-id', verification: 'verified' }, identity })).toThrow('not ready');
+    expect(() => createAuthenticatedCallComposition({ session, transport: {} as never, conversationId: 'room', localIdentityId: 'alice-id', remoteParticipant: { participantId: 'bob', identityId: 'bob-id', verification: 'verified' }, identity, deviceTrust: { assertTrusted: async () => undefined } })).toThrow('not ready');
   });
 });

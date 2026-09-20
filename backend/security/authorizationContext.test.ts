@@ -2,7 +2,7 @@ import { ConversationAuthorizationService, MemoryAttachmentAccessStore, type Aut
 
 const room = '11111111-1111-4111-8111-111111111111';
 const request = '22222222-2222-4222-8222-222222222222';
-const context = (overrides: Partial<AuthenticatedContext> = {}): AuthenticatedContext => ({ sessionId: 'session-1', participantId: 'alice', conversationId: room, permissions: ['attachment:create', 'attachment:write', 'attachment:read', 'attachment:delete'], requestId: request, createdAt: 10, expiresAt: 100, ...overrides });
+const context = (overrides: Partial<AuthenticatedContext> = {}): AuthenticatedContext => ({ sessionId: 'session-1', participantId: 'alice', conversationId: room, permissions: ['attachment:create', 'attachment:write', 'attachment:read', 'attachment:delete'], requestId: request, createdAt: 10, expiresAt: 100, deviceTrust: { assertTrusted: async () => undefined }, ...overrides });
 const memberships: ConversationMembershipStore = { isMember: async (conversationId, participantId) => conversationId === room && ['alice', 'bob'].includes(participantId) };
 
 it('authorizes a valid member and rejects request replay', async () => {

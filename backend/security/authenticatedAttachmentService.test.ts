@@ -4,7 +4,7 @@ import { AuthenticatedAttachmentService } from './authenticatedAttachmentService
 import { ConversationAuthorizationService, MemoryAttachmentAccessStore, type AuthenticatedContext, type ConversationMembershipStore } from './authorizationContext';
 
 const room = '11111111-1111-4111-8111-111111111111';
-const base = (requestId: string, participantId = 'alice'): AuthenticatedContext => ({ sessionId: 'session-1', participantId, conversationId: room, permissions: ['attachment:create', 'attachment:write', 'attachment:read', 'attachment:delete'], requestId, createdAt: 1, expiresAt: Date.now() + 60_000 });
+const base = (requestId: string, participantId = 'alice'): AuthenticatedContext => ({ sessionId: 'session-1', participantId, conversationId: room, permissions: ['attachment:create', 'attachment:write', 'attachment:read', 'attachment:delete'], requestId, createdAt: 1, expiresAt: Date.now() + 60_000, deviceTrust: { assertTrusted: async () => undefined } });
 const members: ConversationMembershipStore = { isMember: async (conversationId, participantId) => conversationId === room && ['alice', 'bob'].includes(participantId) };
 
 it('allows an authenticated owner upload and denies an unauthorized download', async () => {

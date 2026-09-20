@@ -9,8 +9,8 @@ export interface AuthenticatedContext {
   requestId: string;
   createdAt: number;
   expiresAt: number;
-  /** Optional Phase 6B trust adapter supplied by the authenticated runtime. */
-  deviceTrust?: { assertTrusted(): Promise<void> };
+  /** Phase 6B trust adapter supplied by the authenticated runtime. */
+  deviceTrust: { assertTrusted(): Promise<void> };
 }
 
 export interface ConversationMembershipStore {
@@ -42,14 +42,14 @@ export class ConversationAuthorizationService {
 
   async authorizeConversation(context: AuthenticatedContext, conversationId: string, permission: AttachmentPermission): Promise<void> {
     this.validateContext(context);
-    await context.deviceTrust?.assertTrusted();
+    await context.deviceTrust.assertTrusted();
     if (context.conversationId !== conversationId || !context.permissions.includes(permission) || !(await this.memberships.isMember(conversationId, context.participantId))) throw fail();
     this.consumeRequest(context.requestId);
   }
 
   async authorizeAttachment(context: AuthenticatedContext, attachmentId: string, permission: Exclude<AttachmentPermission, 'attachment:create'>): Promise<AttachmentAccessRecord> {
     this.validateContext(context);
-    await context.deviceTrust?.assertTrusted();
+    await context.deviceTrust.assertTrusted();
     let record: AttachmentAccessRecord | undefined;
     try { record = await this.attachments.lookup(attachmentId); } catch { throw fail(); }
     if (!record || record.conversationId !== context.conversationId || !context.permissions.includes(permission) || !(await this.memberships.isMember(record.conversationId, context.participantId))) throw fail();
@@ -58,7 +58,7 @@ export class ConversationAuthorizationService {
   }
 
   private validateContext(context: AuthenticatedContext): void {
-    if (!context || !Array.isArray(context.permissions) || !ID.test(context.sessionId) || !ID.test(context.participantId) || !UUID.test(context.conversationId) || !UUID.test(context.requestId) || !Number.isFinite(context.createdAt) || !Number.isFinite(context.expiresAt) || context.expiresAt <= context.createdAt || context.expiresAt <= this.now()) throw fail();
+    if (!context || !context.deviceTrust || typeof context.deviceTrust.assertTrusted !== 'function' || !Array.isArray(context.permissions) || !ID.test(context.sessionId) || !ID.test(context.participantId) || !UUID.test(context.conversationId) || !UUID.test(context.requestId) || !Number.isFinite(context.createdAt) || !Number.isFinite(context.expiresAt) || context.expiresAt <= context.createdAt || context.expiresAt <= this.now()) throw fail();
   }
 
   private consumeRequest(requestId: string): void { if (this.consumedRequests.has(requestId)) throw fail(); this.consumedRequests.add(requestId); }
