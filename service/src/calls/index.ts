@@ -8,3 +8,4 @@ export * from './authorization';
 export * from './eventProcessor';
 export * from './service';
 export * from './webrtc';
+export * from './media';

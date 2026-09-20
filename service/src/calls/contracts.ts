@@ -11,5 +11,6 @@ export interface CallIdentityVerifier {
   identityBinding(conversationId: string, participants: readonly [CallParticipant, CallParticipant]): Promise<string>;
 }
 
-export interface CallSignal { callId: string; conversationId: string; sender: CallParticipant; event: Exclude<CallEvent, 'heartbeat'>; sequence: number; expiresAt: number; identityBinding: string; }
+export type CallSignalKind = 'control' | 'offer' | 'answer' | 'ice-candidate';
+export interface CallSignal { callId: string; conversationId: string; sender: CallParticipant; event: Exclude<CallEvent, 'heartbeat'>; kind?: CallSignalKind; payload?: unknown; sequence: number; expiresAt: number; identityBinding: string; }
 export interface CallSignalTransport { send(signal: CallSignal): Promise<void>; onSignal(listener: (signal: CallSignal) => Promise<void>): () => void; }
