@@ -58,6 +58,8 @@ describe('Phase 6B.1 device identity foundation', () => {
     expect(commitment).toBe('4ad3aadff6598b7017a819ad24301a592c73d5f2b7968e4c4a39ad0d77bbbf91');
     expect(await verifyDeviceListCommitment(list, commitment)).toBe(true);
     expect(await verifyDeviceListCommitment({ ...list, epoch: 1 }, commitment)).toBe(false);
+    expect(await verifyDeviceListCommitment({ ...list, devices: [{ ...pending, deviceId: 'device-c' }, active] }, commitment)).toBe(false);
+    expect(await verifyDeviceListCommitment({ ...list, devices: [{ ...pending, state: 'revoked', revokedAt: 1_700_000_000_001 }, active] }, commitment)).toBe(false);
   });
 
   it('rejects malformed fields, duplicates, and revoked entries without timestamps', () => {
@@ -75,6 +77,8 @@ describe('Phase 6B.1 device identity foundation', () => {
     expect(() => assertDeviceEntryTransition(active, { ...active, state: 'pending' })).toThrow();
     expect(() => assertDeviceCanAuthorize({ ...active, state: 'revoked', revokedAt: 1_700_000_000_001 })).toThrow();
     expect(() => assertDeviceCanAuthorize(active)).not.toThrow();
+    expect(Object.isFrozen(createDeviceEntry(active))).toBe(true);
+    expect(Object.isFrozen(createDeviceList(list))).toBe(true);
   });
 
   it('rejects rollback and stale epochs while accepting the next epoch', () => {
