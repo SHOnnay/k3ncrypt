@@ -6,7 +6,7 @@ K3ncrypt currently has three creation policies:
 
 - `legacy-default` is the safe fallback and remains the active default.
 - `modern-explicit` permits an existing, explicit modern-conversation setup path.
-- `modern-default` is recognized as a rollout value, but is not enabled by this repository.
+- `modern-default-beta` is recognized as a controlled rollout value, but is not enabled by this repository.
 
 The persisted conversation protocol is authoritative. Modern records are versioned and stored separately from legacy conversations. A policy change must never reinterpret an existing conversation, and there is no legacy-to-modern migration. Existing conversations therefore remain immutable with respect to protocol mode.
 
@@ -16,9 +16,9 @@ The modern path already has identity pinning, explicit verification, identity-ch
 
 `service/src/crypto/conversationPolicy.ts` is the single policy boundary for creation defaults. Unknown or absent configuration resolves to `legacy-default`. Only the two named modern values are accepted. The new resolver has these invariants:
 
-1. `modern-default` selects modern mode only when a conversation has no persisted mode.
+1. `modern-default-beta` selects modern mode only when a conversation has no persisted mode.
 2. `modern-explicit` does not silently opt every new conversation into modern mode; an explicit caller path remains required.
-3. A persisted `legacy` mode remains legacy even when the active policy becomes `modern-default`.
+3. A persisted `legacy` mode remains legacy even when the active policy becomes `modern-default-beta`.
 4. A persisted `modern` mode remains modern even if the active policy is rolled back.
 5. No resolver writes or migrates records. Persistence remains the responsibility of the existing conversation flow.
 
@@ -27,7 +27,7 @@ The default is intentionally not switched in Phase 4.5.
 ## Changes needed before a modern-default rollout
 
 - Keep `legacy-default` while compatibility, browser, deployment, and recovery gates are incomplete.
-- Roll out in stages: explicit modern usage, internal/canary modern-default, then a measured default for new conversations.
+- Roll out in stages: explicit modern usage, internal/canary modern-default-beta, then a measured default for new conversations.
 - Make the rollout decision a single, auditable deployment configuration. Client and service configuration drift must fail closed rather than selecting a different protocol silently.
 - Persist the selected mode at creation and treat it as immutable thereafter. Rollback changes only the policy for future conversations.
 - Require successful modern-session, storage-restart, identity-change, and multi-device tests in every supported browser before enabling the default.
@@ -86,5 +86,4 @@ Modern-default should remain disabled until all of the following are complete an
 
 ## Production recommendation
 
-**Do not enable modern-default yet.** Keep `legacy-default` as the repository default, allow modern only through the existing explicit path, and use the new migration-safety tests as a gate. Once the blockers are closed, enable modern-default only for new conversations in a staged rollout. Persist each new conversation's mode, preserve all existing modes, and make rollback safe by changing only future creation policy. No protocol migration, crypto change, or UI trust shortcut is warranted for this phase.
-
+**Do not enable modern-default-beta yet.** Keep `legacy-default` as the repository default, allow modern only through the existing explicit path, and use the new migration-safety tests as a gate. Once the blockers are closed, enable modern-default-beta only for a canary of new conversations, followed by a separately approved production default. Persist each new conversation's mode, preserve all existing modes, and make rollback safe by changing only future creation policy. No protocol migration, crypto change, or UI trust shortcut is warranted for this phase.

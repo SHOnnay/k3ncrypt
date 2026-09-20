@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { decodeVerificationQrPayload, encodeVerificationQrPayload } from '@chat-e2ee/service';
 import { useChat } from '../../context/ChatContext';
 import { useTheme } from '../../theme/ThemeContext';
 import { Avatar } from '../common/Avatar';
@@ -37,13 +38,23 @@ const viewTitles: Record<SettingsView, string> = {
 
 export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose }) => {
   const [view, setView] = useState<SettingsView>('settings');
-  const { channelHash, isConnected, protocolMode, ownFingerprint, contactIdentity, verifyContact, acceptChangedIdentity } = useChat();
+  const { channelHash, isConnected, protocolMode, ownFingerprint, contactIdentity, verifyContact, acceptChangedIdentity, deleteChannel } = useChat();
   const [comparisonConfirmed, setComparisonConfirmed] = useState(false);
   const [verificationError, setVerificationError] = useState('');
+  const [qrInput, setQrInput] = useState('');
+  const [qrMatch, setQrMatch] = useState(false);
+  const [qrError, setQrError] = useState('');
+  const [recoveryNotice, setRecoveryNotice] = useState('');
   const { theme } = useTheme();
 
   useEffect(() => {
-    if (!isOpen) setView('settings');
+    if (!isOpen) {
+      setView('settings');
+      setQrInput('');
+      setQrMatch(false);
+      setQrError('');
+      setRecoveryNotice('');
+    }
   }, [isOpen]);
 
   if (!isOpen) return null;
@@ -125,18 +136,46 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
               {protocolMode === 'modern' && ownFingerprint ? <div className="unavailable-card">
                 <strong>Your fingerprint</strong><code className="verification-code">{ownFingerprint}</code>
                 <button className="btn btn--secondary" type="button" onClick={() => navigator.clipboard.writeText(ownFingerprint)}>Copy yours</button>
+                <strong>Verification QR payload</strong>
+                <p>Show this temporary code to your contact. It contains public fingerprint information only and is never saved.</p>
+                <textarea className="verification-qr-payload" aria-label="Your verification QR payload" readOnly value={encodeVerificationQrPayload(ownFingerprint)} />
+                <button className="btn btn--secondary" type="button" onClick={() => navigator.clipboard.writeText(encodeVerificationQrPayload(ownFingerprint))}>Copy verification code</button>
                 {contactIdentity ? <>
                   <StatusPill tone={contactIdentity.verification === 'verified' && contactIdentity.changeStatus === 'unchanged' ? 'positive' : 'quiet'}>{contactIdentity.changeStatus === 'changed-pending-review' ? 'Identity changed · review required' : contactIdentity.verification === 'verified' ? 'Verified' : 'Unverified'}</StatusPill>
                   <strong>Contact fingerprint</strong><code className="verification-code">{contactIdentity.identityId}</code>
                   <button className="btn btn--secondary" type="button" onClick={() => navigator.clipboard.writeText(contactIdentity.identityId)}>Copy contact fingerprint</button>
-                  {contactIdentity.changeStatus === 'changed-pending-review' ? <><p>This identity changed. Your previous verification is no longer active.</p><button className="btn btn--secondary" type="button" onClick={() => acceptChangedIdentity().catch(() => setVerificationError('Could not accept this identity change.'))}>Accept new identity and start again</button></> : contactIdentity.verification !== 'verified' ? <>
+                  {contactIdentity.changeStatus === 'changed-pending-review' ? <>
+                    <p role="alert">This identity changed. Your previous verification is no longer active. The reason is unknown.</p>
+                    <strong>Previous fingerprint</strong><code className="verification-code">{contactIdentity.identityId}</code>
+                    <strong>New fingerprint</strong><code className="verification-code">{contactIdentity.pendingIdentity?.identityId ?? 'Unavailable'}</code>
+                    <div className="verification-actions">
+                      <button className="btn btn--secondary" type="button" onClick={() => { setComparisonConfirmed(false); setRecoveryNotice('Compare the new fingerprint through another trusted channel before accepting it.'); }}>Verify again</button>
+                      <button className="btn btn--secondary" type="button" onClick={() => setRecoveryNotice('Change rejected. This conversation remains unverified.')}>Reject change</button>
+                      <button className="btn btn--danger" type="button" onClick={() => deleteChannel().catch(() => setVerificationError('Could not block this conversation.'))}>Block conversation</button>
+                    </div>
+                    <label><input type="checkbox" checked={comparisonConfirmed} onChange={(event) => setComparisonConfirmed(event.target.checked)} /> I compared the new fingerprint with my contact</label>
+                    <button className="btn btn--secondary" type="button" disabled={!comparisonConfirmed} onClick={() => acceptChangedIdentity().catch(() => setVerificationError('Could not accept this identity change.'))}>Accept new identity after review</button>
+                  </> : contactIdentity.verification !== 'verified' ? <>
                     <p>Compare this fingerprint with your contact through another trusted way before marking it verified.</p>
+                    <label htmlFor="verification-qr-input">Paste your contact&apos;s temporary verification code</label>
+                    <textarea id="verification-qr-input" className="verification-qr-payload" value={qrInput} onChange={(event) => { setQrInput(event.target.value); setQrError(''); setQrMatch(false); }} />
+                    <button className="btn btn--secondary" type="button" onClick={() => {
+                      try {
+                        const parsed = decodeVerificationQrPayload(qrInput);
+                        if (parsed.fingerprint !== contactIdentity.identityId) throw new Error('Fingerprint does not match this contact.');
+                        setQrMatch(true);
+                        setQrError('');
+                      } catch { setQrMatch(false); setQrError('That verification code is invalid or does not match this contact.'); }
+                    }}>Check verification code</button>
+                    {qrError && <p role="alert">{qrError}</p>}
                     <label><input type="checkbox" checked={comparisonConfirmed} onChange={(event) => setComparisonConfirmed(event.target.checked)} /> I compared the fingerprints with my contact</label>
                     <button className="btn btn--primary" type="button" disabled={!comparisonConfirmed} onClick={() => {
                       verifyContact().then(() => { setComparisonConfirmed(false); setVerificationError(''); }).catch(() => setVerificationError('Could not save verification. Try again.'));
                     }}>Mark as verified</button>
+                    {qrMatch && <p role="status">The code matches this contact&apos;s fingerprint. Continue only after confirming it with them.</p>}
                   </> : <p>You marked this contact as verified on this device.</p>}
                 </> : <p>Your contact will appear here after the first message.</p>}
+                {recoveryNotice && <p role="status">{recoveryNotice}</p>}
                 {verificationError && <p role="alert">{verificationError}</p>}
               </div> : <div className="unavailable-card"><StatusPill tone="quiet">Not available in this conversation</StatusPill><p>Verification is available for new modern private contacts.</p></div>}
               {channelHash && <p className="room-reference">Current room reference <code>{channelHash.slice(0, 8)}…</code></p>}

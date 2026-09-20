@@ -43,4 +43,6 @@ button.settings-row:hover { background: var(--surface-muted); }
 .unavailable-card p { max-width: 310px; color: var(--muted); font-size: .74rem; line-height: 1.55; }
 .room-reference { color: var(--muted); font-size: .7rem; }.room-reference code { margin-left: 5px; color: var(--ink-soft); }
 .verification-code { max-width: 100%; overflow-wrap: anywhere; color: var(--ink); font-size: .75rem; line-height: 1.5; }
+.verification-qr-payload { width: 100%; min-height: 74px; resize: vertical; padding: 9px; border: 1px solid var(--border-strong); border-radius: 10px; color: var(--ink); background: var(--surface-raised); font: .68rem/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.verification-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
 @media (max-width: 620px) { .settings-panel { width: 100%; border-left: 0; }.settings-panel__header { padding-top: calc(16px + env(safe-area-inset-top)); }.settings-panel__body { padding-bottom: calc(90px + env(safe-area-inset-bottom)); } }
