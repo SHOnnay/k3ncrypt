@@ -24,7 +24,7 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: `cross-env NODE_ENV=test PORT=${backendPort} npm run serve:dev`,
+      command: `cross-env NODE_ENV=test PORT=${backendPort} K3NCRYPT_ALLOWED_ORIGINS=${clientUrl} npm run serve:dev`,
       url: `${backendUrl}/api`,
       reuseExistingServer: false,
       timeout: 60_000,

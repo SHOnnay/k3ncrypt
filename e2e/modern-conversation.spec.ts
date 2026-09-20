@@ -35,7 +35,9 @@ test('modern private contact works after offline recipient and both browser rest
   const bob = await open(browser);
   await bob.page.getByRole('button', { name: /Create a private contact/ }).click();
   await bob.page.locator('input[type="password"]').fill(PASSPHRASE);
+  const creation = bob.page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/chat-link');
   await bob.page.getByRole('button', { name: 'Create private contact' }).click();
+  expect((await creation).status()).toBe(200);
   const invitation = bob.page.getByRole('textbox', { name: 'Modern invitation' });
   await expect(invitation).toHaveValue(/#modern=[^&]+&control=[^&]+&address=/);
   const link = await invitation.inputValue();
