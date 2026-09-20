@@ -1,7 +1,7 @@
 import { BrowserCallMediaConnection, CallMediaController, type MediaCapture } from './media';
 
 const track = () => ({ stop: jest.fn() }) as unknown as MediaStreamTrack;
-const stream = () => ({ getTracks: () => [track(), track()] }) as unknown as MediaStream;
+const stream = () => { const tracks = [track(), track()]; return { getTracks: () => tracks } as unknown as MediaStream; };
 describe('call media transport boundary', () => {
   it('requests media only explicitly and releases all tracks', async () => { const captured = stream(); const capture: MediaCapture = { getUserMedia: jest.fn(async () => captured) }; const controller = new CallMediaController(capture); await controller.request('microphone'); expect(capture.getUserMedia).toHaveBeenCalledWith({ audio: true, video: false }); controller.release(); expect((captured.getTracks()[0].stop as jest.Mock)).toHaveBeenCalled(); });
   it('maps permission denial to a generic error and cleans up', async () => { const controller = new CallMediaController({ getUserMedia: async () => { throw new Error('browser detail'); } }); await expect(controller.request('camera')).rejects.toThrow('permission was denied'); });
