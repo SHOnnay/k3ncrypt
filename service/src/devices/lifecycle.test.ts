@@ -1,6 +1,8 @@
 import type { CryptoSession } from '../core/contracts';
 import {
   createEnrollmentRequest,
+  createEnrollmentConfirmation,
+  createRevocationConfirmation,
   createDeviceEntry,
   createDeviceList,
   DeviceLifecycleService,
@@ -62,10 +64,10 @@ describe('Phase 6B.2/6B.3 device lifecycle', () => {
     const approval = await service.approveEnrollment(request, context, { deviceId: 'device-b', publicIdentityReference: 'identity-b' });
     const enrolled = await service.applyEnrollment(approval, context);
     expect(enrolled.list.epoch).toBe(1);
-    expect(enrolled.list.devices.find((entry) => entry.deviceId === 'device-b')?.state).toBe('active');
+    expect(enrolled.list.devices.find((entry) => entry.deviceId === 'device-b')?.state).toBe('approved_pending_confirmation');
     expect(enrolled.list.previousCommitment).toBeTruthy();
     const revoke = await service.approveRevocation('device-b', context);
-    const revoked = await service.applyRevocation(revoke, context);
+    const revoked = await service.applyRevocation(revoke, context, await createRevocationConfirmation({ version: 1, authorizationDigest: revoke.authorizationDigest, targetDeviceId: revoke.targetDeviceId, confirmationNonce: 'revoke-confirm-1', confirmedAt: 2_000, expiresAt: revoke.expiresAt }));
     expect(revoked.list.epoch).toBe(2);
     expect(revoked.list.devices.find((entry) => entry.deviceId === 'device-b')?.state).toBe('revoked');
     expect(revoked.list.previousCommitment).toBe(enrolled.commitment);
@@ -101,9 +103,10 @@ describe('Phase 6B.2/6B.3 device lifecycle', () => {
     const req = createEnrollmentRequest({ userScope: 'user-1', requestedDeviceId: 'device-b', requestedPublicIdentityReference: 'identity-b', algorithm: 'vodozemac-v1', knownEpoch: 0, now: 1_500, transactionNonce: 'enrollment-nonce-4' });
     const enrolled = await service.applyEnrollment(await service.approveEnrollment(req, context, { deviceId: 'device-b', publicIdentityReference: 'identity-b' }), context);
     const revoke = await service.approveRevocation('device-b', context);
-    await expect(service.applyRevocation({ ...revoke, previousEpoch: 0 }, context)).rejects.toThrow('authorization');
-    await service.applyRevocation(revoke, context);
-    await expect(service.applyRevocation(revoke, context)).rejects.toThrow();
+    const confirmation = await createRevocationConfirmation({ version: 1, authorizationDigest: revoke.authorizationDigest, targetDeviceId: revoke.targetDeviceId, confirmationNonce: 'revoke-confirm-2', confirmedAt: 2_000, expiresAt: revoke.expiresAt });
+    await expect(service.applyRevocation({ ...revoke, previousEpoch: 0 }, context, confirmation)).rejects.toThrow('authorization');
+    await service.applyRevocation(revoke, context, confirmation);
+    await expect(service.applyRevocation(revoke, context, confirmation)).rejects.toThrow();
     expect(enrolled.list.epoch).toBe(1);
   });
 
@@ -121,6 +124,20 @@ describe('Phase 6B.2/6B.3 device lifecycle', () => {
     await expect(service.applyEnrollment({ ...approval, authorIdentityReference: 'forged-identity' }, context)).rejects.toThrow('invalid authenticated sender');
     await service.applyEnrollment(approval, context);
     const revoke = await service.approveRevocation('device-c', context);
-    await expect(service.applyRevocation(revoke, { ...context, authenticatedSender: { ...context.authenticatedSender, verified: false } })).rejects.toThrow('Authenticated device context unavailable');
+    const confirmation = await createRevocationConfirmation({ version: 1, authorizationDigest: revoke.authorizationDigest, targetDeviceId: revoke.targetDeviceId, confirmationNonce: 'revoke-confirm-3', confirmedAt: 2_000, expiresAt: revoke.expiresAt });
+    await expect(service.applyRevocation(revoke, { ...context, authenticatedSender: { ...context.authenticatedSender, verified: false } }, confirmation)).rejects.toThrow('Authenticated device context unavailable');
+  });
+
+  it('keeps an approved enrollment pending until the target device confirms', async () => {
+    const persistence = await makePersistence();
+    const service = new DeviceLifecycleService(persistence, { verify: async () => undefined }, () => 2_000);
+    const request = createEnrollmentRequest({ userScope: 'user-1', requestedDeviceId: 'device-b', requestedPublicIdentityReference: 'identity-b', algorithm: 'vodozemac-v1', knownEpoch: 0, now: 1_500, transactionNonce: 'enrollment-nonce-6' });
+    const authorization = await service.approveEnrollment(request, context, { deviceId: 'device-b', publicIdentityReference: 'identity-b' });
+    await service.applyEnrollment(authorization, context);
+    const targetContext: AuthenticatedDeviceContext = { ...context, authenticatedSender: { deviceId: 'device-b', identityReference: 'identity-b', userScope: 'user-1', verified: true } };
+    const confirmation = await createEnrollmentConfirmation({ version: 1, authorizationDigest: authorization.authorizationDigest, targetDeviceId: 'device-b', targetIdentityReference: 'identity-b', confirmationNonce: 'enrollment-confirm-6', confirmedAt: 2_000, expiresAt: authorization.expiresAt });
+    const confirmed = await service.confirmEnrollment(authorization, targetContext, confirmation);
+    expect(confirmed.list.devices.find((entry) => entry.deviceId === 'device-b')?.state).toBe('active');
+    await expect(service.confirmEnrollment(authorization, targetContext, confirmation)).rejects.toThrow();
   });
 });

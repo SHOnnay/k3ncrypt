@@ -182,7 +182,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
                   <p>Device changes require an authenticated modern session and explicit approval.</p>
                   {deviceLifecycleState?.list.devices.map((device) => <div className="network-status" key={device.deviceId}>
                     <div><strong>{device.deviceId === userId ? 'This device' : device.deviceId}</strong><p>{device.state}</p></div>
-                    {device.deviceId !== userId && device.state !== 'revoked' && <button className="btn btn--danger" type="button" onClick={() => revokeDevice(device.deviceId).catch(() => setVerificationError('Could not revoke this device.'))}>Revoke</button>}
+                    {device.deviceId !== userId && device.state !== 'revoked' && <button className="btn btn--danger" type="button" onClick={() => { if (window.confirm('Confirm removing this device from your private device list?')) revokeDevice(device.deviceId).catch(() => setVerificationError('Could not revoke this device.')); }}>Revoke</button>}
                   </div>)}
                   <label htmlFor="device-id-input">New device ID</label>
                   <input id="device-id-input" className="verification-qr-payload" value={deviceIdInput} onChange={(event) => setDeviceIdInput(event.target.value)} placeholder="Public device identifier" />

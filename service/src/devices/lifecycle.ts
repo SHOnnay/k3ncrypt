@@ -52,6 +52,27 @@ export interface DeviceAuthorization {
     readonly authorizationDigest: string;
 }
 
+export interface EnrollmentConfirmation {
+    readonly version: 1;
+    readonly authorizationDigest: string;
+    readonly targetDeviceId: string;
+    readonly targetIdentityReference: string;
+    readonly confirmationNonce: string;
+    readonly confirmedAt: number;
+    readonly expiresAt: number;
+    readonly confirmationDigest: string;
+}
+
+export interface RevocationConfirmation {
+    readonly version: 1;
+    readonly authorizationDigest: string;
+    readonly targetDeviceId: string;
+    readonly confirmationNonce: string;
+    readonly confirmedAt: number;
+    readonly expiresAt: number;
+    readonly confirmationDigest: string;
+}
+
 export interface LifecycleStateSnapshot {
     readonly list: DeviceList;
     readonly commitment: string;
@@ -129,6 +150,9 @@ const canonicalAuthorization = (authorization: Omit<DeviceAuthorization, 'author
     return new TextEncoder().encode(JSON.stringify(value));
 };
 
+const canonicalConfirmation = (confirmation: Omit<EnrollmentConfirmation | RevocationConfirmation, 'confirmationDigest'>): Uint8Array =>
+    new TextEncoder().encode(JSON.stringify(confirmation));
+
 const digestBytes = async (bytes: Uint8Array): Promise<string> => {
     if (!globalThis.crypto?.subtle) throw new Error('Device authorization is unavailable.');
     const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
@@ -141,6 +165,19 @@ export const verifyAuthorizationDigest = async (authorization: DeviceAuthorizati
     if (!DIGEST_PATTERN.test(authorization.authorizationDigest)) return false;
     return (await authorizationDigest(authorization)).toLowerCase() === authorization.authorizationDigest;
 };
+
+export const confirmationDigest = async (confirmation: Omit<EnrollmentConfirmation | RevocationConfirmation, 'confirmationDigest'>): Promise<string> => digestBytes(canonicalConfirmation(confirmation));
+
+const verifyConfirmationDigest = async (confirmation: EnrollmentConfirmation | RevocationConfirmation): Promise<boolean> => {
+    const { confirmationDigest: digest, ...unsigned } = confirmation;
+    return DIGEST_PATTERN.test(digest) && (await confirmationDigest(unsigned)) === digest;
+};
+
+export const createEnrollmentConfirmation = async (input: Omit<EnrollmentConfirmation, 'confirmationDigest'>): Promise<EnrollmentConfirmation> =>
+    Object.freeze({ ...input, confirmationDigest: await confirmationDigest(input) });
+
+export const createRevocationConfirmation = async (input: Omit<RevocationConfirmation, 'confirmationDigest'>): Promise<RevocationConfirmation> =>
+    Object.freeze({ ...input, confirmationDigest: await confirmationDigest(input) });
 
 const randomNonce = (): string => {
     if (!globalThis.crypto?.getRandomValues) throw new Error('Device enrollment is unavailable.');
@@ -206,13 +243,33 @@ export class DeviceLifecycleService {
         const state = requireState(await this.persistence.read(context.userScope));
         if (state.list.epoch !== authorization.previousEpoch || state.commitment !== authorization.previousCommitment) fail('Enrollment commitment mismatch.');
         if (deviceEntryById(state.list, authorization.targetDeviceId)) fail('Device identifier already exists.');
-        const entry = createDeviceEntry({ deviceId: authorization.targetDeviceId, publicIdentityReference: authorization.targetPublicIdentityReference!, algorithm: authorization.targetAlgorithm!, state: 'active', createdAt: authorization.createdAt });
+        const entry = createDeviceEntry({ deviceId: authorization.targetDeviceId, publicIdentityReference: authorization.targetPublicIdentityReference!, algorithm: authorization.targetAlgorithm!, state: 'approved_pending_confirmation', createdAt: authorization.createdAt });
         const nextList = createDeviceList({ version: 1, identityReference: state.list.identityReference, epoch: state.list.epoch + 1,
             previousCommitment: state.commitment, devices: [...state.list.devices, entry] });
         assertNextEpoch(state.list, nextList);
         const nextCommitment = await deviceListCommitment(nextList);
         await this.persistence.commitEnrollment({ scope: context.userScope, expectedEpoch: state.list.epoch, previousCommitment: state.commitment, nextList, nextCommitment,
             authorization: { operation: 'enroll', transactionNonce: authorization.transactionNonce, authorDeviceId: authorization.authorDeviceId, sequence: authorization.sequence, digest: authorization.authorizationDigest, expiresAt: authorization.expiresAt } });
+        return { list: nextList, commitment: nextCommitment };
+    }
+
+    public async confirmEnrollment(authorization: DeviceAuthorization, context: AuthenticatedDeviceContext, confirmation: EnrollmentConfirmation): Promise<LifecycleStateSnapshot> {
+        assertContext(context);
+        if (authorization.operation !== 'enroll' || confirmation.authorizationDigest !== authorization.authorizationDigest || confirmation.targetDeviceId !== authorization.targetDeviceId || confirmation.targetIdentityReference !== authorization.targetPublicIdentityReference || context.authenticatedSender.deviceId !== authorization.targetDeviceId || context.authenticatedSender.identityReference !== authorization.targetPublicIdentityReference) fail('Enrollment confirmation rejected.');
+        if (!(await verifyAuthorizationDigest(authorization)) || !(await verifyConfirmationDigest(confirmation))) fail('Enrollment confirmation rejected.');
+        assertWindow(authorization.createdAt, authorization.expiresAt, this.now());
+        assertWindow(confirmation.confirmedAt, confirmation.expiresAt, this.now());
+        const state = requireState(await this.persistence.read(context.userScope));
+        if (state.list.epoch !== authorization.previousEpoch + 1 || state.commitment !== authorization.previousCommitment && state.list.previousCommitment !== authorization.previousCommitment) fail('Enrollment confirmation epoch mismatch.');
+        const target = requireEntry(deviceEntryById(state.list, authorization.targetDeviceId), 'Enrollment target unavailable.');
+        if (target.state !== 'approved_pending_confirmation') fail('Enrollment confirmation state invalid.');
+        const active = createDeviceEntry({ ...target, state: 'active' });
+        const nextList = createDeviceList({ version: 1, identityReference: state.list.identityReference, epoch: state.list.epoch + 1,
+            previousCommitment: state.commitment, devices: state.list.devices.map((entry) => entry.deviceId === target.deviceId ? active : entry) });
+        assertNextEpoch(state.list, nextList);
+        const nextCommitment = await deviceListCommitment(nextList);
+        await this.persistence.commitEnrollment({ scope: context.userScope, expectedEpoch: state.list.epoch, previousCommitment: state.commitment, nextList, nextCommitment,
+            authorization: { operation: 'enroll', transactionNonce: confirmation.confirmationNonce, authorDeviceId: context.authenticatedSender.deviceId, sequence: authorization.sequence + 1, digest: confirmation.confirmationDigest, expiresAt: confirmation.expiresAt } });
         return { list: nextList, commitment: nextCommitment };
     }
 
@@ -235,11 +292,13 @@ export class DeviceLifecycleService {
         return Object.freeze({ ...unsigned, authorizationDigest: await authorizationDigest(unsigned) });
     }
 
-    public async applyRevocation(authorization: DeviceAuthorization, context: AuthenticatedDeviceContext): Promise<LifecycleStateSnapshot> {
+    public async applyRevocation(authorization: DeviceAuthorization, context: AuthenticatedDeviceContext, confirmation?: RevocationConfirmation): Promise<LifecycleStateSnapshot> {
+        if (!confirmation) throw new Error('Explicit revocation confirmation required.');
         assertContext(context);
         await this.verifier.verify(context, authorization);
         const sender = context.authenticatedSender;
-        if (authorization.operation !== 'revoke' || authorization.userScope !== context.userScope || authorization.authorDeviceId !== sender.deviceId || authorization.authorIdentityReference !== sender.identityReference) fail('Revocation authorization rejected.');
+        if (authorization.operation !== 'revoke' || authorization.userScope !== context.userScope || authorization.authorDeviceId !== sender.deviceId || authorization.authorIdentityReference !== sender.identityReference || confirmation.authorizationDigest !== authorization.authorizationDigest || confirmation.targetDeviceId !== authorization.targetDeviceId) fail('Revocation authorization rejected.');
+        if (!(await verifyConfirmationDigest(confirmation))) fail('Revocation confirmation rejected.');
         if (!(await verifyAuthorizationDigest(authorization))) fail('Revocation authorization rejected.');
         assertWindow(authorization.createdAt, authorization.expiresAt, this.now());
         const state = requireState(await this.persistence.read(context.userScope));

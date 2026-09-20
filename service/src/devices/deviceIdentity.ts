@@ -1,6 +1,6 @@
 /** Public-only device identity records. Private keys remain in the existing identity/vault boundary. */
 
-export type DeviceLifecycleState = 'pending' | 'active' | 'revoked';
+export type DeviceLifecycleState = 'pending_enrollment' | 'approved_pending_confirmation' | 'active' | 'revoked';
 
 export interface DeviceEntry {
     readonly deviceId: string;
@@ -51,7 +51,7 @@ export const createDeviceEntry = (input: DeviceEntry): DeviceEntry => {
     assertString(value.deviceId, 'deviceId');
     assertString(value.publicIdentityReference, 'publicIdentityReference');
     assertString(value.algorithm, 'algorithm', MAX_ALGORITHM_LENGTH);
-    if (value.state !== 'pending' && value.state !== 'active' && value.state !== 'revoked') fail('Invalid device lifecycle state.');
+    if (value.state !== 'pending_enrollment' && value.state !== 'approved_pending_confirmation' && value.state !== 'active' && value.state !== 'revoked') fail('Invalid device lifecycle state.');
     assertTimestamp(value.createdAt, 'createdAt');
     if (value.revokedAt !== undefined) assertTimestamp(value.revokedAt, 'revokedAt');
     if (value.label !== undefined) assertString(value.label, 'label', MAX_LABEL_LENGTH);
@@ -71,7 +71,8 @@ export const createDeviceEntry = (input: DeviceEntry): DeviceEntry => {
 
 /** Returns whether a lifecycle transition is permitted by the Phase 6B.1 model. */
 export const isValidDeviceLifecycleTransition = (from: DeviceLifecycleState, to: DeviceLifecycleState): boolean =>
-    from === to || (from === 'pending' && (to === 'active' || to === 'revoked')) || (from === 'active' && to === 'revoked');
+    from === to || (from === 'pending_enrollment' && (to === 'approved_pending_confirmation' || to === 'revoked')) ||
+    (from === 'approved_pending_confirmation' && (to === 'active' || to === 'revoked')) || (from === 'active' && to === 'revoked');
 
 export const assertDeviceCanAuthorize = (entry: DeviceEntry): void => {
     if (entry.state !== 'active') fail('Only active devices may authorize operations.');

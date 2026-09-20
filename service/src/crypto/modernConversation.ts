@@ -15,7 +15,7 @@ import { createAuthenticatedCallComposition, type AuthenticatedCallComposition }
 import { VerifiedCallIdentityVerifier } from '../calls/signalBinding';
 import type { CallParticipant } from '../calls/contracts';
 import { AuthenticatedDeviceControlChannel, SecureStorageDeviceLifecyclePersistence, type DeviceControlMessage } from '../devices/runtime';
-import { DeviceLifecycleService, createEnrollmentRequest, type AuthenticatedDeviceContext, type DeviceAuthorization, type EnrollmentRequest, type LifecycleStateSnapshot } from '../devices/lifecycle';
+import { DeviceLifecycleService, createEnrollmentRequest, createEnrollmentConfirmation, createRevocationConfirmation, type AuthenticatedDeviceContext, type DeviceAuthorization, type EnrollmentRequest, type LifecycleStateSnapshot } from '../devices/lifecycle';
 import { createDeviceList } from '../devices/deviceList';
 import { createDeviceEntry } from '../devices/deviceIdentity';
 
@@ -239,6 +239,15 @@ export class ModernConversation {
         return authorization;
     }
 
+    public async confirmDeviceEnrollment(authorization: DeviceAuthorization): Promise<LifecycleStateSnapshot> {
+        const service = this.requireDeviceLifecycle();
+        const confirmation = await createEnrollmentConfirmation({ version: 1, authorizationDigest: authorization.authorizationDigest,
+            targetDeviceId: authorization.targetDeviceId, targetIdentityReference: authorization.targetPublicIdentityReference!,
+            confirmationNonce: `${authorization.transactionNonce}-confirm`, confirmedAt: Date.now(), expiresAt: authorization.expiresAt });
+        await this.deviceControlChannel!.send({ type: 'enrollment-approval', payload: confirmation });
+        return service.confirmEnrollment(authorization, this.deviceContext(), confirmation);
+    }
+
     public async rejectDeviceEnrollment(request: EnrollmentRequest): Promise<void> {
         if (!this.deviceControlChannel) throw new Error('Device enrollment requires a ready modern session.');
         await this.deviceControlChannel.send({ type: 'enrollment-rejection', payload: { version: 1, transactionNonce: request.transactionNonce, expiresAt: request.expiresAt } });
@@ -248,7 +257,9 @@ export class ModernConversation {
         const service = this.requireDeviceLifecycle();
         const authorization = await service.approveRevocation(deviceId, this.deviceContext());
         await this.deviceControlChannel!.send({ type: 'revocation', payload: authorization });
-        await service.applyRevocation(authorization, this.deviceContext());
+        const confirmation = await createRevocationConfirmation({ version: 1, authorizationDigest: authorization.authorizationDigest,
+            targetDeviceId: authorization.targetDeviceId, confirmationNonce: `${authorization.transactionNonce}-confirm`, confirmedAt: Date.now(), expiresAt: authorization.expiresAt });
+        await service.applyRevocation(authorization, this.deviceContext(), confirmation);
         return authorization;
     }
 

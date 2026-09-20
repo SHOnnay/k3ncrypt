@@ -19,7 +19,7 @@ const pending: DeviceEntry = {
   deviceId: 'device-b',
   publicIdentityReference: 'public-b',
   algorithm: 'vodozemac-v1',
-  state: 'pending',
+  state: 'pending_enrollment',
   createdAt: 1_700_000_000_000,
 };
 
@@ -49,13 +49,13 @@ describe('Phase 6B.1 device identity foundation', () => {
       identityReference: 'user-public-identity',
       version: 1,
     };
-    expect(canonicalDeviceListJson(list)).toBe('{"version":1,"identityReference":"user-public-identity","epoch":0,"previousCommitment":null,"devices":[{"deviceId":"device-a","publicIdentityReference":"public-a","algorithm":"vodozemac-v1","state":"active","createdAt":1700000000000,"label":"Primary"},{"deviceId":"device-b","publicIdentityReference":"public-b","algorithm":"vodozemac-v1","state":"pending","createdAt":1700000000000}]}');
+    expect(canonicalDeviceListJson(list)).toBe('{"version":1,"identityReference":"user-public-identity","epoch":0,"previousCommitment":null,"devices":[{"deviceId":"device-a","publicIdentityReference":"public-a","algorithm":"vodozemac-v1","state":"active","createdAt":1700000000000,"label":"Primary"},{"deviceId":"device-b","publicIdentityReference":"public-b","algorithm":"vodozemac-v1","state":"pending_enrollment","createdAt":1700000000000}]}');
     expect(Array.from(canonicalDeviceListBytes(list))).toEqual(Array.from(canonicalDeviceListBytes(reordered)));
   });
 
   it('computes and verifies the SHA-256 commitment test vector', async () => {
     const commitment = await deviceListCommitment(list);
-    expect(commitment).toBe('4ad3aadff6598b7017a819ad24301a592c73d5f2b7968e4c4a39ad0d77bbbf91');
+    expect(commitment).toBe('4e46e10ce668b30e9b5f3b08fad8551f25658d8abf235440f3fafc27f8981be0');
     expect(await verifyDeviceListCommitment(list, commitment)).toBe(true);
     expect(await verifyDeviceListCommitment({ ...list, epoch: 1 }, commitment)).toBe(false);
     expect(await verifyDeviceListCommitment({ ...list, devices: [{ ...pending, deviceId: 'device-c' }, active] }, commitment)).toBe(false);
@@ -71,10 +71,11 @@ describe('Phase 6B.1 device identity foundation', () => {
   });
 
   it('rejects invalid lifecycle transitions and revoked authorization', () => {
-    expect(isValidDeviceLifecycleTransition('pending', 'active')).toBe(true);
-    expect(isValidDeviceLifecycleTransition('active', 'pending')).toBe(false);
+    expect(isValidDeviceLifecycleTransition('pending_enrollment', 'approved_pending_confirmation')).toBe(true);
+    expect(isValidDeviceLifecycleTransition('approved_pending_confirmation', 'active')).toBe(true);
+    expect(isValidDeviceLifecycleTransition('active', 'pending_enrollment')).toBe(false);
     expect(isValidDeviceLifecycleTransition('revoked', 'active')).toBe(false);
-    expect(() => assertDeviceEntryTransition(active, { ...active, state: 'pending' })).toThrow();
+    expect(() => assertDeviceEntryTransition(active, { ...active, state: 'pending_enrollment' })).toThrow();
     expect(() => assertDeviceCanAuthorize({ ...active, state: 'revoked', revokedAt: 1_700_000_000_001 })).toThrow();
     expect(() => assertDeviceCanAuthorize(active)).not.toThrow();
     expect(Object.isFrozen(createDeviceEntry(active))).toBe(true);
