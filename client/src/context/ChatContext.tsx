@@ -4,7 +4,7 @@
 
 import React, { createContext, useContext, ReactNode, useState, useCallback } from 'react';
 import { createChatInstance, utils, BrowserSecureStorage, IndexedDbVaultPersistence, ModernConversation, parseEncryptedMediaMessage } from '@chat-e2ee/service';
-import type { IChatE2EE, IE2ECall, CallLifecycleState, CallLifecycleUpdate, StoredContactIdentity, AuthenticatedCallComposition } from '@chat-e2ee/service';
+import type { IChatE2EE, IE2ECall, CallLifecycleState, CallLifecycleUpdate, StoredContactIdentity, AuthenticatedCallComposition, EnrollmentRequest, DeviceControlEvent, LifecycleStateSnapshot } from '@chat-e2ee/service';
 import { ChatContextType, InviteInfo, Message } from '../types/index';
 import { createMessage } from '../utils/messageHandling';
 import { playBeep } from '../utils/audioNotification';
@@ -33,6 +33,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [protocolMode, setProtocolMode] = useState<'legacy' | 'modern'>('legacy');
   const [ownFingerprint, setOwnFingerprint] = useState<string>();
   const [contactIdentity, setContactIdentity] = useState<StoredContactIdentity>();
+  const [deviceLifecycleState, setDeviceLifecycleState] = useState<LifecycleStateSnapshot>();
+  const [pendingDeviceEnrollment, setPendingDeviceEnrollment] = useState<EnrollmentRequest>();
   const [userId, setUserId] = useState<string>('');
   const [channelHash, setChannelHash] = useState<string>('');
   const [messages, setMessages] = useState<Message[]>([]);
@@ -91,7 +93,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const conversation = new ModernConversation(vault, loadVodozemacBindings);
     const details = await conversation.connect(invite.hash, invite.controlCapability, undefined, (text) => {
       setMessages((previous) => [...previous, displayMessage('contact', text, 'received')]);
-    }, setContactIdentity);
+    }, setContactIdentity, (event: DeviceControlEvent) => { if (event.type === 'enrollment-request') setPendingDeviceEnrollment(event.payload as EnrollmentRequest); });
     setModern(conversation);
     setModernCallComposition(null);
     setModernCallId(undefined);
@@ -100,6 +102,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setOwnFingerprint(details.ownFingerprint);
     setContactIdentity(details.contact);
     setUserId(details.ownAddress);
+    setDeviceLifecycleState(await conversation.getDeviceLifecycleState());
     const fragment = `modern=${encodeURIComponent(invite.hash)}&control=${encodeURIComponent(invite.controlCapability)}&address=${encodeURIComponent(details.ownAddress)}`;
     return `${window.location.origin}${window.location.pathname}#${fragment}`;
   }, [chat, modern]);
@@ -110,7 +113,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const conversation = new ModernConversation(vault, loadVodozemacBindings);
     const details = await conversation.connect(roomId, capability, address, (text) => {
       setMessages((previous) => [...previous, displayMessage('contact', text, 'received')]);
-    }, setContactIdentity);
+    }, setContactIdentity, (event: DeviceControlEvent) => { if (event.type === 'enrollment-request') setPendingDeviceEnrollment(event.payload as EnrollmentRequest); });
     setModern(conversation);
     setModernCallComposition(null);
     setModernCallId(undefined);
@@ -119,6 +122,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setOwnFingerprint(details.ownFingerprint);
     setContactIdentity(details.contact);
     setUserId(details.ownAddress);
+    setDeviceLifecycleState(await conversation.getDeviceLifecycleState());
   }, [modern]);
 
   const verifyContact = useCallback(async (): Promise<void> => {
@@ -141,6 +145,31 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     await modern.acceptChangedIdentity();
     setContactIdentity(await modern.getContact());
     setModernCallComposition(null);
+  }, [modern]);
+
+  const requestDeviceEnrollment = useCallback(async (deviceId: string, publicIdentityReference: string, algorithm: string): Promise<void> => {
+    if (!modern) throw new Error('No modern conversation is open.');
+    await modern.requestDeviceEnrollment({ requestedDeviceId: deviceId, requestedPublicIdentityReference: publicIdentityReference, algorithm });
+    setDeviceLifecycleState(await modern.getDeviceLifecycleState());
+  }, [modern]);
+
+  const approveDeviceEnrollment = useCallback(async (): Promise<void> => {
+    if (!modern || !pendingDeviceEnrollment) throw new Error('No device enrollment request is pending.');
+    await modern.approveDeviceEnrollment(pendingDeviceEnrollment, { deviceId: pendingDeviceEnrollment.requestedDeviceId, publicIdentityReference: pendingDeviceEnrollment.requestedPublicIdentityReference });
+    setPendingDeviceEnrollment(undefined);
+    setDeviceLifecycleState(await modern.getDeviceLifecycleState());
+  }, [modern, pendingDeviceEnrollment]);
+
+  const rejectDeviceEnrollment = useCallback(async (): Promise<void> => {
+    if (!modern || !pendingDeviceEnrollment) throw new Error('No device enrollment request is pending.');
+    await modern.rejectDeviceEnrollment(pendingDeviceEnrollment);
+    setPendingDeviceEnrollment(undefined);
+  }, [modern, pendingDeviceEnrollment]);
+
+  const revokeDevice = useCallback(async (deviceId: string): Promise<void> => {
+    if (!modern) throw new Error('No modern conversation is open.');
+    await modern.revokeDevice(deviceId);
+    setDeviceLifecycleState(await modern.getDeviceLifecycleState());
   }, [modern]);
 
   // Join existing channel using the invitation's roomId + secret
@@ -457,12 +486,18 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     protocolMode,
     ownFingerprint,
     contactIdentity,
+    deviceLifecycleState,
+    pendingDeviceEnrollment,
     initializeChat,
     createNewChannel,
     createModernChannel,
     joinModernChannel,
     verifyContact,
     acceptChangedIdentity,
+    requestDeviceEnrollment,
+    approveDeviceEnrollment,
+    rejectDeviceEnrollment,
+    revokeDevice,
     joinChannel,
     sendMessage,
     startCall,

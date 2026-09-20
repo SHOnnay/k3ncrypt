@@ -38,13 +38,15 @@ const viewTitles: Record<SettingsView, string> = {
 
 export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose }) => {
   const [view, setView] = useState<SettingsView>('settings');
-  const { channelHash, isConnected, protocolMode, ownFingerprint, contactIdentity, verifyContact, acceptChangedIdentity, deleteChannel } = useChat();
+  const { channelHash, isConnected, protocolMode, userId, ownFingerprint, contactIdentity, verifyContact, acceptChangedIdentity, deleteChannel, deviceLifecycleState, pendingDeviceEnrollment, requestDeviceEnrollment, approveDeviceEnrollment, rejectDeviceEnrollment, revokeDevice } = useChat();
   const [comparisonConfirmed, setComparisonConfirmed] = useState(false);
   const [verificationError, setVerificationError] = useState('');
   const [qrInput, setQrInput] = useState('');
   const [qrMatch, setQrMatch] = useState(false);
   const [qrError, setQrError] = useState('');
   const [recoveryNotice, setRecoveryNotice] = useState('');
+  const [deviceIdInput, setDeviceIdInput] = useState('');
+  const [deviceIdentityInput, setDeviceIdentityInput] = useState('');
   const { theme } = useTheme();
 
   useEffect(() => {
@@ -175,6 +177,20 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
                     {qrMatch && <p role="status">The code matches this contact&apos;s fingerprint. Continue only after confirming it with them.</p>}
                   </> : <p>You marked this contact as verified on this device.</p>}
                 </> : <p>Your contact will appear here after the first message.</p>}
+                {protocolMode === 'modern' && <div className="device-management" aria-label="Device management">
+                  <strong>Your devices</strong>
+                  <p>Device changes require an authenticated modern session and explicit approval.</p>
+                  {deviceLifecycleState?.list.devices.map((device) => <div className="network-status" key={device.deviceId}>
+                    <div><strong>{device.deviceId === userId ? 'This device' : device.deviceId}</strong><p>{device.state}</p></div>
+                    {device.deviceId !== userId && device.state !== 'revoked' && <button className="btn btn--danger" type="button" onClick={() => revokeDevice(device.deviceId).catch(() => setVerificationError('Could not revoke this device.'))}>Revoke</button>}
+                  </div>)}
+                  <label htmlFor="device-id-input">New device ID</label>
+                  <input id="device-id-input" className="verification-qr-payload" value={deviceIdInput} onChange={(event) => setDeviceIdInput(event.target.value)} placeholder="Public device identifier" />
+                  <label htmlFor="device-identity-input">New public identity reference</label>
+                  <input id="device-identity-input" className="verification-qr-payload" value={deviceIdentityInput} onChange={(event) => setDeviceIdentityInput(event.target.value)} placeholder="Public identity reference" />
+                  <button className="btn btn--secondary" type="button" disabled={!deviceIdInput || !deviceIdentityInput} onClick={() => requestDeviceEnrollment(deviceIdInput, deviceIdentityInput, 'Olm-Curve25519+Ed25519').then(() => { setDeviceIdInput(''); setDeviceIdentityInput(''); setRecoveryNotice('Enrollment request sent through the protected session.'); }).catch(() => setVerificationError('Could not send the enrollment request.'))}>Request device approval</button>
+                  {pendingDeviceEnrollment && <div className="state-card state-card--positive"><strong>Device approval requested</strong><p>{pendingDeviceEnrollment.requestedDeviceId}</p><div className="verification-actions"><button className="btn btn--primary" type="button" onClick={() => approveDeviceEnrollment().catch(() => setVerificationError('Could not approve this device.'))}>Approve</button><button className="btn btn--secondary" type="button" onClick={() => rejectDeviceEnrollment().catch(() => setVerificationError('Could not reject this device.'))}>Reject</button></div></div>}
+                </div>}
                 {recoveryNotice && <p role="status">{recoveryNotice}</p>}
                 {verificationError && <p role="alert">{verificationError}</p>}
               </div> : <div className="unavailable-card"><StatusPill tone="quiet">Not available in this conversation</StatusPill><p>Verification is available for new modern private contacts.</p></div>}

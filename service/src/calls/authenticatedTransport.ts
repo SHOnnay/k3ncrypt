@@ -17,7 +17,10 @@ export class AuthenticatedCallSignalTransport implements CallSignalTransport {
   }
   onSignal(listener: (signal: CallSignal) => Promise<void>): () => void { this.listener = listener; return () => { if (this.listener === listener) this.listener = undefined; }; }
   async receive(envelope: EncryptedEnvelope): Promise<void> {
-    const signal = decode(await this.session.decrypt('signaling', envelope));
+    await this.receivePlaintext(await this.session.decrypt('signaling', envelope));
+  }
+  async receivePlaintext(plaintext: ArrayBuffer): Promise<void> {
+    const signal = decode(plaintext);
     if (signal.conversationId !== this.conversationId || signal.sender.identityId !== this.remote.identityId || signal.sender.verification !== 'verified' || !(await this.identity.isParticipant(this.conversationId, signal.sender.participantId)) || !(await verifySignalDigest(signal))) throw new Error('Call signal origin rejected.');
     if (this.listener) await this.listener(signal);
   }

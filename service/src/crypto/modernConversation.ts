@@ -14,6 +14,10 @@ import { VodozemacRuntime, type VodozemacBindingsLoader } from './vodozemacRunti
 import { createAuthenticatedCallComposition, type AuthenticatedCallComposition } from '../calls/composition';
 import { VerifiedCallIdentityVerifier } from '../calls/signalBinding';
 import type { CallParticipant } from '../calls/contracts';
+import { AuthenticatedDeviceControlChannel, SecureStorageDeviceLifecyclePersistence, type DeviceControlMessage } from '../devices/runtime';
+import { DeviceLifecycleService, createEnrollmentRequest, type AuthenticatedDeviceContext, type DeviceAuthorization, type EnrollmentRequest, type LifecycleStateSnapshot } from '../devices/lifecycle';
+import { createDeviceList } from '../devices/deviceList';
+import { createDeviceEntry } from '../devices/deviceIdentity';
 
 const OUTBOX_RECORD = 'modern-outbox';
 const SEEN_RECORD = 'modern-seen';
@@ -31,6 +35,7 @@ export interface ModernConnectionDetails {
     ownAddress: string;
     contact?: StoredContactIdentity;
 }
+export type DeviceControlEvent = DeviceControlMessage;
 
 const asBytes = (value: unknown): ArrayBuffer => encoder.encode(JSON.stringify(value)).buffer as ArrayBuffer;
 const parseList = <T>(bytes: ArrayBuffer | undefined): T[] => {
@@ -77,9 +82,13 @@ export class ModernConversation {
     private localIdentityId?: string;
     private callComposition?: AuthenticatedCallComposition;
     private callSignalTransport?: AuthenticatedCallComposition['signalTransport'];
+    private deviceControlChannel?: AuthenticatedDeviceControlChannel;
+    private deviceLifecycle?: DeviceLifecycleService;
+    private deviceLifecyclePersistence?: SecureStorageDeviceLifecyclePersistence;
     private retryTimer?: ReturnType<typeof setInterval>;
     private onMessage?: (text: string) => void;
     private onContactChange?: (contact: StoredContactIdentity) => void;
+    private onDeviceControl?: (message: DeviceControlEvent) => void;
     private readonly tabOwnerId = `${Math.random().toString(36).slice(2)}-${Date.now()}`;
     private fallbackLeaseKey?: string;
     private fallbackLeaseTimer?: ReturnType<typeof setInterval>;
@@ -92,7 +101,12 @@ export class ModernConversation {
         const relay = transportManager ? undefined : new SocketIoRelayTransport(() => this.subscriptions, new Logger('ModernConversation'),
             async (message) => {
                 if (message.channel === 'signaling') {
-                    if (this.callSignalTransport) await this.callSignalTransport.receive(message.envelope);
+                    if (this.deviceControlChannel && this.callSignalTransport) {
+                        const plaintext = await this.runtime.decrypt('signaling', message.envelope);
+                        const control = this.deviceControlChannel.decode(plaintext);
+                        if (control) await this.handleDeviceControl(control);
+                        else await this.callSignalTransport.receivePlaintext(plaintext);
+                    } else if (this.callSignalTransport) await this.callSignalTransport.receive(message.envelope);
                     return false;
                 }
                 return this.receiveMutex.runExclusive(() => this.withTabLock(this.roomId ?? 'unknown', () => this.receive(message.envelope, message.senderRoutingId)));
@@ -102,16 +116,17 @@ export class ModernConversation {
         this.subscriptions.set('delivered', new Set([(id: string) => { void this.acceptDelivery(id); }]));
     }
 
-    public async connect(roomId: string, capability: string, remoteAddress?: string, onMessage?: (text: string) => void, onContactChange?: (contact: StoredContactIdentity) => void): Promise<ModernConnectionDetails> {
-        return this.withTabLock(roomId, () => this.connectUnlocked(roomId, capability, remoteAddress, onMessage, onContactChange), true);
+    public async connect(roomId: string, capability: string, remoteAddress?: string, onMessage?: (text: string) => void, onContactChange?: (contact: StoredContactIdentity) => void, onDeviceControl?: (message: DeviceControlEvent) => void): Promise<ModernConnectionDetails> {
+        return this.withTabLock(roomId, () => this.connectUnlocked(roomId, capability, remoteAddress, onMessage, onContactChange, onDeviceControl), true);
     }
 
-    private async connectUnlocked(roomId: string, capability: string, remoteAddress?: string, onMessage?: (text: string) => void, onContactChange?: (contact: StoredContactIdentity) => void): Promise<ModernConnectionDetails> {
+    private async connectUnlocked(roomId: string, capability: string, remoteAddress?: string, onMessage?: (text: string) => void, onContactChange?: (contact: StoredContactIdentity) => void, onDeviceControl?: (message: DeviceControlEvent) => void): Promise<ModernConnectionDetails> {
         if (!/^[0-9a-f-]{36}$/i.test(roomId) || !capability) throw new Error('Invalid private conversation invitation.');
         this.roomId = roomId;
         this.capability = capability;
         this.onMessage = onMessage;
         this.onContactChange = onContactChange;
+        this.onDeviceControl = onDeviceControl;
         await this.runtime.initialize();
         const own = await this.runtime.restoreOrCreateIdentity();
         this.localIdentityId = own.identityId;
@@ -161,6 +176,22 @@ export class ModernConversation {
         await this.modes.write(roomId, { localAddress, remoteAddress: this.remoteAddress, sessionId: saved?.sessionId });
         this.localAddress = localAddress;
 
+        this.deviceLifecyclePersistence = new SecureStorageDeviceLifecyclePersistence(this.storage);
+        const existingDeviceList = await this.deviceLifecyclePersistence.read(this.localIdentityId);
+        if (!existingDeviceList) {
+            const initialList = createDeviceList({ version: 1, identityReference: this.localIdentityId, epoch: 0, previousCommitment: null,
+                devices: [createDeviceEntry({ deviceId: localAddress, publicIdentityReference: this.localIdentityId, algorithm: 'Olm-Curve25519+Ed25519', state: 'active', createdAt: Date.now() })] });
+            await this.deviceLifecyclePersistence.initialize(this.localIdentityId, initialList);
+        }
+        if (this.runtime.lifecycle === 'active' || this.runtime.lifecycle === 'persisted') {
+            this.deviceControlChannel = new AuthenticatedDeviceControlChannel(this.runtime.getAuthenticatedSession(), this.transport);
+            this.deviceLifecycle = new DeviceLifecycleService(this.deviceLifecyclePersistence, {
+                verify: async (context, authorization) => {
+                    if (!context.verified || context.authorDeviceId !== authorization.authorDeviceId || context.authorIdentityReference !== authorization.authorIdentityReference) throw new Error('Device authorization rejected.');
+                },
+            });
+        }
+
         if (this.remoteAddress && !saved?.sessionId) {
             const contact = validateVodozemacPublicBundle(await fetchVodozemacBundle(roomId, capability, this.remoteAddress));
             await this.observe(this.remoteAddress, contact.identity);
@@ -183,6 +214,41 @@ export class ModernConversation {
         void this.retryPending();
         return { ownFingerprint: own.identityId, ownAddress: localAddress,
             contact: this.remoteAddress ? await this.registry.get(this.remoteAddress) : undefined };
+    }
+
+    public async getDeviceLifecycleState(): Promise<LifecycleStateSnapshot | undefined> {
+        if (!this.deviceLifecyclePersistence || !this.localIdentityId) return undefined;
+        return this.deviceLifecyclePersistence.read(this.localIdentityId);
+    }
+
+    public async requestDeviceEnrollment(input: { requestedDeviceId: string; requestedPublicIdentityReference: string; algorithm: string }): Promise<EnrollmentRequest> {
+        if (!this.deviceControlChannel || !this.localIdentityId) throw new Error('Device enrollment requires a ready modern session.');
+        const state = await this.getDeviceLifecycleState();
+        if (!state) throw new Error('Device lifecycle state unavailable.');
+        const request = createEnrollmentRequest({ ...input, userScope: this.localIdentityId, knownEpoch: state.list.epoch });
+        await this.deviceControlChannel.send({ type: 'enrollment-request', payload: request });
+        return request;
+    }
+
+    public async approveDeviceEnrollment(request: EnrollmentRequest, confirmedTarget: { deviceId: string; publicIdentityReference: string }): Promise<DeviceAuthorization> {
+        const service = this.requireDeviceLifecycle();
+        const authorization = await service.approveEnrollment(request, this.deviceContext(), confirmedTarget);
+        await this.deviceControlChannel!.send({ type: 'enrollment-approval', payload: authorization });
+        await service.applyEnrollment(authorization, this.deviceContext());
+        return authorization;
+    }
+
+    public async rejectDeviceEnrollment(request: EnrollmentRequest): Promise<void> {
+        if (!this.deviceControlChannel) throw new Error('Device enrollment requires a ready modern session.');
+        await this.deviceControlChannel.send({ type: 'enrollment-rejection', payload: { version: 1, transactionNonce: request.transactionNonce, expiresAt: request.expiresAt } });
+    }
+
+    public async revokeDevice(deviceId: string): Promise<DeviceAuthorization> {
+        const service = this.requireDeviceLifecycle();
+        const authorization = await service.approveRevocation(deviceId, this.deviceContext());
+        await this.deviceControlChannel!.send({ type: 'revocation', payload: authorization });
+        await service.applyRevocation(authorization, this.deviceContext());
+        return authorization;
     }
 
     public async send(text: string): Promise<'pending'> {
@@ -338,6 +404,23 @@ export class ModernConversation {
         await this.storage.write(SEEN_RECORD, this.roomId, asBytes([...seen.slice(-(MAX_SEEN - 1)), digest]));
         this.onMessage?.(text);
         return true;
+    }
+
+    private requireDeviceLifecycle(): DeviceLifecycleService {
+        if (!this.deviceLifecycle || !this.deviceControlChannel) throw new Error('Device lifecycle requires a ready modern session.');
+        return this.deviceLifecycle;
+    }
+
+    private deviceContext(): AuthenticatedDeviceContext {
+        if (!this.localIdentityId || !this.localAddress) throw new Error('Device lifecycle identity is unavailable.');
+        return { cryptoSession: this.runtime.getAuthenticatedSession(), conversationId: this.roomId!, userScope: this.localIdentityId,
+            authorDeviceId: this.localAddress, authorIdentityReference: this.localIdentityId, verified: true };
+    }
+
+    private async handleDeviceControl(message: DeviceControlMessage): Promise<void> {
+        // Control delivery is deliberately fail-closed until a caller supplies a
+        // target-side ceremony. Unknown or malformed controls are dropped.
+        if (message.type === 'enrollment-request' && this.deviceLifecycle) this.onDeviceControl?.(message as DeviceControlEvent);
     }
 
     private async withTabLock<T>(conversationId: string, operation: () => Promise<T>, persistLease = false): Promise<T> {

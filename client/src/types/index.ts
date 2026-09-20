@@ -4,7 +4,7 @@
 
 import type { IChatE2EE } from '@chat-e2ee/service';
 import type { CallLifecycleState } from '@chat-e2ee/service';
-import type { StoredContactIdentity } from '@chat-e2ee/service';
+import type { StoredContactIdentity, EnrollmentRequest, LifecycleStateSnapshot } from '@chat-e2ee/service';
 
 // Message type
 export interface Message {
@@ -56,6 +56,8 @@ export interface ChatContextType {
   protocolMode: 'legacy' | 'modern';
   ownFingerprint?: string;
   contactIdentity?: StoredContactIdentity;
+  deviceLifecycleState?: LifecycleStateSnapshot;
+  pendingDeviceEnrollment?: EnrollmentRequest;
 
   // Methods
   initializeChat: () => Promise<void>;
@@ -64,6 +66,10 @@ export interface ChatContextType {
   joinModernChannel: (roomId: string, controlCapability: string, address: string, passphrase: string) => Promise<void>;
   verifyContact: () => Promise<void>;
   acceptChangedIdentity: () => Promise<void>;
+  requestDeviceEnrollment: (deviceId: string, publicIdentityReference: string, algorithm: string) => Promise<void>;
+  approveDeviceEnrollment: () => Promise<void>;
+  rejectDeviceEnrollment: () => Promise<void>;
+  revokeDevice: (deviceId: string) => Promise<void>;
   joinChannel: (roomId: string, secret: string, controlCapability: string) => Promise<void>;
   sendMessage: (text: string) => Promise<void>;
   startCall: () => Promise<void>;
