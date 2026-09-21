@@ -9,6 +9,18 @@ export interface SecureStorageAdapter {
     lock(): Promise<void>;
 }
 
+export interface PlatformStorageProfile {
+    readonly platform: PlatformName;
+    readonly keyIsolationRequired: true;
+    readonly encryptedAppPrivateStateRequired: true;
+    readonly backupExclusionRequired: true;
+    readonly secureDeletionBoundaryRequired: true;
+}
+
+export interface PlatformSecureStorageProvider {
+    open(profile: PlatformStorageProfile): Promise<SecureStorageAdapter>;
+}
+
 export interface PermissionAdapter { request(permission: PermissionName): Promise<boolean>; release(permission: PermissionName): Promise<void>; }
 export interface LocalEncryptionAdapter { encrypt(plaintext: Uint8Array): Promise<Uint8Array>; decrypt(ciphertext: Uint8Array): Promise<Uint8Array>; }
 export interface DeviceLifecycleAdapter { onSuspend(handler: () => Promise<void>): () => void; onResume(handler: () => Promise<void>): () => void; }

@@ -22,6 +22,11 @@ export interface RecoveryMaterialVerifier {
     verify(archive: RecoveryArchive, secret: Uint8Array): Promise<void>;
 }
 
+export interface RecoveryArchiveCrypto {
+    seal(manifest: RecoveryArchiveManifest, plaintext: Uint8Array, secret: Uint8Array): Promise<RecoveryArchive>;
+    open(archive: RecoveryArchive, secret: Uint8Array): Promise<Uint8Array>;
+}
+
 export interface RecoveryReplacementContext {
     readonly oldFingerprint: string;
     readonly newFingerprint: string;
@@ -33,4 +38,9 @@ export interface RecoveryPersistence {
     stage(archive: RecoveryArchive, context: RecoveryReplacementContext): Promise<void>;
     complete(replacementId: string): Promise<void>;
     reject(replacementId: string): Promise<void>;
+}
+
+export interface RecoveryTrustReplacementBoundary {
+    replaceIdentity(context: RecoveryReplacementContext, userConfirmed: true): Promise<{ readonly newScope: string; readonly invalidatedDeviceIds: readonly string[] }>;
+    resetContactTrust(newScope: string): Promise<void>;
 }
