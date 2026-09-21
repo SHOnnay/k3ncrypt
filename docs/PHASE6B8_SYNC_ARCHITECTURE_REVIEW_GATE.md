@@ -2,6 +2,9 @@
 
 Review baseline: `7b5a18139d36b8ff12721cc29330dd5c5e2a2d72`.
 Verdict: **NOT READY for security-sensitive synchronization implementation.**
+Latest design-closure status: see §13. Four normative specifications now narrow
+the remaining architectural issue to membership ordering/fencing; READY is not
+claimed while that issue is unresolved.
 This is a design review: attacks below are reasoned counterexamples and required
 experiments, not executed exploits or newly passing tests. No source is changed.
 
@@ -353,3 +356,39 @@ attachment, call or lifecycle source change is authorized by this review.
 Documentation only: verify this file exists, local links resolve, and staged
 changes contain only this report; run `git diff --check`. No implementation,
 browser or adversarial execution results are claimed for this milestone.
+
+## 13. Design closure disposition
+
+The following design-only addenda supersede conflicting v1 details in the earlier
+architecture and roadmap. They are specifications, not implemented guarantees:
+
+- [Protocol specification](PHASE6B8_SYNC_PROTOCOL_SPECIFICATION.md)
+- [State machine](PHASE6B8_SYNC_STATE_MACHINE.md)
+- [Conflict model](PHASE6B8_SYNC_CONFLICT_MODEL.md)
+- [Record permissions](PHASE6B8_SYNC_RECORD_PERMISSION_MODEL.md)
+
+| Finding | Design disposition | Residual work |
+| --- | --- | --- |
+| G1 | **OPEN.** Fixed-membership admission and immediate local suspension are specified. Global ordering of competing lifecycle changes is not. | Protocol §10 requires an explicit agreement/reconfiguration decision under the existing authority assumptions. Do not implement a guessed server CAS, trusted sequencer or quorum. |
+| G2 | Defined restricted bootstrap, stable scope pinning, independent device identity binding, direct author/target ratification and unavailable-author suspension. | Real bootstrap composition and cross-device tests; checkpoint activation across membership change depends on G1. |
+| G3 | Defined conservative durable intent/staging/ACK crash table around the inspected runtime's persist-before-return behavior. Uncertain streams close; no ratchet rollback. | Implement actual local atomic application transaction and fault tests; transparent retry across uncertain ratchet progress is deliberately not promised. |
+| G4 | Defined snapshot-after-retention, explicit gaps, current-exporter historical provenance, expiry preservation and no v1 tombstone compaction. | Storage/quota and deletion-race tests. |
+| G5 | Defined typed object authority, causal multi-value resolution, immutable contact/protocol identity, historical-only conversation mapping and local-only unblock. | Independent contact sending remains outside initial v1 sync; do not claim complete live multi-device messaging. |
+| G6 | Defined exact frame/body schemas, canonical rules, namespace bounds, fragmentation, local deadlines and a fixed full-frame digest fixture. | Additional independently reviewed schema fixtures and parser limits tests before merge. |
+| G7 | Retained approved single-device authority and explicitly documented issuer-plus-target compromise as a limitation. | A stronger guarantee requires separately approved authority changes; no hidden second approval is inferred. |
+| G8 | Specified selected retained history, appearance-only settings, attachment placeholders, no automatic verified-contact import and explicit metadata limits. | Full attachment/direct-contact compatibility is not part of v1 readiness. |
+
+**Overall: NOT READY.** Luna can implement the closed data-model contracts only
+in isolation; Luna cannot implement the complete sync system without making the
+G1 architectural decision. No code should choose that decision implicitly.
+
+Exact next action: resolve protocol §10 with a membership reconfiguration decision
+record. It must explain how concurrent A-revokes-B/B-revokes-A and an unavailable
+removed device yield one fenced outcome or a deliberately suspended outcome,
+without granting the server trust authority or claiming the removed device erased
+its old ciphertext. If only permanent suspension is supported, label that scope
+restriction explicitly rather than reporting distributed synchronization complete.
+
+Documentation validation: verify the four new files and local references, confirm
+the frame fixture byte count/digest, and run staged diff whitespace/scope checks.
+No runtime validation or design proof of G1 is claimed.
