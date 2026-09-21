@@ -6,6 +6,8 @@ import { SyncStateMachine } from './stateMachine';
 /** Application adapter for one recipient-specific transfer. It never owns keys. */
 export class SyncTransferController {
     public readonly state = new SyncStateMachine('pending', 'created');
+    public get members(): readonly string[] { return this.authorization.activeMemberDeviceIds ?? [this.authorization.sourceDeviceId, this.authorization.targetDeviceId]; }
+    public get membershipEvidenceRequired(): boolean { return this.authorization.activeMemberDeviceIds !== undefined; }
     private readonly received = new Map<number, string>();
     public constructor(private readonly authorization: SyncAuthorization, private readonly trust: SyncTrustBoundary, private readonly now = Date.now) {}
 

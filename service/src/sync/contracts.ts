@@ -15,6 +15,7 @@ export interface SyncAuthorization {
     readonly checkpoint: SyncCheckpoint;
     readonly transferId: string;
     readonly expiresAt: number;
+    readonly activeMemberDeviceIds?: readonly string[];
 }
 export interface SyncPackage {
     readonly version: 1;
@@ -44,10 +45,10 @@ export interface SyncPersistence {
     claim(scope: string, key: string): Promise<boolean>;
     read(scope: string): Promise<SyncCheckpoint | undefined>;
     write(scope: string, checkpoint: SyncCheckpoint): Promise<void>;
-    readonly durable?: true;
-    transaction?<T>(scope: string, expected: SyncCheckpoint | undefined, operation: (tx: SyncPersistenceTransaction) => Promise<T>): Promise<T>;
-    readState?(scope: string): Promise<SyncDurableState | undefined>;
-    writeState?(scope: string, state: SyncDurableState): Promise<void>;
+    readonly durable: true;
+    transaction<T>(scope: string, expected: SyncCheckpoint | undefined, operation: (tx: SyncPersistenceTransaction) => Promise<T>): Promise<T>;
+    readState(scope: string): Promise<SyncDurableState | undefined>;
+    writeState(scope: string, state: SyncDurableState): Promise<void>;
 }
 
 export type SyncAdmissionState = 'idle' | 'prepare' | 'prepared' | 'ready' | 'transfer';
@@ -60,6 +61,8 @@ export interface SyncDurableState {
     readonly authorizationId?: string;
     readonly transferId?: string;
     readonly receivedSequences: readonly number[];
+    readonly preparedMembers?: readonly string[];
+    readonly readyMembers?: readonly string[];
     readonly terminal?: 'completed' | 'failed';
 }
 

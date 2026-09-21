@@ -27,9 +27,20 @@ export interface SyncRetryPolicy {
 
 const id = /^[A-Za-z0-9_-]{16,128}$/;
 const hash = /^[0-9a-f]{64}$/;
+const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
+const requiredString = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 256;
+
+const validatePayload = (kind: SyncRecordKind, payload: unknown): void => {
+    if (!object(payload)) throw new Error('Sync record rejected.');
+    if (kind === 'conversation' && (!requiredString(payload.contact) || !requiredString(payload.fingerprint) || !['modern', 'legacy'].includes(String(payload.protocol)) || typeof payload.label !== 'string')) throw new Error('Sync record rejected.');
+    if (kind === 'contact' && (!requiredString(payload.contact) || !requiredString(payload.fingerprint) || !['unconfirmed', 'changed'].includes(String(payload.status)))) throw new Error('Sync record rejected.');
+    if (kind === 'device' && (!requiredString(payload.deviceId) || !requiredString(payload.identityReference) || !['pending', 'active', 'revoked'].includes(String(payload.state)))) throw new Error('Sync record rejected.');
+    if (kind === 'settings' && (!['paper-ink', 'slate-dusk'].includes(String(payload.theme)))) throw new Error('Sync record rejected.');
+};
 
 export const validateSyncRecord = (record: SyncRecord, checkpoint: SyncCheckpoint): void => {
-    if (record.version !== 1 || !record.scope || !id.test(record.recordId) || !['conversation', 'contact', 'device', 'settings'].includes(record.kind) || record.epoch !== checkpoint.epoch || record.commitment !== checkpoint.commitment || !hash.test(record.commitment) || record.payload === undefined) throw new Error('Sync record rejected.');
+    if (record.version !== 1 || !record.scope || !id.test(record.recordId) || !['conversation', 'contact', 'device', 'settings'].includes(record.kind) || record.epoch !== checkpoint.epoch || record.commitment !== checkpoint.commitment || !hash.test(record.commitment)) throw new Error('Sync record rejected.');
+    validatePayload(record.kind, record.payload);
 };
 
 export const validateSyncRecords = (scope: string, checkpoint: SyncCheckpoint, records: readonly SyncRecord[]): void => {

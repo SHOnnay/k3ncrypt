@@ -8,6 +8,8 @@ export class RuntimeSyncController {
     private admission: SyncAdmissionState = 'idle';
     private expiresAt = 0;
     private readonly receivedSequences = new Set<number>();
+    private readonly preparedMembers = new Set<string>();
+    private readonly readyMembers = new Set<string>();
     private checkpoint?: SyncCheckpoint;
     public constructor(private readonly scope: string, private readonly localDeviceId: string, private readonly trust: SyncTrustBoundary, private readonly persistence: SyncPersistence, private readonly now = Date.now) {}
 
@@ -20,22 +22,43 @@ export class RuntimeSyncController {
         this.transfer = new SyncTransferController(authorization, this.trust, this.now);
         this.expiresAt = authorization.expiresAt;
         this.checkpoint = authorization.checkpoint;
+        this.preparedMembers.add(this.localDeviceId);
+        this.readyMembers.add(this.localDeviceId);
         await this.transfer.authorize();
         this.admission = 'prepare';
-        await this.atomic(authorization.checkpoint, async (tx) => tx.writeState(this.scope, this.state(authorization.checkpoint)));
+        await this.atomic(persisted, async (tx) => tx.writeState(this.scope, this.state(authorization.checkpoint)));
+    }
+
+    /** Restores only durable evidence; live admission always requires reauthorization after restart. */
+    public async recover(): Promise<SyncDurableState | undefined> {
+        const state = await this.persistence.readState(this.scope);
+        if (!state) return undefined;
+        if (state.version !== 1 || state.scope !== this.scope || !Number.isSafeInteger(state.checkpoint.epoch) || state.checkpoint.epoch < 0 || new Set(state.receivedSequences).size !== state.receivedSequences.length) throw new Error('Sync recovery state is corrupted.');
+        this.checkpoint = state.checkpoint;
+        this.receivedSequences.clear();
+        for (const sequence of state.receivedSequences) { if (!Number.isSafeInteger(sequence) || sequence < 1) throw new Error('Sync recovery state is corrupted.'); this.receivedSequences.add(sequence); }
+        this.preparedMembers.clear();
+        this.readyMembers.clear();
+        for (const deviceId of state.preparedMembers ?? []) this.preparedMembers.add(deviceId);
+        for (const deviceId of state.readyMembers ?? []) this.readyMembers.add(deviceId);
+        this.admission = 'idle';
+        return state;
     }
 
     public async prepared(): Promise<void> { if (this.admission !== 'prepare' || !this.transfer || this.now() > this.expiresAt) throw new Error('Sync admission is unavailable.'); const snapshot = await this.trust.snapshot(); await this.trust.assertTrustedAt(snapshot.list.epoch); this.admission = 'prepared'; await this.persistState(this.checkpoint!); }
     public async ready(): Promise<void> { if (this.admission !== 'prepared' || !this.transfer || this.now() > this.expiresAt) throw new Error('Sync admission is unavailable.'); const snapshot = await this.trust.snapshot(); await this.trust.assertTrustedAt(snapshot.list.epoch); this.admission = 'ready'; await this.persistState(this.checkpoint!); }
 
-    public begin(): void { if (!this.transfer || this.admission !== 'ready' || this.now() > this.expiresAt) throw new Error('Sync admission is unavailable.'); this.transfer.begin(); this.admission = 'transfer'; void this.persistState(this.checkpoint!); }
+    public recordPrepared(deviceId: string): void { if (!this.transfer || !this.transferMembers().includes(deviceId)) throw new Error('Sync admission member rejected.'); this.preparedMembers.add(deviceId); }
+    public recordReady(deviceId: string): void { if (!this.transfer || !this.transferMembers().includes(deviceId) || !this.preparedMembers.has(deviceId)) throw new Error('Sync admission member rejected.'); this.readyMembers.add(deviceId); }
 
-    public async receiveAuthenticated(frame: AuthenticatedSyncFrame & { package: SyncPackage }): Promise<ReturnType<SyncTransferController['accept']> extends Promise<infer A> ? A : never> {
+    public async begin(): Promise<void> { if (!this.transfer || this.admission !== 'ready' || this.now() > this.expiresAt || (this.transfer.membershipEvidenceRequired && (this.preparedMembers.size !== this.transferMembers().length || this.readyMembers.size !== this.transferMembers().length))) throw new Error('Sync admission is unavailable.'); this.transfer.begin(); this.admission = 'transfer'; await this.persistState(this.checkpoint!); }
+
+    public async receiveAuthenticated(frame: AuthenticatedSyncFrame): Promise<ReturnType<SyncTransferController['accept']> extends Promise<infer A> ? A : never> {
         if (frame.sessionBinding.length === 0 || frame.senderIdentityReference.length === 0) throw new Error('Authenticated sync frame rejected.');
-        return this.receive(frame.package);
+        return this.receiveInternal(frame.syncPackage);
     }
 
-    public async receive(pkg: SyncPackage): Promise<ReturnType<SyncTransferController['accept']> extends Promise<infer A> ? A : never> {
+    private async receiveInternal(pkg: SyncPackage): Promise<ReturnType<SyncTransferController['accept']> extends Promise<infer A> ? A : never> {
         if (!this.transfer || this.admission !== 'transfer' || this.now() > this.expiresAt) throw new Error('Sync transfer is unavailable.');
         const receipt = await this.transfer.accept(pkg);
         const key = `${pkg.sender}:${pkg.receiver}:${pkg.streamId}:${pkg.sequence}`;
@@ -44,10 +67,11 @@ export class RuntimeSyncController {
         return receipt;
     }
 
-    public complete(): void { if (!this.transfer || this.admission !== 'transfer') throw new Error('Sync transfer is unavailable.'); this.transfer.complete(); this.admission = 'idle'; void this.persistState(this.checkpoint!, 'completed'); }
-    public fail(): void { this.transfer?.fail(); this.admission = 'idle'; if (this.checkpoint) void this.persistState(this.checkpoint, 'failed'); }
+    public async complete(): Promise<void> { if (!this.transfer || this.admission !== 'transfer') throw new Error('Sync transfer is unavailable.'); this.transfer.complete(); this.admission = 'idle'; await this.persistState(this.checkpoint!, 'completed'); }
+    public async fail(): Promise<void> { this.transfer?.fail(); this.admission = 'idle'; if (this.checkpoint) await this.persistState(this.checkpoint, 'failed'); }
 
-    private state(checkpoint: SyncCheckpoint, terminal?: 'completed' | 'failed'): SyncDurableState { return { scope: this.scope, version: 1, checkpoint, admission: this.admission, receivedSequences: [...this.receivedSequences].sort((a, b) => a - b), terminal }; }
-    private async persistState(checkpoint: SyncCheckpoint, terminal?: 'completed' | 'failed'): Promise<void> { if (this.persistence.writeState) await this.persistence.writeState(this.scope, this.state(checkpoint, terminal)); }
-    private async atomic<T>(checkpoint: SyncCheckpoint, operation: (tx: SyncPersistenceTransaction) => Promise<T>): Promise<T> { if (!this.persistence.transaction) throw new Error('Durable sync persistence is unavailable.'); return this.persistence.transaction(this.scope, checkpoint, operation); }
+    private state(checkpoint: SyncCheckpoint, terminal?: 'completed' | 'failed'): SyncDurableState { return { scope: this.scope, version: 1, checkpoint, admission: this.admission, receivedSequences: [...this.receivedSequences].sort((a, b) => a - b), preparedMembers: [...this.preparedMembers].sort(), readyMembers: [...this.readyMembers].sort(), terminal }; }
+    private transferMembers(): readonly string[] { return this.transfer ? this.transfer.members : []; }
+    private async persistState(checkpoint: SyncCheckpoint, terminal?: 'completed' | 'failed'): Promise<void> { await this.atomic(checkpoint, async (tx) => tx.writeState(this.scope, this.state(checkpoint, terminal))); }
+    private async atomic<T>(checkpoint: SyncCheckpoint | undefined, operation: (tx: SyncPersistenceTransaction) => Promise<T>): Promise<T> { return this.persistence.transaction(this.scope, checkpoint, operation); }
 }

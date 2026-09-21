@@ -396,10 +396,11 @@ export class ModernConversation {
     }
 
     /** Returns a sync transport only for the active verified modern session. */
-    public createAuthenticatedSyncTransport(binding: Omit<SyncSessionBinding, 'session'>): AuthenticatedSyncTransport {
+    public async createAuthenticatedSyncTransport(binding: Omit<SyncSessionBinding, 'session'>): Promise<AuthenticatedSyncTransport> {
         if (!this.roomId || !this.localAddress || !this.localIdentityId || !this.remoteAddress) throw new Error('Modern conversation is not ready for synchronization.');
         if (!this.runtime.getAuthenticatedSession()) throw new Error('Authenticated sync session is unavailable.');
-        if (binding.peerDeviceId !== this.remoteAddress || binding.localIdentityReference !== this.localIdentityId) throw new Error('Authenticated sync identity rejected.');
+        const contact = await this.registry.get(this.remoteAddress);
+        if (!contact || contact.verification !== 'verified' || contact.changeStatus !== 'unchanged' || binding.peerDeviceId !== this.remoteAddress || binding.peerIdentityReference !== contact.identityId || binding.localIdentityReference !== this.localIdentityId) throw new Error('Authenticated sync identity rejected.');
         return new AuthenticatedSyncTransport({ ...binding, session: this.runtime.getAuthenticatedSession() }, this.transport, this.localIdentityId, this.localAddress);
     }
 

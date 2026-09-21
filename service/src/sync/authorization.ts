@@ -2,7 +2,8 @@ import { verifyDeviceListCheckpoint } from './codec';
 import type { SyncAuthorization, SyncTrustBoundary } from './contracts';
 
 export const authorizeSync = async (authorization: SyncAuthorization, trust: SyncTrustBoundary, now = Date.now()): Promise<void> => {
-    if (authorization.version !== 1 || !authorization.scope || !authorization.sourceDeviceId || !authorization.targetDeviceId || authorization.sourceDeviceId === authorization.targetDeviceId || !Number.isSafeInteger(authorization.expiresAt) || now > authorization.expiresAt) throw new Error('Sync authorization rejected.');
+    const members = authorization.activeMemberDeviceIds ?? [authorization.sourceDeviceId, authorization.targetDeviceId];
+    if (authorization.version !== 1 || !authorization.scope || !authorization.sourceDeviceId || !authorization.targetDeviceId || authorization.sourceDeviceId === authorization.targetDeviceId || !Number.isSafeInteger(authorization.expiresAt) || now > authorization.expiresAt || !members.includes(authorization.sourceDeviceId) || !members.includes(authorization.targetDeviceId) || new Set(members).size !== members.length) throw new Error('Sync authorization rejected.');
     const snapshot = await trust.snapshot();
     await verifyDeviceListCheckpoint(snapshot.list, authorization.checkpoint);
     await trust.assertTrustedAt(authorization.checkpoint.epoch);

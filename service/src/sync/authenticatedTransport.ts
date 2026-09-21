@@ -9,12 +9,20 @@ export interface SyncSessionBinding {
     readonly peerDeviceId: string;
 }
 
-export interface AuthenticatedSyncFrame {
-    readonly envelope: EncryptedEnvelope;
-    readonly sessionBinding: string;
-    readonly senderIdentityReference: string;
-    readonly receiverIdentityReference: string;
-    readonly senderDeviceId: string;
+export class AuthenticatedSyncFrame {
+    readonly #authenticated = true;
+    public get authenticated(): true { return this.#authenticated; }
+    private constructor(
+        readonly envelope: EncryptedEnvelope,
+        readonly sessionBinding: string,
+        readonly senderIdentityReference: string,
+        readonly receiverIdentityReference: string,
+        readonly senderDeviceId: string,
+        readonly syncPackage: SyncPackage,
+    ) {}
+    public static create(envelope: EncryptedEnvelope, sessionBinding: string, senderIdentityReference: string, receiverIdentityReference: string, senderDeviceId: string, syncPackage: SyncPackage): AuthenticatedSyncFrame {
+        return new AuthenticatedSyncFrame(envelope, sessionBinding, senderIdentityReference, receiverIdentityReference, senderDeviceId, syncPackage);
+    }
 }
 
 const encode = (value: SyncPackage): ArrayBuffer => new TextEncoder().encode(JSON.stringify(value)).buffer as ArrayBuffer;
@@ -34,10 +42,10 @@ export class AuthenticatedSyncTransport {
         await this.transport.sendEnvelope('signaling', await this.binding.session.encrypt('signaling', encode(pkg)), pkg.receiver);
     }
 
-    public async receive(envelope: EncryptedEnvelope, expectedPeerDeviceId: string): Promise<AuthenticatedSyncFrame & { package: SyncPackage }> {
+    public async receive(envelope: EncryptedEnvelope, expectedPeerDeviceId: string): Promise<AuthenticatedSyncFrame> {
         if (!this.binding.session.ready || !this.binding.session.encrypted || expectedPeerDeviceId !== this.binding.peerDeviceId) throw new Error('Authenticated sync session rejected.');
         const pkg = decode(await this.binding.session.decrypt('signaling', envelope));
         if (pkg.scope !== this.scope || pkg.senderIdentity !== this.binding.peerIdentityReference || pkg.receiverIdentity !== this.binding.localIdentityReference || pkg.receiver !== this.localDeviceId || pkg.sender !== this.binding.peerDeviceId) throw new Error('Authenticated sync identity rejected.');
-        return { envelope, package: pkg, sessionBinding: this.binding.sessionBinding, senderIdentityReference: this.binding.peerIdentityReference, receiverIdentityReference: this.binding.localIdentityReference, senderDeviceId: this.binding.peerDeviceId };
+        return AuthenticatedSyncFrame.create(envelope, this.binding.sessionBinding, this.binding.peerIdentityReference, this.binding.localIdentityReference, this.binding.peerDeviceId, pkg);
     }
 }
