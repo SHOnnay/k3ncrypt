@@ -3,6 +3,7 @@ import { assertDeviceCanAuthorize, createDeviceEntry, type DeviceEntry, type Dev
 import { deviceListCommitment } from './canonicalEncoding';
 import { assertNextEpoch } from './epoch';
 import { createDeviceList, deviceEntryById } from './deviceList';
+import { assertIssuedDeviceContext } from './authenticatedContext';
 
 export type DeviceAuthorizationOperation = 'enroll' | 'revoke';
 
@@ -89,6 +90,8 @@ export interface AuthorizationRecord {
 
 /** Production boundary: implementations must atomically claim and commit all fields. */
 export interface DeviceLifecyclePersistence {
+    readAuthorization?(scope: string, digest: string): Promise<AuthorizationRecord | undefined>;
+    suspendTrust?(scope: string, epoch: number, commitment: string): Promise<void>;
     read(scope: string): Promise<LifecycleStateSnapshot | undefined>;
     commitEnrollment(input: {
         readonly scope: string;
@@ -120,7 +123,8 @@ const nowOr = (now: number | undefined): number => now ?? Date.now();
 const requireState = (state: LifecycleStateSnapshot | undefined): LifecycleStateSnapshot => state ?? fail('Device list unavailable.');
 const requireEntry = (entry: DeviceEntry | undefined, message: string): DeviceEntry => entry ?? fail(message);
 
-const assertContext = (context: AuthenticatedDeviceContext): void => {
+const assertContext = (context: AuthenticatedDeviceContext, payload?: unknown): void => {
+    assertIssuedDeviceContext(context, payload);
     const sender = context.authenticatedSender;
     if (!context.cryptoSession.encrypted || !context.cryptoSession.ready || !sender?.verified) fail('Authenticated device context unavailable.');
     if (!context.conversationId || !context.userScope || context.userScope !== sender.userScope || !sender.deviceId || !sender.identityReference) fail('Authenticated device context unavailable.');
@@ -128,6 +132,11 @@ const assertContext = (context: AuthenticatedDeviceContext): void => {
 
 const assertWindow = (createdAt: number, expiresAt: number, now: number): void => {
     if (!Number.isSafeInteger(createdAt) || !Number.isSafeInteger(expiresAt) || createdAt > expiresAt || now < createdAt || now > expiresAt) fail('Device authorization expired.');
+};
+const assertAuthor = (state: LifecycleStateSnapshot, authorization: DeviceAuthorization): void => {
+    const author = requireEntry(deviceEntryById(state.list, authorization.authorDeviceId), 'Authorization issuer unavailable.');
+    assertDeviceCanAuthorize(author);
+    if (author.publicIdentityReference !== authorization.authorIdentityReference || state.list.identityReference !== authorization.userScope || authorization.version !== 1 || !NONCE_PATTERN.test(authorization.transactionNonce) || authorization.sequence !== authorization.previousEpoch + 1) fail('Authorization issuer or scope rejected.');
 };
 
 const canonicalAuthorization = (authorization: Omit<DeviceAuthorization, 'authorizationDigest'>): Uint8Array => {
@@ -234,7 +243,7 @@ export class DeviceLifecycleService {
     }
 
     public async applyEnrollment(authorization: DeviceAuthorization, context: AuthenticatedDeviceContext): Promise<LifecycleStateSnapshot> {
-        assertContext(context);
+        assertContext(context, authorization);
         await this.verifier.verify(context, authorization);
         const sender = context.authenticatedSender;
         if (authorization.operation !== 'enroll' || authorization.userScope !== context.userScope || authorization.authorDeviceId !== sender.deviceId || authorization.authorIdentityReference !== sender.identityReference) fail('Enrollment authorization rejected.');
@@ -242,6 +251,7 @@ export class DeviceLifecycleService {
         assertWindow(authorization.createdAt, authorization.expiresAt, this.now());
         const state = requireState(await this.persistence.read(context.userScope));
         if (state.list.epoch !== authorization.previousEpoch || state.commitment !== authorization.previousCommitment) fail('Enrollment commitment mismatch.');
+        assertAuthor(state, authorization);
         if (deviceEntryById(state.list, authorization.targetDeviceId)) fail('Device identifier already exists.');
         const entry = createDeviceEntry({ deviceId: authorization.targetDeviceId, publicIdentityReference: authorization.targetPublicIdentityReference!, algorithm: authorization.targetAlgorithm!, state: 'approved_pending_confirmation', createdAt: authorization.createdAt });
         const nextList = createDeviceList({ version: 1, identityReference: state.list.identityReference, epoch: state.list.epoch + 1,
@@ -254,7 +264,8 @@ export class DeviceLifecycleService {
     }
 
     public async confirmEnrollment(authorization: DeviceAuthorization, context: AuthenticatedDeviceContext, confirmation: EnrollmentConfirmation): Promise<LifecycleStateSnapshot> {
-        assertContext(context);
+        assertContext(context, { authorization, confirmation });
+        if (authorization.userScope !== context.userScope || confirmation.version !== 1 || !NONCE_PATTERN.test(confirmation.confirmationNonce)) fail('Enrollment confirmation rejected.');
         if (authorization.operation !== 'enroll' || confirmation.authorizationDigest !== authorization.authorizationDigest || confirmation.targetDeviceId !== authorization.targetDeviceId || confirmation.targetIdentityReference !== authorization.targetPublicIdentityReference || context.authenticatedSender.deviceId !== authorization.targetDeviceId || context.authenticatedSender.identityReference !== authorization.targetPublicIdentityReference) fail('Enrollment confirmation rejected.');
         if (!(await verifyAuthorizationDigest(authorization)) || !(await verifyConfirmationDigest(confirmation))) fail('Enrollment confirmation rejected.');
         assertWindow(authorization.createdAt, authorization.expiresAt, this.now());
@@ -262,6 +273,9 @@ export class DeviceLifecycleService {
         const state = requireState(await this.persistence.read(context.userScope));
         if (state.list.epoch !== authorization.previousEpoch + 1 || state.commitment !== authorization.previousCommitment && state.list.previousCommitment !== authorization.previousCommitment) fail('Enrollment confirmation epoch mismatch.');
         const target = requireEntry(deviceEntryById(state.list, authorization.targetDeviceId), 'Enrollment target unavailable.');
+        assertAuthor(state, authorization);
+        const approved = await this.persistence.readAuthorization?.(context.userScope, authorization.authorizationDigest);
+        if (!approved || approved.transactionNonce !== authorization.transactionNonce || target.publicIdentityReference !== confirmation.targetIdentityReference || target.algorithm !== authorization.targetAlgorithm) fail('Enrollment confirmation does not match stored approval.');
         if (target.state !== 'approved_pending_confirmation') fail('Enrollment confirmation state invalid.');
         const active = createDeviceEntry({ ...target, state: 'active' });
         const nextList = createDeviceList({ version: 1, identityReference: state.list.identityReference, epoch: state.list.epoch + 1,
@@ -294,7 +308,7 @@ export class DeviceLifecycleService {
 
     public async applyRevocation(authorization: DeviceAuthorization, context: AuthenticatedDeviceContext, confirmation?: RevocationConfirmation): Promise<LifecycleStateSnapshot> {
         if (!confirmation) throw new Error('Explicit revocation confirmation required.');
-        assertContext(context);
+        assertContext(context, { authorization, confirmation });
         await this.verifier.verify(context, authorization);
         const sender = context.authenticatedSender;
         if (authorization.operation !== 'revoke' || authorization.userScope !== context.userScope || authorization.authorDeviceId !== sender.deviceId || authorization.authorIdentityReference !== sender.identityReference || confirmation.authorizationDigest !== authorization.authorizationDigest || confirmation.targetDeviceId !== authorization.targetDeviceId) fail('Revocation authorization rejected.');
@@ -303,6 +317,9 @@ export class DeviceLifecycleService {
         assertWindow(authorization.createdAt, authorization.expiresAt, this.now());
         const state = requireState(await this.persistence.read(context.userScope));
         if (state.list.epoch !== authorization.previousEpoch || state.commitment !== authorization.previousCommitment) fail('Revocation commitment mismatch.');
+        assertAuthor(state, authorization);
+        assertWindow(confirmation.confirmedAt, confirmation.expiresAt, this.now());
+        if (confirmation.version !== 1 || !NONCE_PATTERN.test(confirmation.confirmationNonce)) fail('Revocation confirmation rejected.');
         const target = requireEntry(deviceEntryById(state.list, authorization.targetDeviceId), 'Device cannot be revoked.');
         if (target.state === 'revoked' || target.deviceId === authorization.authorDeviceId) fail('Device cannot be revoked.');
         const revoked = createDeviceEntry({ ...target, state: 'revoked', revokedAt: this.now() });

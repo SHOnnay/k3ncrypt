@@ -19,9 +19,12 @@ export const createDeviceList = (input: DeviceList): DeviceList => {
     if (!Array.isArray(value.devices)) fail();
     const devices = (value.devices as unknown[]).map((entry) => createDeviceEntry(entry as DeviceEntry));
     const ids = new Set<string>();
+    const identities = new Set<string>();
     for (const entry of devices) {
         if (ids.has(entry.deviceId)) fail('Duplicate device identifier.');
         ids.add(entry.deviceId);
+        if (identities.has(entry.publicIdentityReference)) fail('Duplicate device public identity.');
+        identities.add(entry.publicIdentityReference);
     }
     return freezeList({
         version: 1,

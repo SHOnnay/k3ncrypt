@@ -3,6 +3,11 @@ import { BrowserCallMediaConnection, CallMediaController, type MediaCapture } fr
 const track = () => ({ stop: jest.fn() }) as unknown as MediaStreamTrack;
 const stream = () => { const tracks = [track(), track()]; return { getTracks: () => tracks } as unknown as MediaStream; };
 describe('call media transport boundary', () => {
+  it('passes relay-only policy to the actual peer factory', () => {
+    const factory = jest.fn(() => ({} as RTCPeerConnection));
+    new BrowserCallMediaConnection([], factory, 'relay');
+    expect(factory).toHaveBeenCalledWith({ iceServers: [], iceTransportPolicy: 'relay' });
+  });
   it('requests media only explicitly and releases all tracks', async () => { const captured = stream(); const capture: MediaCapture = { getUserMedia: jest.fn(async () => captured) }; const controller = new CallMediaController(capture); await controller.request('microphone'); expect(capture.getUserMedia).toHaveBeenCalledWith({ audio: true, video: false }); controller.release(); expect((captured.getTracks()[0].stop as jest.Mock)).toHaveBeenCalled(); });
   it('maps permission denial to a generic error and cleans up', async () => { const controller = new CallMediaController({ getUserMedia: async () => { throw new Error('browser detail'); } }); await expect(controller.request('camera')).rejects.toThrow('permission was denied'); });
   it('maps peer disconnect to reconnecting and closes resources', async () => { const listeners: (() => void)[] = []; const fake = { connectionState: 'new', close: jest.fn(), setLocalDescription: jest.fn(), setRemoteDescription: jest.fn(), createOffer: jest.fn(async () => ({})), createAnswer: jest.fn(async () => ({})), addIceCandidate: jest.fn(), addTrack: jest.fn(), set onconnectionstatechange(value: () => void) { listeners.push(value); } } as unknown as RTCPeerConnection; const connection = new BrowserCallMediaConnection([], () => fake); const states: string[] = []; connection.onStateChange((state) => states.push(state)); (fake as any).connectionState = 'disconnected'; listeners[0](); expect(states).toContain('reconnecting'); await connection.close(); expect(fake.close).toHaveBeenCalled(); expect(states).toContain('closed'); });

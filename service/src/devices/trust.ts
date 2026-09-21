@@ -24,9 +24,16 @@ export interface TrustStateEventSink {
 
 /** Single enforcement boundary shared by messaging, calls, attachments, and sync adapters. */
 export class DeviceTrustEnforcer {
+    private suspended = false;
+    public async suspend(epoch: number, commitment: string): Promise<void> {
+        this.suspended = true;
+        if (!this.persistence.suspendTrust) throw new Error('Durable trust suspension is unavailable.');
+        await this.persistence.suspendTrust(this.scope, epoch, commitment);
+    }
     public constructor(private readonly persistence: DeviceLifecyclePersistence, private readonly scope: string, private readonly deviceId: string, private readonly identityReference: string) {}
 
     public async snapshot(): Promise<LifecycleStateSnapshot> {
+        if (this.suspended) throw new Error('Device trust is unavailable: freshness conflicts.');
         const state = await this.persistence.read(this.scope);
         if (!state) throw new Error('Device trust is unavailable.');
         if (await deviceListCommitment(state.list) !== state.commitment) throw new Error('Device trust state is corrupted.');
@@ -73,8 +80,8 @@ export class TrustStateEventCoordinator {
         if (this.seen.has(event.eventId)) throw new Error('Trust state event replayed.');
         const current = await this.enforcer.snapshot();
         if (event.epoch < current.list.epoch) throw new Error('Trust state event is stale.');
-        if (event.epoch > current.list.epoch) throw new Error('Trust state event is unavailable.');
-        if (event.commitment !== current.commitment) throw new Error('Trust state event conflicts with current state.');
+        if (event.epoch > current.list.epoch) { await this.enforcer.suspend(event.epoch, event.commitment); throw new Error('Trust state event is unavailable.'); }
+        if (event.commitment !== current.commitment) { await this.enforcer.suspend(event.epoch, event.commitment); throw new Error('Trust state event conflicts with current state.'); }
         const entry = current.list.devices.find((candidate) => candidate.deviceId === event.deviceId);
         if (!entry || entry.publicIdentityReference !== event.identityReference || entry.state !== event.state) throw new Error('Trust state event does not match current state.');
         this.seen.add(event.eventId);

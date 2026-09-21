@@ -9,6 +9,7 @@ import { MicIcon, PaperclipIcon, SendIcon } from '../common/icons';
 import './ChatFooter.css';
 import { debugError } from '../../utils/debug';
 import { useMedia } from '../../context/MediaContext';
+import { BrowserCaptureController } from '../../../../service/src/privacy/capture';
 
 export const ChatFooter: React.FC = () => {
   const { sendMessage } = useChat();
@@ -21,6 +22,17 @@ export const ChatFooter: React.FC = () => {
   const recordingStartedAt = useRef<number>(0);
   const [isRecording, setIsRecording] = useState(false);
   const discardRecording = useRef(false);
+  const capture = useRef(new BrowserCaptureController());
+  useEffect(() => {
+    const cancel = () => {
+      discardRecording.current = true;
+      capture.current.release();
+      if (recorderRef.current?.state === 'recording') recorderRef.current.stop();
+    };
+    const hidden = () => { if (document.visibilityState === 'hidden') cancel(); };
+    document.addEventListener('visibilitychange', hidden);
+    return () => { document.removeEventListener('visibilitychange', hidden); cancel(); };
+  }, []);
   const [lastAttachment, setLastAttachment] = useState<{ kind: 'image' | 'file'; file: File }>();
 
   const handleSend = async () => {
@@ -55,11 +67,14 @@ export const ChatFooter: React.FC = () => {
       return;
     }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      discardRecording.current = false;
+      const stream = await capture.current.request({ audio: true });
       const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
       const chunks: Blob[] = [];
       recorder.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data); };
+      recorder.onerror = () => { discardRecording.current = true; capture.current.release(); setIsRecording(false); };
       recorder.onstop = async () => {
+        capture.current.release();
         stream.getTracks().forEach((track) => track.stop());
         setIsRecording(false);
         recorderRef.current = null;
@@ -72,12 +87,13 @@ export const ChatFooter: React.FC = () => {
       recordingStartedAt.current = Date.now();
       setIsRecording(true);
     } catch {
+      capture.current.release();
       setIsRecording(false);
     }
   };
 
   useEffect(() => {
-    const cancelOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape' && isRecording) { discardRecording.current = true; recorderRef.current?.stop(); } };
+    const cancelOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') { discardRecording.current = true; capture.current.release(); if (recorderRef.current?.state === 'recording') recorderRef.current.stop(); } };
     window.addEventListener('keydown', cancelOnEscape);
     return () => window.removeEventListener('keydown', cancelOnEscape);
   }, [isRecording]);

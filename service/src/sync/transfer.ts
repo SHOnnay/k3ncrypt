@@ -1,5 +1,6 @@
 import { authorizeSync } from './authorization';
 import { syncDigest } from './codec';
+import { decodeSyncPackage, encodeSyncPackage } from './codec';
 import type { SyncAcknowledgement, SyncAuthorization, SyncPackage, SyncTrustBoundary } from './contracts';
 import { SyncStateMachine } from './stateMachine';
 
@@ -20,6 +21,8 @@ export class SyncTransferController {
     public begin(): void { this.state.transitionDevice('syncing'); this.state.transitionTransfer('transferring'); }
 
     public async accept(pkg: SyncPackage): Promise<SyncAcknowledgement> {
+        pkg = decodeSyncPackage(encodeSyncPackage(pkg));
+        if (pkg.senderIdentity !== this.authorization.sourceIdentityReference || pkg.receiverIdentity !== this.authorization.targetIdentityReference || this.now() >= this.authorization.expiresAt) throw new Error('Sync identity or expiry rejected.');
         if (this.state.device !== 'syncing' || this.state.transfer !== 'transferring') throw new Error('Sync transfer is unavailable.');
         if (pkg.scope !== this.authorization.scope || pkg.sender !== this.authorization.sourceDeviceId || pkg.receiver !== this.authorization.targetDeviceId || pkg.transferId !== this.authorization.transferId || pkg.checkpoint.epoch !== this.authorization.checkpoint.epoch || pkg.checkpoint.commitment !== this.authorization.checkpoint.commitment) throw new Error('Sync package authorization rejected.');
         await this.trust.assertTrustedAt(pkg.checkpoint.epoch);

@@ -105,8 +105,10 @@ export interface TransportManager {
  * plaintext secret records unless their encryption boundary is explicit.
  */
 export type UnlockSecretType = 'passphrase' | 'password' | 'pin';
+export interface SecureRecordUpdate { recordType: string; recordId: string; expected: ArrayBuffer | undefined; next: ArrayBuffer; }
 
 export interface SecureStorage {
+    compareAndSwapRecords?(updates: readonly SecureRecordUpdate[]): Promise<boolean>;
     initializeWithPassphrase(secret: string, type?: UnlockSecretType): Promise<void>;
     unlock(secret: string): Promise<void>;
     lock(): void;

@@ -14,6 +14,8 @@ import {
 } from './index';
 import { deviceListCommitment } from './canonicalEncoding';
 import type { DeviceList } from './deviceIdentity';
+import { DeviceContextAuthority } from './authenticatedContext';
+import { authorizationDigest } from './lifecycle';
 
 const session: CryptoSession = {
   encrypted: true,
@@ -24,14 +26,10 @@ const session: CryptoSession = {
   destroy: () => undefined,
 };
 
-const context: AuthenticatedDeviceContext = {
-  cryptoSession: session,
-  conversationId: 'conversation-1',
-  userScope: 'user-1',
-  authenticatedSender: { deviceId: 'device-a', identityReference: 'identity-a', userScope: 'user-1', verified: true },
-};
+const context = new DeviceContextAuthority(session, 'conversation-1', { deviceId: 'device-a', identityReference: 'identity-a', userScope: 'user-1', verified: true }).localContext();
 
 class TestPersistence implements DeviceLifecyclePersistence {
+  public async readAuthorization(_scope: string, digest: string): Promise<AuthorizationRecord | undefined> { return this.records.find((record) => record.digest === digest); }
   public state!: LifecycleStateSnapshot;
   public records: AuthorizationRecord[] = [];
   public async read(): Promise<LifecycleStateSnapshot> { return this.state; }
@@ -54,6 +52,22 @@ const makePersistence = async (): Promise<TestPersistence> => {
 };
 
 describe('Phase 6B.2/6B.3 device lifecycle', () => {
+  it('rejects absent and revoked authors even with recomputed digests and a permissive verifier', async () => {
+    const persistence = await makePersistence();
+    const service = new DeviceLifecycleService(persistence, { verify: async () => undefined }, () => 2_000);
+    const request = createEnrollmentRequest({ userScope: 'user-1', requestedDeviceId: 'device-b', requestedPublicIdentityReference: 'identity-b', algorithm: 'vodozemac-v1', knownEpoch: 0, now: 1_500, transactionNonce: 'adversarial-nonce-1' });
+    const approval = await service.approveEnrollment(request, context, { deviceId: 'device-b', publicIdentityReference: 'identity-b' });
+    const forged = { ...approval, authorDeviceId: 'outsider', authorIdentityReference: 'outsider-key' };
+    forged.authorizationDigest = await authorizationDigest(forged);
+    const outsider = new DeviceContextAuthority(session, 'conversation-1', { deviceId: 'outsider', identityReference: 'outsider-key', userScope: 'user-1', verified: true }).localContext();
+    await expect(service.applyEnrollment(forged, outsider)).rejects.toThrow('issuer unavailable');
+    const revokedList = createDeviceList({ ...persistence.state.list, devices: persistence.state.list.devices.map((entry) => createDeviceEntry({ ...entry, state: 'revoked', revokedAt: 1_900 })) });
+    persistence.state = { list: revokedList, commitment: await deviceListCommitment(revokedList) };
+    const stale = { ...approval, previousCommitment: persistence.state.commitment };
+    stale.authorizationDigest = await authorizationDigest(stale);
+    await expect(service.applyEnrollment(stale, context)).rejects.toThrow();
+    expect(persistence.records).toHaveLength(0);
+  });
   it('enrolls and then revokes a device with chained epochs and commitments', async () => {
     const persistence = await makePersistence();
     const verifier = { verify: async (candidate: AuthenticatedDeviceContext, authorization: DeviceAuthorization) => {
@@ -119,13 +133,13 @@ describe('Phase 6B.2/6B.3 device lifecycle', () => {
     const service = new DeviceLifecycleService(persistence, verifier, () => 2_000);
     const request = createEnrollmentRequest({ userScope: 'user-1', requestedDeviceId: 'device-c', requestedPublicIdentityReference: 'identity-c', algorithm: 'vodozemac-v1', knownEpoch: 0, now: 1_500, transactionNonce: 'enrollment-nonce-5' });
     const approval = await service.approveEnrollment(request, context, { deviceId: 'device-c', publicIdentityReference: 'identity-c' });
-    await expect(service.applyEnrollment(approval, { ...context, authenticatedSender: { ...context.authenticatedSender, deviceId: 'device-b' } })).rejects.toThrow('invalid authenticated sender');
-    await expect(service.applyEnrollment(approval, { ...context, userScope: 'other-user', authenticatedSender: { ...context.authenticatedSender, userScope: 'other-user' } })).rejects.toThrow('authorization');
+    await expect(service.applyEnrollment(approval, { ...context, authenticatedSender: { ...context.authenticatedSender, deviceId: 'device-b' } })).rejects.toThrow('Invalid authenticated device context');
+    await expect(service.applyEnrollment(approval, { ...context, userScope: 'other-user', authenticatedSender: { ...context.authenticatedSender, userScope: 'other-user' } })).rejects.toThrow('Invalid authenticated device context');
     await expect(service.applyEnrollment({ ...approval, authorIdentityReference: 'forged-identity' }, context)).rejects.toThrow('invalid authenticated sender');
     await service.applyEnrollment(approval, context);
     const revoke = await service.approveRevocation('device-c', context);
     const confirmation = await createRevocationConfirmation({ version: 1, authorizationDigest: revoke.authorizationDigest, targetDeviceId: revoke.targetDeviceId, confirmationNonce: 'revoke-confirm-3', confirmedAt: 2_000, expiresAt: revoke.expiresAt });
-    await expect(service.applyRevocation(revoke, { ...context, authenticatedSender: { ...context.authenticatedSender, verified: false } }, confirmation)).rejects.toThrow('Authenticated device context unavailable');
+    await expect(service.applyRevocation(revoke, { ...context, authenticatedSender: { ...context.authenticatedSender, verified: false } }, confirmation)).rejects.toThrow('Invalid authenticated device context');
   });
 
   it('keeps an approved enrollment pending until the target device confirms', async () => {
@@ -134,7 +148,7 @@ describe('Phase 6B.2/6B.3 device lifecycle', () => {
     const request = createEnrollmentRequest({ userScope: 'user-1', requestedDeviceId: 'device-b', requestedPublicIdentityReference: 'identity-b', algorithm: 'vodozemac-v1', knownEpoch: 0, now: 1_500, transactionNonce: 'enrollment-nonce-6' });
     const authorization = await service.approveEnrollment(request, context, { deviceId: 'device-b', publicIdentityReference: 'identity-b' });
     await service.applyEnrollment(authorization, context);
-    const targetContext: AuthenticatedDeviceContext = { ...context, authenticatedSender: { deviceId: 'device-b', identityReference: 'identity-b', userScope: 'user-1', verified: true } };
+    const targetContext = new DeviceContextAuthority(session, 'conversation-1', { deviceId: 'device-b', identityReference: 'identity-b', userScope: 'user-1', verified: true }).localContext();
     const confirmation = await createEnrollmentConfirmation({ version: 1, authorizationDigest: authorization.authorizationDigest, targetDeviceId: 'device-b', targetIdentityReference: 'identity-b', confirmationNonce: 'enrollment-confirm-6', confirmedAt: 2_000, expiresAt: authorization.expiresAt });
     const confirmed = await service.confirmEnrollment(authorization, targetContext, confirmation);
     expect(confirmed.list.devices.find((entry) => entry.deviceId === 'device-b')?.state).toBe('active');

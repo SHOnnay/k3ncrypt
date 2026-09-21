@@ -1,6 +1,6 @@
 import { argon2id } from 'hash-wasm';
 
-import type { SecureStorage, UnlockSecretType } from '../core/contracts';
+import type { SecureStorage, SecureRecordUpdate, UnlockSecretType } from '../core/contracts';
 import { fromBase64Url, toBase64Url } from '../crypto/base64url';
 import type { VaultPersistence } from './persistence';
 
@@ -253,6 +253,27 @@ export class BrowserSecureStorage implements SecureStorage {
     }
 
     public async write(recordType: string, recordId: string, plaintext: ArrayBuffer): Promise<void> {
+        await this.persistence.writeRecord(persistenceKey(recordType, recordId), await this.encryptRecord(recordType, recordId, plaintext));
+    }
+
+    public async compareAndSwapRecords(updates: readonly SecureRecordUpdate[]): Promise<boolean> {
+        if (!this.persistence.compareAndSwapRecords) throw new Error('Atomic secure storage is unavailable.');
+        const prepared = [];
+        for (const item of updates) {
+            this.validateRecordAddress(item.recordType, item.recordId);
+            const key = persistenceKey(item.recordType, item.recordId);
+            const before = await this.persistence.readRecord(key);
+            const plaintext = await this.read(item.recordType, item.recordId);
+            if ((plaintext === undefined) !== (item.expected === undefined) || (plaintext && item.expected && (plaintext.byteLength !== item.expected.byteLength || !new Uint8Array(plaintext).every((byte, index) => byte === new Uint8Array(item.expected!)[index])))) return false;
+            // A concurrent change between the two reads is a conflict, even if it decrypts to equal bytes.
+            if (await this.persistence.readRecord(key) !== before) return false;
+            prepared.push({ key, expected: before, next: await this.encryptRecord(item.recordType, item.recordId, item.next) });
+        }
+        this.requireStorageKey();
+        return this.persistence.compareAndSwapRecords(prepared);
+    }
+
+    private async encryptRecord(recordType: string, recordId: string, plaintext: ArrayBuffer): Promise<string> {
         const key = this.requireStorageKey();
         this.validateRecordAddress(recordType, recordId);
         if (!(plaintext instanceof ArrayBuffer) || plaintext.byteLength > 4 * 1024 * 1024) {
@@ -271,7 +292,7 @@ export class BrowserSecureStorage implements SecureStorage {
             nonce: toBase64Url(nonce),
             ciphertext: toBase64Url(new Uint8Array(ciphertext)),
         };
-        await this.persistence.writeRecord(persistenceKey(recordType, recordId), JSON.stringify(envelope));
+        return JSON.stringify(envelope);
     }
 
     public async delete(recordType: string, recordId: string): Promise<void> {

@@ -59,7 +59,20 @@ export class VodozemacRuntime {
     public getAuthenticatedSession(): CryptoSession {
         this.requireState('active', 'persisted');
         if (!this.session?.ready) throw new VodozemacBoundaryError('MISSING_SESSION', 'No active conversation session.');
-        return this.session;
+        const runtime = this;
+        const boundSession = this.session;
+        const check = (): void => {
+            runtime.requireState('active', 'persisted');
+            if (runtime.session !== boundSession) throw new VodozemacBoundaryError('MISSING_SESSION', 'Session binding expired.');
+        };
+        return Object.freeze({
+            get encrypted() { return runtime.session === boundSession && boundSession.encrypted; },
+            get ready() { return runtime.session === boundSession && boundSession.ready && ['active', 'persisted'].includes(runtime.state); },
+            initialize: async () => { throw new Error('Session initialization belongs to the runtime.'); },
+            encrypt: async (channel, plaintext) => { check(); return runtime.encrypt(channel, plaintext); },
+            decrypt: async (channel, envelope) => { check(); return runtime.decrypt(channel, envelope); },
+            destroy: () => { check(); runtime.close(); },
+        } satisfies CryptoSession);
     }
 
     public async initialize(): Promise<void> {
@@ -209,11 +222,13 @@ export class VodozemacRuntime {
         return this.sessionMutex.runExclusive(async () => {
             this.requireState('active', 'persisted');
             if (!this.session) throw new VodozemacBoundaryError('MISSING_SESSION', 'No active conversation session.');
+            await this.prepareMutation();
             let envelope;
             try { envelope = await this.session.encrypt(channel, plaintext); }
-            catch { throw new VodozemacBoundaryError('INVALID_CIPHERTEXT', 'The message could not be encrypted.'); }
+            catch { this.quarantineSession(); throw new VodozemacBoundaryError('INVALID_CIPHERTEXT', 'The message could not be encrypted.'); }
             try {
                 await this.persistSessionUnsafe();
+                await this.storage.delete(TRANSACTION_RECORD_TYPE, 'local');
                 return envelope;
             } catch {
                 this.quarantineSession();
@@ -226,11 +241,13 @@ export class VodozemacRuntime {
         return this.sessionMutex.runExclusive(async () => {
             this.requireState('active', 'persisted');
             if (!this.session) throw new VodozemacBoundaryError('MISSING_SESSION', 'No active conversation session.');
+            await this.prepareMutation();
             let plaintext: ArrayBuffer | undefined;
             try { plaintext = await this.session.decrypt(channel, envelope); }
-            catch { throw new VodozemacBoundaryError('INVALID_CIPHERTEXT', 'The message could not be decrypted.'); }
+            catch { this.quarantineSession(); throw new VodozemacBoundaryError('INVALID_CIPHERTEXT', 'The message could not be decrypted.'); }
             try {
                 await this.persistSessionUnsafe();
+                await this.storage.delete(TRANSACTION_RECORD_TYPE, 'local');
                 return plaintext;
             } catch {
                 new Uint8Array(plaintext).fill(0);
@@ -242,6 +259,11 @@ export class VodozemacRuntime {
 
     public async persistSession(): Promise<void> {
         await this.sessionMutex.runExclusive(() => this.persistSessionUnsafe(true));
+    }
+    private async prepareMutation(): Promise<void> {
+        if (!this.conversationId || !this.session) throw new Error('Session unavailable.');
+        const marker: CommitMarker = { version: 1, conversationId: this.conversationId, sessionId: this.session.sessionId(), phase: 'prepared' };
+        await this.storage.write(TRANSACTION_RECORD_TYPE, 'local', new TextEncoder().encode(JSON.stringify(marker)).buffer as ArrayBuffer);
     }
 
     public close(): void {

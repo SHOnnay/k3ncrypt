@@ -5,6 +5,12 @@ import { createDeviceEntry, createDeviceList, deviceListCommitment } from './ind
 const envelope: EncryptedEnvelope = { version: 1, strategy: 'test', data: {} };
 
 class MemoryLifecycleStorage implements Partial<SecureStorage> {
+  public async compareAndSwapRecords(updates: readonly import('../core/contracts').SecureRecordUpdate[]): Promise<boolean> {
+    if (this.failWrites) throw new Error('simulated write failure');
+    if (updates.some((item) => { const old = this.records.get(`${item.recordType}:${item.recordId}`); return old === undefined ? item.expected !== undefined : item.expected === undefined || !Buffer.from(old).equals(Buffer.from(item.expected)); })) return false;
+    for (const item of updates) this.records.set(`${item.recordType}:${item.recordId}`, item.next.slice(0));
+    return true;
+  }
   public records = new Map<string, ArrayBuffer>();
   public failWrites = false;
   public async read(type: string, id: string): Promise<ArrayBuffer | undefined> { return this.records.get(`${type}:${id}`); }
@@ -24,6 +30,7 @@ describe('authenticated device control channel', () => {
     const channel = new AuthenticatedDeviceControlChannel(session, transport);
     await channel.send({ type: 'enrollment-rejection', payload: { version: 1, transactionNonce: 'nonce' } });
     expect(sent).toHaveLength(1);
+    await expect(channel.receive(sent[0])).resolves.toEqual({ type: 'enrollment-rejection', payload: { version: 1, transactionNonce: 'nonce' } });
     await expect(channel.receive(envelope)).resolves.toBeUndefined();
   });
 

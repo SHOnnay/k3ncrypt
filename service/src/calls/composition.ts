@@ -68,6 +68,7 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
   };
   const notify = (session: CallSession): void => { listeners.forEach((listener) => listener(session)); };
   const unsubscribeSignals = signaling.onSignal(async (signal) => {
+    await input.deviceTrust.assertTrusted();
     const existing = await repository.get(signal.callId);
     if (!existing) {
       if (signal.event !== 'invite' || signal.identityBinding !== await input.identity.identityBinding(input.conversationId, [localParticipant, input.remoteParticipant])) throw new Error('Unknown call.');

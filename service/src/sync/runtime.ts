@@ -1,6 +1,7 @@
 import type { SyncAdmissionState, SyncAuthorization, SyncCheckpoint, SyncDurableState, SyncPackage, SyncPersistence, SyncPersistenceTransaction, SyncTrustBoundary } from './contracts';
 import { SyncTransferController } from './transfer';
 import type { AuthenticatedSyncFrame } from './authenticatedTransport';
+import { consumeAuthenticatedSyncFrame } from './authenticatedTransport';
 
 /** Runtime composition boundary. Persistence implementations are supplied by the application. */
 export class RuntimeSyncController {
@@ -54,6 +55,7 @@ export class RuntimeSyncController {
     public async begin(): Promise<void> { if (!this.transfer || this.admission !== 'ready' || this.now() > this.expiresAt || (this.transfer.membershipEvidenceRequired && (this.preparedMembers.size !== this.transferMembers().length || this.readyMembers.size !== this.transferMembers().length))) throw new Error('Sync admission is unavailable.'); this.transfer.begin(); this.admission = 'transfer'; await this.persistState(this.checkpoint!); }
 
     public async receiveAuthenticated(frame: AuthenticatedSyncFrame): Promise<ReturnType<SyncTransferController['accept']> extends Promise<infer A> ? A : never> {
+        consumeAuthenticatedSyncFrame(frame);
         if (frame.sessionBinding.length === 0 || frame.senderIdentityReference.length === 0) throw new Error('Authenticated sync frame rejected.');
         return this.receiveInternal(frame.syncPackage);
     }

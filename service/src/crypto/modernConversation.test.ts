@@ -5,6 +5,7 @@ import type { VodozemacSessionHandle } from '../core/vodozemacCryptoSession';
 import { ModernConversation } from './modernConversation';
 import { publishVodozemacBundle, fetchVodozemacBundle, claimVodozemacOneTimeKey, renewVodozemacBundle } from '../api/prekeys';
 import { AuthenticatedCallSignalTransport } from '../calls/authenticatedTransport';
+import { SecureStorageDeviceLifecyclePersistence } from '../devices/runtime';
 
 jest.mock('../api/prekeys', () => ({
     publishVodozemacBundle: jest.fn(), fetchVodozemacBundle: jest.fn(), claimVodozemacOneTimeKey: jest.fn(), renewVodozemacBundle: jest.fn(),
@@ -20,6 +21,11 @@ const bundle = { version: 1 as const, protocol: 'vodozemac-olm-v1' as const,
     identity: { curve25519: key(3), ed25519: key(4) }, oneTimeKeys: [{ id: 'otk-remote-test', key: key(5) }] };
 
 class Storage implements SecureStorage {
+    async compareAndSwapRecords(updates: readonly import('../core/contracts').SecureRecordUpdate[]): Promise<boolean> {
+        if (updates.some((item) => { const old = this.values.get(`${item.recordType}:${item.recordId}`); return old === undefined ? item.expected !== undefined : item.expected === undefined || !Buffer.from(old).equals(Buffer.from(item.expected)); })) return false;
+        for (const item of updates) this.values.set(`${item.recordType}:${item.recordId}`, item.next.slice(0));
+        return true;
+    }
     private readonly values = new Map<string, ArrayBuffer>();
     async initializeWithPassphrase() {}
     async unlock() {}
@@ -90,6 +96,25 @@ it('retries the identical persisted envelope after a lost ACK and after restart'
     expect(encryptions).toBe(1);
     await second.close();
     later.mockRestore();
+});
+
+it('does not retry queued envelopes after durable future-epoch suspension', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
+    const storage = new Storage();
+    const transport = fakeTransport();
+    const conversation = new ModernConversation(storage, loader, transport.transport);
+    await conversation.connect(room, key(9), remoteAddress);
+    try {
+        await conversation.send('queued message');
+        const state = (await conversation.getDeviceLifecycleState())!;
+        await new SecureStorageDeviceLifecyclePersistence(storage).suspendTrust(state.list.identityReference, state.list.epoch + 1, 'a'.repeat(64));
+        const now = jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 10_000);
+        try { await conversation.retryPending(); } finally { now.mockRestore(); }
+        expect(transport.sent).toHaveLength(1);
+        await expect(conversation.send('must not send')).rejects.toThrow();
+    } finally { await conversation.close(); }
 });
 
 it('does not republish possibly claimed one-time keys after an uncertain publication response', async () => {

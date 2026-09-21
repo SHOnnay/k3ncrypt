@@ -10,6 +10,7 @@ import {
 } from "./types";
 import { AudioSink } from "./audioSink";
 import type { WebRtcConfig } from '../public/types';
+import { BrowserCaptureController } from '../privacy/capture';
 
 /**
  * Seals and sends a signaling payload (offer/answer/ICE candidate/call
@@ -20,6 +21,7 @@ import type { WebRtcConfig } from '../public/types';
 export type SignalSender = (signal: WebRtcSignalPayload) => Promise<void>;
 
 export class Peer {
+    private readonly capture = new BrowserCaptureController();
     private state: RTCPeerConnectionState;
     private pc: RTCPeerConnection;
 
@@ -122,6 +124,7 @@ export class Peer {
     }
 
     public dispose(): void {
+        this.capture.release();
         if(this.audioStream) {
             this.audioStream.getTracks().forEach(track => {
                 track.stop() ;
@@ -142,7 +145,7 @@ export class Peer {
 
     private async getAudioStream(): Promise<MediaStream> {
         this.logger.log('getAudioStream');
-        return navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        return this.capture.request({ audio: true, video: false });
     }
 
     private resolveSignalMetadata(): SignalMetadata {

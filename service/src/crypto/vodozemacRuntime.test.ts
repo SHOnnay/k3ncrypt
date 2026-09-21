@@ -52,6 +52,43 @@ const bindings = {
 };
 
 describe('VodozemacRuntime', () => {
+    it('persists both facade mutations and invalidates retained handles on close', async () => {
+        const storage = new MemoryStorage();
+        const runtime = new VodozemacRuntime(storage, async () => bindings);
+        await runtime.initialize();
+        await runtime.restoreOrCreateIdentity();
+        await runtime.establishSession('conversation-1', session(), 'session-1');
+        const write = jest.spyOn(storage, 'write');
+        const facade = runtime.getAuthenticatedSession();
+        const wire = await facade.encrypt('signaling', new TextEncoder().encode('control').buffer);
+        await expect(facade.decrypt('signaling', wire)).resolves.toEqual(new TextEncoder().encode('control').buffer);
+        expect(write.mock.calls.filter(([type]) => type === 'vodozemac-session')).toHaveLength(2);
+        expect(write.mock.calls.filter(([type]) => type === 'vodozemac-commit')).toHaveLength(2);
+        expect(storage.has('vodozemac-commit', 'local')).toBe(false);
+        runtime.close();
+        expect(facade.ready).toBe(false);
+        await expect(facade.encrypt('signaling', new ArrayBuffer(0))).rejects.toThrow();
+    });
+
+    it('retains an interrupted mutation marker and discards unsafe ratchet state on restart', async () => {
+        const storage = new MemoryStorage();
+        const runtime = new VodozemacRuntime(storage, async () => bindings);
+        await runtime.initialize();
+        await runtime.restoreOrCreateIdentity();
+        await runtime.establishSession('conversation-1', session(), 'session-1');
+        await runtime.persistSession();
+        const originalDelete = storage.delete.bind(storage);
+        jest.spyOn(storage, 'delete').mockImplementation(async (type, id) => {
+            if (type === 'vodozemac-commit') throw new Error('simulated interruption');
+            await originalDelete(type, id);
+        });
+        await expect(runtime.getAuthenticatedSession().encrypt('signaling', new ArrayBuffer(0))).rejects.toThrow();
+        expect(storage.has('vodozemac-commit', 'local')).toBe(true);
+        jest.restoreAllMocks();
+        const restarted = new VodozemacRuntime(storage, async () => bindings);
+        await restarted.initialize();
+        expect(storage.has('vodozemac-session', 'conversation-1')).toBe(false);
+    });
     it('enforces the explicit lifecycle and keeps operations unavailable before a session', async () => {
         const runtime = new VodozemacRuntime(new MemoryStorage(), async () => bindings);
         await expect(runtime.encrypt('message', new ArrayBuffer(0))).rejects.toMatchObject({ code: 'INVALID_LIFECYCLE' });

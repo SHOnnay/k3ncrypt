@@ -1,4 +1,5 @@
 import type { VoiceRecorder, VoiceRecordingState } from './contracts';
+import { BrowserCaptureController } from '../privacy/capture';
 
 /** Browser adapter: it never requests a microphone until requestPermission/startRecording is called. */
 export class BrowserVoiceRecorder implements VoiceRecorder {
@@ -6,15 +7,15 @@ export class BrowserVoiceRecorder implements VoiceRecorder {
     private stream?: MediaStream;
     private recorder?: MediaRecorder;
     private parts: Blob[] = [];
+    private readonly capture = new BrowserCaptureController();
 
     getRecordingState(): VoiceRecordingState { return this.state; }
 
     async requestPermission(): Promise<void> {
         if (this.state !== 'idle' && this.state !== 'failed') throw new Error('Voice recorder is busy.');
-        if (!globalThis.navigator?.mediaDevices?.getUserMedia) throw new Error('Microphone recording is unavailable.');
         this.state = 'requesting_permission';
         try {
-            this.stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+            this.stream = await this.capture.request({ audio: true, video: false });
             this.state = 'idle';
         } catch {
             this.state = 'failed';
@@ -24,20 +25,28 @@ export class BrowserVoiceRecorder implements VoiceRecorder {
 
     async startRecording(): Promise<void> {
         if (this.state !== 'idle' || !this.stream) throw new Error('Microphone permission is required before recording.');
-        if (!globalThis.MediaRecorder || !MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) throw new Error('Supported voice recording is unavailable.');
+        if (!globalThis.MediaRecorder || !MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) { this.releaseStream(); throw new Error('Supported voice recording is unavailable.'); }
         this.parts = [];
+        try {
         this.recorder = new MediaRecorder(this.stream, { mimeType: 'audio/webm;codecs=opus' });
         this.recorder.ondataavailable = (event) => { if (event.data.size) this.parts.push(event.data); };
+        this.recorder.onerror = () => { this.parts = []; this.releaseStream(); this.state = 'failed'; };
         this.recorder.start();
         this.state = 'recording';
+        } catch { this.releaseStream(); this.state = 'failed'; throw new Error('Voice recording unavailable.'); }
     }
 
     async stopRecording(): Promise<Uint8Array> {
         if (this.state !== 'recording' || !this.recorder) throw new Error('No recording is active.');
         this.state = 'stopping';
         const recorder = this.recorder;
-        await new Promise<void>((resolve) => { recorder.addEventListener('stop', () => resolve(), { once: true }); recorder.stop(); });
-        this.releaseStream();
+        try {
+            await new Promise<void>((resolve, reject) => {
+                recorder.addEventListener('stop', () => resolve(), { once: true });
+                recorder.addEventListener('error', () => reject(new Error('Voice recording unavailable.')), { once: true });
+                recorder.stop();
+            });
+        } finally { this.releaseStream(); }
         const data = new Uint8Array(await new Blob(this.parts, { type: 'audio/webm;codecs=opus' }).arrayBuffer());
         this.state = 'completed';
         return data;
@@ -51,6 +60,7 @@ export class BrowserVoiceRecorder implements VoiceRecorder {
     }
 
     private releaseStream(): void {
+        this.capture.release();
         this.stream?.getTracks().forEach((track) => track.stop());
         this.stream = undefined;
         this.recorder = undefined;
