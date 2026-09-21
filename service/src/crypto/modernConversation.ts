@@ -19,6 +19,8 @@ import { DeviceTrustEnforcer, TrustStateEventCoordinator, type DeviceTrustDecisi
 import { DeviceLifecycleService, createEnrollmentRequest, createEnrollmentConfirmation, createRevocationConfirmation, type AuthenticatedDeviceContext, type DeviceAuthorization, type EnrollmentRequest, type LifecycleStateSnapshot } from '../devices/lifecycle';
 import { createDeviceList } from '../devices/deviceList';
 import { createDeviceEntry } from '../devices/deviceIdentity';
+import { RuntimeSyncController } from '../sync/runtime';
+import type { SyncPersistence, SyncAuthorization } from '../sync/contracts';
 
 const OUTBOX_RECORD = 'modern-outbox';
 const SEEN_RECORD = 'modern-seen';
@@ -89,6 +91,7 @@ export class ModernConversation {
     private deviceTrust?: DeviceTrustEnforcer;
     private trustEvents?: TrustStateEventCoordinator;
     private trustEpoch?: number;
+    private syncController?: RuntimeSyncController;
     private retryTimer?: ReturnType<typeof setInterval>;
     private onMessage?: (text: string) => void;
     private onContactChange?: (contact: StoredContactIdentity) => void;
@@ -377,6 +380,20 @@ export class ModernConversation {
         return composition;
     }
 
+    /** Creates the only synchronization boundary available to a modern conversation. */
+    public async createSyncController(persistence: SyncPersistence): Promise<RuntimeSyncController> {
+        await this.assertCurrentDeviceTrust();
+        if (!this.localIdentityId || !this.localAddress) throw new Error('Modern conversation is not ready for synchronization.');
+        if (!this.syncController) this.syncController = new RuntimeSyncController(this.localIdentityId, this.localAddress, this.deviceTrust!, persistence);
+        return this.syncController;
+    }
+
+    public async authorizeSync(authorization: SyncAuthorization, persistence: SyncPersistence): Promise<RuntimeSyncController> {
+        const controller = await this.createSyncController(persistence);
+        await controller.authorize(authorization);
+        return controller;
+    }
+
     public async verifyContact(confirmed: boolean): Promise<void> {
         if (!confirmed || !this.remoteAddress) throw new Error('Confirm the comparison before verifying this contact.');
         await this.registry.markVerified(this.remoteAddress);
@@ -391,6 +408,7 @@ export class ModernConversation {
         this.runtime.close();
         this.callComposition = undefined;
         this.callSignalTransport = undefined;
+        this.syncController = undefined;
     }
 
     public async close(): Promise<void> {
@@ -399,6 +417,7 @@ export class ModernConversation {
         this.runtime.close();
         this.callComposition = undefined;
         this.callSignalTransport = undefined;
+        this.syncController = undefined;
         const browserWindow = (globalThis as typeof globalThis & { window?: { removeEventListener?: (event: string, handler: () => void) => void } }).window;
         if (this.unloadHandler && browserWindow?.removeEventListener) {
             browserWindow.removeEventListener('beforeunload', this.unloadHandler);
