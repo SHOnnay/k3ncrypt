@@ -44,6 +44,27 @@ export interface SyncPersistence {
     claim(scope: string, key: string): Promise<boolean>;
     read(scope: string): Promise<SyncCheckpoint | undefined>;
     write(scope: string, checkpoint: SyncCheckpoint): Promise<void>;
+    readonly durable?: true;
+    transaction?<T>(scope: string, expected: SyncCheckpoint | undefined, operation: (tx: SyncPersistenceTransaction) => Promise<T>): Promise<T>;
+    readState?(scope: string): Promise<SyncDurableState | undefined>;
+    writeState?(scope: string, state: SyncDurableState): Promise<void>;
 }
 
 export type SyncAdmissionState = 'idle' | 'prepare' | 'prepared' | 'ready' | 'transfer';
+
+export interface SyncDurableState {
+    readonly scope: string;
+    readonly version: number;
+    readonly checkpoint: SyncCheckpoint;
+    readonly admission: SyncAdmissionState;
+    readonly authorizationId?: string;
+    readonly transferId?: string;
+    readonly receivedSequences: readonly number[];
+    readonly terminal?: 'completed' | 'failed';
+}
+
+export interface SyncPersistenceTransaction {
+    claim(scope: string, key: string): Promise<boolean>;
+    write(scope: string, checkpoint: SyncCheckpoint): Promise<void>;
+    writeState(scope: string, state: SyncDurableState): Promise<void>;
+}
