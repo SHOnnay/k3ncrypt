@@ -1,0 +1,35 @@
+import { authorizeSync } from './authorization';
+import { decodeSyncPackage, encodeSyncPackage, syncDigest, verifyDeviceListCheckpoint, verifySyncDigest } from './codec';
+import { SyncFenceCoordinator } from './fencing';
+import { SyncStateMachine } from './stateMachine';
+import { SyncTransferController } from './transfer';
+import { createDeviceEntry, createDeviceList, deviceListCommitment } from '../devices';
+
+const ids = (value: string): string => value.padEnd(16, '0');
+const setup = async () => {
+    const list = createDeviceList({ version: 1, identityReference: 'user', epoch: 1, previousCommitment: 'a'.repeat(64), devices: [createDeviceEntry({ deviceId: 'device-a', publicIdentityReference: 'identity-a', algorithm: 'v', state: 'active', createdAt: 1 }), createDeviceEntry({ deviceId: 'device-b', publicIdentityReference: 'identity-b', algorithm: 'v', state: 'active', createdAt: 1 })] });
+    return { list, commitment: await deviceListCommitment(list) };
+};
+describe('Phase 6B.8 synchronization domain', () => {
+    it('round-trips authenticated package framing and rejects tampering', async () => {
+        const state = await setup(); const checkpoint = { epoch: state.list.epoch, commitment: state.commitment }; const value = { version: 1 as const, purpose: 'sync-manifest' as const, scope: 'user', sender: ids('device-a'), senderIdentity: 'identity-a', receiver: ids('device-b'), receiverIdentity: 'identity-b', checkpoint, streamId: ids('stream'), sequence: 1, messageId: ids('message'), transferId: ids('transfer'), payload: { digest: 'x' } };
+        const encoded = encodeSyncPackage(value); const decoded = decodeSyncPackage(encoded); expect(decoded.purpose).toBe('sync-manifest');
+        const expected = await syncDigest(decoded); expect(await verifySyncDigest(decoded, expected)).toBe(true);
+        const modified = { ...decoded, payload: { digest: 'tampered' } }; expect(await verifySyncDigest(modified, expected)).toBe(false);
+    });
+    it('rejects stale or wrong commitments and untrusted targets', async () => {
+        const state = await setup(); await expect(verifyDeviceListCheckpoint(state.list, { epoch: 0, commitment: state.commitment })).rejects.toThrow();
+        const trust = { snapshot: async () => state, assertTrustedAt: async () => undefined };
+        await expect(authorizeSync({ version: 1, authorizationId: ids('auth'), scope: 'user', sourceDeviceId: 'device-a', targetDeviceId: 'device-b', sourceIdentityReference: 'identity-a', targetIdentityReference: 'wrong', checkpoint: { epoch: state.list.epoch, commitment: state.commitment }, transferId: ids('transfer'), expiresAt: Date.now() + 1000 }, trust)).rejects.toThrow();
+    });
+    it('requires fences from every prior member and preserves conflicts', () => {
+        const checkpoint = { epoch: 2, commitment: 'b'.repeat(64) }; const fence = new SyncFenceCoordinator('user', checkpoint, ['a', 'b']);
+        fence.recordFence({ attemptId: ids('attempt'), scope: 'user', checkpoint, deviceId: 'a', ledgerDigest: 'c'.repeat(64), createdAt: 1 }); expect(fence.canResume()).toBe(false);
+        fence.recordConflict({ attemptId: ids('attempt'), scope: 'user', checkpoint, proposals: ['d'.repeat(64)], reason: 'fork' }); fence.recordFence({ attemptId: ids('attempt'), scope: 'user', checkpoint, deviceId: 'b', ledgerDigest: 'e'.repeat(64), createdAt: 1 }); expect(fence.canResume()).toBe(false);
+        expect(fence.conflictsFor(ids('attempt'))).toBeDefined();
+    });
+    it('rejects invalid state transitions and suspends on uncertainty', () => { const machine = new SyncStateMachine('approved', 'created'); machine.transitionDevice('syncing'); machine.suspend(); expect(machine.device).toBe('suspended'); expect(machine.transfer).toBe('failed'); expect(() => machine.transitionDevice('revoked')).not.toThrow(); expect(() => machine.transitionTransfer('completed')).toThrow(); });
+    it('authorizes a recipient-specific transfer and rejects stale package identity', async () => {
+        const state = await setup(); const checkpoint = { epoch: state.list.epoch, commitment: state.commitment }; const auth = { version: 1 as const, authorizationId: ids('authorization'), scope: 'user', sourceDeviceId: 'device-a', targetDeviceId: 'device-b', sourceIdentityReference: 'identity-a', targetIdentityReference: 'identity-b', checkpoint, transferId: ids('transfer'), expiresAt: Date.now() + 10000 }; const trust = { snapshot: async () => state, assertTrustedAt: async () => undefined }; const transfer = new SyncTransferController(auth, trust); await transfer.authorize(); transfer.begin(); const pkg = { version: 1 as const, purpose: 'sync-chunk' as const, scope: 'user', sender: 'device-a', senderIdentity: 'identity-a', receiver: 'device-b', receiverIdentity: 'identity-b', checkpoint, streamId: ids('stream'), sequence: 1, messageId: ids('message'), transferId: auth.transferId, payload: { chunk: 'ciphertext' } }; await expect(transfer.accept(pkg)).resolves.toMatchObject({ transferId: auth.transferId }); await expect(transfer.accept({ ...pkg, receiver: 'device-c' })).rejects.toThrow(); transfer.complete(); expect(transfer.state.transfer).toBe('completed');
+    });
+});

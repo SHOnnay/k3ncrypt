@@ -640,6 +640,7 @@ export {
 } from './crypto/registry';
 export type { EncryptionStrategy, EncryptionStrategyFactory, EncryptionEnvelope } from './crypto/strategy';
 export * from './devices';
+export * from './sync';
 export type {
     AttachmentStore,
     AppLocalIdentity,
