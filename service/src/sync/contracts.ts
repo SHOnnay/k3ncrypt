@@ -45,3 +45,5 @@ export interface SyncPersistence {
     read(scope: string): Promise<SyncCheckpoint | undefined>;
     write(scope: string, checkpoint: SyncCheckpoint): Promise<void>;
 }
+
+export type SyncAdmissionState = 'idle' | 'prepare' | 'prepared' | 'ready' | 'transfer';
