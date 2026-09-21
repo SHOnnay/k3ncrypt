@@ -21,6 +21,7 @@ import { createDeviceList } from '../devices/deviceList';
 import { createDeviceEntry } from '../devices/deviceIdentity';
 import { RuntimeSyncController } from '../sync/runtime';
 import type { SyncPersistence, SyncAuthorization } from '../sync/contracts';
+import { AuthenticatedSyncTransport, type SyncSessionBinding } from '../sync/authenticatedTransport';
 
 const OUTBOX_RECORD = 'modern-outbox';
 const SEEN_RECORD = 'modern-seen';
@@ -392,6 +393,14 @@ export class ModernConversation {
         const controller = await this.createSyncController(persistence);
         await controller.authorize(authorization);
         return controller;
+    }
+
+    /** Returns a sync transport only for the active verified modern session. */
+    public createAuthenticatedSyncTransport(binding: Omit<SyncSessionBinding, 'session'>): AuthenticatedSyncTransport {
+        if (!this.roomId || !this.localAddress || !this.localIdentityId || !this.remoteAddress) throw new Error('Modern conversation is not ready for synchronization.');
+        if (!this.runtime.getAuthenticatedSession()) throw new Error('Authenticated sync session is unavailable.');
+        if (binding.peerDeviceId !== this.remoteAddress || binding.localIdentityReference !== this.localIdentityId) throw new Error('Authenticated sync identity rejected.');
+        return new AuthenticatedSyncTransport({ ...binding, session: this.runtime.getAuthenticatedSession() }, this.transport, this.localIdentityId, this.localAddress);
     }
 
     public async verifyContact(confirmed: boolean): Promise<void> {

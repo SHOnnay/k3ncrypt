@@ -6,3 +6,4 @@ export * from './fencing';
 export * from './transfer';
 export * from './runtime';
 export * from './authenticatedTransport';
+export * from './stateRecords';

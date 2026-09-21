@@ -5,6 +5,7 @@ import { SyncStateMachine } from './stateMachine';
 import { SyncTransferController } from './transfer';
 import { RuntimeSyncController } from './runtime';
 import { AuthenticatedSyncTransport } from './authenticatedTransport';
+import { validateSyncRecords } from './stateRecords';
 import { createDeviceEntry, createDeviceList, deviceListCommitment } from '../devices';
 
 const ids = (value: string): string => value.padEnd(16, '0');
@@ -51,5 +52,12 @@ describe('Phase 6B.8 synchronization domain', () => {
         await expect(authenticated.receive(envelope, 'device-c')).rejects.toThrow('session rejected');
         await expect(authenticated.send({ ...pkg, sender: 'device-b', senderIdentity: 'identity-b', receiver: 'device-a', receiverIdentity: 'identity-a' })).resolves.toBeUndefined();
         await expect(authenticated.send(pkg)).rejects.toThrow('origin rejected');
+    });
+    it('rejects duplicate or stale state records before import', async () => {
+        const state = await setup(); const checkpoint = { epoch: state.list.epoch, commitment: state.commitment };
+        const record = { version: 1 as const, scope: 'user', recordId: ids('record'), kind: 'settings' as const, epoch: checkpoint.epoch, commitment: checkpoint.commitment, payload: { theme: 'paper-ink' } };
+        expect(() => validateSyncRecords('user', checkpoint, [record])).not.toThrow();
+        expect(() => validateSyncRecords('user', checkpoint, [record, record])).toThrow();
+        expect(() => validateSyncRecords('user', { epoch: checkpoint.epoch - 1, commitment: checkpoint.commitment }, [record])).toThrow();
     });
 });
