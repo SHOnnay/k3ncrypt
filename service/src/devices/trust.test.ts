@@ -1,5 +1,5 @@
 import type { DeviceLifecyclePersistence, LifecycleStateSnapshot } from './lifecycle';
-import { DeviceTrustEnforcer } from './trust';
+import { DeviceTrustEnforcer, TrustStateEventCoordinator } from './trust';
 import { createDeviceEntry, createDeviceList, deviceListCommitment } from './index';
 
 const state = async (deviceState: 'active' | 'revoked'): Promise<LifecycleStateSnapshot> => {
@@ -26,5 +26,24 @@ describe('Phase 6B device trust enforcement', () => {
         await expect(revoked.assertTrusted()).rejects.toThrow('trust');
         const corrupted: DeviceLifecyclePersistence = { ...persistence(await state('active')), read: async () => ({ ...(await state('active')), commitment: '0'.repeat(64) }) };
         expect(await new DeviceTrustEnforcer(corrupted, 'user', 'device-a', 'identity-a').decision()).toBe('unavailable');
+    });
+
+    it('rejects stale, forked, future, and replayed propagation events', async () => {
+        const snapshot = await state('active');
+        const enforcer = new DeviceTrustEnforcer(persistence(snapshot), 'user', 'device-a', 'identity-a');
+        const coordinator = new TrustStateEventCoordinator(enforcer, 'user');
+        const base = { version: 1 as const, scope: 'user', epoch: snapshot.list.epoch, commitment: snapshot.commitment,
+            deviceId: 'device-a', identityReference: 'identity-a', state: 'active' as const, createdAt: 10 };
+        await expect(coordinator.accept({ ...base, eventId: 'event-1' })).resolves.toEqual(snapshot);
+        await expect(coordinator.accept({ ...base, eventId: 'event-1' })).rejects.toThrow('replayed');
+        await expect(coordinator.accept({ ...base, eventId: 'event-2', epoch: 0 })).rejects.toThrow('stale');
+        await expect(coordinator.accept({ ...base, eventId: 'event-3', epoch: 2 })).rejects.toThrow('unavailable');
+        await expect(coordinator.accept({ ...base, eventId: 'event-4', commitment: 'f'.repeat(64) })).rejects.toThrow('conflicts');
+    });
+
+    it('requires the exact epoch for protected operations', async () => {
+        const enforcer = new DeviceTrustEnforcer(persistence(await state('active')), 'user', 'device-a', 'identity-a');
+        await expect(enforcer.assertTrustedAt(1)).resolves.toBeUndefined();
+        await expect(enforcer.assertTrustedAt(0)).rejects.toThrow('stale');
     });
 });

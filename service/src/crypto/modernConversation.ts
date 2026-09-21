@@ -15,7 +15,7 @@ import { createAuthenticatedCallComposition, type AuthenticatedCallComposition }
 import { VerifiedCallIdentityVerifier } from '../calls/signalBinding';
 import type { CallParticipant } from '../calls/contracts';
 import { AuthenticatedDeviceControlChannel, SecureStorageDeviceLifecyclePersistence, type DeviceControlMessage } from '../devices/runtime';
-import { DeviceTrustEnforcer, type DeviceTrustDecision } from '../devices/trust';
+import { DeviceTrustEnforcer, TrustStateEventCoordinator, type DeviceTrustDecision, type TrustStateEvent } from '../devices/trust';
 import { DeviceLifecycleService, createEnrollmentRequest, createEnrollmentConfirmation, createRevocationConfirmation, type AuthenticatedDeviceContext, type DeviceAuthorization, type EnrollmentRequest, type LifecycleStateSnapshot } from '../devices/lifecycle';
 import { createDeviceList } from '../devices/deviceList';
 import { createDeviceEntry } from '../devices/deviceIdentity';
@@ -87,6 +87,8 @@ export class ModernConversation {
     private deviceLifecycle?: DeviceLifecycleService;
     private deviceLifecyclePersistence?: SecureStorageDeviceLifecyclePersistence;
     private deviceTrust?: DeviceTrustEnforcer;
+    private trustEvents?: TrustStateEventCoordinator;
+    private trustEpoch?: number;
     private retryTimer?: ReturnType<typeof setInterval>;
     private onMessage?: (text: string) => void;
     private onContactChange?: (contact: StoredContactIdentity) => void;
@@ -186,7 +188,10 @@ export class ModernConversation {
             await this.deviceLifecyclePersistence.initialize(this.localIdentityId, initialList);
         }
         this.deviceTrust = new DeviceTrustEnforcer(this.deviceLifecyclePersistence, this.localIdentityId, localAddress, this.localIdentityId);
-        await this.deviceTrust.assertTrusted();
+        const trustSnapshot = await this.deviceTrust.snapshot();
+        await this.deviceTrust.assertTrustedAt(trustSnapshot.list.epoch);
+        this.trustEpoch = trustSnapshot.list.epoch;
+        this.trustEvents = new TrustStateEventCoordinator(this.deviceTrust, this.localIdentityId);
         if (this.runtime.lifecycle === 'active' || this.runtime.lifecycle === 'persisted') {
             this.deviceControlChannel = new AuthenticatedDeviceControlChannel(this.runtime.getAuthenticatedSession(), this.transport);
             this.deviceLifecycle = new DeviceLifecycleService(this.deviceLifecyclePersistence, {
@@ -233,7 +238,7 @@ export class ModernConversation {
 
     public async requestDeviceEnrollment(input: { requestedDeviceId: string; requestedPublicIdentityReference: string; algorithm: string }): Promise<EnrollmentRequest> {
         if (!this.deviceControlChannel || !this.localIdentityId) throw new Error('Device enrollment requires a ready modern session.');
-        await this.deviceTrust?.assertTrusted();
+        await this.assertCurrentDeviceTrust();
         const state = await this.getDeviceLifecycleState();
         if (!state) throw new Error('Device lifecycle state unavailable.');
         const request = createEnrollmentRequest({ ...input, userScope: this.localIdentityId, knownEpoch: state.list.epoch });
@@ -242,7 +247,7 @@ export class ModernConversation {
     }
 
     public async approveDeviceEnrollment(request: EnrollmentRequest, confirmedTarget: { deviceId: string; publicIdentityReference: string }): Promise<DeviceAuthorization> {
-        await this.deviceTrust?.assertTrusted();
+        await this.assertCurrentDeviceTrust();
         const service = this.requireDeviceLifecycle();
         const authorization = await service.approveEnrollment(request, this.deviceContext(), confirmedTarget);
         await this.deviceControlChannel!.send({ type: 'enrollment-approval', payload: authorization });
@@ -251,7 +256,7 @@ export class ModernConversation {
     }
 
     public async confirmDeviceEnrollment(authorization: DeviceAuthorization): Promise<LifecycleStateSnapshot> {
-        await this.deviceTrust?.assertTrusted();
+        await this.assertCurrentDeviceTrust();
         const service = this.requireDeviceLifecycle();
         const confirmation = await createEnrollmentConfirmation({ version: 1, authorizationDigest: authorization.authorizationDigest,
             targetDeviceId: authorization.targetDeviceId, targetIdentityReference: authorization.targetPublicIdentityReference!,
@@ -262,18 +267,26 @@ export class ModernConversation {
 
     public async rejectDeviceEnrollment(request: EnrollmentRequest): Promise<void> {
         if (!this.deviceControlChannel) throw new Error('Device enrollment requires a ready modern session.');
-        await this.deviceTrust?.assertTrusted();
+        await this.assertCurrentDeviceTrust();
         await this.deviceControlChannel.send({ type: 'enrollment-rejection', payload: { version: 1, transactionNonce: request.transactionNonce, expiresAt: request.expiresAt } });
     }
 
     public async revokeDevice(deviceId: string): Promise<DeviceAuthorization> {
-        await this.deviceTrust?.assertTrusted();
+        await this.assertCurrentDeviceTrust();
         const service = this.requireDeviceLifecycle();
         const authorization = await service.approveRevocation(deviceId, this.deviceContext());
         await this.deviceControlChannel!.send({ type: 'revocation', payload: authorization });
         const confirmation = await createRevocationConfirmation({ version: 1, authorizationDigest: authorization.authorizationDigest,
             targetDeviceId: authorization.targetDeviceId, confirmationNonce: `${authorization.transactionNonce}-confirm`, confirmedAt: Date.now(), expiresAt: authorization.expiresAt });
-        await service.applyRevocation(authorization, this.deviceContext(), confirmation);
+        const next = await service.applyRevocation(authorization, this.deviceContext(), confirmation);
+        const target = next.list.devices.find((entry) => entry.deviceId === authorization.targetDeviceId);
+        if (target && (target.state === 'active' || target.state === 'revoked')) {
+            await this.deviceControlChannel!.send({ type: 'trust-state', payload: {
+                version: 1, eventId: `${authorization.transactionNonce}:${next.list.epoch}`, scope: this.localIdentityId!,
+                epoch: next.list.epoch, commitment: next.commitment, deviceId: target.deviceId,
+                identityReference: target.publicIdentityReference, state: target.state, createdAt: Date.now(),
+            } satisfies TrustStateEvent });
+        }
         return authorization;
     }
 
@@ -284,7 +297,7 @@ export class ModernConversation {
 
     private async sendUnlocked(text: string): Promise<'pending'> {
         if (!this.roomId || !this.runtime.activeSessionId || !text.trim()) throw new Error('The private contact is not ready.');
-        await this.deviceTrust?.assertTrusted();
+        await this.assertCurrentDeviceTrust();
         const contact = await this.getContact();
         if (contact?.changeStatus !== 'unchanged') throw new Error('Review this contact’s changed identity before sending.');
         await this.deliveryMutex.runExclusive(async () => {
@@ -338,7 +351,7 @@ export class ModernConversation {
         if (!this.roomId || !this.localAddress || !this.localIdentityId || !this.remoteAddress) {
             throw new Error('Modern conversation is not ready for calling.');
         }
-        await this.deviceTrust?.assertTrusted();
+        await this.assertCurrentDeviceTrust();
         const contact = await this.getContact();
         if (!contact || contact.changeStatus !== 'unchanged' || contact.verification !== 'verified') {
             throw new Error('Verify this contact before starting a call.');
@@ -408,7 +421,7 @@ export class ModernConversation {
     }
 
     private async receive(envelope: EncryptedEnvelope, senderAddress?: string): Promise<boolean> {
-        await this.deviceTrust?.assertTrusted();
+        await this.assertCurrentDeviceTrust();
         if (!this.roomId || !this.capability || !senderAddress ||
             (this.remoteAddress && senderAddress !== this.remoteAddress)) return false;
         const digest = await this.digest(envelope);
@@ -450,7 +463,42 @@ export class ModernConversation {
     private async handleDeviceControl(message: DeviceControlMessage): Promise<void> {
         // Control delivery is deliberately fail-closed until a caller supplies a
         // target-side ceremony. Unknown or malformed controls are dropped.
+        if (message.type === 'trust-state') {
+            if (!this.trustEvents || !message.payload || typeof message.payload !== 'object') return;
+            try {
+                const state = await this.trustEvents.accept(message.payload as TrustStateEvent);
+                this.trustEpoch = state.list.epoch;
+                const event = message.payload as TrustStateEvent;
+                const local = this.localAddress ? state.list.devices.find((entry) => entry.deviceId === this.localAddress) : undefined;
+                if (event.deviceId === this.localAddress && event.state === 'revoked' && local?.state !== 'active') {
+                    this.runtime.close();
+                    this.callComposition = undefined;
+                    this.callSignalTransport = undefined;
+                }
+                this.onDeviceControl?.(message as DeviceControlEvent);
+                return;
+            } catch { return; }
+        }
         if (message.type === 'enrollment-request' && this.deviceLifecycle) this.onDeviceControl?.(message as DeviceControlEvent);
+    }
+
+    /** Every protected operation observes the current lifecycle epoch. */
+    private async assertCurrentDeviceTrust(): Promise<void> {
+        if (!this.deviceTrust) throw new Error('Device trust is unavailable.');
+        const state = await this.deviceTrust.snapshot();
+        try {
+            await this.deviceTrust.assertTrustedAt(state.list.epoch);
+        } catch (error) {
+            this.runtime.close();
+            this.callComposition = undefined;
+            this.callSignalTransport = undefined;
+            throw error;
+        }
+        if (this.trustEpoch !== undefined && state.list.epoch < this.trustEpoch) {
+            this.runtime.close();
+            throw new Error('Device trust is stale.');
+        }
+        this.trustEpoch = state.list.epoch;
     }
 
     private async withTabLock<T>(conversationId: string, operation: () => Promise<T>, persistLease = false): Promise<T> {

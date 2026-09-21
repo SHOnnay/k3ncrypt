@@ -12,7 +12,7 @@ const decoder = new TextDecoder();
 const CONTROL_PREFIX = 'k3ncrypt-device-control-v1:';
 
 export type DeviceControlMessage = {
-    readonly type: 'enrollment-request' | 'enrollment-approval' | 'enrollment-rejection' | 'revocation';
+    readonly type: 'enrollment-request' | 'enrollment-approval' | 'enrollment-rejection' | 'revocation' | 'trust-state';
     readonly payload: unknown;
 };
 
@@ -24,7 +24,7 @@ const parse = (value: ArrayBuffer): DeviceControlMessage | undefined => {
     try { parsed = JSON.parse(text.slice(CONTROL_PREFIX.length)); } catch { throw new Error('Invalid device control message.'); }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Invalid device control message.');
     const record = parsed as Record<string, unknown>;
-    if (!['enrollment-request', 'enrollment-approval', 'enrollment-rejection', 'revocation'].includes(record.type as string) || !('payload' in record)) throw new Error('Invalid device control message.');
+    if (!['enrollment-request', 'enrollment-approval', 'enrollment-rejection', 'revocation', 'trust-state'].includes(record.type as string) || !('payload' in record)) throw new Error('Invalid device control message.');
     return { type: record.type as DeviceControlMessage['type'], payload: record.payload };
 };
 
