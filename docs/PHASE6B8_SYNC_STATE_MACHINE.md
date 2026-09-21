@@ -1,8 +1,10 @@
 # Phase 6B.8 sync state machine
 
 Normative design only. Uses the [protocol](PHASE6B8_SYNC_PROTOCOL_SPECIFICATION.md).
-Overall status remains NOT READY at its membership-ordering gate. States here
-are adapter states, not changes to the existing device lifecycle enum.
+Status: READY for implementation of the bounded blocking profile in the
+[authority decision](PHASE6B8_CONFLICT_AUTHORITY_DECISION_RECORD.md). States here
+are adapter states, not changes to the existing device lifecycle enum. Missing
+old-member evidence deliberately leaves sync suspended indefinitely.
 
 ## 1. Device adapter state
 
@@ -28,7 +30,7 @@ Transition table is exhaustive. Unlisted transitions reject without state mutati
 | syncing -> suspended | Admission invalidation, uncertain result, conflict or unknown terminal evidence |
 | syncing -> revoked | Verified local revocation; cancel work immediately |
 | suspended -> pending | Original incomplete enrollment may safely resume through existing ceremony; no identity replacement |
-| suspended -> approved | Direct same-checkpoint reconciliation and all uncertain operation states resolved; membership reconfiguration remains blocked by protocol §10 |
+| suspended -> approved | Direct same-checkpoint reconciliation and all uncertain operation states resolved; any membership change also requires the authority decision's complete installed barrier |
 | suspended -> revoked | Verified local revocation |
 
 `revoked` is terminal for this stable device identity. Self-transitions are
@@ -71,7 +73,7 @@ at commit. A remote delayed completion does not renew an expired reservation.
 from every nonterminal state. Prepared and ready are durable locks for the exact
 manifest/epoch. Direct peer deny causes failure; missing decision causes suspended
 uncertainty. No timeout elects a winner or produces commit evidence. All-active
-and lifecycle transition rules must satisfy protocol §10 before deployment.
+and lifecycle transitions follow protocol §10 and its authority decision.
 
 Local revocation closes the target gate immediately. Existing admissions become
 invalid locally, pending transfers fail, and published ciphertext is classified

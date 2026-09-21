@@ -1,10 +1,11 @@
 # Phase 6B.8 synchronization architecture review gate
 
 Review baseline: `7b5a18139d36b8ff12721cc29330dd5c5e2a2d72`.
-Verdict: **NOT READY for security-sensitive synchronization implementation.**
-Latest design-closure status: see §13. Four normative specifications now narrow
-the remaining architectural issue to membership ordering/fencing; READY is not
-claimed while that issue is unresolved.
+Current verdict: **READY for implementation of the bounded blocking v1 profile**
+in §14 and the [final authority decision](PHASE6B8_CONFLICT_AUTHORITY_DECISION_RECORD.md).
+Prior NOT READY findings and the interim §13 disposition are retained as audit
+history. This is not production readiness: unavailable old devices may prevent
+sync resumption indefinitely, while local revocation still takes effect.
 This is a design review: attacks below are reasoned counterexamples and required
 experiments, not executed exploits or newly passing tests. No source is changed.
 
@@ -324,7 +325,7 @@ be separate scope with explicit cost and threat analysis.
 | Conflicting offline contact states | Arrival-order winner can silently replace data/trust. | G5 causal siblings and explicit resolution; restrictive handling for identity/block changes. |
 | Revoked device tries to recover data | Can still decrypt old retained copies, but must not obtain newly admitted content. | G1 fencing plus queue/retry guards; no recovery shortcut; state the prior-ciphertext limitation. |
 
-## 11. Required changes before coding and final gate
+## 11. Original required changes before coding and review verdict
 
 The minimum remaining work is to amend the existing three design documents with
 the contracts below, rather than create another general architecture proposal.
@@ -357,7 +358,7 @@ Documentation only: verify this file exists, local links resolve, and staged
 changes contain only this report; run `git diff --check`. No implementation,
 browser or adversarial execution results are claimed for this milestone.
 
-## 13. Design closure disposition
+## 13. Interim design closure disposition (superseded by §14)
 
 The following design-only addenda supersede conflicting v1 details in the earlier
 architecture and roadmap. They are specifications, not implemented guarantees:
@@ -392,3 +393,33 @@ restriction explicitly rather than reporting distributed synchronization complet
 Documentation validation: verify the four new files and local references, confirm
 the frame fixture byte count/digest, and run staged diff whitespace/scope checks.
 No runtime validation or design proof of G1 is claimed.
+
+## 14. Final conflict authority decision and readiness
+
+Selected architecture: **hybrid authenticated fencing and explicit user selection**,
+with unanimous prior-checkpoint evidence required before sync resumes. The
+[decision record](PHASE6B8_CONFLICT_AUTHORITY_DECISION_RECORD.md) evaluates all five
+options and specifies proposal validation, participant sets, one-choice locks,
+direct authenticated phase messages, abort limits, installed barrier, UI states,
+fault assumptions and adversarial outcomes.
+
+G1 is **closed as a design decision for this bounded profile**. No server sequencer,
+primary device, hash-selected winner or implicit quorum may be substituted.
+Luna can implement the stated transitions, including permanent suspension for
+unavailable evidence, without choosing an additional authority architecture.
+
+The availability tradeoff is substantive: a removed old device can withhold the
+fencing acknowledgment needed for cross-device resumption. It cannot veto local
+blocking, but sync may remain paused indefinitely. This supersedes earlier wording
+suggesting removed-device cooperation is unnecessary for every stage. No seamless
+lost-device reconfiguration, recovery, divergent-history repair or production
+availability is claimed. Future requirements for these reopen the design gate.
+
+Implementation acceptance still requires real authenticated peer tests, durable
+phase-lock/crash tests, resolution byte vectors and the safety checks in decision
+§11. The earlier runtime/storage findings are not marked fixed. Cryptographic
+accountability is authenticated peer attribution, not portable digital signatures.
+
+**Final readiness: READY for the specified bounded implementation; not production
+ready.** No source files changed. Document links, staged whitespace/scope and
+current-versus-historical readiness wording must be checked before commit.

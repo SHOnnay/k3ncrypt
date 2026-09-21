@@ -1,7 +1,8 @@
 # Phase 6B.8 sync protocol specification
 
-Status: normative design for the bounded v1 data plane; overall **NOT READY**
-until the membership-ordering decision in §10 is resolved. No implementation.
+Status: normative design for the bounded v1 profile; **READY for implementation**
+with the explicitly blocking conflict authority decision in §10. No implementation
+or production-readiness claim. Unavailable old devices can prevent sync resumption.
 Reviewed baseline: `520bc32df45859ee9350d0236a9ac6101523b659`.
 
 Companion contracts:
@@ -192,9 +193,10 @@ confirmed or create direct-contact sending credentials.
 
 ## 6. Fixed-membership admission protocol
 
-This section is fully specified for a checkpoint already agreed by every active
-participant. It is NOT a membership-change protocol. Unknown/new checkpoints
-cannot enter it until §10 is resolved. No implementation may invent that step.
+This section applies to a checkpoint already agreed by every active participant.
+Unknown/new checkpoints enter it only after the installed barrier in §10's
+conflict-authority decision. Fixed-membership readiness alone cannot reconfigure
+membership. No implementation may omit the old-member fencing barrier.
 
 1. Source builds and durably freezes the manifest/payload under explicit consent.
    All active members must be directly authenticated and report the identical
@@ -298,30 +300,23 @@ fixtures must be independently reviewed. Tests must not compute their expected
 output with the implementation under test. This is test evidence work, not
 permission to vary the schema.
 
-## 10. Remaining architectural blocker: membership ordering
+## 10. Membership ordering: final authority decision
 
-**G1 is not closed.** No current approved mechanism determines one globally
-ordered checkpoint when independent active devices concurrently revoke each
-other or change membership across a partition. Full-membership batch readiness
-does not solve reconfiguration. Server CAS cannot be trusted as that authority;
-requiring the removed target's ACK can prevent revocation indefinitely.
+G1 is closed for the bounded blocking profile by the normative
+[conflict authority decision](PHASE6B8_CONFLICT_AUTHORITY_DECISION_RECORD.md).
+Use its exact resolution schema, durable one-choice locks, old-member participant
+set, explicit user selection and installed barrier. Resolution is not a hash
+winner, server decision, primary-device rule or implicit quorum.
 
-Until a decision is made: local verified revocation immediately rejects the target
-and suspends sync; global fencing is `unknown`; no automatic resume on a new
-member set is permitted. This is specified fail-closed behavior, not completion
-of the requested multi-device synchronization architecture.
+Local verified revocation immediately rejects the target and suspends sync.
+Resumption requires every previously active member's authenticated fencing and
+resolution evidence, including the removed member, plus target confirmation for
+new members. Missing evidence keeps sync suspended indefinitely. Local blocking
+does not require the target's consent; cross-device resumption can be prevented
+by that target's absence or refusal. This explicitly narrows the earlier desired
+availability guarantee and must be disclosed in the product.
 
-Exact remaining question: **Which mechanism establishes a unique next lifecycle
-checkpoint and fences outstanding admissions when an old member is unavailable
-or malicious, while retaining single-device mutation authority and no server
-trust authority?** The decision must choose and specify an agreement/reconfiguration
-protocol under explicit fault assumptions, or explicitly narrow the guarantee to
-local revocation with cross-partition sync suspended. A new trusted sequencer,
-quorum authority or stale-access lease must not be silently inserted by Luna.
-
-Required decision artifact is a revision to this section with participant sets,
-durable vote/decision rules, conflict intersection argument, removal completion
-point, and mutual-revocation/partition traces. Existing primitives may carry
-authenticated votes, but cannot make unspecified agreement rules safe. If the
-requirements cannot be met together, the security/product owner must approve the
-specific authority or availability tradeoff. No new crypto is proposed here.
+The decision record's `resolution` frame is the only addition to the type table
+in §3. It uses the same dedicated authenticated channel and never authorizes old
+content or resets a lifecycle commitment. Existing divergent committed branches
+are not repaired by rollback. No override or hidden recovery path is allowed.
