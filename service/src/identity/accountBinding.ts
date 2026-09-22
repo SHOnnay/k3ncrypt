@@ -33,3 +33,22 @@ export const loadAccountBinding = async (storage: SecureStorage, identityReferen
     if (!stored) { const winner = await read(); if (!winner) throw new Error('Account binding unavailable.'); return winner; }
     return Object.freeze(binding);
 };
+
+/**
+ * Installs membership for a newly approved device. The caller must already
+ * have completed the target-side lifecycle ceremony; this helper only binds
+ * the local public identity to the existing account namespace and never copies
+ * key material.
+ */
+export const adoptApprovedAccountBinding = async (storage: SecureStorage, identityReference: string, userScope: string, deviceId: string): Promise<LocalAccountBinding> => {
+    if (!identityReference || !userScope || !deviceId) throw new Error('Account membership is unavailable.');
+    if (!storage.compareAndSwapRecords) throw new Error('Atomic account binding storage unavailable.');
+    const value: LocalAccountBinding = { version: 1, userScope, deviceId, identityReference };
+    const next = new TextEncoder().encode(JSON.stringify(value)).buffer as ArrayBuffer;
+    if (await storage.compareAndSwapRecords([{ recordType: 'device-account-binding', recordId: 'local', expected: undefined, next }])) return Object.freeze(value);
+    const existing = await storage.read('device-account-binding', 'local');
+    if (!existing) throw new Error('Account membership conflict.');
+    const winner = JSON.parse(new TextDecoder().decode(existing)) as LocalAccountBinding;
+    if (winner.version !== 1 || winner.userScope !== userScope || winner.deviceId !== deviceId || winner.identityReference !== identityReference) throw new Error('Account membership conflict.');
+    return Object.freeze(winner);
+};

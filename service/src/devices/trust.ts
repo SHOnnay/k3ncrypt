@@ -1,5 +1,6 @@
 import { deviceListCommitment } from './canonicalEncoding';
 import type { DeviceLifecyclePersistence, LifecycleStateSnapshot } from './lifecycle';
+import { TrustFreshnessAdmission, type TrustFreshnessEvidence } from './freshness';
 
 export type DeviceTrustDecision = 'trusted' | 'revoked' | 'unavailable';
 
@@ -25,12 +26,17 @@ export interface TrustStateEventSink {
 /** Single enforcement boundary shared by messaging, calls, attachments, and sync adapters. */
 export class DeviceTrustEnforcer {
     private suspended = false;
+    private freshnessMembers?: readonly string[];
+    private readonly freshness: TrustFreshnessAdmission;
     public async suspend(epoch: number, commitment: string): Promise<void> {
         this.suspended = true;
         if (!this.persistence.suspendTrust) throw new Error('Durable trust suspension is unavailable.');
         await this.persistence.suspendTrust(this.scope, epoch, commitment);
     }
-    public constructor(private readonly persistence: DeviceLifecyclePersistence, private readonly scope: string, private readonly deviceId: string, private readonly identityReference: string) {}
+    public constructor(private readonly persistence: DeviceLifecyclePersistence, private readonly scope: string, private readonly deviceId: string, private readonly identityReference: string) { this.freshness = new TrustFreshnessAdmission(deviceId); }
+
+    public configureFreshnessMembers(members: readonly string[]): void { this.freshnessMembers = Object.freeze([...members]); }
+    public async recordFreshnessEvidence(evidence: TrustFreshnessEvidence): Promise<void> { this.freshness.recordAuthenticatedEvidence(evidence, await this.snapshot()); }
 
     public async snapshot(): Promise<LifecycleStateSnapshot> {
         if (this.suspended) throw new Error('Device trust is unavailable: freshness conflicts.');
@@ -57,6 +63,7 @@ export class DeviceTrustEnforcer {
     public async assertTrustedAt(epoch: number): Promise<void> {
         const state = await this.snapshot();
         if (state.list.epoch !== epoch) throw new Error('Device trust is stale.');
+        if (this.freshnessMembers) this.freshness.assertCurrent(state, this.freshnessMembers);
         const entry = state.list.devices.find((candidate) => candidate.deviceId === this.deviceId);
         if (!entry || entry.publicIdentityReference !== this.identityReference || entry.state !== 'active') {
             throw new Error('Device trust is unavailable.');

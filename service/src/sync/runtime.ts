@@ -2,6 +2,8 @@ import type { SyncAdmissionState, SyncAuthorization, SyncCheckpoint, SyncDurable
 import { SyncTransferController } from './transfer';
 import type { AuthenticatedSyncFrame } from './authenticatedTransport';
 import { consumeAuthenticatedSyncFrame } from './authenticatedTransport';
+import type { SyncRecord } from './stateRecords';
+import { TrustFreshnessAdmission } from '../devices/freshness';
 
 /** Runtime composition boundary. Persistence implementations are supplied by the application. */
 export class RuntimeSyncController {
@@ -11,8 +13,9 @@ export class RuntimeSyncController {
     private readonly receivedSequences = new Set<number>();
     private readonly preparedMembers = new Set<string>();
     private readonly readyMembers = new Set<string>();
+    private readonly freshness: TrustFreshnessAdmission;
     private checkpoint?: SyncCheckpoint;
-    public constructor(private readonly scope: string, private readonly localDeviceId: string, private readonly trust: SyncTrustBoundary, private readonly persistence: SyncPersistence, private readonly now = Date.now) {}
+    public constructor(private readonly scope: string, private readonly localDeviceId: string, private readonly trust: SyncTrustBoundary, private readonly persistence: SyncPersistence, private readonly now = Date.now) { this.freshness = new TrustFreshnessAdmission(localDeviceId); }
 
     public async authorize(authorization: SyncAuthorization): Promise<void> {
         if (authorization.scope !== this.scope || authorization.targetDeviceId !== this.localDeviceId) throw new Error('Sync target is unavailable.');
@@ -20,6 +23,13 @@ export class RuntimeSyncController {
         if (persisted && (authorization.checkpoint.epoch < persisted.epoch || (authorization.checkpoint.epoch === persisted.epoch && authorization.checkpoint.commitment !== persisted.commitment))) throw new Error('Sync checkpoint is stale.');
         const current = await this.trust.snapshot();
         await this.trust.assertTrustedAt(current.list.epoch);
+        if (authorization.freshnessRequired && authorization.activeMemberDeviceIds && !authorization.activeMemberDeviceIds.includes(this.localDeviceId)) throw new Error('Sync freshness membership rejected.');
+        this.freshness.clear();
+        for (const evidence of authorization.freshnessEvidence ?? []) this.freshness.recordAuthenticatedEvidence(evidence, current);
+        if (authorization.freshnessRequired && authorization.activeMemberDeviceIds) this.freshness.assertCurrent(current, authorization.activeMemberDeviceIds);
+        this.receivedSequences.clear();
+        this.preparedMembers.clear();
+        this.readyMembers.clear();
         this.transfer = new SyncTransferController(authorization, this.trust, this.now);
         this.expiresAt = authorization.expiresAt;
         this.checkpoint = authorization.checkpoint;
@@ -40,8 +50,9 @@ export class RuntimeSyncController {
         for (const sequence of state.receivedSequences) { if (!Number.isSafeInteger(sequence) || sequence < 1) throw new Error('Sync recovery state is corrupted.'); this.receivedSequences.add(sequence); }
         this.preparedMembers.clear();
         this.readyMembers.clear();
-        for (const deviceId of state.preparedMembers ?? []) this.preparedMembers.add(deviceId);
-        for (const deviceId of state.readyMembers ?? []) this.readyMembers.add(deviceId);
+        // Durable progress is evidence, not a fresh peer admission after restart.
+        this.transfer = undefined;
+        this.expiresAt = 0;
         this.admission = 'idle';
         return state;
     }
@@ -63,8 +74,22 @@ export class RuntimeSyncController {
     private async receiveInternal(pkg: SyncPackage): Promise<ReturnType<SyncTransferController['accept']> extends Promise<infer A> ? A : never> {
         if (!this.transfer || this.admission !== 'transfer' || this.now() > this.expiresAt) throw new Error('Sync transfer is unavailable.');
         const receipt = await this.transfer.accept(pkg);
+        if (this.transfer.membershipEvidenceRequired && this.transfer.freshnessRequired) {
+            const current = await this.trust.snapshot();
+            this.freshness.recordAuthenticatedEvidence({ version: 1, deviceId: pkg.sender, identityReference: pkg.senderIdentity, epoch: pkg.checkpoint.epoch, commitment: pkg.checkpoint.commitment, evidenceId: pkg.messageId }, current);
+            this.freshness.assertCurrent(current, this.transferMembers());
+        }
         const key = `${pkg.sender}:${pkg.receiver}:${pkg.streamId}:${pkg.sequence}`;
-        await this.atomic(pkg.checkpoint, async (tx) => { if (!(await tx.claim(this.scope, key))) throw new Error('Sync package replayed.'); this.receivedSequences.add(pkg.sequence); await tx.writeState(this.scope, this.state(pkg.checkpoint)); });
+        const incomingRecords = this.extractRecords(pkg.payload);
+        await this.atomic(pkg.checkpoint, async (tx) => {
+            if (!(await tx.claim(this.scope, key))) throw new Error('Sync package replayed.');
+            if (incomingRecords.length > 0) {
+                if (!tx.importRecords) throw new Error('Atomic sync import unavailable.');
+                await tx.importRecords(this.scope, pkg.checkpoint, incomingRecords);
+            }
+            this.receivedSequences.add(pkg.sequence);
+            await tx.writeState(this.scope, this.state(pkg.checkpoint));
+        });
         this.checkpoint = pkg.checkpoint;
         return receipt;
     }
@@ -75,5 +100,26 @@ export class RuntimeSyncController {
     private state(checkpoint: SyncCheckpoint, terminal?: 'completed' | 'failed'): SyncDurableState { return { scope: this.scope, version: 1, checkpoint, admission: this.admission, receivedSequences: [...this.receivedSequences].sort((a, b) => a - b), preparedMembers: [...this.preparedMembers].sort(), readyMembers: [...this.readyMembers].sort(), terminal }; }
     private transferMembers(): readonly string[] { return this.transfer ? this.transfer.members : []; }
     private async persistState(checkpoint: SyncCheckpoint, terminal?: 'completed' | 'failed'): Promise<void> { await this.atomic(checkpoint, async (tx) => tx.writeState(this.scope, this.state(checkpoint, terminal))); }
-    private async atomic<T>(checkpoint: SyncCheckpoint | undefined, operation: (tx: SyncPersistenceTransaction) => Promise<T>): Promise<T> { return this.persistence.transaction(this.scope, checkpoint, operation); }
+    private async atomic<T>(checkpoint: SyncCheckpoint | undefined, operation: (tx: SyncPersistenceTransaction) => Promise<T>): Promise<T> {
+        try { return await this.persistence.transaction(this.scope, checkpoint, operation); }
+        catch (error) {
+            // A failed/uncertain commit cannot leave usable process-local admission.
+            // Recovery rereads durable evidence; a new admission is still required.
+            this.transfer = undefined;
+            this.admission = 'idle';
+            this.expiresAt = 0;
+            this.receivedSequences.clear();
+            this.preparedMembers.clear();
+            this.readyMembers.clear();
+            throw error;
+        }
+    }
+
+    private extractRecords(payload: unknown): readonly SyncRecord[] {
+        if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return [];
+        const value = payload as Record<string, unknown>;
+        if (!('records' in value)) return [];
+        if (!Array.isArray(value.records)) throw new Error('Sync records rejected.');
+        return value.records as SyncRecord[];
+    }
 }

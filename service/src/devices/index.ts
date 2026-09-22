@@ -5,3 +5,5 @@ export * from './epoch';
 export * from './lifecycle';
 export * from './runtime';
 export * from './trust';
+export * from './freshness';
+export * from './join';

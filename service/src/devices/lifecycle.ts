@@ -90,6 +90,7 @@ export interface AuthorizationRecord {
 
 /** Production boundary: implementations must atomically claim and commit all fields. */
 export interface DeviceLifecyclePersistence {
+    initialize?(scope: string, list: DeviceList): Promise<LifecycleStateSnapshot>;
     readAuthorization?(scope: string, digest: string): Promise<AuthorizationRecord | undefined>;
     suspendTrust?(scope: string, epoch: number, commitment: string): Promise<void>;
     read(scope: string): Promise<LifecycleStateSnapshot | undefined>;

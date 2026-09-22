@@ -1,4 +1,5 @@
 import type { DeviceList } from '../devices/deviceIdentity';
+import type { SyncRecord } from './stateRecords';
 
 export type DeviceSyncState = 'pending' | 'approved' | 'syncing' | 'suspended' | 'revoked';
 export type TransferState = 'created' | 'authorized' | 'transferring' | 'verified' | 'completed' | 'failed';
@@ -16,6 +17,8 @@ export interface SyncAuthorization {
     readonly transferId: string;
     readonly expiresAt: number;
     readonly activeMemberDeviceIds?: readonly string[];
+    readonly freshnessRequired?: boolean;
+    readonly freshnessEvidence?: readonly { readonly version: 1; readonly deviceId: string; readonly identityReference: string; readonly epoch: number; readonly commitment: string; readonly evidenceId: string }[];
 }
 export interface SyncPackage {
     readonly version: 1;
@@ -70,4 +73,6 @@ export interface SyncPersistenceTransaction {
     claim(scope: string, key: string): Promise<boolean>;
     write(scope: string, checkpoint: SyncCheckpoint): Promise<void>;
     writeState(scope: string, state: SyncDurableState): Promise<void>;
+    /** Imports validated records in the same CAS as replay/checkpoint state. */
+    importRecords?(scope: string, checkpoint: SyncCheckpoint, records: readonly SyncRecord[]): Promise<void>;
 }

@@ -17,6 +17,7 @@ import type { CallParticipant } from '../calls/contracts';
 import { AuthenticatedDeviceControlChannel, SecureStorageDeviceLifecyclePersistence, type DeviceControlMessage } from '../devices/runtime';
 import { DeviceTrustEnforcer, TrustStateEventCoordinator, type DeviceTrustDecision, type TrustStateEvent } from '../devices/trust';
 import { DeviceLifecycleService, createEnrollmentRequest, createEnrollmentConfirmation, createRevocationConfirmation, type AuthenticatedDeviceContext, type DeviceAuthorization, type EnrollmentRequest, type LifecycleStateSnapshot } from '../devices/lifecycle';
+import { AuthenticatedDeviceJoinService } from '../devices/join';
 import { createDeviceList } from '../devices/deviceList';
 import { createDeviceEntry } from '../devices/deviceIdentity';
 import { RuntimeSyncController } from '../sync/runtime';
@@ -24,6 +25,9 @@ import type { SyncPersistence, SyncAuthorization } from '../sync/contracts';
 import { AuthenticatedSyncTransport, type SyncSessionBinding } from '../sync/authenticatedTransport';
 import { loadAccountBinding } from '../identity/accountBinding';
 import { DeviceContextAuthority } from '../devices/authenticatedContext';
+import { SocketSyncRelay } from '../sync/relay';
+import { configContext } from '../configContext';
+import { SecureSyncPersistence } from '../sync/persistence';
 
 const OUTBOX_RECORD = 'modern-outbox';
 const SEEN_RECORD = 'modern-seen';
@@ -97,6 +101,7 @@ export class ModernConversation {
     private trustEvents?: TrustStateEventCoordinator;
     private trustEpoch?: number;
     private syncController?: RuntimeSyncController;
+    private syncRelay?: SocketSyncRelay;
     private retryTimer?: ReturnType<typeof setInterval>;
     private onMessage?: (text: string) => void;
     private onContactChange?: (contact: StoredContactIdentity) => void;
@@ -243,6 +248,12 @@ export class ModernConversation {
         return this.deviceTrust.decision();
     }
 
+    /** Configures the all-member freshness fence used by every protected operation. */
+    public configureDeviceTrustFreshness(activeMemberDeviceIds: readonly string[]): void {
+        if (!this.deviceTrust || activeMemberDeviceIds.length === 0) throw new Error('Device trust is unavailable.');
+        this.deviceTrust.configureFreshnessMembers(activeMemberDeviceIds);
+    }
+
     public async requestDeviceEnrollment(input: { requestedDeviceId: string; requestedPublicIdentityReference: string; algorithm: string }): Promise<EnrollmentRequest> {
         this.prepareDeviceControl();
         if (!this.deviceControlChannel || !this.localIdentityId) throw new Error('Device enrollment requires a ready modern session.');
@@ -271,6 +282,14 @@ export class ModernConversation {
             confirmationNonce: `${authorization.transactionNonce}-confirm`, confirmedAt: Date.now(), expiresAt: authorization.expiresAt });
         await this.deviceControlChannel!.send({ type: 'enrollment-approval', payload: confirmation });
         return service.confirmEnrollment(authorization, this.deviceContext(), confirmation);
+    }
+
+    /** Target-side account joining: confirmation also installs the public lifecycle state and account namespace. */
+    public async confirmDeviceEnrollmentAsAccountMember(authorization: DeviceAuthorization, targetStorage: SecureStorage, targetPersistence: import('../devices/lifecycle').DeviceLifecyclePersistence): Promise<LifecycleStateSnapshot> {
+        await this.assertCurrentDeviceTrust();
+        if (!this.deviceLifecycle || !this.userScope) throw new Error('Device lifecycle requires a ready modern session.');
+        const joined = await new AuthenticatedDeviceJoinService(this.deviceLifecycle, targetStorage, targetPersistence).confirm(authorization, this.deviceContext());
+        return joined.state;
     }
 
     public async rejectDeviceEnrollment(request: EnrollmentRequest): Promise<void> {
@@ -387,10 +406,15 @@ export class ModernConversation {
     }
 
     /** Creates the only synchronization boundary available to a modern conversation. */
-    public async createSyncController(persistence: SyncPersistence): Promise<RuntimeSyncController> {
+    public async createSyncController(persistence: SyncPersistence = new SecureSyncPersistence(this.storage)): Promise<RuntimeSyncController> {
+        if (persistence.durable !== true || typeof persistence.transaction !== 'function') throw new Error('Durable sync persistence is required.');
         await this.assertCurrentDeviceTrust();
         if (!this.userScope || !this.localDeviceId) throw new Error('Modern conversation is not ready for synchronization.');
-        if (!this.syncController) this.syncController = new RuntimeSyncController(this.userScope, this.localDeviceId, this.deviceTrust!, persistence);
+        if (!this.syncController) {
+            const controller = new RuntimeSyncController(this.userScope, this.localDeviceId, this.deviceTrust!, persistence);
+            await controller.recover();
+            this.syncController = controller;
+        }
         return this.syncController;
     }
 
@@ -402,6 +426,7 @@ export class ModernConversation {
 
     /** Returns a sync transport only for the active verified modern session. */
     public async createAuthenticatedSyncTransport(binding: Omit<SyncSessionBinding, 'session'>): Promise<AuthenticatedSyncTransport> {
+        binding = Object.freeze({ ...binding });
         await this.assertCurrentDeviceTrust();
         if (!this.roomId || !this.localAddress || !this.localIdentityId || !this.remoteAddress) throw new Error('Modern conversation is not ready for synchronization.');
         if (!this.runtime.getAuthenticatedSession()) throw new Error('Authenticated sync session is unavailable.');
@@ -410,7 +435,25 @@ export class ModernConversation {
         const peer = state.list.devices.find((device) => device.deviceId === binding.peerDeviceId && device.state === 'active');
         const sessionBinding = `${this.roomId}:${this.runtime.activeSessionId}`;
         if (!contact || !peer || peer.publicIdentityReference !== contact.identityId || contact.verification !== 'verified' || contact.changeStatus !== 'unchanged' || binding.sessionBinding !== sessionBinding || binding.peerIdentityReference !== contact.identityId || binding.localIdentityReference !== this.localIdentityId) throw new Error('Authenticated sync identity rejected.');
-        return new AuthenticatedSyncTransport({ ...binding, session: this.runtime.getAuthenticatedSession() }, this.transport, this.userScope!, this.localDeviceId!);
+        const controller = this.syncController;
+        if (!controller || !this.capability) throw new Error('Durable sync controller is required.');
+        const baseUrl = configContext().baseUrl;
+        if (!baseUrl) throw new Error('Sync relay configuration is unavailable.');
+        this.syncRelay?.close();
+        let authenticated: AuthenticatedSyncTransport;
+        const verifyPeer = async (): Promise<void> => {
+            await this.assertCurrentDeviceTrust();
+            const currentContact = await this.registry.get(this.remoteAddress!);
+            if (currentContact?.verification !== 'verified' || currentContact.changeStatus !== 'unchanged' || currentContact.identityId !== binding.peerIdentityReference) throw new Error('Sync peer changed.');
+        };
+        const relay = new SocketSyncRelay(baseUrl, this.roomId, this.localAddress, this.capability, this.remoteAddress, async (envelope) => {
+            await verifyPeer();
+            const frame = await authenticated.receive(envelope, binding.peerDeviceId);
+            await controller.receiveAuthenticated(frame);
+        });
+        authenticated = new AuthenticatedSyncTransport({ ...binding, session: this.runtime.getAuthenticatedSession() }, { send: async (envelope) => { await verifyPeer(); await relay.send(envelope); } }, this.userScope!, this.localDeviceId!, this.deviceTrust!);
+        this.syncRelay = relay;
+        return authenticated;
     }
 
     public async verifyContact(confirmed: boolean): Promise<void> {
@@ -420,6 +463,7 @@ export class ModernConversation {
 
     /** Explicitly accepts a changed public identity; the prior session is discarded and a fresh pre-key flow is required. */
     public async acceptChangedIdentity(): Promise<void> {
+        this.syncRelay?.close();
         if (!this.roomId || !this.remoteAddress) throw new Error('No changed contact is open.');
         await this.registry.acceptPendingChange(this.remoteAddress);
         await this.storage.delete('vodozemac-session', this.roomId);
@@ -431,6 +475,7 @@ export class ModernConversation {
     }
 
     public async close(): Promise<void> {
+        this.syncRelay?.close();
         if (this.retryTimer) clearInterval(this.retryTimer);
         await this.transport.stop();
         this.runtime.close();
@@ -523,6 +568,7 @@ export class ModernConversation {
                 const current = await this.deviceTrust!.snapshot();
                 if (!current.list.devices.some((entry) => entry.state === 'active' && entry.publicIdentityReference === contact.identityId)) return;
                 const state = await this.trustEvents.accept(message.payload as TrustStateEvent);
+                await this.deviceTrust!.recordFreshnessEvidence({ version: 1, deviceId: (message.payload as TrustStateEvent).deviceId, identityReference: (message.payload as TrustStateEvent).identityReference, epoch: (message.payload as TrustStateEvent).epoch, commitment: (message.payload as TrustStateEvent).commitment, evidenceId: (message.payload as TrustStateEvent).eventId });
                 this.trustEpoch = state.list.epoch;
                 const event = message.payload as TrustStateEvent;
                 const local = state.list.devices.find((entry) => entry.deviceId === this.localDeviceId);

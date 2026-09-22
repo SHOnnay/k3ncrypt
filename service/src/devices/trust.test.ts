@@ -1,5 +1,6 @@
 import type { DeviceLifecyclePersistence, LifecycleStateSnapshot } from './lifecycle';
 import { DeviceTrustEnforcer, TrustStateEventCoordinator } from './trust';
+import { TrustFreshnessAdmission } from './freshness';
 import { createDeviceEntry, createDeviceList, deviceListCommitment } from './index';
 
 const state = async (deviceState: 'active' | 'revoked'): Promise<LifecycleStateSnapshot> => {
@@ -45,5 +46,16 @@ describe('Phase 6B device trust enforcement', () => {
         const enforcer = new DeviceTrustEnforcer(persistence(await state('active')), 'user', 'device-a', 'identity-a');
         await expect(enforcer.assertTrustedAt(1)).resolves.toBeUndefined();
         await expect(enforcer.assertTrustedAt(0)).rejects.toThrow('stale');
+    });
+
+    it('blocks admission until every active peer has authenticated current evidence', async () => {
+        const snapshot = await state('active');
+        const list = createDeviceList({ ...snapshot.list, devices: [...snapshot.list.devices, createDeviceEntry({ deviceId: 'device-b', publicIdentityReference: 'identity-b', algorithm: 'vodozemac-v1', state: 'active', createdAt: 1 })] });
+        const current = { list, commitment: await deviceListCommitment(list) };
+        const admission = new TrustFreshnessAdmission('device-a');
+        expect(() => admission.assertCurrent(current, ['device-a', 'device-b'])).toThrow('unavailable');
+        admission.recordAuthenticatedEvidence({ version: 1, deviceId: 'device-b', identityReference: 'identity-b', epoch: list.epoch, commitment: current.commitment, evidenceId: 'evidence-b' }, current);
+        expect(() => admission.assertCurrent(current, ['device-a', 'device-b'])).not.toThrow();
+        expect(() => admission.recordAuthenticatedEvidence({ version: 1, deviceId: 'device-b', identityReference: 'identity-b', epoch: list.epoch + 1, commitment: current.commitment, evidenceId: 'future' }, current)).toThrow('stale');
     });
 });
