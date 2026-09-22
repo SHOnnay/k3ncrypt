@@ -8,10 +8,11 @@ import { useCallTimer } from '../../hooks/useCallTimer';
 import { Button } from '../common/Button';
 import { EndCallIcon, MicIcon, VolumeIcon } from '../common/icons';
 import { Avatar } from '../common/Avatar';
+import { startRingtone, stopRingtone } from '../../utils/ringtone';
 import './CallOverlay.css';
 
 export const CallOverlay: React.FC = () => {
-  const { callActive, callStatus, isIncomingCall, callLifecycleState, endCall, acceptCall, rejectCall, cancelCall } = useChat();
+  const { callActive, callStatus, isIncomingCall, callLifecycleState, endCall, acceptCall, rejectCall, cancelCall, privacyPreferences } = useChat();
   const { duration, formatDuration, startTimer, stopTimer } = useCallTimer();
 
   useEffect(() => {
@@ -21,6 +22,12 @@ export const CallOverlay: React.FC = () => {
       stopTimer();
     }
   }, [callActive, callStatus, startTimer, stopTimer]);
+
+  useEffect(() => {
+    if (callActive && isIncomingCall && callLifecycleState === 'incoming' && privacyPreferences.ringtoneEnabled) startRingtone();
+    else stopRingtone();
+    return stopRingtone;
+  }, [callActive, callLifecycleState, isIncomingCall, privacyPreferences.ringtoneEnabled]);
 
   if (!callActive) return null;
 

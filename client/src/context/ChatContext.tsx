@@ -13,6 +13,7 @@ import { debugError } from '../utils/debug';
 import { loadVodozemacBindings } from '../crypto/vodozemacModule';
 import { readConversationDescriptors, removeConversationDescriptor, saveConversationDescriptor, type ConversationDescriptor } from '../product/sessionStore';
 import { readPrivacyPreferences, writePrivacyPreferences, type PrivacyPreferences } from '../product/preferences';
+import { deliverNotification } from '../product/notifications';
 import { readMessages, writeMessages } from '../product/messageStore';
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
@@ -45,6 +46,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [sessionError, setSessionError] = useState<string>();
   const [syncStatus, setSyncStatus] = useState<'unavailable' | 'recovering' | 'ready' | 'blocked'>('unavailable');
   const [privacyPreferences, setPrivacyPreferences] = useState<PrivacyPreferences>(readPrivacyPreferences);
+  const privacyPreferencesRef = useRef(privacyPreferences);
   const [permissionStatus, setPermissionStatus] = useState<{ microphone: PermissionState | 'unknown'; camera: PermissionState | 'unknown' }>({ microphone: 'unknown', camera: 'unknown' });
   const acceptedDeliveries = useRef(new Set<string>());
   const callNegotiator = useRef<ProductionCallNegotiator>();
@@ -58,6 +60,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [callDuration, setCallDuration] = useState<number>(0);
   const [callLifecycleState, setCallLifecycleState] = useState<CallLifecycleState>('idle');
   const [isIncomingCall, setIsIncomingCall] = useState<boolean>(false);
+  useEffect(() => { privacyPreferencesRef.current = privacyPreferences; }, [privacyPreferences]);
   // Chat message decryption happens inside the SDK; only plaintext ever
   // reaches this context. No private key material is held here any more.
 
@@ -125,7 +128,9 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     });
     try {
       const details = await conversation.connect(descriptor.roomId, descriptor.controlCapability, descriptor.remoteAddress, (text) => {
-        setMessages((previous) => [...previous, displayMessage('contact', text, 'received')]);
+        const message = displayMessage('contact', text, 'received');
+        setMessages((previous) => [...previous, message]);
+        deliverNotification({ kind: 'message', conversationId: descriptor.roomId, preview: message.text }, privacyPreferencesRef.current);
       }, setContactIdentity, (event: DeviceControlEvent) => {
         if (event.type === 'enrollment-request') setPendingDeviceEnrollment(event.payload as EnrollmentRequest);
         if (event.type === 'enrollment-approval') setPendingDeviceApproval(event.payload as EnrollmentApprovalPacket);
@@ -479,6 +484,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     chatInstance.on('chat-message', (msg: any) => {
       const message = displayMessage(msg.sender, msg.message, 'received');
       addMessage(message);
+      deliverNotification({ kind: 'message', conversationId: channelHash || 'legacy', preview: message.text }, privacyPreferencesRef.current);
     });
 
     chatInstance.on('call-added', (call: IE2ECall) => {
@@ -493,6 +499,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setCallLifecycleState('incoming');
       setCallStatus('Incoming Call...');
       playBeep();
+      deliverNotification({ kind: 'incoming-call', conversationId: channelHash || 'legacy' }, privacyPreferencesRef.current);
     });
 
     chatInstance.on('call-state-changed', (update: CallLifecycleUpdate) => {
@@ -502,6 +509,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         setCallActive(true);
       }
       if (['ended', 'rejected', 'timeout', 'cancelled', 'no-peer', 'media-denied', 'signaling-failed', 'ice-failed'].includes(update.state)) {
+        if (update.state === 'timeout') deliverNotification({ kind: 'missed-call', conversationId: channelHash || 'legacy' }, privacyPreferencesRef.current);
         setCallActive(false);
         setIsIncomingCall(false);
         setCallDuration(0);

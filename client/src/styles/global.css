@@ -28,6 +28,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px
 ::-webkit-scrollbar-thumb { border-radius: var(--radius-round); background: var(--border-strong); }
 
 .app-shell { height: 100%; display: flex; overflow: hidden; background: var(--canvas); }
+.app-shell--privacy-blur { filter: blur(14px); pointer-events: none; }
 .conversation-workspace { flex: 1; min-width: 0; height: 100%; padding: 16px; }
 .app-error { position: fixed; z-index: 999; top: 18px; right: 18px; max-width: 360px; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border)); border-radius: 12px; color: var(--danger); background: var(--danger-soft); box-shadow: var(--shadow-sm); font-size: .78rem; }
 

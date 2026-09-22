@@ -17,10 +17,11 @@ import { HttpAttachmentGateway } from './media/HttpAttachmentGateway';
 import { getRuntimeConfig } from './config/runtimeConfig';
 
 const AppContent: React.FC = () => {
-  const { initializeChat, joinChannel, openConversation, attachmentRequestHeaders } = useChat();
+  const { initializeChat, joinChannel, openConversation, attachmentRequestHeaders, privacyPreferences } = useChat();
   const [showSetup, setShowSetup] = useState(true);
   const [error, setError] = useState<string>('');
   const [showSettings, setShowSettings] = useState(false);
+  const [backgrounded, setBackgrounded] = useState(false);
   const mediaWorkflow = useMemo(() => new MediaMessageWorkflow(new HttpAttachmentGateway(getRuntimeConfig().baseUrl ?? '', attachmentRequestHeaders)), [attachmentRequestHeaders]);
 
   // Initialize chat on mount
@@ -30,6 +31,12 @@ const AppContent: React.FC = () => {
       debugError('Initialization failed', err);
     });
   }, [initializeChat]);
+
+  useEffect(() => {
+    const update = () => setBackgrounded(document.visibilityState !== 'visible');
+    document.addEventListener('visibilitychange', update); update();
+    return () => document.removeEventListener('visibilitychange', update);
+  }, []);
 
   const handleSetupComplete = async (roomId: string, secret: string, controlCapability: string) => {
     try {
@@ -44,7 +51,7 @@ const AppContent: React.FC = () => {
   };
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${privacyPreferences.blurSensitiveContent && backgrounded ? 'app-shell--privacy-blur' : ''}`}>
       <Sidebar
         isWelcomeActive={showSetup}
         onNewConversation={() => setShowSetup(true)}

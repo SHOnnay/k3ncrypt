@@ -22,7 +22,7 @@ import { SettingsRow } from './SettingsRow';
 import { copy } from '../../content/copy';
 import './SettingsPanel.css';
 
-type SettingsView = 'settings' | 'privacy' | 'appearance' | 'network' | 'verification';
+type SettingsView = 'settings' | 'privacy' | 'notifications' | 'calls' | 'appearance' | 'network' | 'verification';
 
 interface SettingsPanelProps {
   isOpen: boolean;
@@ -32,6 +32,8 @@ interface SettingsPanelProps {
 const viewTitles: Record<SettingsView, string> = {
   settings: 'Settings',
   privacy: 'Privacy',
+  notifications: 'Notifications',
+  calls: 'Calls',
   appearance: 'Appearance',
   network: 'Connection',
   verification: copy.verification.title,
@@ -88,7 +90,8 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
                 <SettingsRow icon={<PaletteIcon size={18} />} title="Appearance" description={theme === 'paper' ? 'Paper & Ink' : 'Slate Dusk'} onClick={() => setView('appearance')} />
               </section>
               <section className="settings-group" aria-label="Future settings">
-                <SettingsRow icon={<BellIcon size={18} />} title="Notifications" description="Notification controls" status="Coming soon" disabled />
+                <SettingsRow icon={<BellIcon size={18} />} title="Notifications" description={privacyPreferences.notificationsEnabled ? 'Private alerts are on' : 'Notifications are off'} onClick={() => setView('notifications')} />
+                <SettingsRow icon={<MicIcon size={18} />} title="Calls" description="Ringtone and media permissions" onClick={() => setView('calls')} />
                 <SettingsRow icon={<StorageIcon size={18} />} title="Storage" description="Local message storage" status="Not available" disabled />
                 <SettingsRow icon={<InfoIcon size={18} />} title="About" description="K3ncrypt · private by design" status="Prototype" />
               </section>
@@ -109,6 +112,8 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
               <div className="preference-list">
                 <SettingsRow icon={<LockIcon size={17} />} title="App lock" description="Modern account data requires the local vault passphrase" status={protocolMode === 'modern' ? 'On' : 'Modern only'} />
                 <label className="settings-row"><span className="settings-row__icon"><BellIcon size={17} /></span><span className="settings-row__copy"><strong>Notification previews</strong><small>Show message content in system notifications</small></span><input type="checkbox" checked={privacyPreferences.notificationPreviews} onChange={(event) => updatePrivacyPreferences({ notificationPreviews: event.target.checked })} /></label>
+                <label className="settings-row"><span className="settings-row__icon"><ShieldIcon size={17} /></span><span className="settings-row__copy"><strong>Blur sensitive content</strong><small>Reduce readable content when the app is in the background</small></span><input type="checkbox" checked={privacyPreferences.blurSensitiveContent} onChange={(event) => updatePrivacyPreferences({ blurSensitiveContent: event.target.checked })} /></label>
+                <label className="settings-row"><span className="settings-row__icon"><ShieldIcon size={17} /></span><span className="settings-row__copy"><strong>Screen privacy</strong><small>Use supported native screen-capture protection</small></span><input type="checkbox" checked={privacyPreferences.screenPrivacy} onChange={(event) => updatePrivacyPreferences({ screenPrivacy: event.target.checked })} /></label>
                 <SettingsRow icon={<InfoIcon size={17} />} title="Link previews" description="No link previews are generated" status="Off" />
                 <label className="settings-row"><span className="settings-row__icon"><StorageIcon size={17} /></span><span className="settings-row__copy"><strong>Media auto-download</strong><small>Open protected media only when you choose</small></span><input type="checkbox" checked={privacyPreferences.mediaAutoDownload} onChange={(event) => updatePrivacyPreferences({ mediaAutoDownload: event.target.checked })} /></label>
                 <SettingsRow icon={<ShieldIcon size={17} />} title="Analytics" description="No usage analytics are sent" status="Off" />
@@ -116,7 +121,23 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
                 <SettingsRow icon={<InfoIcon size={17} />} title="Camera permission" description="No background camera capture" status={permissionStatus.camera} />
                 <button className="btn btn--secondary" type="button" onClick={() => refreshPermissionStatus()}>Refresh permissions</button>
               </div>
+              {privacyPreferences.screenPrivacy && <p className="detail-note">Screen privacy is a preference for supported native hosts. This browser client cannot guarantee screenshot prevention.</p>}
             </section>
+          )}
+
+          {view === 'notifications' && (
+            <section className="settings-detail">
+              <div className="detail-intro"><h3>Private notifications</h3><p>By default, alerts identify K3NCRYPT and the event, never the sender or message content.</p></div>
+              <div className="preference-list">
+                <label className="settings-row"><span className="settings-row__icon"><BellIcon size={17} /></span><span className="settings-row__copy"><strong>Notifications</strong><small>Show new message, call, and security event alerts</small></span><input type="checkbox" checked={privacyPreferences.notificationsEnabled} onChange={(event) => updatePrivacyPreferences({ notificationsEnabled: event.target.checked })} /></label>
+                <label className="settings-row"><span className="settings-row__icon"><LockIcon size={17} /></span><span className="settings-row__copy"><strong>Message previews</strong><small>Show content only if you explicitly choose to</small></span><input type="checkbox" checked={privacyPreferences.notificationPreviews} disabled={!privacyPreferences.notificationsEnabled} onChange={(event) => updatePrivacyPreferences({ notificationPreviews: event.target.checked })} /></label>
+                {channelHash && <label className="settings-row"><span className="settings-row__icon"><BellIcon size={17} /></span><span className="settings-row__copy"><strong>Mute this conversation</strong><small>Keep this conversation out of system notifications</small></span><input type="checkbox" checked={privacyPreferences.mutedConversations.includes(channelHash)} onChange={(event) => updatePrivacyPreferences({ mutedConversations: event.target.checked ? [...privacyPreferences.mutedConversations, channelHash] : privacyPreferences.mutedConversations.filter((id) => id !== channelHash) })} /></label>}
+              </div>
+            </section>
+          )}
+
+          {view === 'calls' && (
+            <section className="settings-detail"><div className="detail-intro"><h3>Calls</h3><p>Microphone and camera access begins only after you accept or start a call.</p></div><div className="preference-list"><label className="settings-row"><span className="settings-row__icon"><BellIcon size={17} /></span><span className="settings-row__copy"><strong>Incoming call ringtone</strong><small>Play a local ringtone while an incoming call is waiting</small></span><input type="checkbox" checked={privacyPreferences.ringtoneEnabled} onChange={(event) => updatePrivacyPreferences({ ringtoneEnabled: event.target.checked })} /></label><SettingsRow icon={<MicIcon size={17} />} title="Microphone" description="Requested only after an explicit call action" status={permissionStatus.microphone} /><SettingsRow icon={<InfoIcon size={17} />} title="Camera" description="Requested only after an explicit video action" status={permissionStatus.camera} /></div></section>
           )}
 
           {view === 'network' && (
