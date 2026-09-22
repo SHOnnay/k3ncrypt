@@ -1,23 +1,51 @@
-# K3ncrypt
+# K3NCRYPT
 
-K3ncrypt is an experimental two-person private messenger. It currently offers disposable invite-based conversations, authenticated encrypted message/signaling envelopes, and WebRTC audio calls.
+Private communication you control.
 
-> K3ncrypt is under active security architecture work. The current legacy invite session uses HKDF-SHA-256 and AES-256-GCM, but it does **not** yet provide cryptographic identities, forward secrecy, post-compromise recovery, encrypted history, or account recovery. Read [the architecture](docs/ARCHITECTURE.md) and [initial audit](docs/SECURITY_AUDIT_INITIAL.md) before relying on it.
+## Overview
 
-## What works
+K3NCRYPT is an open-source privacy-first communication application for people and teams who want encrypted conversations, user-controlled device identity, and self-hostable infrastructure. Clients hold encryption private keys; servers provide transport, persistence, and authorization services.
 
-- Two-person invitation flow; the 256-bit secret is generated in the browser and carried in the URL fragment.
-- Separate message and signaling keys derived with HKDF-SHA-256.
-- AES-256-GCM authenticated envelopes with no plaintext fallback.
-- Authentication and replay validation before delivery acknowledgement.
-- Bounded out-of-order delivery handling.
-- Opaque Socket.IO relay with payload bounds and rate limiting.
-- Explicit WebRTC ICE/TURN configuration; no public STUN server by default.
-- No analytics, remote fonts, or third-party media uploads.
+K3NCRYPT is in beta development. Security features are actively reviewed; no security software can promise perfect protection.
 
-## Run locally
+## Fork attribution
 
-Requirements: Node.js 22.12+ (required by the current Vite toolchain) and npm.
+K3NCRYPT is a fork of [muke1908/chat-e2ee](https://github.com/muke1908/chat-e2ee), licensed under [Apache License 2.0](LICENSE). The original license and attribution notices remain in this repository.
+
+K3NCRYPT extends the historical base with durable device trust and lifecycle management, resource-bound authorization proofs, private-network membership authority, encrypted media and storage boundaries, and privacy-focused communication controls. See [FORK_NOTICE.md](FORK_NOTICE.md).
+
+## Features
+
+- End-to-end encrypted messaging with opaque relay delivery.
+- Encrypted attachments and voice/video communication boundaries.
+- Local device identity and encrypted storage controls.
+- No analytics by default and no third-party media upload requirement.
+- Configurable relay, STUN/TURN, and user-owned private-network foundations.
+- Durable device lifecycle, proof authorization, and membership checks.
+
+## Security model
+
+Clients create and hold device and encryption private keys. The backend can route ciphertext, store encrypted records, enforce signed lifecycle state, consume replay nonces, and verify short-lived authorization proofs. It is not intended to decrypt message, attachment, or call content.
+
+The server still sees operational metadata needed to provide service, such as connection timing, routing identifiers, account/device references, and membership state. A compromised client, deployment, database, browser, or operating system remains outside client-side encryption protection. Read the security reports in `docs/` before relying on a deployment.
+
+## Architecture overview
+
+```text
+Client UI and SDK
+        ↓
+Encrypted messaging, media, call, and trust boundaries
+        ↓
+Backend API, Socket.IO relays, lifecycle and membership authorities
+        ↓
+MongoDB durable metadata and replay state
+```
+
+The client owns identity and encryption operations. The service SDK coordinates conversations, proofs, synchronization, and private-network sessions. The backend validates authorization and transports opaque data. MongoDB stores lifecycle, membership, replay, and operational records.
+
+## Development setup
+
+Requirements: Node.js 22.12 or newer, npm, and MongoDB for persistence-dependent tests. Docker is optional.
 
 ```sh
 cp .env.sample .env
@@ -26,34 +54,22 @@ npm run build-service-sdk
 npm run dev
 ```
 
-The client runs at `http://localhost:5173`; the relay/API defaults to `http://localhost:3001`.
-
-For TURN or relay-only calling, configure the values documented in [network privacy](docs/NETWORK_PRIVACY.md).
-
-## Verify
+The client normally runs at `http://localhost:5173`; the API and relay use `http://localhost:3001`.
 
 ```sh
 npm test -- --runInBand
+npm run lint
 npm run build-service-sdk
 npm run client:build
-npx playwright test
 npm audit
 ```
 
-## Architecture and roadmap
+See [docs/LOCAL_DEVELOPMENT.md](docs/LOCAL_DEVELOPMENT.md) for Mongo and environment details.
 
-- [Current boundaries](docs/ARCHITECTURE.md)
-- [Phase 1 completion](docs/PHASE1_COMPLETION.md)
-- [Design system](docs/DESIGN_SYSTEM.md)
-- [Network privacy](docs/NETWORK_PRIVACY.md)
-- [Dependency security](docs/DEPENDENCY_SECURITY.md)
-- [Secure storage](docs/SECURE_STORAGE.md)
-- [Key hierarchy](docs/KEY_HIERARCHY.md)
-- [Server security](docs/SERVER_SECURITY.md)
-- [Vodozemac prototype](docs/VODOZEMAC_INTEGRATION.md)
+## Current status
 
-Phase 2 includes encrypted browser storage, persistent prototype identity, and isolated vodozemac validation. Recovery, attachments, offline mailboxes, native clients, and production ratcheted messaging remain future phases. Tor, Bluetooth, Wi-Fi Direct, LAN transport, MLS groups, and biometrics are not implemented.
+K3NCRYPT is in beta development. Device bootstrap, lifecycle authority, durable proof authorization, resource binding, private-network membership authority, and security verification documentation are present. Native packaging, production deployment, operational backup testing, and broader infrastructure validation remain preparation work.
 
-## Provenance and license
+## License
 
-K3ncrypt preserves the history and required notices of its historical base, [muke1908/chat-e2ee](https://github.com/muke1908/chat-e2ee). The project is licensed under Apache-2.0; see [LICENSE](LICENSE).
+K3NCRYPT remains under Apache-2.0. See [LICENSE](LICENSE), [SECURITY.md](SECURITY.md), and [CONTRIBUTING.md](CONTRIBUTING.md).

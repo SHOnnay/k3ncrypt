@@ -1,24 +1,17 @@
-1. Fork the repo.
-2. Make changes.
-3. Please describe the changes and open PR.
+# Contributing to K3NCRYPT
 
-Note:
+K3NCRYPT is a fork of [muke1908/chat-e2ee](https://github.com/muke1908/chat-e2ee) under Apache-2.0. Preserve upstream attribution and license notices.
 
-- Please update Readme if applicable.
-- Create issue if you are adding new feature or proposing changes.
+## Workflow
 
----
+1. Create a topic branch from `main`.
+2. Keep changes focused and describe the problem they address.
+3. Add meaningful tests for changed behavior.
+4. Run lint, tests, the service build, and the client build before opening a pull request.
+5. Include validation results and known limitations in the pull request.
 
-### Scripts:
+Use conventional commit messages, for example `fix: reject stale device proof`.
 
-Install - `npm install`  
-Add and setup .env file - [ENV variables Wiki](https://github.com/muke1908/chat-e2ee/wiki/ENV-variables)  
-Start dev server - `npm run dev`
+## Security-sensitive changes
 
----
-
-Please follow the convention for commit message.
-https://github.com/conventional-changelog/commitlint/#what-is-commitlint
-
-Example:  
-`git commit -m"feat: some relevant message"`
+Changes involving identity, lifecycle state, proofs, cryptography, persistence, relays, attachments, calls, or private networking require security-focused review. Do not introduce alternate authorization paths, plaintext logging, private-key export, or test-only enforcement. Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
