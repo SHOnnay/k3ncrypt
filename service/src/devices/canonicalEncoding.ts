@@ -34,11 +34,12 @@ export const canonicalDeviceListJson = (input: DeviceList): string => {
 export const canonicalDeviceListBytes = (input: DeviceList): Uint8Array => textEncoder.encode(canonicalDeviceListJson(input));
 
 const toHex = (bytes: Uint8Array): string => [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+const bufferSource = (bytes: Uint8Array): ArrayBuffer => Uint8Array.from(bytes).buffer;
 
 /** SHA-256(canonical device-list object bytes), represented as lowercase hex. */
 export const deviceListCommitment = async (input: DeviceList): Promise<string> => {
     if (!globalThis.crypto?.subtle) throw new Error('Device-list commitment is unavailable.');
-    const digest = await globalThis.crypto.subtle.digest('SHA-256', canonicalDeviceListBytes(input));
+    const digest = await globalThis.crypto.subtle.digest('SHA-256', bufferSource(canonicalDeviceListBytes(input)));
     return toHex(new Uint8Array(digest));
 };
 

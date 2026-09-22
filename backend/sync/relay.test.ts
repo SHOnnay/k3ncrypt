@@ -7,7 +7,7 @@ import { authorizeRoomControl } from '../security/controlCapability';
 
 jest.mock('../security/controlCapability', () => ({ ...jest.requireActual('../security/controlCapability'), authorizeRoomControl: jest.fn(async () => ({})) }));
 jest.mock('../api/chatHash/utils/validateChannel', () => ({ __esModule: true, default: async () => ({ valid: true }) }));
-jest.mock('../db', () => ({ __esModule: true, default: { cleanupExpiredOfflineMessages: jest.fn(), claimOfflineMessage: async () => undefined } }));
+jest.mock('../db', () => ({ __esModule: true, default: { cleanupExpiredOfflineMessages: jest.fn(), claimOfflineMessage: async () => undefined, findOneFromDB: async () => undefined } }));
 const room = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const alice = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const bob = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';

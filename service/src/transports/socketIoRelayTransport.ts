@@ -65,8 +65,8 @@ export class SocketIoRelayTransport implements Transport {
         this.socket.disconnect();
     }
 
-    public join(conversationId: string, peerRoutingId: string, controlCapability: string): void {
-        const payload: chatJoinPayloadType = { channelID: conversationId, userID: peerRoutingId, controlCapability };
+    public join(conversationId: string, peerRoutingId: string, controlCapability: string, routingProof?: string): void {
+        const payload: chatJoinPayloadType = { channelID: conversationId, userID: peerRoutingId, controlCapability, ...(routingProof ? { routingProof } : {}) };
         this.socket.emit('chat-join', payload);
     }
 

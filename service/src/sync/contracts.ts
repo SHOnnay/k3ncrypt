@@ -36,6 +36,7 @@ export interface SyncPackage {
     readonly payload: unknown;
 }
 export interface SyncAcknowledgement { readonly transferId: string; readonly checkpoint: SyncCheckpoint; readonly sequence: number; readonly digest: string; }
+export interface SyncCompletionManifest { readonly version: 1; readonly expectedChunkCount: number; readonly finalContentCommitment: string; }
 export interface FenceRecord { readonly attemptId: string; readonly scope: string; readonly checkpoint: SyncCheckpoint; readonly deviceId: string; readonly ledgerDigest: string; readonly createdAt: number; }
 export interface ConflictRecord { readonly attemptId: string; readonly scope: string; readonly checkpoint: SyncCheckpoint; readonly proposals: readonly string[]; readonly reason: 'fork' | 'stale' | 'missing-member' | 'uncertain'; }
 

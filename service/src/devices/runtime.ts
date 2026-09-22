@@ -2,7 +2,7 @@ import type { EncryptedEnvelope, SecureStorage, TransportManager } from '../core
 import { deviceListCommitment } from './canonicalEncoding';
 import { createDeviceList } from './deviceList';
 import type { DeviceList } from './deviceIdentity';
-import type { AuthorizationRecord, DeviceLifecyclePersistence, LifecycleStateSnapshot } from './lifecycle';
+import { verifyAuthorizationDigest, type AuthorizationRecord, type DeviceAuthorization, type DeviceLifecyclePersistence, type LifecycleStateSnapshot } from './lifecycle';
 import { AsyncMutex } from '../utils/asyncMutex';
 import { canonicalIdentityRecordId } from '../identity/machineIdentity';
 
@@ -13,7 +13,7 @@ const decoder = new TextDecoder();
 const CONTROL_PREFIX = 'k3ncrypt-device-control-v1:';
 
 export type DeviceControlMessage = {
-    readonly type: 'enrollment-request' | 'enrollment-approval' | 'enrollment-rejection' | 'revocation' | 'trust-state';
+    readonly type: 'enrollment-request' | 'enrollment-approval' | 'enrollment-confirmation' | 'enrollment-rejection' | 'revocation' | 'trust-state' | 'trust-state-request' | 'trust-state-snapshot';
     readonly payload: unknown;
 };
 
@@ -26,7 +26,7 @@ export const decodeDeviceControl = (value: ArrayBuffer): DeviceControlMessage | 
     try { parsed = JSON.parse(text.slice(CONTROL_PREFIX.length)); } catch { throw new Error('Invalid device control message.'); }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Invalid device control message.');
     const record = parsed as Record<string, unknown>;
-    if (Object.keys(record).some((key) => !['type', 'payload'].includes(key)) || !['enrollment-request', 'enrollment-approval', 'enrollment-rejection', 'revocation', 'trust-state'].includes(record.type as string) || !('payload' in record)) throw new Error('Invalid device control message.');
+    if (Object.keys(record).some((key) => !['type', 'payload'].includes(key)) || !['enrollment-request', 'enrollment-approval', 'enrollment-confirmation', 'enrollment-rejection', 'revocation', 'trust-state', 'trust-state-request', 'trust-state-snapshot'].includes(record.type as string) || !('payload' in record)) throw new Error('Invalid device control message.');
     return { type: record.type as DeviceControlMessage['type'], payload: record.payload };
 };
 
@@ -110,6 +110,47 @@ export class SecureStorageDeviceLifecyclePersistence implements DeviceLifecycleP
             bytes({ version: 2, state, authorizations: [], highestEpoch: normalized.epoch, commitmentHistory: [{ epoch: normalized.epoch, commitment: state.commitment }] }),
             bytes({ version: 1, highestEpoch: normalized.epoch, commitment: state.commitment }));
         return state;
+        });
+    }
+    public async installEnrollmentApproval(scope: string, state: LifecycleStateSnapshot, authorization: DeviceAuthorization): Promise<void> {
+        await this.lock(scope).runExclusive(async () => {
+            if (authorization.operation !== 'enroll' || authorization.userScope !== scope || authorization.previousEpoch + 1 !== state.list.epoch ||
+                state.list.identityReference !== scope || state.list.previousCommitment !== authorization.previousCommitment ||
+                state.commitment !== await deviceListCommitment(state.list) || !(await verifyAuthorizationDigest(authorization))) throw new Error('Enrollment approval rejected.');
+            const author = state.list.devices.find((entry) => entry.deviceId === authorization.authorDeviceId && entry.publicIdentityReference === authorization.authorIdentityReference && entry.state === 'active');
+            const target = state.list.devices.find((entry) => entry.deviceId === authorization.targetDeviceId && entry.publicIdentityReference === authorization.targetPublicIdentityReference && entry.state === 'approved_pending_confirmation');
+            if (!author || !target || target.algorithm !== authorization.targetAlgorithm) throw new Error('Enrollment approval rejected.');
+            const id = await canonicalIdentityRecordId(scope);
+            const expected = await this.storage.read(RECORD_TYPE, id);
+            const expectedHighwater = await this.storage.read(HIGHWATER_RECORD_TYPE, id);
+            if (expected || expectedHighwater) throw new Error('Enrollment approval replayed.');
+            const record: AuthorizationRecord = { operation: 'enroll', transactionNonce: authorization.transactionNonce, authorDeviceId: authorization.authorDeviceId, sequence: authorization.sequence, digest: authorization.authorizationDigest, expiresAt: authorization.expiresAt };
+            await this.writeAtomic(id, undefined, undefined,
+                bytes({ version: 2, state, authorizations: [record], highestEpoch: state.list.epoch, commitmentHistory: [{ epoch: state.list.epoch, commitment: state.commitment }] }),
+                bytes({ version: 1, highestEpoch: state.list.epoch, commitment: state.commitment }));
+        });
+    }
+    public async installTrustUpdate(scope: string, current: LifecycleStateSnapshot, next: LifecycleStateSnapshot, authenticatedPeer: { deviceId: string; identityReference: string }): Promise<void> {
+        await this.lock(scope).runExclusive(async () => {
+            const record = await this.readRecord(scope);
+            if (!record || record.state.list.epoch !== current.list.epoch || record.state.commitment !== current.commitment ||
+                next.list.identityReference !== scope || next.list.epoch !== current.list.epoch + 1 || next.list.previousCommitment !== current.commitment ||
+                next.commitment !== await deviceListCommitment(next.list)) throw new Error('Trust update rejected.');
+            const priorPeer = current.list.devices.find((entry) => entry.deviceId === authenticatedPeer.deviceId && entry.publicIdentityReference === authenticatedPeer.identityReference && entry.state === 'active');
+            const nextPeer = next.list.devices.find((entry) => entry.deviceId === authenticatedPeer.deviceId && entry.publicIdentityReference === authenticatedPeer.identityReference && entry.state === 'active');
+            if (!priorPeer || !nextPeer || current.list.devices.length !== next.list.devices.length) throw new Error('Trust update rejected.');
+            for (const prior of current.list.devices) {
+                const updated = next.list.devices.find((entry) => entry.deviceId === prior.deviceId);
+                if (!updated || updated.publicIdentityReference !== prior.publicIdentityReference || updated.algorithm !== prior.algorithm ||
+                    (prior.state !== updated.state && !(prior.state === 'active' && updated.state === 'revoked'))) throw new Error('Trust update rejected.');
+            }
+            const id = await canonicalIdentityRecordId(scope);
+            const expected = await this.storage.read(RECORD_TYPE, id);
+            const expectedHighwater = await this.storage.read(HIGHWATER_RECORD_TYPE, id);
+            const history = [...record.commitmentHistory, { epoch: next.list.epoch, commitment: next.commitment }].slice(-256);
+            await this.writeAtomic(id, expected, expectedHighwater,
+                bytes({ ...record, state: next, highestEpoch: next.list.epoch, commitmentHistory: history }),
+                bytes({ version: 1, highestEpoch: next.list.epoch, commitment: next.commitment }));
         });
     }
     private async writeAtomic(id: string, expected: ArrayBuffer | undefined, highwater: ArrayBuffer | undefined, next: ArrayBuffer, nextHighwater: ArrayBuffer): Promise<void> {

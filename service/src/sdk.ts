@@ -163,7 +163,10 @@ class ChatE2EE implements IChatE2EE {
         // The factory is called twice so the chat and signaling strategy
         // instances are always genuinely distinct, even though they share
         // the same underlying implementation.
-        const strategyFactory = resolveEncryptionStrategyFactory(config?.encryption?.strategy);
+        const strategyFactory = resolveEncryptionStrategyFactory(config?.encryption?.strategy, {
+            developmentAllowInsecurePlaintextStrategy: config?.encryption?.developmentAllowInsecurePlaintextStrategy,
+            environment: typeof process === 'undefined' ? 'production' : process.env.NODE_ENV,
+        });
         this.cryptoSession = new LegacyInviteCryptoSession(strategyFactory);
     }
 
@@ -641,6 +644,8 @@ export {
 export type { EncryptionStrategy, EncryptionStrategyFactory, EncryptionEnvelope } from './crypto/strategy';
 export * from './devices';
 export * from './sync';
+export * from './recovery';
+export * from './groups';
 export type {
     AttachmentStore,
     AppLocalIdentity,

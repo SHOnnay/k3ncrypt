@@ -29,6 +29,7 @@ export type chatJoinPayloadType = {
     channelID: string,
     userID: string,
     controlCapability: string,
+    routingProof?: string,
 }
 
 export interface IChatE2EE {
@@ -68,6 +69,8 @@ export interface IUtils {
  */
 export type EncryptionConfig = {
     strategy?: string | EncryptionStrategyFactory,
+    /** Development-only escape hatch. Ignored in production. Never enable in a deployed build. */
+    developmentAllowInsecurePlaintextStrategy?: boolean,
 }
 
 export type WebRtcConfig = {

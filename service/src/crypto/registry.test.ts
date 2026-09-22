@@ -137,6 +137,15 @@ describe('encryption strategy registry', () => {
             expect(resolveEncryptionStrategyFactory('custom-test-strategy')().id).toBe('custom-test-strategy');
         });
 
+        it('rejects the disabled strategy in production even with the development option', () => {
+            expect(() => resolveEncryptionStrategyFactory(DISABLED_STRATEGY_ID, { environment: 'production', developmentAllowInsecurePlaintextStrategy: true })).toThrow('development-only');
+        });
+
+        it('accepts the disabled strategy only with an explicit non-production opt-in', () => {
+            expect(() => resolveEncryptionStrategyFactory(DISABLED_STRATEGY_ID, { environment: 'development' })).toThrow('development-only');
+            expect(resolveEncryptionStrategyFactory(DISABLED_STRATEGY_ID, { environment: 'development', developmentAllowInsecurePlaintextStrategy: true })().encrypted).toBe(false);
+        });
+
         it('throws for an unregistered string id', () => {
             expect(() => resolveEncryptionStrategyFactory('does-not-exist')).toThrow(/Unknown encryption strategy/);
         });

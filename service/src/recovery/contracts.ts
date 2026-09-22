@@ -35,6 +35,9 @@ export interface RecoveryReplacementContext {
 
 export interface RecoveryPersistence {
     claim(archiveId: string): Promise<boolean>;
+    release?(archiveId: string): Promise<void>;
+    stageVerified?(archive: RecoveryArchive, context: RecoveryReplacementContext): Promise<boolean>;
+    readPending?(): Promise<RecoveryReplacementContext | undefined>;
     stage(archive: RecoveryArchive, context: RecoveryReplacementContext): Promise<void>;
     complete(replacementId: string): Promise<void>;
     reject(replacementId: string): Promise<void>;

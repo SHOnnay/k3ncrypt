@@ -9,9 +9,14 @@ export class RecoveryCeremony {
 
     public async stage(archive: RecoveryArchive, secret: Uint8Array, context: RecoveryReplacementContext): Promise<void> {
         if (this.stateValue !== 'idle' || !archive || archive.manifest.version !== 1 || archive.manifest.expiresAt !== undefined && archive.manifest.expiresAt <= this.now() || context.oldFingerprint === context.newFingerprint || !context.replacementId) throw new Error('Recovery request rejected.');
-        if (!(await this.persistence.claim(archive.manifest.archiveId))) throw new Error('Recovery request replayed.');
         await this.verifier.verify(archive, secret);
-        await this.persistence.stage(archive, context);
+        if (this.persistence.stageVerified) {
+            if (!(await this.persistence.stageVerified(archive, context))) throw new Error('Recovery request replayed.');
+        } else {
+            if (!(await this.persistence.claim(archive.manifest.archiveId))) throw new Error('Recovery request replayed.');
+            try { await this.persistence.stage(archive, context); }
+            catch (error) { await this.persistence.release?.(archive.manifest.archiveId); throw error; }
+        }
         this.replacement = context;
         this.stateValue = 'staged';
     }

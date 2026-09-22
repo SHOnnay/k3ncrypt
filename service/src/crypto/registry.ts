@@ -90,11 +90,14 @@ export const getEncryptionStrategy = (id: string): EncryptionStrategy => getEncr
  *    registered globally (handy for one-off/ad-hoc strategies in tests
  *    without polluting the shared registry).
  */
-export const resolveEncryptionStrategyFactory = (strategy?: string | EncryptionStrategyFactory): EncryptionStrategyFactory => {
+export const resolveEncryptionStrategyFactory = (strategy?: string | EncryptionStrategyFactory, options: { developmentAllowInsecurePlaintextStrategy?: boolean; environment?: string } = {}): EncryptionStrategyFactory => {
     if (!strategy) {
         return getEncryptionStrategyFactory(DEFAULT_ENCRYPTION_STRATEGY_ID);
     }
     if (typeof strategy === 'string') {
+        if (strategy === DISABLED_STRATEGY_ID && (options.environment === 'production' || options.developmentAllowInsecurePlaintextStrategy !== true)) {
+            throw new Error('The disabled encryption strategy is restricted to an explicit development-only opt-in.');
+        }
         return getEncryptionStrategyFactory(strategy);
     }
     if (typeof strategy !== 'function') {

@@ -9,6 +9,7 @@ export interface ModernConversationRecord {
     sessionId?: string;
     localAddress?: string;
     remoteAddress?: string;
+    routingProof?: string;
 }
 
 export class ConversationModeStore {
@@ -19,8 +20,9 @@ export class ConversationModeStore {
         if (!bytes) return undefined;
         const value = JSON.parse(new TextDecoder().decode(bytes)) as ModernConversationRecord;
         if (!value || value.version !== 1 || value.mode !== 'modern' ||
-            Object.keys(value).some((key) => !['version', 'mode', 'sessionId', 'localAddress', 'remoteAddress'].includes(key)) ||
-            [value.sessionId, value.localAddress, value.remoteAddress].some((part) => part !== undefined && (typeof part !== 'string' || part.length > 128))) {
+            Object.keys(value).some((key) => !['version', 'mode', 'sessionId', 'localAddress', 'remoteAddress', 'routingProof'].includes(key)) ||
+            [value.sessionId, value.localAddress, value.remoteAddress].some((part) => part !== undefined && (typeof part !== 'string' || part.length > 128)) ||
+            value.routingProof !== undefined && (typeof value.routingProof !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(value.routingProof))) {
             throw new Error('Conversation protocol record is invalid.');
         }
         return value;

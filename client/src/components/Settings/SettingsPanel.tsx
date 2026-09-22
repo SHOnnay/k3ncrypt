@@ -38,7 +38,7 @@ const viewTitles: Record<SettingsView, string> = {
 
 export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose }) => {
   const [view, setView] = useState<SettingsView>('settings');
-  const { channelHash, isConnected, protocolMode, userId, ownFingerprint, contactIdentity, verifyContact, acceptChangedIdentity, deleteChannel, deviceLifecycleState, pendingDeviceEnrollment, requestDeviceEnrollment, approveDeviceEnrollment, rejectDeviceEnrollment, revokeDevice } = useChat();
+  const { channelHash, isConnected, protocolMode, userId, ownFingerprint, contactIdentity, verifyContact, acceptChangedIdentity, deleteChannel, deviceLifecycleState, pendingDeviceEnrollment, pendingDeviceApproval, requestDeviceEnrollment, approveDeviceEnrollment, rejectDeviceEnrollment, confirmDeviceEnrollment, revokeDevice } = useChat();
   const [comparisonConfirmed, setComparisonConfirmed] = useState(false);
   const [verificationError, setVerificationError] = useState('');
   const [qrInput, setQrInput] = useState('');
@@ -190,6 +190,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
                   <input id="device-identity-input" className="verification-qr-payload" value={deviceIdentityInput} onChange={(event) => setDeviceIdentityInput(event.target.value)} placeholder="Public identity reference" />
                   <button className="btn btn--secondary" type="button" disabled={!deviceIdInput || !deviceIdentityInput} onClick={() => requestDeviceEnrollment(deviceIdInput, deviceIdentityInput, 'Olm-Curve25519+Ed25519').then(() => { setDeviceIdInput(''); setDeviceIdentityInput(''); setRecoveryNotice('Enrollment request sent through the protected session.'); }).catch(() => setVerificationError('Could not send the enrollment request.'))}>Request device approval</button>
                   {pendingDeviceEnrollment && <div className="state-card state-card--positive"><strong>Device approval requested</strong><p>{pendingDeviceEnrollment.requestedDeviceId}</p><div className="verification-actions"><button className="btn btn--primary" type="button" onClick={() => approveDeviceEnrollment().catch(() => setVerificationError('Could not approve this device.'))}>Approve</button><button className="btn btn--secondary" type="button" onClick={() => rejectDeviceEnrollment().catch(() => setVerificationError('Could not reject this device.'))}>Reject</button></div></div>}
+                  {pendingDeviceApproval && <div className="state-card state-card--positive"><strong>Device approval received</strong><p>{pendingDeviceApproval.authorization.targetDeviceId}</p><button className="btn btn--primary" type="button" onClick={() => confirmDeviceEnrollment().then(() => setRecoveryNotice('This independent device is now active on the account.')).catch(() => setVerificationError('Could not confirm device enrollment.'))}>Confirm on this device</button></div>}
                 </div>}
                 {recoveryNotice && <p role="status">{recoveryNotice}</p>}
                 {verificationError && <p role="alert">{verificationError}</p>}

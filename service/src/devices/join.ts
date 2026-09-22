@@ -3,6 +3,12 @@ import { adoptApprovedAccountBinding, type LocalAccountBinding } from '../identi
 import type { AuthenticatedDeviceContext, DeviceAuthorization, DeviceLifecyclePersistence, DeviceLifecycleService, EnrollmentConfirmation, EnrollmentRequest, LifecycleStateSnapshot } from './lifecycle';
 import { createEnrollmentConfirmation, createEnrollmentRequest } from './lifecycle';
 
+export interface EnrollmentApprovalPacket {
+    readonly version: 1;
+    readonly authorization: DeviceAuthorization;
+    readonly approvedState: LifecycleStateSnapshot;
+}
+
 /** Explicit, two-party account-device ceremony. Only public device metadata crosses the boundary. */
 export class AuthenticatedDeviceJoinService {
     public constructor(private readonly sourceLifecycle: DeviceLifecycleService, private readonly targetStorage: SecureStorage, private readonly targetPersistence: DeviceLifecyclePersistence, private readonly now: () => number = Date.now) {}
@@ -17,7 +23,13 @@ export class AuthenticatedDeviceJoinService {
         return authorization;
     }
 
-    public async confirm(authorization: DeviceAuthorization, targetContext: AuthenticatedDeviceContext): Promise<{ binding: LocalAccountBinding; state: LifecycleStateSnapshot }> {
+    public async confirmApproval(packet: EnrollmentApprovalPacket, targetContext: AuthenticatedDeviceContext): Promise<{ binding: LocalAccountBinding; state: LifecycleStateSnapshot; confirmation: EnrollmentConfirmation }> {
+        if (packet.version !== 1 || packet.authorization.userScope !== targetContext.userScope || !this.targetPersistence.installEnrollmentApproval) throw new Error('Device join approval rejected.');
+        await this.targetPersistence.installEnrollmentApproval(packet.authorization.userScope, packet.approvedState, packet.authorization);
+        return this.confirm(packet.authorization, targetContext);
+    }
+
+    public async confirm(authorization: DeviceAuthorization, targetContext: AuthenticatedDeviceContext): Promise<{ binding: LocalAccountBinding; state: LifecycleStateSnapshot; confirmation: EnrollmentConfirmation }> {
         if (targetContext.userScope !== authorization.userScope || targetContext.authenticatedSender.deviceId !== authorization.targetDeviceId || targetContext.authenticatedSender.identityReference !== authorization.targetPublicIdentityReference) throw new Error('Device join target rejected.');
         const confirmation: EnrollmentConfirmation = await createEnrollmentConfirmation({
             version: 1,
@@ -34,6 +46,6 @@ export class AuthenticatedDeviceJoinService {
         if (!this.targetPersistence.initialize) throw new Error('Target lifecycle persistence is unavailable.');
         const targetState = await this.targetPersistence.initialize(authorization.userScope, state.list);
         const binding = await adoptApprovedAccountBinding(this.targetStorage, authorization.targetPublicIdentityReference!, authorization.userScope, authorization.targetDeviceId);
-        return { binding, state: targetState };
+        return { binding, state: targetState, confirmation };
     }
 }

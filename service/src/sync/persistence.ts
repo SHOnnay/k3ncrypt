@@ -2,6 +2,9 @@ import type { SecureStorage } from '../core/contracts';
 import { canonicalIdentityRecordId } from '../identity/machineIdentity';
 import type { SyncCheckpoint, SyncDurableState, SyncPersistence, SyncPersistenceTransaction } from './contracts';
 import { validateSyncRecords, type SyncRecord } from './stateRecords';
+import { createDeviceList } from '../devices/deviceList';
+import { deviceListCommitment } from '../devices/canonicalEncoding';
+import type { SecureRecordUpdate } from '../core/contracts';
 
 interface RecordState {
     version: 1;
@@ -48,6 +51,7 @@ export class SecureSyncPersistence implements SyncPersistence {
         if (!same(record.checkpoint, expected)) throw new Error('Sync persistence conflict.');
         const requireScope = (candidate: string): void => { if (candidate !== scope) throw new Error('Sync persistence scope rejected.'); };
         let active = true;
+        const applicationUpdates: SecureRecordUpdate[] = [];
         const requireActive = (): void => { if (!active) throw new Error('Sync transaction closed.'); };
         const putCheckpoint = (checkpoint: SyncCheckpoint): void => {
             if (!checkpointValid(checkpoint) || (record.checkpoint && (checkpoint.epoch < record.checkpoint.epoch || (checkpoint.epoch === record.checkpoint.epoch && checkpoint.commitment !== record.checkpoint.commitment)))) throw new Error('Sync checkpoint rejected.');
@@ -79,13 +83,43 @@ export class SecureSyncPersistence implements SyncPersistence {
                 if (records.some((item) => existingIds.has(item.recordId))) throw new Error('Sync record already imported.');
                 record.records = [...existing, ...JSON.parse(JSON.stringify(records)) as SyncRecord[]];
                 if (record.records.length > 10000) throw new Error('Sync record storage unavailable.');
+                for (const imported of records) applicationUpdates.push(...await this.applicationUpdates(scope, imported));
+                if (new Set(applicationUpdates.map((item) => `${item.recordType}:${item.recordId}`)).size !== applicationUpdates.length) throw new Error('Sync records target the same application state.');
             },
         }); } finally { active = false; }
         if (record.state !== undefined) validateState(scope, record.state, record.checkpoint);
         if (record.revision >= Number.MAX_SAFE_INTEGER) throw new Error('Sync persistence exhausted.');
         ++record.revision;
         const next = new TextEncoder().encode(JSON.stringify(record)).buffer as ArrayBuffer;
-        if (!await this.storage.compareAndSwapRecords!([{ recordType: 'sync-runtime', recordId: id, expected: raw, next }])) throw new Error('Sync persistence conflict.');
+        if (!await this.storage.compareAndSwapRecords!([{ recordType: 'sync-runtime', recordId: id, expected: raw, next }, ...applicationUpdates])) throw new Error('Sync persistence conflict.');
         return result;
+    }
+
+    private async applicationUpdates(scope: string, record: SyncRecord): Promise<SecureRecordUpdate[]> {
+        const encode = (value: unknown): ArrayBuffer => new TextEncoder().encode(JSON.stringify(value)).buffer as ArrayBuffer;
+        const payload = record.payload as Record<string, unknown>;
+        if (record.kind === 'conversation') {
+            const recordId = payload.conversationId as string;
+            const next = { version: 1, mode: 'modern', ...(payload.sessionId ? { sessionId: payload.sessionId } : {}), ...(payload.localAddress ? { localAddress: payload.localAddress } : {}), ...(payload.remoteAddress ? { remoteAddress: payload.remoteAddress } : {}) };
+            return [{ recordType: 'conversation-protocol', recordId, expected: await this.storage.read('conversation-protocol', recordId), next: encode(next) }];
+        }
+        if (record.kind === 'contact') {
+            const recordId = payload.contactId as string;
+            const next = { contactId: recordId, identityId: payload.identityId, algorithm: payload.algorithm, publicKey: payload.publicKey, verification: payload.verification, changeStatus: 'unchanged' };
+            return [{ recordType: 'contact-identity', recordId, expected: await this.storage.read('contact-identity', recordId), next: encode(next) }];
+        }
+        if (record.kind === 'settings') {
+            const next = { version: 1, theme: payload.theme, privacy: { analytics: false, backgroundCapture: false, externalMedia: false, minimizeMetadata: payload.minimizeMetadata !== false } };
+            return [{ recordType: 'application-settings', recordId: 'local', expected: await this.storage.read('application-settings', 'local'), next: encode(next) }];
+        }
+        const state = payload.state as { list: Parameters<typeof createDeviceList>[0]; commitment: string };
+        const list = createDeviceList(state.list);
+        if (list.identityReference !== scope || await deviceListCommitment(list) !== state.commitment) throw new Error('Sync device record rejected.');
+        const recordId = await canonicalIdentityRecordId(scope);
+        const lifecycle = { version: 2, state: { list, commitment: state.commitment }, authorizations: [], highestEpoch: list.epoch, commitmentHistory: [{ epoch: list.epoch, commitment: state.commitment }] };
+        return [
+            { recordType: 'device-lifecycle', recordId, expected: await this.storage.read('device-lifecycle', recordId), next: encode(lifecycle) },
+            { recordType: 'device-lifecycle-highwater', recordId, expected: await this.storage.read('device-lifecycle-highwater', recordId), next: encode({ version: 1, highestEpoch: list.epoch, commitment: state.commitment }) },
+        ];
     }
 }

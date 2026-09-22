@@ -93,6 +93,8 @@ export interface DeviceLifecyclePersistence {
     initialize?(scope: string, list: DeviceList): Promise<LifecycleStateSnapshot>;
     readAuthorization?(scope: string, digest: string): Promise<AuthorizationRecord | undefined>;
     suspendTrust?(scope: string, epoch: number, commitment: string): Promise<void>;
+    installEnrollmentApproval?(scope: string, state: LifecycleStateSnapshot, authorization: DeviceAuthorization): Promise<void>;
+    installTrustUpdate?(scope: string, current: LifecycleStateSnapshot, next: LifecycleStateSnapshot, authenticatedPeer: { deviceId: string; identityReference: string }): Promise<void>;
     read(scope: string): Promise<LifecycleStateSnapshot | undefined>;
     commitEnrollment(input: {
         readonly scope: string;
@@ -162,10 +164,11 @@ const canonicalAuthorization = (authorization: Omit<DeviceAuthorization, 'author
 
 const canonicalConfirmation = (confirmation: Omit<EnrollmentConfirmation | RevocationConfirmation, 'confirmationDigest'>): Uint8Array =>
     new TextEncoder().encode(JSON.stringify(confirmation));
+const bufferSource = (bytes: Uint8Array): ArrayBuffer => Uint8Array.from(bytes).buffer;
 
 const digestBytes = async (bytes: Uint8Array): Promise<string> => {
     if (!globalThis.crypto?.subtle) throw new Error('Device authorization is unavailable.');
-    const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+    const digest = await globalThis.crypto.subtle.digest('SHA-256', bufferSource(bytes));
     return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 };
 

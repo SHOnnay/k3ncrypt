@@ -6,15 +6,18 @@ const PREFIX = 'k3ncrypt-sync-v1:';
 const HEX = /^[0-9a-f]{64}$/;
 const ID = /^[A-Za-z0-9_-]{16,128}$/;
 const encoder = new TextEncoder();
+const bufferSource = (bytes: Uint8Array): ArrayBuffer => Uint8Array.from(bytes).buffer;
 
 const canonical = (value: unknown): string => JSON.stringify(value);
 const digest = async (bytes: Uint8Array): Promise<string> => {
     if (!globalThis.crypto?.subtle) throw new Error('Sync integrity is unavailable.');
-    const hash = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+    const hash = await globalThis.crypto.subtle.digest('SHA-256', bufferSource(bytes));
     return [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, '0')).join('');
 };
 
 export const syncDigest = async (value: unknown): Promise<string> => digest(encoder.encode(canonical(value)));
+export const syncContentCommitment = async (transferId: string, chunks: readonly { sequence: number; digest: string }[]): Promise<string> =>
+    syncDigest({ version: 1, transferId, chunks: [...chunks].sort((a, b) => a.sequence - b.sequence) });
 
 export const verifySyncDigest = async (value: SyncPackage, expected: string): Promise<boolean> => /^[0-9a-f]{64}$/.test(expected) && (await syncDigest(value)) === expected;
 
@@ -34,6 +37,12 @@ export const decodeSyncPackage = (bytes: ArrayBuffer): SyncPackage => {
     const checkpoint = value.checkpoint as Record<string, unknown>;
     if (!Number.isSafeInteger(checkpoint.epoch) || (checkpoint.epoch as number) < 0 || typeof checkpoint.commitment !== 'string' || !HEX.test(checkpoint.commitment as string)) throw new Error('Invalid sync checkpoint.');
     if (!['sync-manifest','sync-chunk','sync-delta','sync-ack','sync-reconcile'].includes(value.purpose as string)) throw new Error('Invalid sync purpose.');
+    if (value.purpose === 'sync-manifest') {
+        const payload = value.payload as Record<string, unknown> | undefined;
+        if (!payload || Object.keys(payload).sort().join(',') !== 'expectedChunkCount,finalContentCommitment,version' || payload.version !== 1 ||
+            !Number.isSafeInteger(payload.expectedChunkCount) || (payload.expectedChunkCount as number) < 1 || (payload.expectedChunkCount as number) > 10000 ||
+            typeof payload.finalContentCommitment !== 'string' || !HEX.test(payload.finalContentCommitment)) throw new Error('Invalid sync manifest.');
+    }
     return Object.freeze({ ...value, checkpoint: Object.freeze({ epoch: checkpoint.epoch as number, commitment: checkpoint.commitment }) }) as unknown as SyncPackage;
 };
 

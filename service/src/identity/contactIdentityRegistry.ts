@@ -11,6 +11,7 @@ export interface StoredContactIdentity {
     algorithm: string;
     publicKey: string;
     verification: ContactIdentity['verification'];
+    verifiedAt?: number;
     changeStatus: IdentityChangeStatus;
     identityChangedAt?: number;
     pendingIdentity?: {
@@ -27,7 +28,7 @@ export type ContactIdentityEvent =
 
 const parseStored = (bytes: ArrayBuffer): StoredContactIdentity => {
     const parsed = JSON.parse(new TextDecoder().decode(bytes)) as StoredContactIdentity;
-    const allowed = ['algorithm', 'changeStatus', 'contactId', 'identityChangedAt', 'identityId', 'pendingIdentity', 'publicKey', 'verification'];
+    const allowed = ['algorithm', 'changeStatus', 'contactId', 'identityChangedAt', 'identityId', 'pendingIdentity', 'publicKey', 'verification', 'verifiedAt'];
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) ||
         Object.keys(parsed).some((key) => !allowed.includes(key)) ||
         typeof parsed.contactId !== 'string' || typeof parsed.identityId !== 'string' ||
@@ -64,7 +65,7 @@ export class ContactIdentityRegistry {
             await this.storage.write(RECORD_TYPE, contactId, encodeStored(current));
             return { kind: 'first-seen', current };
         }
-        const current = parseStored(storedBytes);
+        const current = await this.applyRecoveryReset(parseStored(storedBytes));
         if (current.identityId === presentedRecord.identityId &&
             current.algorithm === presentedRecord.algorithm && current.publicKey === presentedRecord.publicKey) {
             return { kind: 'unchanged', current };
@@ -93,12 +94,12 @@ export class ContactIdentityRegistry {
         if (!bytes) throw new Error('Unknown contact identity.');
         const current = parseStored(bytes);
         if (current.changeStatus !== 'unchanged') throw new Error('Review the changed identity before verifying it.');
-        await this.storage.write(RECORD_TYPE, contactId, encodeStored({ ...current, verification: 'verified' }));
+        await this.storage.write(RECORD_TYPE, contactId, encodeStored({ ...current, verification: 'verified', verifiedAt: this.now() }));
     }
 
     public async get(contactId: string): Promise<StoredContactIdentity | undefined> {
         const bytes = await this.storage.read(RECORD_TYPE, contactId);
-        return bytes ? parseStored(bytes) : undefined;
+        return bytes ? this.applyRecoveryReset(parseStored(bytes)) : undefined;
     }
 
     public async acceptPendingChange(contactId: string): Promise<void> {
@@ -113,5 +114,16 @@ export class ContactIdentityRegistry {
             verification: 'unverified',
             changeStatus: 'unchanged',
         }));
+    }
+
+    private async applyRecoveryReset(current: StoredContactIdentity): Promise<StoredContactIdentity> {
+        const marker = await this.storage.read('contact-trust-reset', 'local');
+        if (!marker || current.verification !== 'verified') return current;
+        const reset = JSON.parse(new TextDecoder().decode(marker)) as { version?: unknown; resetAt?: unknown };
+        if (reset.version !== 1 || !Number.isSafeInteger(reset.resetAt)) throw new Error('Contact trust reset state is invalid.');
+        if ((current.verifiedAt ?? 0) > (reset.resetAt as number)) return current;
+        const downgraded = { ...current, verification: 'unverified' as const, verifiedAt: undefined };
+        await this.storage.write(RECORD_TYPE, current.contactId, encodeStored(downgraded));
+        return downgraded;
     }
 }

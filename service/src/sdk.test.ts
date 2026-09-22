@@ -636,7 +636,7 @@ describe('createChatInstance() encryption strategy selection', () => {
         mockSocket.emit.mockImplementation((event: string, _payload: unknown, ack?: (r: unknown) => void) => {
             if (event === 'chat-message') ack?.({ id: 1, timestamp: 1 });
         });
-        const instance = createChatInstance({ encryption: { strategy: NO_ENCRYPTION_STRATEGY_ID } });
+        const instance = createChatInstance({ encryption: { strategy: NO_ENCRYPTION_STRATEGY_ID, developmentAllowInsecurePlaintextStrategy: true } });
         await instance.init();
         await instance.setChannel(ROOM_ID, SECRET, USER_ID, CONTROL_CAPABILITY);
 
@@ -662,7 +662,7 @@ describe('createChatInstance() encryption strategy selection', () => {
     });
 
     it('disabled strategy rejects an envelope with an unsupported protocol version (no silent fallback)', async () => {
-        const instance = createChatInstance({ encryption: { strategy: NO_ENCRYPTION_STRATEGY_ID } });
+        const instance = createChatInstance({ encryption: { strategy: NO_ENCRYPTION_STRATEGY_ID, developmentAllowInsecurePlaintextStrategy: true } });
         await instance.init();
         await instance.setChannel(ROOM_ID, SECRET, USER_ID, CONTROL_CAPABILITY);
         const cb = jest.fn();
@@ -677,7 +677,7 @@ describe('createChatInstance() encryption strategy selection', () => {
     });
 
     it('rejects an envelope sealed by the secure strategy when configured for disabled mode (no cross-mode fallback)', async () => {
-        const instance = createChatInstance({ encryption: { strategy: NO_ENCRYPTION_STRATEGY_ID } });
+        const instance = createChatInstance({ encryption: { strategy: NO_ENCRYPTION_STRATEGY_ID, developmentAllowInsecurePlaintextStrategy: true } });
         await instance.init();
         await instance.setChannel(ROOM_ID, SECRET, USER_ID, CONTROL_CAPABILITY);
         const cb = jest.fn();

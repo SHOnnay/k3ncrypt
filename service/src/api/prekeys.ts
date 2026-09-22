@@ -2,9 +2,10 @@ import makeRequest from './client';
 import type { VodozemacPublicBundle, VodozemacPublicKeyMaterial } from '../identity/vodozemacBundle';
 
 const CONTROL_CAPABILITY_HEADER = 'X-K3ncrypt-Control-Capability';
+const RENEWAL_PROOF_HEADER = 'X-K3ncrypt-Prekey-Renewal';
 
-export const publishVodozemacBundle = async (channelId: string, controlCapability: string, bundle: VodozemacPublicBundle): Promise<{ address: string }> =>
-  makeRequest<{ address: string }, VodozemacPublicBundle>(`chat-link/${encodeURIComponent(channelId)}/prekeys`, {
+export const publishVodozemacBundle = async (channelId: string, controlCapability: string, bundle: VodozemacPublicBundle): Promise<{ address: string; renewalProof: string }> =>
+  makeRequest<{ address: string; renewalProof: string }, VodozemacPublicBundle>(`chat-link/${encodeURIComponent(channelId)}/prekeys`, {
     method: 'POST', body: bundle, headers: { [CONTROL_CAPABILITY_HEADER]: controlCapability },
   });
 
@@ -18,8 +19,8 @@ export const claimVodozemacOneTimeKey = async (channelId: string, controlCapabil
     method: 'POST', body: { keyId }, headers: { [CONTROL_CAPABILITY_HEADER]: controlCapability },
   });
 
-export const renewVodozemacBundle = async (channelId: string, controlCapability: string, address: string, bundle: VodozemacPublicBundle): Promise<void> => {
+export const renewVodozemacBundle = async (channelId: string, controlCapability: string, address: string, renewalProof: string, bundle: VodozemacPublicBundle): Promise<void> => {
   await makeRequest<{ status: string }, VodozemacPublicBundle>(`chat-link/${encodeURIComponent(channelId)}/prekeys/${encodeURIComponent(address)}/renew`, {
-    method: 'POST', body: bundle, headers: { [CONTROL_CAPABILITY_HEADER]: controlCapability },
+    method: 'POST', body: bundle, headers: { [CONTROL_CAPABILITY_HEADER]: controlCapability, [RENEWAL_PROOF_HEADER]: renewalProof },
   });
 };

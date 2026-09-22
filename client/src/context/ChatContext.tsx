@@ -4,7 +4,7 @@
 
 import React, { createContext, useContext, ReactNode, useState, useCallback } from 'react';
 import { createChatInstance, utils, BrowserSecureStorage, IndexedDbVaultPersistence, ModernConversation, parseEncryptedMediaMessage } from '@chat-e2ee/service';
-import type { IChatE2EE, IE2ECall, CallLifecycleState, CallLifecycleUpdate, StoredContactIdentity, AuthenticatedCallComposition, EnrollmentRequest, DeviceControlEvent, LifecycleStateSnapshot } from '@chat-e2ee/service';
+import type { IChatE2EE, IE2ECall, CallLifecycleState, CallLifecycleUpdate, StoredContactIdentity, AuthenticatedCallComposition, EnrollmentRequest, EnrollmentApprovalPacket, DeviceControlEvent, LifecycleStateSnapshot } from '@chat-e2ee/service';
 import { ChatContextType, InviteInfo, Message } from '../types/index';
 import { createMessage } from '../utils/messageHandling';
 import { playBeep } from '../utils/audioNotification';
@@ -35,6 +35,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [contactIdentity, setContactIdentity] = useState<StoredContactIdentity>();
   const [deviceLifecycleState, setDeviceLifecycleState] = useState<LifecycleStateSnapshot>();
   const [pendingDeviceEnrollment, setPendingDeviceEnrollment] = useState<EnrollmentRequest>();
+  const [pendingDeviceApproval, setPendingDeviceApproval] = useState<EnrollmentApprovalPacket>();
   const [userId, setUserId] = useState<string>('');
   const [channelHash, setChannelHash] = useState<string>('');
   const [messages, setMessages] = useState<Message[]>([]);
@@ -93,7 +94,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const conversation = new ModernConversation(vault, loadVodozemacBindings);
     const details = await conversation.connect(invite.hash, invite.controlCapability, undefined, (text) => {
       setMessages((previous) => [...previous, displayMessage('contact', text, 'received')]);
-    }, setContactIdentity, (event: DeviceControlEvent) => { if (event.type === 'enrollment-request') setPendingDeviceEnrollment(event.payload as EnrollmentRequest); });
+    }, setContactIdentity, (event: DeviceControlEvent) => { if (event.type === 'enrollment-request') setPendingDeviceEnrollment(event.payload as EnrollmentRequest); if (event.type === 'enrollment-approval') setPendingDeviceApproval(event.payload as EnrollmentApprovalPacket); });
     setModern(conversation);
     setModernCallComposition(null);
     setModernCallId(undefined);
@@ -113,7 +114,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const conversation = new ModernConversation(vault, loadVodozemacBindings);
     const details = await conversation.connect(roomId, capability, address, (text) => {
       setMessages((previous) => [...previous, displayMessage('contact', text, 'received')]);
-    }, setContactIdentity, (event: DeviceControlEvent) => { if (event.type === 'enrollment-request') setPendingDeviceEnrollment(event.payload as EnrollmentRequest); });
+    }, setContactIdentity, (event: DeviceControlEvent) => { if (event.type === 'enrollment-request') setPendingDeviceEnrollment(event.payload as EnrollmentRequest); if (event.type === 'enrollment-approval') setPendingDeviceApproval(event.payload as EnrollmentApprovalPacket); });
     setModern(conversation);
     setModernCallComposition(null);
     setModernCallId(undefined);
@@ -165,6 +166,13 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     await modern.rejectDeviceEnrollment(pendingDeviceEnrollment);
     setPendingDeviceEnrollment(undefined);
   }, [modern, pendingDeviceEnrollment]);
+
+  const confirmDeviceEnrollment = useCallback(async (): Promise<void> => {
+    if (!modern || !pendingDeviceApproval) throw new Error('No device enrollment approval is pending.');
+    await modern.confirmDeviceEnrollment(pendingDeviceApproval);
+    setPendingDeviceApproval(undefined);
+    setDeviceLifecycleState(await modern.getDeviceLifecycleState());
+  }, [modern, pendingDeviceApproval]);
 
   const revokeDevice = useCallback(async (deviceId: string): Promise<void> => {
     if (!modern) throw new Error('No modern conversation is open.');
@@ -488,6 +496,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     contactIdentity,
     deviceLifecycleState,
     pendingDeviceEnrollment,
+    pendingDeviceApproval,
     initializeChat,
     createNewChannel,
     createModernChannel,
@@ -497,6 +506,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     requestDeviceEnrollment,
     approveDeviceEnrollment,
     rejectDeviceEnrollment,
+    confirmDeviceEnrollment,
     revokeDevice,
     joinChannel,
     sendMessage,

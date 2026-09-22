@@ -84,7 +84,7 @@ export interface TransportCapabilities {
 export interface Transport {
     start(): Promise<void>;
     stop(): Promise<void>;
-    join(conversationId: string, peerRoutingId: string, controlCapability: string): void;
+    join(conversationId: string, peerRoutingId: string, controlCapability: string, routingProof?: string): void;
     sendEnvelope(channel: CryptoChannel, envelope: EncryptedEnvelope, recipientRoutingId?: string): Promise<{ id?: string; timestamp?: number }>;
     sendBlob?(ciphertext: ArrayBuffer): Promise<void>;
     connectionState(): TransportConnectionState;
@@ -95,7 +95,7 @@ export interface Transport {
 export interface TransportManager {
     start(): Promise<void>;
     stop(): Promise<void>;
-    join(conversationId: string, peerRoutingId: string, controlCapability: string): void;
+    join(conversationId: string, peerRoutingId: string, controlCapability: string, routingProof?: string): void;
     sendEnvelope(channel: CryptoChannel, envelope: EncryptedEnvelope, recipientRoutingId?: string): Promise<{ id?: string; timestamp?: number }>;
     activeTransport(): Transport | undefined;
 }

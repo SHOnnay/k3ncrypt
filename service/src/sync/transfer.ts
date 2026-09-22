@@ -1,7 +1,7 @@
 import { authorizeSync } from './authorization';
-import { syncDigest } from './codec';
+import { syncContentCommitment, syncDigest } from './codec';
 import { decodeSyncPackage, encodeSyncPackage } from './codec';
-import type { SyncAcknowledgement, SyncAuthorization, SyncPackage, SyncTrustBoundary } from './contracts';
+import type { SyncAcknowledgement, SyncAuthorization, SyncCompletionManifest, SyncPackage, SyncTrustBoundary } from './contracts';
 import { SyncStateMachine } from './stateMachine';
 
 /** Application adapter for one recipient-specific transfer. It never owns keys. */
@@ -11,6 +11,8 @@ export class SyncTransferController {
     public get freshnessRequired(): boolean { return this.authorization.freshnessRequired === true; }
     public get membershipEvidenceRequired(): boolean { return this.authorization.activeMemberDeviceIds !== undefined; }
     private readonly received = new Map<number, string>();
+    private readonly chunks = new Map<number, string>();
+    private manifest?: SyncCompletionManifest;
     public constructor(private readonly authorization: SyncAuthorization, private readonly trust: SyncTrustBoundary, private readonly now = Date.now) {}
 
     public async authorize(): Promise<void> {
@@ -30,10 +32,21 @@ export class SyncTransferController {
         const digest = await syncDigest(pkg);
         const prior = this.received.get(pkg.sequence);
         if (prior && prior !== digest) { this.state.suspend(); throw new Error('Sync sequence conflict.'); }
+        if (pkg.purpose === 'sync-manifest') {
+            if (this.manifest) throw new Error('Sync manifest replayed.');
+            this.manifest = Object.freeze({ ...(pkg.payload as SyncCompletionManifest) });
+        } else if (pkg.purpose === 'sync-chunk' || pkg.purpose === 'sync-delta') {
+            this.chunks.set(pkg.sequence, digest);
+        }
         this.received.set(pkg.sequence, digest);
         return { transferId: this.authorization.transferId, checkpoint: this.authorization.checkpoint, sequence: pkg.sequence, digest };
     }
 
-    public complete(): void { if (this.received.size === 0) throw new Error('Sync transfer has no verified packages.'); this.state.transitionTransfer('verified'); this.state.transitionTransfer('completed'); this.state.transitionDevice('approved'); }
+    public async complete(): Promise<void> {
+        if (!this.manifest || this.chunks.size !== this.manifest.expectedChunkCount) throw new Error('Sync transfer is incomplete.');
+        const commitment = await syncContentCommitment(this.authorization.transferId, [...this.chunks].map(([sequence, digest]) => ({ sequence, digest })));
+        if (commitment !== this.manifest.finalContentCommitment) { this.state.suspend(); throw new Error('Sync content commitment rejected.'); }
+        this.state.transitionTransfer('verified'); this.state.transitionTransfer('completed'); this.state.transitionDevice('approved');
+    }
     public fail(): void { if (this.state.transfer !== 'completed') this.state.transitionTransfer('failed'); this.state.transitionDevice('suspended'); }
 }

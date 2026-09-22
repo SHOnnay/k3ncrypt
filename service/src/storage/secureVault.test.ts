@@ -85,7 +85,9 @@ describe('BrowserSecureStorage', () => {
         await vault.initializeWithPassphrase(passphrase);
         await vault.write('account', 'local', bytes('account pickle'));
         const envelope = JSON.parse(persistence.inspectRecord('account:local')!);
-        envelope.ciphertext = `${envelope.ciphertext.slice(0, -1)}A`;
+        const decoded = Buffer.from(envelope.ciphertext, 'base64url');
+        decoded[Math.floor(decoded.length / 2)] ^= 0x01;
+        envelope.ciphertext = decoded.toString('base64url');
         persistence.corruptRecord('account:local', JSON.stringify(envelope));
 
         await expect(vault.read('account', 'local')).rejects.toThrow(/authentication|Corrupted/);

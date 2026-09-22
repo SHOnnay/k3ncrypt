@@ -6,6 +6,7 @@ import db from '../db';
 import { PREKEY_COLLECTION } from '../db/const';
 
 const header = 'X-K3ncrypt-Control-Capability';
+const renewalHeader = 'X-K3ncrypt-Prekey-Renewal';
 const key = () => randomBytes(32).toString('base64url');
 
 const createRoom = async () => {
@@ -76,13 +77,23 @@ describe('opaque Vodozemac pre-key service', () => {
     await request(app).get(`/api/chat-link/${room}/prekeys/${published.body.address}`).set(header, capability).expect(404);
   });
 
-  it('renews an existing opaque address without changing its identity', async () => {
+  it('renews an existing opaque address only with ownership proof and identity continuity', async () => {
     const { room, capability } = await createRoom();
     const original = bundle('otk-renew-original');
     const published = await request(app).post(`/api/chat-link/${room}/prekeys`).set(header, capability).send(original).expect(201);
-    const replacement = bundle('otk-renew-replacement');
-    await request(app).post(`/api/chat-link/${room}/prekeys/${published.body.address}/renew`).set(header, capability).send(replacement).expect(200);
+    const replacement = { ...bundle('otk-renew-replacement'), identity: original.identity };
+    await request(app).post(`/api/chat-link/${room}/prekeys/${published.body.address}/renew`).set(header, capability).set(renewalHeader, published.body.renewalProof).send(replacement).expect(200);
     const fetched = await request(app).get(`/api/chat-link/${room}/prekeys/${published.body.address}`).set(header, capability).expect(200);
     expect(fetched.body).toEqual(replacement);
+  });
+
+  it('rejects a malicious participant replacing another address or identity', async () => {
+    const { room, capability } = await createRoom();
+    const original = bundle('otk-victim');
+    const published = await request(app).post(`/api/chat-link/${room}/prekeys`).set(header, capability).send(original).expect(201);
+    await request(app).post(`/api/chat-link/${room}/prekeys/${published.body.address}/renew`).set(header, capability).set(renewalHeader, key()).send(bundle('otk-attacker')).expect(403);
+    await request(app).post(`/api/chat-link/${room}/prekeys/${published.body.address}/renew`).set(header, capability).set(renewalHeader, published.body.renewalProof).send(bundle('otk-new-identity')).expect(403);
+    const fetched = await request(app).get(`/api/chat-link/${room}/prekeys/${published.body.address}`).set(header, capability).expect(200);
+    expect(fetched.body).toEqual(original);
   });
 });

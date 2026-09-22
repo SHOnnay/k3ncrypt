@@ -1,10 +1,11 @@
-import { createHash, randomUUID } from 'crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'crypto';
 import getClientInstance from "./clients";
 import channelValid from "../api/chatHash/utils/validateChannel";
 import { socketEmit, SOCKET_TOPIC, CustomSocket, WireEnvelope } from "./index";
 import { RateLimiter } from "./rateLimiter";
 import { authorizeRoomControl, isValidControlCapability, isValidRoomId } from '../security/controlCapability';
 import db from '../db';
+import { PREKEY_COLLECTION } from '../db/const';
 
 const clients = getClientInstance();
 
@@ -18,6 +19,14 @@ const rateLimiter = new RateLimiter({ capacity: 40, refillPerSecond: 10 });
 
 type Ack = (response: Record<string, unknown>) => void;
 const noop: Ack = () => undefined;
+const routingProofHash = (proof: string): Buffer => createHash('sha256').update(`k3ncrypt-prekey-renewal-v1\0${proof}`).digest();
+
+export const authorizeRoutingAddress = async (channel: string, address: string, proof: unknown): Promise<boolean> => {
+  const record = await db.findOneFromDB<{ renewalProofHash?: string; expiresAt?: Date }>({ channel, address }, PREKEY_COLLECTION);
+  if (!record) return true; // Legacy ephemeral routing identifiers have no pre-key ownership record.
+  if (!(record.expiresAt instanceof Date) || record.expiresAt.getTime() <= Date.now() || typeof proof !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(proof) || !/^[0-9a-f]{64}$/.test(record.renewalProofHash ?? '')) return false;
+  return timingSafeEqual(routingProofHash(proof), Buffer.from(record.renewalProofHash!, 'hex'));
+};
 
 const isPayloadTooLarge = (payload: unknown): boolean => {
   try {
@@ -78,9 +87,9 @@ const findPeerSid = (socket: CustomSocket): string | undefined => {
 
 const connectionListener = (socket: CustomSocket, io) => {
   socket.on("chat-join", async (data) => {
-    const { userID, channelID, controlCapability } = data || {};
+    const { userID, channelID, controlCapability, routingProof } = data || {};
     if (!data || typeof data !== 'object' || Array.isArray(data) ||
-        !exactKeys(data, ['userID', 'channelID', 'controlCapability']) ||
+        !(exactKeys(data, ['userID', 'channelID', 'controlCapability']) || exactKeys(data, ['userID', 'channelID', 'controlCapability', 'routingProof'])) ||
         !isValidRoomId(userID) ||
         !isValidRoomId(channelID) || !isValidControlCapability(controlCapability)) {
       console.error("Rejected malformed channel join");
@@ -89,6 +98,10 @@ const connectionListener = (socket: CustomSocket, io) => {
 
     if (!await authorizeRoomControl(channelID, controlCapability)) {
       console.error('Rejected unauthorized channel join');
+      return;
+    }
+    if (!await authorizeRoutingAddress(channelID, userID, routingProof)) {
+      console.error('Rejected unauthorized routing identity');
       return;
     }
     const { valid } = await channelValid(channelID);

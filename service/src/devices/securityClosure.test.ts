@@ -56,6 +56,10 @@ describe('security closure real encrypted vault boundary', () => {
         expect(results.filter(Boolean)).toHaveLength(1);
         expect(await first.read('test', 'state')).toEqual(await second.read('test', 'highwater'));
         await expect(first.compareAndSwapRecords(updates('stale'))).resolves.toBe(false);
+        const state = new TextDecoder().decode(await first.read('test', 'state'));
+        expect(['one', 'two']).toContain(state);
+        expect(new TextDecoder().decode(await first.read('test', 'highwater'))).toBe(state);
+        expect(state).not.toBe('stale');
     });
 
     it('rejects duplicate public identity under different device identifiers', () => {

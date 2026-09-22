@@ -33,10 +33,18 @@ const requiredString = (value: unknown): value is string => typeof value === 'st
 const validatePayload = (kind: SyncRecordKind, payload: unknown, scope: string): void => {
     if (!object(payload)) throw new Error('Sync record rejected.');
     if ('owner' in payload && payload.owner !== scope) throw new Error('Sync record owner rejected.');
-    if (kind === 'conversation' && (!requiredString(payload.contact) || !requiredString(payload.fingerprint) || !['modern', 'legacy'].includes(String(payload.protocol)) || typeof payload.label !== 'string')) throw new Error('Sync record rejected.');
-    if (kind === 'contact' && (!requiredString(payload.contact) || !requiredString(payload.fingerprint) || !['unconfirmed', 'changed'].includes(String(payload.status)))) throw new Error('Sync record rejected.');
-    if (kind === 'device' && (!requiredString(payload.deviceId) || !requiredString(payload.identityReference) || !['pending', 'active', 'revoked'].includes(String(payload.state)))) throw new Error('Sync record rejected.');
-    if (kind === 'settings' && (!['paper-ink', 'slate-dusk'].includes(String(payload.theme)))) throw new Error('Sync record rejected.');
+    if (kind === 'conversation' && (!requiredString(payload.conversationId) || payload.protocol !== 'modern' ||
+        [payload.sessionId, payload.localAddress, payload.remoteAddress].some((part) => part !== undefined && !requiredString(part)))) throw new Error('Sync record rejected.');
+    if (kind === 'contact' && (!requiredString(payload.contactId) || !requiredString(payload.identityId) || !requiredString(payload.algorithm) ||
+        !requiredString(payload.publicKey) || !['unknown', 'unverified', 'verified'].includes(String(payload.verification)) || payload.changeStatus !== 'unchanged')) throw new Error('Sync record rejected.');
+    if (kind === 'device') {
+        const state = payload.state as Record<string, unknown> | undefined;
+        const list = state?.list as Record<string, unknown> | undefined;
+        if (!state || !list || list.identityReference !== scope || !Array.isArray(list.devices) || !requiredString(state.commitment)) throw new Error('Sync record rejected.');
+    }
+    if (kind === 'settings' && (!['paper-ink', 'slate-dusk'].includes(String(payload.theme)) ||
+        payload.analytics !== undefined && payload.analytics !== false || payload.backgroundCapture !== undefined && payload.backgroundCapture !== false ||
+        payload.externalMedia !== undefined && payload.externalMedia !== false)) throw new Error('Sync record rejected.');
 };
 
 export const validateSyncRecord = (record: SyncRecord, checkpoint: SyncCheckpoint): void => {

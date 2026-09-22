@@ -1,5 +1,5 @@
 import express from 'express';
-import { randomUUID } from 'crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'crypto';
 import db from '../../db';
 import { PREKEY_COLLECTION } from '../../db/const';
 import asyncHandler from '../../middleware/asyncHandler';
@@ -12,6 +12,16 @@ const MAX_KEYS = 100;
 export const PREKEY_BUNDLE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const BASE64_KEY = /^[A-Za-z0-9_-]{43}$/;
 const ADDRESS = /^[0-9a-f-]{36}$/i;
+const RENEWAL_PROOF = /^[A-Za-z0-9_-]{43}$/;
+const RENEWAL_HEADER = 'X-K3ncrypt-Prekey-Renewal';
+
+const proofHash = (proof: string): string => createHash('sha256').update(`k3ncrypt-prekey-renewal-v1\0${proof}`).digest('hex');
+const proofMatches = (proof: unknown, expected: unknown): boolean => {
+  if (typeof proof !== 'string' || !RENEWAL_PROOF.test(proof) || typeof expected !== 'string' || !/^[0-9a-f]{64}$/.test(expected)) return false;
+  const actualBytes = Buffer.from(proofHash(proof), 'hex');
+  const expectedBytes = Buffer.from(expected, 'hex');
+  return actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes);
+};
 
 const exactKeys = (value: Record<string, unknown>, expected: string[]): boolean =>
   Object.keys(value).sort().join('\0') === [...expected].sort().join('\0');
@@ -56,8 +66,9 @@ router.post('/', controlRateLimit, asyncHandler(async (req, res) => {
   const capability = readControlCapability(req);
   if (!await authorize(channel, capability) || !validBundle(req.body)) return res.status(400).send({ error: 'Invalid pre-key bundle' });
   const address = randomUUID();
-  await db.insertInDb({ channel, address, bundle: req.body, createdAt: new Date(), expiresAt: new Date(Date.now() + PREKEY_BUNDLE_TTL_MS) }, PREKEY_COLLECTION);
-  return res.status(201).send({ address });
+  const renewalProof = randomBytes(32).toString('base64url');
+  await db.insertInDb({ channel, address, bundle: req.body, renewalProofHash: proofHash(renewalProof), createdAt: new Date(), expiresAt: new Date(Date.now() + PREKEY_BUNDLE_TTL_MS) }, PREKEY_COLLECTION);
+  return res.status(201).send({ address, renewalProof });
 }));
 
 router.get('/:address', controlRateLimit, asyncHandler(async (req, res) => {
@@ -77,8 +88,14 @@ router.post('/:address/renew', controlRateLimit, asyncHandler(async (req, res) =
   const { channel, address } = req.params;
   const capability = readControlCapability(req);
   if (!ADDRESS.test(address) || !await authorize(channel, capability) || !validBundle(req.body)) return res.status(404).send({ error: 'Pre-key bundle unavailable' });
-  const existing = await db.findOneFromDB({ channel, address }, PREKEY_COLLECTION);
-  if (!existing) return res.status(404).send({ error: 'Pre-key bundle unavailable' });
+  const existing = await db.findOneFromDB<{ bundle: { identity: unknown }; renewalProofHash: string }>({ channel, address }, PREKEY_COLLECTION);
+  const renewalProof = req.get(RENEWAL_HEADER);
+  const existingIdentity = existing?.bundle.identity as { curve25519?: unknown; ed25519?: unknown } | undefined;
+  const nextIdentity = (req.body as { identity?: { curve25519?: unknown; ed25519?: unknown } }).identity;
+  if (!existing || !proofMatches(renewalProof, existing.renewalProofHash) || !existingIdentity || !nextIdentity ||
+      existingIdentity.curve25519 !== nextIdentity.curve25519 || existingIdentity.ed25519 !== nextIdentity.ed25519) {
+    return res.status(403).send({ error: 'Pre-key renewal rejected' });
+  }
   await db.updateOneFromDb({ channel, address }, { bundle: req.body, createdAt: new Date(), expiresAt: new Date(Date.now() + PREKEY_BUNDLE_TTL_MS) }, PREKEY_COLLECTION);
   return res.status(200).send({ status: 'renewed' });
 }));

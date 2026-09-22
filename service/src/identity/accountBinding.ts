@@ -45,10 +45,20 @@ export const adoptApprovedAccountBinding = async (storage: SecureStorage, identi
     if (!storage.compareAndSwapRecords) throw new Error('Atomic account binding storage unavailable.');
     const value: LocalAccountBinding = { version: 1, userScope, deviceId, identityReference };
     const next = new TextEncoder().encode(JSON.stringify(value)).buffer as ArrayBuffer;
-    if (await storage.compareAndSwapRecords([{ recordType: 'device-account-binding', recordId: 'local', expected: undefined, next }])) return Object.freeze(value);
     const existing = await storage.read('device-account-binding', 'local');
-    if (!existing) throw new Error('Account membership conflict.');
+    if (!existing) {
+        if (await storage.compareAndSwapRecords([{ recordType: 'device-account-binding', recordId: 'local', expected: undefined, next }])) return Object.freeze(value);
+        throw new Error('Account membership conflict.');
+    }
     const winner = JSON.parse(new TextDecoder().decode(existing)) as LocalAccountBinding;
-    if (winner.version !== 1 || winner.userScope !== userScope || winner.deviceId !== deviceId || winner.identityReference !== identityReference) throw new Error('Account membership conflict.');
-    return Object.freeze(winner);
+    if (winner.version !== 1 || winner.identityReference !== identityReference) throw new Error('Account membership conflict.');
+    if (winner.userScope === userScope && winner.deviceId === deviceId) return Object.freeze(winner);
+    // A target device creates an isolated bootstrap account before pairing. It
+    // may replace that binding exactly once, while retaining its independent
+    // cryptographic identity and the approved target device identifier.
+    if (!winner.userScope.startsWith('account-') || !winner.deviceId.startsWith('device-') ||
+        !await storage.compareAndSwapRecords([{ recordType: 'device-account-binding', recordId: 'local', expected: existing, next }])) {
+        throw new Error('Account membership conflict.');
+    }
+    return Object.freeze(value);
 };

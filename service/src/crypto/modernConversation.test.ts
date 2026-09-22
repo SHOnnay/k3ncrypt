@@ -69,7 +69,7 @@ beforeEach(() => jest.clearAllMocks());
 
 it('retries the identical persisted envelope after a lost ACK and after restart', async () => {
     encryptions = 0;
-    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress });
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
     jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
     jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
     const storage = new Storage();
@@ -99,7 +99,7 @@ it('retries the identical persisted envelope after a lost ACK and after restart'
 });
 
 it('does not retry queued envelopes after durable future-epoch suspension', async () => {
-    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress });
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
     jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
     jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
     const storage = new Storage();
@@ -128,7 +128,7 @@ it('does not republish possibly claimed one-time keys after an uncertain publica
 });
 
 it('blocks a restored session when its pinned contact identity changes', async () => {
-    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress });
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
     jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
     jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
     const storage = new Storage();
@@ -144,7 +144,7 @@ it('blocks a restored session when its pinned contact identity changes', async (
 });
 
 it('keeps a fallback tab lease for the conversation lifetime and releases it on close', async () => {
-    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress });
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
     jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
     const values = new Map<string, string>();
     const localStorage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value), removeItem: (key: string) => values.delete(key) };
@@ -165,7 +165,7 @@ it('keeps a fallback tab lease for the conversation lifetime and releases it on 
 });
 
 it('exposes authenticated call composition only after modern identity verification', async () => {
-    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress });
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
     jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
     jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
     const conversation = new ModernConversation(new Storage(), loader, fakeTransport().transport);

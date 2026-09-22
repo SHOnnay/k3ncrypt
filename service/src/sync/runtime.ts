@@ -94,7 +94,7 @@ export class RuntimeSyncController {
         return receipt;
     }
 
-    public async complete(): Promise<void> { if (!this.transfer || this.admission !== 'transfer') throw new Error('Sync transfer is unavailable.'); this.transfer.complete(); this.admission = 'idle'; await this.persistState(this.checkpoint!, 'completed'); }
+    public async complete(): Promise<void> { if (!this.transfer || this.admission !== 'transfer') throw new Error('Sync transfer is unavailable.'); await this.transfer.complete(); this.admission = 'idle'; await this.persistState(this.checkpoint!, 'completed'); }
     public async fail(): Promise<void> { this.transfer?.fail(); this.admission = 'idle'; if (this.checkpoint) await this.persistState(this.checkpoint, 'failed'); }
 
     private state(checkpoint: SyncCheckpoint, terminal?: 'completed' | 'failed'): SyncDurableState { return { scope: this.scope, version: 1, checkpoint, admission: this.admission, receivedSequences: [...this.receivedSequences].sort((a, b) => a - b), preparedMembers: [...this.preparedMembers].sort(), readyMembers: [...this.readyMembers].sort(), terminal }; }
