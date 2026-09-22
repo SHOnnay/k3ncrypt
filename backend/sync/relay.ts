@@ -4,6 +4,8 @@ import { authorizeRoomControl, isValidControlCapability, isValidRoomId } from '.
 import channelValid from '../api/chatHash/utils/validateChannel';
 import { allowedCorsOrigins } from '../security/cors';
 import { RateLimiter } from '../socket.io/rateLimiter';
+import { markRelayReady } from '../operations/status';
+import { operationalLog } from '../operations/logger';
 
 export const SYNC_SOCKET_PATH = '/sync/socket.io';
 export const MAX_SYNC_ENVELOPE_BYTES = 192 * 1024;
@@ -24,6 +26,8 @@ export const initSyncRelay = (http: HttpServer): Server => {
     const io = new Server(http, { path: SYNC_SOCKET_PATH, maxHttpBufferSize: MAX_SYNC_PACKET_BYTES,
         cors: { origin: allowedCorsOrigins(), credentials: false }, allowEIO3: false });
     const routes = new Map<string, Map<string, Socket>>();
+    markRelayReady('sync');
+    operationalLog('info', 'sync_relay_ready');
     io.on('connection', (socket) => {
         const limiter = new RateLimiter({ capacity: 8, refillPerSecond: 4 });
         const auth = socket.handshake.auth as unknown;

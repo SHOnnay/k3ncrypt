@@ -5,11 +5,13 @@ import path from 'path';
 
 import apiController from './backend/api';
 import { corsOrigin } from './backend/security/cors';
+import { safeErrorHandler } from './backend/middleware/safeErrorHandler';
 
 require("dotenv").config();
 
 const app = express();
 app.disable("x-powered-by");
+if (process.env.K3NCRYPT_TRUST_PROXY === 'true') app.set('trust proxy', 1);
 app.use(cors({ origin: corsOrigin, credentials: false }));
 app.use(bodyParser.json({ limit: '64kb' }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '64kb' }));
@@ -27,5 +29,7 @@ if (process.env.NODE_ENV === "production") {
     res.status(500).send("Cant serve production build in dev mode, please open react dev server");
   });
 }
+
+app.use(safeErrorHandler);
 
 export default app;

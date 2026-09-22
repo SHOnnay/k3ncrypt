@@ -1,6 +1,8 @@
 import { Server, Socket } from "socket.io";
 import connectionListener from "./listeners";
 import { allowedCorsOrigins } from '../security/cors';
+import { markRelayReady } from '../operations/status';
+import { operationalLog } from '../operations/logger';
 
 export interface CustomSocket extends Socket {
   userID: string,
@@ -52,7 +54,8 @@ export const initSocket = (server) => {
       credentials: false,
     }
   });
-  console.log("Websocket is up!");
+  markRelayReady('messaging');
+  operationalLog('info', 'messaging_relay_ready');
 
   // add listeners
   io.on("connection", (socket) => connectionListener(socket as CustomSocket, io));
@@ -63,7 +66,7 @@ export const initSocket = (server) => {
 export const socketEmit = <T extends keyof emitDataTypes>(topic: T, sid: string, data: emitDataTypes[T]): void => {
   const socket = io.sockets.sockets.get(sid);
   if (!socket) {
-    console.warn("SKIPPING. No socket found.");
+    operationalLog('warn', 'socket_receiver_unavailable');
     return;
   }
   socket.emit(topic as string, data);

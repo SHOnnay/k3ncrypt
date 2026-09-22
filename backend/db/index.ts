@@ -5,7 +5,8 @@ import {
     findOneFromDB as _findOneFromDB, insertInDb as _insertInDb, updateOneFromDb as _updateOneFromDb, claimOneTimeKey as _claimOneTimeKey, deleteExpiredPrekeyBundles as _deleteExpiredPrekeyBundles
     , insertOfflineMessage as _insertOfflineMessage, claimOfflineMessage as _claimOfflineMessage, ackOfflineMessage as _ackOfflineMessage, deleteExpiredOfflineMessages as _deleteExpiredOfflineMessages, countOfflineMessages as _countOfflineMessages
 } from './inMemDB';
-import { PREKEY_COLLECTION, OFFLINE_MESSAGE_COLLECTION } from './const';
+import { LINK_COLLECTION, PREKEY_COLLECTION, OFFLINE_MESSAGE_COLLECTION } from './const';
+import { applyMigrations } from './migrations';
 
 const uri = process.env.MONGO_URI;
 const dbName = process.env.MONGO_DB_NAME;
@@ -27,12 +28,9 @@ const connectDb = async (): Promise<void> => {
     if (!client) throw new Error("No client");
     await client.connect();
     db = client.db(dbName);
-    await db.collection(PREKEY_COLLECTION).createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
-    await db.collection(PREKEY_COLLECTION).createIndex({ channel: 1, address: 1 }, { unique: true });
-    await db.collection(OFFLINE_MESSAGE_COLLECTION).createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
-    await db.collection(OFFLINE_MESSAGE_COLLECTION).createIndex({ dedupeKey: 1 }, { unique: true });
-    await db.collection(OFFLINE_MESSAGE_COLLECTION).createIndex({ channel: 1, mailbox: 1, slot: 1 }, { unique: true });
-    await db.collection(OFFLINE_MESSAGE_COLLECTION).createIndex({ channel: 1, mailbox: 1, claimedUntil: 1, expiresAt: 1 });
+    // Tests and local development get a convenient additive setup. Production
+    // deploys run this explicitly via `npm run migrate` before traffic moves.
+    if (process.env.NODE_ENV !== 'production') await applyMigrations(db);
   } catch (err) {
     inMem = true;
     if (process.env.NODE_ENV !== 'test') {
@@ -88,6 +86,26 @@ export const claimOneTimeKey = async <T>(condition, keyId: string, collectionNam
 export const prekeyStorageReady = (): boolean => process.env.NODE_ENV !== 'production' || !inMem;
 export const persistentStorageReady = (): boolean => !inMem;
 export const getDatabase = (): Db | undefined => inMem || !db ? undefined : db;
+export const ping = async (): Promise<void> => {
+  if (inMem || !db) throw new Error('Persistent database unavailable.');
+  await db.command({ ping: 1 });
+};
+const requiredIndexes: Record<string, string[]> = {
+  [LINK_COLLECTION]: ['hash_1'],
+  [PREKEY_COLLECTION]: ['expiresAt_1', 'channel_1_address_1'],
+  [OFFLINE_MESSAGE_COLLECTION]: ['expiresAt_1', 'dedupeKey_1', 'channel_1_mailbox_1_slot_1', 'channel_1_mailbox_1_claimedUntil_1_expiresAt_1'],
+  attachment_metadata: ['id_1', 'expiresAt_1_status_1'],
+  attachment_chunks: ['attachmentId_1_index_1', 'attachmentId_1_storedAt_1'],
+  attachment_access: ['attachmentId_1'],
+};
+export const requiredIndexesReady = async (): Promise<boolean> => {
+  if (inMem || !db) return false;
+  for (const [collection, expected] of Object.entries(requiredIndexes)) {
+    const actual = new Set((await db.collection(collection).indexes()).map((index) => index.name));
+    if (expected.some((name) => !actual.has(name))) return false;
+  }
+  return true;
+};
 export const cleanupExpiredPrekeyBundles = (now = Date.now()): number =>
   inMem ? _deleteExpiredPrekeyBundles(now, PREKEY_COLLECTION) : 0;
 
@@ -151,4 +169,6 @@ export default {
   countOfflineMessages,
   persistentStorageReady,
   getDatabase,
+  ping,
+  requiredIndexesReady,
 };

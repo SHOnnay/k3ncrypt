@@ -30,7 +30,6 @@ class MongoAttachmentAccessStore implements AttachmentAccessStore {
 }
 
 let service: ReturnType<typeof createProductionAuthenticatedAttachmentService> | undefined;
-let indexesReady: Promise<void> | undefined;
 const productionService = () => {
   const database = db.getDatabase();
   if (!database) throw new Error('Persistent attachment storage unavailable.');
@@ -44,10 +43,6 @@ const productionService = () => {
         return !!record;
       },
     };
-    indexesReady = Promise.all([
-      persistence.ensureIndexes(),
-      accessCollection.createIndex({ attachmentId: 1 }, { unique: true }).then(() => undefined),
-    ]).then(() => undefined);
     service = createProductionAuthenticatedAttachmentService({ memberships, access }, new PersistentAttachmentDeliveryStore(persistence));
   }
   return service;
@@ -64,7 +59,6 @@ const authenticate = async (request: Request): Promise<AuthenticatedContext | un
   const record = await db.findOneFromDB<{ renewalProofHash: string; expiresAt: Date }>({ channel: conversationId, address: participantId }, PREKEY_COLLECTION);
   if (!record || !(record.expiresAt instanceof Date) || record.expiresAt.getTime() <= Date.now() || !proofMatches(proof, record.renewalProofHash)) return undefined;
   productionService();
-  await indexesReady;
   const now = Date.now();
   return {
     sessionId: `attachment:${participantId}`,

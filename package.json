@@ -15,6 +15,7 @@
     "lint": "eslint .",
     "serve:dev": "cross-env NODE_ENV=development nodemon --ext ts,json --ignore client --ignore service --exec ts-node index.ts",
     "serve": "cross-env NODE_ENV=production ts-node index.ts",
+    "migrate": "cross-env NODE_ENV=production ts-node scripts/migrate.ts",
     "test": "cross-env NODE_ENV=test jest",
     "build-service-sdk": "npm run build --workspace=service"
   },
