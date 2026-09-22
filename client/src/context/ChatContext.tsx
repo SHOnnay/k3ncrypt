@@ -3,7 +3,7 @@
  */
 
 import React, { createContext, useContext, ReactNode, useState, useCallback, useEffect, useRef } from 'react';
-import { createChatInstance, utils, BrowserSecureStorage, IndexedDbVaultPersistence, ModernConversation, parseEncryptedMediaMessage } from '@chat-e2ee/service';
+import { createChatInstance, utils, BrowserSecureStorage, IndexedDbVaultPersistence, ModernConversation, parseEncryptedMediaMessage, BrowserCallTransport, ProductionCallNegotiator } from '@chat-e2ee/service';
 import type { IChatE2EE, IE2ECall, CallLifecycleState, CallLifecycleUpdate, StoredContactIdentity, AuthenticatedCallComposition, EnrollmentRequest, EnrollmentApprovalPacket, DeviceControlEvent, LifecycleStateSnapshot } from '@chat-e2ee/service';
 import { ChatContextType, InviteInfo, Message } from '../types/index';
 import { createMessage } from '../utils/messageHandling';
@@ -47,6 +47,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [privacyPreferences, setPrivacyPreferences] = useState<PrivacyPreferences>(readPrivacyPreferences);
   const [permissionStatus, setPermissionStatus] = useState<{ microphone: PermissionState | 'unknown'; camera: PermissionState | 'unknown' }>({ microphone: 'unknown', camera: 'unknown' });
   const acceptedDeliveries = useRef(new Set<string>());
+  const callNegotiator = useRef<ProductionCallNegotiator>();
+  const locallyAcceptedCalls = useRef(new Set<string>());
   const [userId, setUserId] = useState<string>('');
   const [channelHash, setChannelHash] = useState<string>('');
   const [messages, setMessages] = useState<Message[]>([]);
@@ -194,12 +196,17 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setContactIdentity(await modern.getContact());
     const composition = await modern.createAuthenticatedCallComposition();
     setModernCallComposition(composition);
+    callNegotiator.current?.dispose();
+    callNegotiator.current = new ProductionCallNegotiator(composition, new BrowserCallTransport(), async () => getRuntimeConfig().webrtc);
     composition.onCallUpdate((session) => {
       setModernCallId(session.callId);
       setCallLifecycleState(session.state === 'inviting' ? 'ringing' : session.state === 'rejected' ? 'rejected' : session.state === 'cancelled' ? 'cancelled' : session.state === 'ended' ? 'ended' : session.state === 'accepted' ? 'connecting' : 'ringing');
       setIsIncomingCall(session.state === 'ringing');
       setCallActive(!['rejected', 'cancelled', 'ended', 'expired', 'failed'].includes(session.state));
       setCallStatus(session.state === 'ringing' ? 'Incoming Call...' : session.state.charAt(0).toUpperCase() + session.state.slice(1));
+      if (session.state === 'accepted' && !locallyAcceptedCalls.current.delete(session.callId)) {
+        void callNegotiator.current?.beginOffer(session.callId).catch(() => setCallStatus('Connection Failed'));
+      }
     });
   }, [modern]);
 
@@ -346,6 +353,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const composition = modernCallComposition ?? await modern.createAuthenticatedCallComposition();
       setModernCallComposition(composition);
       const call = await composition.invite();
+      await callNegotiator.current?.prepareOutgoing(call);
       setModernCallId(call.callId);
       setCallActive(true);
       setIsIncomingCall(false);
@@ -370,6 +378,10 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const acceptCall = useCallback(async () => {
     if (protocolMode === 'modern') {
       if (!modernCallComposition || !modernCallId) throw new Error('No authenticated incoming call is available.');
+      const incoming = await modernCallComposition.service.get(modernCallId);
+      if (!incoming) throw new Error('Incoming call is unavailable.');
+      await callNegotiator.current?.acceptIncoming(incoming);
+      locallyAcceptedCalls.current.add(modernCallId);
       await modernCallComposition.accept(modernCallId);
       return;
     }
@@ -431,7 +443,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const endCall = useCallback(async () => {
     try {
       if (protocolMode === 'modern' && modernCallComposition && modernCallId) {
-        await modernCallComposition.cancel(modernCallId);
+        await callNegotiator.current?.end(modernCallId);
+        await modernCallComposition.cancel(modernCallId).catch(() => undefined);
       } else if (chat && protocolMode === 'legacy') {
         await chat.endCall();
       }

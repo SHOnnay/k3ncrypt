@@ -30,5 +30,9 @@ describe('getRuntimeConfig', () => {
     process.env.CHATE2EE_ICE_SERVERS = 'not-json';
     expect(getRuntimeConfig().webrtc?.iceServers).toEqual([]);
   });
-});
 
+  it('rejects invalid ICE URLs and malformed TURN credentials', () => {
+    process.env.CHATE2EE_ICE_SERVERS = '[{"urls":"https://not-an-ice-server"},{"urls":"turn:relay.example.test","credential":4}]';
+    expect(getRuntimeConfig().webrtc.iceServers).toEqual([]);
+  });
+});

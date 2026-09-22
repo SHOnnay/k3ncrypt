@@ -11,7 +11,14 @@ const parseIceServers = (raw: string | undefined): RTCIceServer[] => {
   if (!raw) return [];
   try {
     const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed as RTCIceServer[] : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((value): value is RTCIceServer => {
+      if (!value || typeof value !== 'object') return false;
+      const server = value as { urls?: unknown; username?: unknown; credential?: unknown };
+      const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
+      return urls.length > 0 && urls.every((url) => typeof url === 'string' && /^(stun|stuns|turn|turns):/i.test(url)) &&
+        (server.username === undefined || typeof server.username === 'string') && (server.credential === undefined || typeof server.credential === 'string');
+    });
   } catch {
     return [];
   }

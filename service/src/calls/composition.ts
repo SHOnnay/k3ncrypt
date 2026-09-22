@@ -31,6 +31,8 @@ export interface AuthenticatedCallComposition {
   readonly reject: (callId: string) => Promise<CallSession>;
   readonly cancel: (callId: string) => Promise<CallSession>;
   readonly onCallUpdate: (listener: (session: CallSession) => void) => () => void;
+  readonly sendMediaSignal: (callId: string, event: 'connect' | 'connected' | 'reconnect', kind: Exclude<CallSignalKind, 'control'>, payload: unknown) => Promise<void>;
+  readonly onMediaSignal: (listener: (session: CallSession, signal: CallSignal) => Promise<void>) => () => void;
 }
 
 /** Sole composition point for calls: raw transports cannot satisfy this boundary. */
@@ -42,6 +44,8 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
   const repository = new MemoryCallRepository();
   const service = new CallService(repository, new CallAuthorization(input.identity));
   const listeners = new Set<(session: CallSession) => void>();
+  const mediaListeners = new Set<(session: CallSession, signal: CallSignal) => Promise<void>>();
+  const sequences = new Map<string, number>();
   const localParticipant: CallParticipant = {
     participantId: input.localParticipantId ?? input.localIdentityId,
     identityId: input.localIdentityId,
@@ -49,7 +53,7 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
   };
   const sendEvent = async (session: CallSession, event: CallEvent, sequence: number, kind: CallSignalKind = 'control', payload?: unknown): Promise<void> => {
     await input.deviceTrust?.assertTrusted();
-    if (event === 'heartbeat' || event === 'expire' || event === 'fail' || event === 'connect' || event === 'connected' || event === 'reconnect') {
+    if (event === 'heartbeat' || event === 'expire') {
       throw new Error('Unsupported call signal event.');
     }
     const unsigned: Omit<CallSignal, 'payloadDigest'> = {
@@ -87,6 +91,7 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
       return;
     }
     if (signal.conversationId !== existing.conversationId || signal.identityBinding !== existing.identityBinding) throw new Error('Call signal binding rejected.');
+    if (signal.kind && signal.kind !== 'control') { for (const listener of mediaListeners) await listener(existing, signal); return; }
     const updated = await service.event(signal.callId, signal.event);
     notify(updated);
   });
@@ -99,18 +104,27 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
     const binding = await input.identity.identityBinding(input.conversationId, participants);
     const session = await service.invite(input.conversationId, participants, binding);
     await sendEvent(session, 'invite', 1);
+    sequences.set(session.callId, 1);
     notify(session);
     return session;
   };
   const respond = async (callId: string, event: 'accept' | 'reject' | 'cancel'): Promise<CallSession> => {
     await input.deviceTrust?.assertTrusted();
     const session = await service.event(callId, event);
-    await sendEvent(session, event, session.updatedAt === session.createdAt ? 1 : 2);
+    const sequence = session.updatedAt === session.createdAt ? 1 : 2;
+    await sendEvent(session, event, sequence);
+    sequences.set(callId, sequence);
     notify(session);
     return session;
   };
   const onCallUpdate = (listener: (session: CallSession) => void): (() => void) => { listeners.add(listener); return () => listeners.delete(listener); };
+  const sendMediaSignal = async (callId: string, event: 'connect' | 'connected' | 'reconnect', kind: Exclude<CallSignalKind, 'control'>, payload: unknown): Promise<void> => {
+    const session = await repository.get(callId); if (!session) throw new Error('Unknown call.');
+    const sequence = (sequences.get(callId) ?? 1) + 1; sequences.set(callId, sequence);
+    await sendEvent(session, event, sequence, kind, payload);
+  };
+  const onMediaSignal = (listener: (session: CallSession, signal: CallSignal) => Promise<void>): (() => void) => { mediaListeners.add(listener); return () => mediaListeners.delete(listener); };
   // Keep the transport listener alive for the lifetime of the composition.
   void unsubscribeSignals;
-  return Object.freeze({ service, signaling, signalTransport, repository, invite, accept: (id: string) => respond(id, 'accept'), reject: (id: string) => respond(id, 'reject'), cancel: (id: string) => respond(id, 'cancel'), onCallUpdate });
+  return Object.freeze({ service, signaling, signalTransport, repository, invite, accept: (id: string) => respond(id, 'accept'), reject: (id: string) => respond(id, 'reject'), cancel: (id: string) => respond(id, 'cancel'), onCallUpdate, sendMediaSignal, onMediaSignal });
 };

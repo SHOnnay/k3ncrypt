@@ -27,16 +27,20 @@ const browserPeerFactory: PeerFactory = (configuration) => new RTCPeerConnection
 /** Browser WebRTC lifecycle adapter. It has no signaling or storage authority. */
 export class BrowserCallMediaConnection implements CallMediaConnection {
   private readonly peer: RTCPeerConnection;
-  private readonly listeners = new Set<(state: 'connecting' | 'connected' | 'reconnecting' | 'failed' | 'closed') => void>();
+  private readonly listeners = new Set<(state: import('./webrtc').CallMediaState) => void>();
+  private readonly candidateListeners = new Set<(candidate: unknown) => void>();
   constructor(iceServers: readonly IceServer[], factory: PeerFactory = browserPeerFactory, iceTransportPolicy: RTCIceTransportPolicy = 'all') {
     this.peer = factory({ iceServers: iceServers as RTCIceServer[], iceTransportPolicy });
     this.peer.onconnectionstatechange = () => { const state = this.peer.connectionState; this.listeners.forEach((listener) => listener(state === 'connected' ? 'connected' : state === 'disconnected' ? 'reconnecting' : state === 'closed' ? 'closed' : state === 'failed' ? 'failed' : 'connecting')); };
+    this.peer.onicecandidate = (event) => { const candidate = event.candidate; if (candidate) this.candidateListeners.forEach((listener) => listener(candidate.toJSON())); };
   }
-  async createOffer(): Promise<RTCSessionDescriptionInit> { const offer = await this.peer.createOffer(); await this.peer.setLocalDescription(offer); return offer; }
+  async createOffer(restart = false): Promise<RTCSessionDescriptionInit> { const offer = await this.peer.createOffer(restart ? { iceRestart: true } : undefined); await this.peer.setLocalDescription(offer); return offer; }
   async acceptOffer(offer: RTCSessionDescriptionInit): Promise<RTCSessionDescriptionInit> { await this.peer.setRemoteDescription(offer); const answer = await this.peer.createAnswer(); await this.peer.setLocalDescription(answer); return answer; }
+  async acceptAnswer(answer: RTCSessionDescriptionInit): Promise<void> { await this.peer.setRemoteDescription(answer); }
   async addIceCandidate(candidate: RTCIceCandidateInit): Promise<void> { await this.peer.addIceCandidate(candidate); }
   addStream(stream: MediaStream): void { stream.getTracks().forEach((track) => this.peer.addTrack(track, stream)); }
-  async close(): Promise<void> { this.peer.close(); this.listeners.forEach((listener) => listener('closed')); this.listeners.clear(); }
+  async close(): Promise<void> { this.peer.close(); this.listeners.forEach((listener) => listener('closed')); this.listeners.clear(); this.candidateListeners.clear(); }
+  onIceCandidate(listener: (candidate: unknown) => void): () => void { this.candidateListeners.add(listener); return () => this.candidateListeners.delete(listener); }
   onStateChange(listener: (state: 'connecting' | 'connected' | 'reconnecting' | 'failed' | 'closed') => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
 }
 

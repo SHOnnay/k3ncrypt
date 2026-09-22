@@ -13,3 +13,4 @@ export * from './signalBinding';
 export * from './replayProtection';
 export * from './authenticatedTransport';
 export * from './composition';
+export * from './negotiation';
