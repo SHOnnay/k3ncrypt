@@ -87,6 +87,7 @@ export const claimOneTimeKey = async <T>(condition, keyId: string, collectionNam
 
 export const prekeyStorageReady = (): boolean => process.env.NODE_ENV !== 'production' || !inMem;
 export const persistentStorageReady = (): boolean => !inMem;
+export const getDatabase = (): Db | undefined => inMem || !db ? undefined : db;
 export const cleanupExpiredPrekeyBundles = (now = Date.now()): number =>
   inMem ? _deleteExpiredPrekeyBundles(now, PREKEY_COLLECTION) : 0;
 
@@ -149,4 +150,5 @@ export default {
   cleanupExpiredOfflineMessages,
   countOfflineMessages,
   persistentStorageReady,
+  getDatabase,
 };

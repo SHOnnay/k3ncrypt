@@ -10,6 +10,7 @@ export function createMessage(
   type: 'sent' | 'received'
 ): Message {
   return {
+    id: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`,
     sender,
     text,
     type,

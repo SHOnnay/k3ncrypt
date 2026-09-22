@@ -13,7 +13,7 @@ import { BrowserCaptureController } from '../../../../service/src/privacy/captur
 
 export const ChatFooter: React.FC = () => {
   const { sendMessage } = useChat();
-  const { sendFile, sendVoice, transfer } = useMedia();
+  const { sendFile, sendVoice, transfer, cancelTransfer } = useMedia();
   const [message, setMessage] = useState<string>('');
   const [isSending, setIsSending] = useState<boolean>(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -33,7 +33,7 @@ export const ChatFooter: React.FC = () => {
     document.addEventListener('visibilitychange', hidden);
     return () => { document.removeEventListener('visibilitychange', hidden); cancel(); };
   }, []);
-  const [lastAttachment, setLastAttachment] = useState<{ kind: 'image' | 'file'; file: File }>();
+  const [lastAttachment, setLastAttachment] = useState<{ kind: 'image' | 'video' | 'file'; file: File }>();
 
   const handleSend = async () => {
     if (!message.trim()) return;
@@ -54,7 +54,7 @@ export const ChatFooter: React.FC = () => {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
-    const kind = file.type.startsWith('image/') ? 'image' : 'file';
+    const kind = file.type.startsWith('image/') ? 'image' : file.type.startsWith('video/') ? 'video' : 'file';
     setLastAttachment({ kind, file });
     await sendFile(kind, file);
   };
@@ -108,7 +108,7 @@ export const ChatFooter: React.FC = () => {
   return (
     <footer className="chat-footer glass">
       <div className="input-container">
-        <input ref={attachmentInputRef} type="file" hidden accept="image/png,image/jpeg,image/webp,image/gif,.pdf,.txt,.zip,.doc,.docx" onChange={handleAttachment} />
+        <input ref={attachmentInputRef} type="file" hidden accept="image/png,image/jpeg,image/webp,image/gif,video/webm,video/mp4,video/ogg,.pdf,.txt,.zip,.doc,.docx" onChange={handleAttachment} />
         <button className="composer-tool" type="button" onClick={() => attachmentInputRef.current?.click()} disabled={isSending || transfer.state === 'uploading'} title="Send a protected file" aria-label="Attach a protected file"><PaperclipIcon size={19} /></button>
         <input
           ref={inputRef}
@@ -132,7 +132,7 @@ export const ChatFooter: React.FC = () => {
           <SendIcon size={20} />
         </Button>
       </div>
-      {transfer.state !== 'idle' && <div className="media-transfer-status" role="status"><span>{transfer.error ?? ({ uploading: 'Uploading protected data…', downloading: 'Opening protected media…', ready: 'Protected media ready.', failed: 'Unable to send protected media.', idle: '' } as Record<string, string>)[transfer.state]}</span>{transfer.state === 'failed' && lastAttachment && <button type="button" onClick={retryAttachment}>Try again</button>}</div>}
+      {transfer.state !== 'idle' && <div className="media-transfer-status" role="status"><span>{transfer.error ?? ({ uploading: 'Uploading protected data…', downloading: 'Opening protected media…', ready: 'Protected media ready.', failed: 'Unable to send protected media.', idle: '' } as Record<string, string>)[transfer.state]}</span>{transfer.state === 'uploading' && <button type="button" onClick={cancelTransfer}>Cancel</button>}{transfer.state === 'failed' && lastAttachment && <button type="button" onClick={retryAttachment}>Try again</button>}</div>}
     </footer>
   );
 };

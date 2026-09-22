@@ -11,6 +11,7 @@ import {
   CloseIcon,
   InfoIcon,
   LockIcon,
+  MicIcon,
   NetworkIcon,
   PaletteIcon,
   ShieldIcon,
@@ -38,7 +39,7 @@ const viewTitles: Record<SettingsView, string> = {
 
 export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose }) => {
   const [view, setView] = useState<SettingsView>('settings');
-  const { channelHash, isConnected, protocolMode, userId, ownFingerprint, contactIdentity, verifyContact, acceptChangedIdentity, deleteChannel, deviceLifecycleState, pendingDeviceEnrollment, pendingDeviceApproval, requestDeviceEnrollment, approveDeviceEnrollment, rejectDeviceEnrollment, confirmDeviceEnrollment, revokeDevice } = useChat();
+  const { channelHash, isConnected, protocolMode, userId, ownFingerprint, contactIdentity, verifyContact, acceptChangedIdentity, deleteChannel, deviceLifecycleState, pendingDeviceEnrollment, pendingDeviceApproval, requestDeviceEnrollment, approveDeviceEnrollment, rejectDeviceEnrollment, confirmDeviceEnrollment, revokeDevice, privacyPreferences, updatePrivacyPreferences, permissionStatus, refreshPermissionStatus, syncStatus } = useChat();
   const [comparisonConfirmed, setComparisonConfirmed] = useState(false);
   const [verificationError, setVerificationError] = useState('');
   const [qrInput, setQrInput] = useState('');
@@ -106,10 +107,14 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
               <div className="detail-intro"><h3>Designed around your privacy</h3><p>{protocolMode === 'modern' ? 'Your modern contact uses a lasting identity on this device.' : 'Your current conversation uses its private invitation to protect messages in transit.'}</p></div>
               <div className="state-card state-card--positive"><ShieldIcon size={21} /><div><strong>Conversation protection is on</strong><p>{protocolMode === 'modern' ? 'Your identity and conversation state stay in your local encrypted vault.' : 'Sensitive invitation details stay in the link fragment and are not sent as a normal page request.'}</p></div></div>
               <div className="preference-list">
-                <SettingsRow icon={<LockIcon size={17} />} title="App lock" description="Unlock this app with a passphrase" status="Not available yet" disabled />
-                <SettingsRow icon={<BellIcon size={17} />} title="Notification privacy" description="Hide message previews" status="Not available yet" disabled />
+                <SettingsRow icon={<LockIcon size={17} />} title="App lock" description="Modern account data requires the local vault passphrase" status={protocolMode === 'modern' ? 'On' : 'Modern only'} />
+                <label className="settings-row"><span className="settings-row__icon"><BellIcon size={17} /></span><span className="settings-row__copy"><strong>Notification previews</strong><small>Show message content in system notifications</small></span><input type="checkbox" checked={privacyPreferences.notificationPreviews} onChange={(event) => updatePrivacyPreferences({ notificationPreviews: event.target.checked })} /></label>
                 <SettingsRow icon={<InfoIcon size={17} />} title="Link previews" description="No link previews are generated" status="Off" />
-                <SettingsRow icon={<StorageIcon size={17} />} title="Media controls" description="Attachments are not available yet" status="Off" disabled />
+                <label className="settings-row"><span className="settings-row__icon"><StorageIcon size={17} /></span><span className="settings-row__copy"><strong>Media auto-download</strong><small>Open protected media only when you choose</small></span><input type="checkbox" checked={privacyPreferences.mediaAutoDownload} onChange={(event) => updatePrivacyPreferences({ mediaAutoDownload: event.target.checked })} /></label>
+                <SettingsRow icon={<ShieldIcon size={17} />} title="Analytics" description="No usage analytics are sent" status="Off" />
+                <SettingsRow icon={<MicIcon size={17} />} title="Microphone permission" description="Requested only from a call or voice-note action" status={permissionStatus.microphone} />
+                <SettingsRow icon={<InfoIcon size={17} />} title="Camera permission" description="No background camera capture" status={permissionStatus.camera} />
+                <button className="btn btn--secondary" type="button" onClick={() => refreshPermissionStatus()}>Refresh permissions</button>
               </div>
             </section>
           )}
@@ -122,6 +127,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
                 <div><strong>{isConnected ? 'Conversation connected' : 'Waiting for the other person'}</strong><p>Relay connection · browser</p></div>
                 <StatusPill tone={isConnected ? 'positive' : 'quiet'}>{isConnected ? 'Online' : 'Waiting'}</StatusPill>
               </div>
+              <div className="network-status"><span className={`network-pulse ${syncStatus === 'ready' ? 'online' : ''}`} /><div><strong>Device sync</strong><p>Authenticated state synchronization</p></div><StatusPill tone={syncStatus === 'ready' ? 'positive' : 'quiet'}>{syncStatus}</StatusPill></div>
               <div className="preference-list">
                 <SettingsRow icon={<NetworkIcon size={17} />} title="Local communication mode" description="Connect without the internet when nearby" status="Coming soon" disabled />
                 <SettingsRow icon={<ShieldIcon size={17} />} title="Private routing" description="Alternative network routes" status="Not available" disabled />

@@ -5,9 +5,12 @@
 import type { IChatE2EE } from '@chat-e2ee/service';
 import type { CallLifecycleState } from '@chat-e2ee/service';
 import type { StoredContactIdentity, EnrollmentRequest, EnrollmentApprovalPacket, LifecycleStateSnapshot } from '@chat-e2ee/service';
+import type { ConversationDescriptor } from '../product/sessionStore';
+import type { PrivacyPreferences } from '../product/preferences';
 
 // Message type
 export interface Message {
+  id: string;
   sender: string;
   text: string;
   type: 'sent' | 'received';
@@ -59,9 +62,17 @@ export interface ChatContextType {
   deviceLifecycleState?: LifecycleStateSnapshot;
   pendingDeviceEnrollment?: EnrollmentRequest;
   pendingDeviceApproval?: EnrollmentApprovalPacket;
+  conversations: ConversationDescriptor[];
+  accountState: 'checking' | 'new' | 'locked' | 'ready';
+  sessionError?: string;
+  syncStatus: 'unavailable' | 'recovering' | 'ready' | 'blocked';
+  privacyPreferences: PrivacyPreferences;
+  permissionStatus: { microphone: PermissionState | 'unknown'; camera: PermissionState | 'unknown' };
 
   // Methods
   initializeChat: () => Promise<void>;
+  restoreSession: (passphrase: string) => Promise<void>;
+  openConversation: (roomId: string) => Promise<void>;
   createNewChannel: () => Promise<InviteInfo>;
   createModernChannel: (passphrase: string) => Promise<string>;
   joinModernChannel: (roomId: string, controlCapability: string, address: string, passphrase: string) => Promise<void>;
@@ -74,6 +85,7 @@ export interface ChatContextType {
   revokeDevice: (deviceId: string) => Promise<void>;
   joinChannel: (roomId: string, secret: string, controlCapability: string) => Promise<void>;
   sendMessage: (text: string) => Promise<void>;
+  retryMessage: (messageId: string) => Promise<void>;
   startCall: () => Promise<void>;
   acceptCall: () => Promise<void>;
   rejectCall: () => Promise<void>;
@@ -82,6 +94,9 @@ export interface ChatContextType {
   addMessage: (message: Message) => void;
   setCallDuration: (duration: number) => void;
   deleteChannel: () => Promise<void>;
+  updatePrivacyPreferences: (next: Partial<PrivacyPreferences>) => void;
+  refreshPermissionStatus: () => Promise<void>;
+  attachmentRequestHeaders: () => Promise<Record<string, string>>;
 }
 
 // Common component props

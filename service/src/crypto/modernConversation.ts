@@ -42,7 +42,7 @@ const TAB_LEASE_MS = 15_000;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-interface PendingEnvelope { envelope: EncryptedEnvelope; relayId?: string; sentAt?: number; }
+interface PendingEnvelope { envelope: EncryptedEnvelope; relayId?: string; sentAt?: number; clientId?: string; }
 interface PublicationMarker { version: 1; roomId: string; address?: string; routingProof?: string; }
 export interface ModernConnectionDetails {
     ownFingerprint: string;
@@ -105,6 +105,7 @@ export class ModernConversation {
     private trustEvents?: TrustStateEventCoordinator;
     private trustEpoch?: number;
     private syncController?: RuntimeSyncController;
+    private deliveryObserver?: (clientId: string, state: 'accepted') => void;
     private syncRelay?: SocketSyncRelay;
     private groupAdapter?: SecureStorageGroupRuntimeAdapter;
     private groupRuntime?: GroupSecurityRuntime;
@@ -273,6 +274,21 @@ export class ModernConversation {
         return this.deviceTrust.decision();
     }
 
+    /** Short-lived request proof for the host's authenticated ciphertext attachment adapter. */
+    public async attachmentAuthorizationHeaders(): Promise<Record<string, string>> {
+        await this.assertCurrentDeviceTrust();
+        if (!this.roomId || !this.capability || !this.localAddress) throw new Error('Attachment authorization is unavailable.');
+        const mode = await this.modes.read(this.roomId);
+        if (!mode?.routingProof || mode.localAddress !== this.localAddress) throw new Error('Attachment ownership proof is unavailable.');
+        return {
+            'X-K3ncrypt-Conversation': this.roomId,
+            'X-K3ncrypt-Participant': this.localAddress,
+            'X-K3ncrypt-Control-Capability': this.capability,
+            'X-K3ncrypt-Routing-Proof': mode.routingProof,
+            'X-K3ncrypt-Request-Id': crypto.randomUUID(),
+        };
+    }
+
     /** Configures the all-member freshness fence used by every protected operation. */
     public configureDeviceTrustFreshness(activeMemberDeviceIds: readonly string[]): void {
         if (!this.deviceTrust || activeMemberDeviceIds.length === 0) throw new Error('Device trust is unavailable.');
@@ -367,24 +383,32 @@ export class ModernConversation {
     }
 
     public async send(text: string): Promise<'pending'> {
+        await this.sendWithReceipt(text);
+        return 'pending';
+    }
+
+    public async sendWithReceipt(text: string): Promise<string> {
         if (this.roomId) return this.withTabLock(this.roomId, () => this.sendUnlocked(text));
         throw new Error('The private contact is not ready.');
     }
 
-    private async sendUnlocked(text: string): Promise<'pending'> {
+    public onDeliveryUpdate(observer: (clientId: string, state: 'accepted') => void): void { this.deliveryObserver = observer; }
+
+    private async sendUnlocked(text: string): Promise<string> {
         if (!this.roomId || !this.runtime.activeSessionId || !text.trim()) throw new Error('The private contact is not ready.');
         await this.assertCurrentDeviceTrust();
         const contact = await this.getContact();
         if (contact?.changeStatus !== 'unchanged') throw new Error('Review this contact’s changed identity before sending.');
+        const clientId = crypto.randomUUID();
         await this.deliveryMutex.runExclusive(async () => {
             const pending = await this.readPending();
             if (pending.length >= MAX_PENDING) throw new Error('Too many messages are waiting to send.');
             const envelope = await this.runtime.encrypt('message', encoder.encode(text).buffer as ArrayBuffer);
-            pending.push({ envelope });
+            pending.push({ envelope, clientId });
             await this.storage.write(OUTBOX_RECORD, this.roomId!, asBytes(pending));
         });
         await this.retryPending();
-        return 'pending';
+        return clientId;
     }
 
     public async retryPending(): Promise<void> {
@@ -408,8 +432,10 @@ export class ModernConversation {
         if (!this.roomId) return;
         await this.deliveryMutex.runExclusive(async () => {
             const pending = await this.readPending();
+            const accepted = pending.find((item) => item.relayId === relayId);
             const next = pending.filter((item) => item.relayId !== relayId);
             if (next.length !== pending.length) await this.storage.write(OUTBOX_RECORD, this.roomId!, asBytes(next));
+            if (accepted?.clientId) this.deliveryObserver?.(accepted.clientId, 'accepted');
         });
     }
 

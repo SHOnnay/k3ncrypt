@@ -12,6 +12,8 @@ export interface MediaAttachmentGateway {
     storeChunk(context: MediaConversationContext, id: string, capability: string, chunk: PreparedMedia['chunks'][number]): Promise<void>;
     completeUpload(context: MediaConversationContext, id: string, capability: string): Promise<void>;
     getChunks(context: MediaConversationContext, id: string, capability: string): Promise<PreparedMedia['chunks']>;
+    deleteUpload?(context: MediaConversationContext, id: string, capability: string): Promise<void>;
+    cancel?(): void;
 }
 
 export type MediaTransferState = 'uploading' | 'sent' | 'downloading' | 'ready' | 'failed';
@@ -23,6 +25,8 @@ const unavailable = (): Error => new Error('Protected media is unavailable.');
 /** Orchestrates local media encryption, authenticated ciphertext delivery, and E2EE references. */
 export class MediaMessageWorkflow {
     constructor(private readonly attachments: MediaAttachmentGateway) {}
+
+    cancel(): void { this.attachments.cancel?.(); }
 
     async sendFile(context: MediaConversationContext, kind: Exclude<MediaKind, 'voice'>, file: { arrayBuffer: () => Promise<ArrayBuffer>; type: string }, send: (serialized: string) => Promise<void>): Promise<MediaSendResult> {
         return this.sendPrepared(context, await prepareEncryptedFile(kind, file), send);
@@ -46,11 +50,16 @@ export class MediaMessageWorkflow {
 
     private async sendPrepared(context: MediaConversationContext, prepared: PreparedMedia, send: (serialized: string) => Promise<void>, durationMs?: number): Promise<MediaSendResult> {
         const upload = await this.attachments.createUpload(context, { id: prepared.attachment.id, size: prepared.attachment.size, chunkCount: prepared.attachment.chunkCount, encryptedMetadata: prepared.attachment.encryptedMetadata, expiresAt: prepared.attachment.expiresAt });
-        for (const chunk of prepared.chunks) await this.attachments.storeChunk(context, upload.id, upload.capability, { ...chunk, attachmentId: upload.id });
-        await this.attachments.completeUpload(context, upload.id, upload.capability);
-        const message = { ...createEncryptedMediaMessage(prepared, durationMs), attachmentCapability: upload.capability };
-        const serialized = serializeEncryptedMediaMessage(message);
-        await send(serialized);
-        return { state: 'sent', message, serialized };
+        try {
+            for (const chunk of prepared.chunks) await this.attachments.storeChunk(context, upload.id, upload.capability, { ...chunk, attachmentId: upload.id });
+            await this.attachments.completeUpload(context, upload.id, upload.capability);
+            const message = { ...createEncryptedMediaMessage(prepared, durationMs), attachmentCapability: upload.capability };
+            const serialized = serializeEncryptedMediaMessage(message);
+            await send(serialized);
+            return { state: 'sent', message, serialized };
+        } catch (error) {
+            await this.attachments.deleteUpload?.(context, upload.id, upload.capability).catch(() => undefined);
+            throw error;
+        }
     }
 }

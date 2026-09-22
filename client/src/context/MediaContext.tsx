@@ -10,6 +10,7 @@ interface MediaContextValue {
   sendVoice: (bytes: Uint8Array, durationMs: number) => Promise<void>;
   receive: (serialized: string) => Promise<MediaReceiveResult | undefined>;
   clearTransfer: () => void;
+  cancelTransfer: () => void;
 }
 
 const MediaContext = createContext<MediaContextValue | undefined>(undefined);
@@ -63,7 +64,8 @@ export const MediaProvider: React.FC<{ children: ReactNode; workflow?: MediaMess
     }
   }, [workflow, protocolMode, context.conversationId, context.participantId, sendMessage]);
 
-  return <MediaContext.Provider value={{ transfer, sendFile, sendVoice, receive, clearTransfer: () => setTransfer({ state: 'idle' }) }}>{children}</MediaContext.Provider>;
+  const cancelTransfer = () => { workflow?.cancel(); setTransfer({ state: 'idle' }); };
+  return <MediaContext.Provider value={{ transfer, sendFile, sendVoice, receive, clearTransfer: () => setTransfer({ state: 'idle' }), cancelTransfer }}>{children}</MediaContext.Provider>;
 };
 
 export const useMedia = (): MediaContextValue => {

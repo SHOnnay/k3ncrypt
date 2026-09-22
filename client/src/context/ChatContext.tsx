@@ -2,7 +2,7 @@
  * Chat context provider for explicit legacy and modern service paths.
  */
 
-import React, { createContext, useContext, ReactNode, useState, useCallback } from 'react';
+import React, { createContext, useContext, ReactNode, useState, useCallback, useEffect, useRef } from 'react';
 import { createChatInstance, utils, BrowserSecureStorage, IndexedDbVaultPersistence, ModernConversation, parseEncryptedMediaMessage } from '@chat-e2ee/service';
 import type { IChatE2EE, IE2ECall, CallLifecycleState, CallLifecycleUpdate, StoredContactIdentity, AuthenticatedCallComposition, EnrollmentRequest, EnrollmentApprovalPacket, DeviceControlEvent, LifecycleStateSnapshot } from '@chat-e2ee/service';
 import { ChatContextType, InviteInfo, Message } from '../types/index';
@@ -11,6 +11,9 @@ import { playBeep } from '../utils/audioNotification';
 import { getRuntimeConfig } from '../config/runtimeConfig';
 import { debugError } from '../utils/debug';
 import { loadVodozemacBindings } from '../crypto/vodozemacModule';
+import { readConversationDescriptors, removeConversationDescriptor, saveConversationDescriptor, type ConversationDescriptor } from '../product/sessionStore';
+import { readPrivacyPreferences, writePrivacyPreferences, type PrivacyPreferences } from '../product/preferences';
+import { readMessages, writeMessages } from '../product/messageStore';
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
 
@@ -36,6 +39,14 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [deviceLifecycleState, setDeviceLifecycleState] = useState<LifecycleStateSnapshot>();
   const [pendingDeviceEnrollment, setPendingDeviceEnrollment] = useState<EnrollmentRequest>();
   const [pendingDeviceApproval, setPendingDeviceApproval] = useState<EnrollmentApprovalPacket>();
+  const [vault, setVault] = useState<BrowserSecureStorage>();
+  const [conversations, setConversations] = useState<ConversationDescriptor[]>([]);
+  const [accountState, setAccountState] = useState<'checking' | 'new' | 'locked' | 'ready'>('checking');
+  const [sessionError, setSessionError] = useState<string>();
+  const [syncStatus, setSyncStatus] = useState<'unavailable' | 'recovering' | 'ready' | 'blocked'>('unavailable');
+  const [privacyPreferences, setPrivacyPreferences] = useState<PrivacyPreferences>(readPrivacyPreferences);
+  const [permissionStatus, setPermissionStatus] = useState<{ microphone: PermissionState | 'unknown'; camera: PermissionState | 'unknown' }>({ microphone: 'unknown', camera: 'unknown' });
+  const acceptedDeliveries = useRef(new Set<string>());
   const [userId, setUserId] = useState<string>('');
   const [channelHash, setChannelHash] = useState<string>('');
   const [messages, setMessages] = useState<Message[]>([]);
@@ -54,11 +65,23 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const chatInstance = createChatInstance(getRuntimeConfig());
       await chatInstance.init();
       setChat(chatInstance);
+      const metadata = await new IndexedDbVaultPersistence().loadMetadata();
+      setAccountState(metadata ? 'locked' : 'new');
     } catch (err) {
       debugError('Chat initialization failed', err);
       throw err;
     }
   }, []);
+
+  const refreshPermissionStatus = useCallback(async (): Promise<void> => {
+    if (!navigator.permissions?.query) return;
+    const query = async (name: 'microphone' | 'camera'): Promise<PermissionState | 'unknown'> => {
+      try { return (await navigator.permissions.query({ name: name as PermissionName })).state; } catch { return 'unknown'; }
+    };
+    setPermissionStatus({ microphone: await query('microphone'), camera: await query('camera') });
+  }, []);
+
+  useEffect(() => { void refreshPermissionStatus(); }, [refreshPermissionStatus]);
 
   // Create new channel: asks the server for a room id, then generates the
   // invitation secret entirely on this device (see getLink()). The secret
@@ -83,48 +106,87 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const vault = new BrowserSecureStorage(persistence);
     if (await persistence.loadMetadata()) await vault.unlock(passphrase);
     else await vault.initializeWithPassphrase(passphrase);
+    setVault(vault);
+    setAccountState('ready');
+    setSessionError(undefined);
     return vault;
   };
 
+  const connectModern = async (secureVault: BrowserSecureStorage, descriptor: ConversationDescriptor): Promise<{ ownFingerprint: string; ownAddress: string; contact?: StoredContactIdentity }> => {
+    if (modern) await modern.close();
+    setSyncStatus('recovering');
+    setMessages(await readMessages(secureVault, descriptor.roomId));
+    const conversation = new ModernConversation(secureVault, loadVodozemacBindings);
+    conversation.onDeliveryUpdate((clientId, state) => {
+      acceptedDeliveries.current.add(clientId);
+      setMessages((current) => current.map((message) => message.id === clientId ? { ...message, delivery: state } : message));
+    });
+    try {
+      const details = await conversation.connect(descriptor.roomId, descriptor.controlCapability, descriptor.remoteAddress, (text) => {
+        setMessages((previous) => [...previous, displayMessage('contact', text, 'received')]);
+      }, setContactIdentity, (event: DeviceControlEvent) => {
+        if (event.type === 'enrollment-request') setPendingDeviceEnrollment(event.payload as EnrollmentRequest);
+        if (event.type === 'enrollment-approval') setPendingDeviceApproval(event.payload as EnrollmentApprovalPacket);
+      });
+      setModern(conversation);
+      setModernCallComposition(null);
+      setModernCallId(undefined);
+      setProtocolMode('modern');
+      setChannelHash(descriptor.roomId);
+      setOwnFingerprint(details.ownFingerprint);
+      setContactIdentity(details.contact);
+      setUserId(details.ownAddress);
+      setDeviceLifecycleState(await conversation.getDeviceLifecycleState());
+      setIsConnected(true);
+      setSyncStatus((await conversation.getDeviceTrust()) === 'trusted' ? 'ready' : 'blocked');
+      setSessionError(undefined);
+      return details;
+    } catch (error) {
+      await conversation.close().catch(() => undefined);
+      setSyncStatus('blocked');
+      setSessionError(error instanceof Error ? error.message : 'Could not open the private session.');
+      throw error;
+    }
+  };
+
+  useEffect(() => {
+    if (vault && channelHash && protocolMode === 'modern') void writeMessages(vault, channelHash, messages).catch((error) => debugError('Message history persistence failed', error));
+  }, [channelHash, messages, protocolMode, vault]);
+
   const createModernChannel = useCallback(async (passphrase: string): Promise<string> => {
     if (!chat) throw new Error('Chat not initialized');
-    if (modern) await modern.close();
     const invite = await chat.getLink();
-    const vault = await openModernVault(passphrase);
-    const conversation = new ModernConversation(vault, loadVodozemacBindings);
-    const details = await conversation.connect(invite.hash, invite.controlCapability, undefined, (text) => {
-      setMessages((previous) => [...previous, displayMessage('contact', text, 'received')]);
-    }, setContactIdentity, (event: DeviceControlEvent) => { if (event.type === 'enrollment-request') setPendingDeviceEnrollment(event.payload as EnrollmentRequest); if (event.type === 'enrollment-approval') setPendingDeviceApproval(event.payload as EnrollmentApprovalPacket); });
-    setModern(conversation);
-    setModernCallComposition(null);
-    setModernCallId(undefined);
-    setProtocolMode('modern');
-    setChannelHash(invite.hash);
-    setOwnFingerprint(details.ownFingerprint);
-    setContactIdentity(details.contact);
-    setUserId(details.ownAddress);
-    setDeviceLifecycleState(await conversation.getDeviceLifecycleState());
+    const secureVault = await openModernVault(passphrase);
+    const descriptor: ConversationDescriptor = { version: 1, roomId: invite.hash, controlCapability: invite.controlCapability, label: 'Private contact', updatedAt: Date.now() };
+    const details = await connectModern(secureVault, descriptor);
+    setConversations(await saveConversationDescriptor(secureVault, descriptor));
     const fragment = `modern=${encodeURIComponent(invite.hash)}&control=${encodeURIComponent(invite.controlCapability)}&address=${encodeURIComponent(details.ownAddress)}`;
     return `${window.location.origin}${window.location.pathname}#${fragment}`;
   }, [chat, modern]);
 
   const joinModernChannel = useCallback(async (roomId: string, capability: string, address: string, passphrase: string): Promise<void> => {
-    if (modern) await modern.close();
-    const vault = await openModernVault(passphrase);
-    const conversation = new ModernConversation(vault, loadVodozemacBindings);
-    const details = await conversation.connect(roomId, capability, address, (text) => {
-      setMessages((previous) => [...previous, displayMessage('contact', text, 'received')]);
-    }, setContactIdentity, (event: DeviceControlEvent) => { if (event.type === 'enrollment-request') setPendingDeviceEnrollment(event.payload as EnrollmentRequest); if (event.type === 'enrollment-approval') setPendingDeviceApproval(event.payload as EnrollmentApprovalPacket); });
-    setModern(conversation);
-    setModernCallComposition(null);
-    setModernCallId(undefined);
-    setProtocolMode('modern');
-    setChannelHash(roomId);
-    setOwnFingerprint(details.ownFingerprint);
-    setContactIdentity(details.contact);
-    setUserId(details.ownAddress);
-    setDeviceLifecycleState(await conversation.getDeviceLifecycleState());
+    const secureVault = await openModernVault(passphrase);
+    const descriptor: ConversationDescriptor = { version: 1, roomId, controlCapability: capability, remoteAddress: address, label: 'Private contact', updatedAt: Date.now() };
+    await connectModern(secureVault, descriptor);
+    setConversations(await saveConversationDescriptor(secureVault, descriptor));
   }, [modern]);
+
+  const restoreSession = useCallback(async (passphrase: string): Promise<void> => {
+    const secureVault = await openModernVault(passphrase);
+    const saved = await readConversationDescriptors(secureVault);
+    setConversations(saved);
+    if (!saved[0]) { setAccountState('ready'); return; }
+    await connectModern(secureVault, saved[0]);
+  }, [modern]);
+
+  const openConversation = useCallback(async (roomId: string): Promise<void> => {
+    if (roomId === channelHash && modern) return;
+    if (!vault) throw new Error('Unlock this device before opening a conversation.');
+    const descriptor = conversations.find((item) => item.roomId === roomId);
+    if (!descriptor) throw new Error('Conversation is unavailable.');
+    setMessages([]);
+    await connectModern(vault, descriptor);
+  }, [channelHash, conversations, modern, vault]);
 
   const verifyContact = useCallback(async (): Promise<void> => {
     if (!modern) throw new Error('No modern contact is open.');
@@ -226,22 +288,56 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const sendMessage = useCallback(
     async (text: string) => {
       if (!userId || (protocolMode === 'legacy' && !chat) || (protocolMode === 'modern' && !modern)) throw new Error('Chat not ready');
+      const outgoing = { ...displayMessage(userId, text, 'sent'), delivery: 'pending' as const };
       try {
         if (protocolMode === 'modern') {
-          const delivery = await modern!.send(text);
-      addMessage({ ...displayMessage(userId, text, 'sent'), delivery });
+          const clientId = await modern!.sendWithReceipt(text);
+          const accepted = acceptedDeliveries.current.delete(clientId);
+          addMessage({ ...outgoing, id: clientId, delivery: accepted ? 'accepted' : 'pending' });
           return;
         }
-        const message = createMessage(userId, text, 'sent');
-        addMessage(message);
         await chat!.encrypt({ text, image: '' }).send();
+        addMessage({ ...outgoing, delivery: 'accepted' });
       } catch (err) {
+        addMessage({ ...outgoing, delivery: 'failed' });
         debugError('Message send failed', err);
         throw err;
       }
     },
     [chat, modern, protocolMode, userId]
   );
+
+  const retryMessage = useCallback(async (messageId: string): Promise<void> => {
+    const failed = messages.find((message) => message.id === messageId && message.type === 'sent');
+    if (!failed) throw new Error('Message retry is unavailable.');
+    setMessages((current) => current.map((message) => message.id === messageId ? { ...message, delivery: 'pending' } : message));
+    try {
+      if (protocolMode === 'modern') await modern?.retryPending();
+      else {
+        if (!chat) throw new Error('Chat is unavailable.');
+        await chat.encrypt({ text: failed.text, image: '' }).send();
+        setMessages((current) => current.map((message) => message.id === messageId ? { ...message, delivery: 'accepted' } : message));
+      }
+    } catch (error) {
+      setMessages((current) => current.map((message) => message.id === messageId ? { ...message, delivery: 'failed' } : message));
+      throw error;
+    }
+  }, [chat, messages, modern, protocolMode]);
+
+  useEffect(() => {
+    const retry = () => { if (modern) void modern.retryPending(); };
+    window.addEventListener('online', retry);
+    return () => window.removeEventListener('online', retry);
+  }, [modern]);
+
+  const updatePrivacyPreferences = useCallback((next: Partial<PrivacyPreferences>): void => {
+    setPrivacyPreferences((current) => writePrivacyPreferences({ ...current, ...next, analytics: false }));
+  }, []);
+
+  const attachmentRequestHeaders = useCallback(async (): Promise<Record<string, string>> => {
+    if (!modern || protocolMode !== 'modern') throw new Error('Protected media requires a modern private session.');
+    return modern.attachmentAuthorizationHeaders();
+  }, [modern, protocolMode]);
 
   // Start call
   const startCall = useCallback(async () => {
@@ -460,6 +556,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const deleteChannel = useCallback(async () => {
     if (protocolMode === 'modern') {
       await modern?.delete();
+      if (vault && channelHash) setConversations(await removeConversationDescriptor(vault, channelHash));
       setModern(null);
       setModernCallComposition(null);
       setModernCallId(undefined);
@@ -478,7 +575,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       debugError('Conversation deletion failed', err);
       throw err;
     }
-  }, [chat, modern, protocolMode]);
+  }, [chat, channelHash, modern, protocolMode, vault]);
 
   const value: ChatContextType = {
     chat,
@@ -497,7 +594,15 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     deviceLifecycleState,
     pendingDeviceEnrollment,
     pendingDeviceApproval,
+    conversations,
+    accountState,
+    sessionError,
+    syncStatus,
+    privacyPreferences,
+    permissionStatus,
     initializeChat,
+    restoreSession,
+    openConversation,
     createNewChannel,
     createModernChannel,
     joinModernChannel,
@@ -510,6 +615,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     revokeDevice,
     joinChannel,
     sendMessage,
+    retryMessage,
     startCall,
     acceptCall,
     rejectCall,
@@ -518,6 +624,9 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     addMessage,
     setCallDuration,
     deleteChannel,
+    updatePrivacyPreferences,
+    refreshPermissionStatus,
+    attachmentRequestHeaders,
   };
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;

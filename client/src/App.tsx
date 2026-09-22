@@ -2,7 +2,8 @@
  * Main App component
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { MediaMessageWorkflow } from '@chat-e2ee/service';
 import { useChat } from './context/ChatContext';
 import { SetupOverlay } from './components/SetupOverlay/SetupOverlay';
 import { ChatContainer } from './components/ChatContainer/ChatContainer';
@@ -12,12 +13,15 @@ import { SettingsPanel } from './components/Settings/SettingsPanel';
 import './styles/global.css';
 import { debugError } from './utils/debug';
 import { MediaProvider } from './context/MediaContext';
+import { HttpAttachmentGateway } from './media/HttpAttachmentGateway';
+import { getRuntimeConfig } from './config/runtimeConfig';
 
 const AppContent: React.FC = () => {
-  const { initializeChat, joinChannel } = useChat();
+  const { initializeChat, joinChannel, openConversation, attachmentRequestHeaders } = useChat();
   const [showSetup, setShowSetup] = useState(true);
   const [error, setError] = useState<string>('');
   const [showSettings, setShowSettings] = useState(false);
+  const mediaWorkflow = useMemo(() => new MediaMessageWorkflow(new HttpAttachmentGateway(getRuntimeConfig().baseUrl ?? '', attachmentRequestHeaders)), [attachmentRequestHeaders]);
 
   // Initialize chat on mount
   useEffect(() => {
@@ -44,7 +48,10 @@ const AppContent: React.FC = () => {
       <Sidebar
         isWelcomeActive={showSetup}
         onNewConversation={() => setShowSetup(true)}
-        onOpenConversation={() => setShowSetup(false)}
+        onOpenConversation={(roomId) => {
+          setShowSetup(false);
+          if (roomId) openConversation(roomId).catch((err) => setError((err as Error).message));
+        }}
         onOpenSettings={() => setShowSettings(true)}
       />
       <section className="conversation-workspace" aria-label="Conversation workspace">
@@ -52,7 +59,7 @@ const AppContent: React.FC = () => {
           window.history.replaceState(null, '', inviteLink);
           setShowSetup(false);
         }} isHidden={!showSetup} />
-        <MediaProvider>
+        <MediaProvider workflow={mediaWorkflow}>
           <ChatContainer isHidden={showSetup} />
         </MediaProvider>
       </section>

@@ -6,22 +6,26 @@ const bytes = (value: string): Uint8Array => { const decoded = atob(value.replac
 
 /** Fetch gateway; authentication headers are supplied by the host session adapter and never persisted here. */
 export class HttpAttachmentGateway implements MediaAttachmentGateway {
-    constructor(private readonly baseUrl: string, private readonly requestHeaders: () => Record<string, string>) {}
+    private controller = new AbortController();
+    constructor(private readonly baseUrl: string, private readonly requestHeaders: () => Promise<Record<string, string>>) {}
+
+    cancel(): void { this.controller.abort(); this.controller = new AbortController(); }
 
     async createUpload(_context: MediaConversationContext, input: CreateAttachmentUpload): Promise<CreatedAttachmentUpload> {
-        const response = await this.request('/api/attachments/create', { method: 'POST', headers: { 'Content-Type': 'application/json', ...this.requestHeaders() }, body: JSON.stringify({ ...input, encryptedMetadata: { nonce: Array.from(input.encryptedMetadata.nonce), ciphertext: Array.from(input.encryptedMetadata.ciphertext) } }) });
+        const response = await this.request('/api/attachments/create', { method: 'POST', headers: { 'Content-Type': 'application/json', ...await this.requestHeaders() }, body: JSON.stringify({ ...input, encryptedMetadata: { nonce: Array.from(input.encryptedMetadata.nonce), ciphertext: Array.from(input.encryptedMetadata.ciphertext) } }) });
         return this.json<CreatedAttachmentUpload>(response);
     }
     async storeChunk(_context: MediaConversationContext, id: string, capability: string, chunk: EncryptedAttachmentChunk): Promise<void> {
-        await this.request(`/api/attachments/${encodeURIComponent(id)}/chunk`, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream', 'X-K3ncrypt-Attachment-Capability': capability, 'X-K3ncrypt-Chunk-Index': String(chunk.index), 'X-K3ncrypt-Chunk-Total': String(chunk.total), 'X-K3ncrypt-Chunk-Nonce': base64(chunk.nonce), ...this.requestHeaders() }, body: chunk.ciphertext });
+        await this.request(`/api/attachments/${encodeURIComponent(id)}/chunk`, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream', 'X-K3ncrypt-Attachment-Capability': capability, 'X-K3ncrypt-Chunk-Index': String(chunk.index), 'X-K3ncrypt-Chunk-Total': String(chunk.total), 'X-K3ncrypt-Chunk-Nonce': base64(chunk.nonce), ...await this.requestHeaders() }, body: chunk.ciphertext });
     }
-    async completeUpload(_context: MediaConversationContext, id: string, capability: string): Promise<void> { await this.request(`/api/attachments/${encodeURIComponent(id)}/complete`, { method: 'POST', headers: { 'X-K3ncrypt-Attachment-Capability': capability, ...this.requestHeaders() } }); }
+    async completeUpload(_context: MediaConversationContext, id: string, capability: string): Promise<void> { await this.request(`/api/attachments/${encodeURIComponent(id)}/complete`, { method: 'POST', headers: { 'X-K3ncrypt-Attachment-Capability': capability, ...await this.requestHeaders() } }); }
     async getChunks(_context: MediaConversationContext, id: string, capability: string): Promise<EncryptedAttachmentChunk[]> {
-        const response = await this.request(`/api/attachments/${encodeURIComponent(id)}/chunks`, { method: 'GET', headers: { 'X-K3ncrypt-Attachment-Capability': capability, ...this.requestHeaders() } });
+        const response = await this.request(`/api/attachments/${encodeURIComponent(id)}/chunks`, { method: 'GET', headers: { 'X-K3ncrypt-Attachment-Capability': capability, ...await this.requestHeaders() } });
         const values = await this.json<Array<{ attachmentId: string; index: number; total: number; nonce: string; ciphertext: string }>>(response);
         if (!Array.isArray(values)) throw unavailable();
         return values.map((value) => ({ attachmentId: value.attachmentId, index: value.index, total: value.total, nonce: bytes(value.nonce), ciphertext: bytes(value.ciphertext) }));
     }
-    private async request(url: string, init: RequestInit): Promise<Response> { try { const response = await fetch(`${this.baseUrl}${url}`, init); if (!response.ok) throw unavailable(); return response; } catch { throw unavailable(); } }
+    async deleteUpload(_context: MediaConversationContext, id: string, capability: string): Promise<void> { await this.request(`/api/attachments/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { 'X-K3ncrypt-Attachment-Capability': capability, ...await this.requestHeaders() } }); }
+    private async request(url: string, init: RequestInit): Promise<Response> { try { const response = await fetch(`${this.baseUrl}${url}`, { ...init, signal: this.controller.signal }); if (!response.ok) throw unavailable(); return response; } catch { throw unavailable(); } }
     private async json<T>(response: Response): Promise<T> { try { return await response.json() as T; } catch { throw unavailable(); } }
 }

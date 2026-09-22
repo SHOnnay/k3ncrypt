@@ -8,7 +8,7 @@ import './AppShell.css';
 interface SidebarProps {
   isWelcomeActive: boolean;
   onNewConversation: () => void;
-  onOpenConversation: () => void;
+  onOpenConversation: (roomId?: string) => void;
   onOpenSettings: () => void;
 }
 
@@ -18,7 +18,7 @@ const formatSidebarTime = (date?: Date): string => {
 };
 
 export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, onNewConversation, onOpenConversation, onOpenSettings }) => {
-  const { channelHash, messages, isConnected } = useChat();
+  const { channelHash, messages, isConnected, conversations, syncStatus } = useChat();
   const latest = messages.at(-1);
 
   return (
@@ -38,15 +38,16 @@ export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, onNewConversa
 
       <div className="conversation-section">
         <p className="section-label">Conversations</p>
-        {channelHash ? (
-          <button className={`conversation-row ${!isWelcomeActive ? 'active' : ''}`} type="button" onClick={onOpenConversation}>
+        {(conversations.length > 0 ? conversations : channelHash ? [{ roomId: channelHash, label: 'Private conversation', updatedAt: latest?.timestamp.getTime() ?? 0 }] : []).map((conversation) => (
+          <button key={conversation.roomId} className={`conversation-row ${!isWelcomeActive && channelHash === conversation.roomId ? 'active' : ''}`} type="button" onClick={() => onOpenConversation(conversation.roomId)}>
             <Avatar label="Private conversation" size="medium" status={isConnected ? 'online' : 'offline'} />
             <span className="conversation-copy">
-              <span className="conversation-name-row"><span className="conversation-name">Private conversation</span><time>{formatSidebarTime(latest?.timestamp)}</time></span>
-              <span className="conversation-preview">{latest?.text || (isConnected ? 'Together now' : 'Waiting for someone you trust')}</span>
+              <span className="conversation-name-row"><span className="conversation-name">{conversation.label}</span><time>{channelHash === conversation.roomId ? formatSidebarTime(latest?.timestamp) : ''}</time></span>
+              <span className="conversation-preview">{channelHash === conversation.roomId && latest?.text ? latest.text : syncStatus === 'blocked' ? 'Security update required' : isConnected ? 'Protected session ready' : 'Stored on this device'}</span>
             </span>
           </button>
-        ) : (
+        ))}
+        {!channelHash && conversations.length === 0 && (
           <div className="conversation-placeholder"><strong>{copy.empty.title}</strong><span>{copy.empty.description}</span></div>
         )}
       </div>

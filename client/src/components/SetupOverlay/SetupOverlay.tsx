@@ -18,10 +18,10 @@ interface SetupOverlayProps {
   onModernSetupComplete: (inviteLink: string) => void;
 }
 
-type ViewType = 'initial' | 'create' | 'join' | 'modern' | 'deleted';
+type ViewType = 'initial' | 'create' | 'join' | 'modern' | 'restore' | 'deleted';
 
 export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onModernSetupComplete, isHidden }) => {
-  const { createNewChannel, createModernChannel, joinModernChannel } = useChat();
+  const { createNewChannel, createModernChannel, joinModernChannel, restoreSession, accountState, sessionError } = useChat();
   const [view, setView] = useState<ViewType>('initial');
   const [invite, setInvite] = useState<{ roomId: string; secret: string; controlCapability: string; link: string } | null>(null);
   const [joinInput, setJoinInput] = useState<string>('');
@@ -140,7 +140,18 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onM
     } catch { setStatus('Could not create this contact. Use a passphrase of at least 12 characters, or unlock this device with the existing one.'); }
   };
 
-  const heading = view === 'initial' ? copy.welcome.title : view === 'create' ? copy.contact.title : view === 'join' ? 'Open an invitation' : view === 'modern' ? 'A private contact' : 'Conversation closed';
+  const handleRestore = async () => {
+    const passphrase = passphraseRef.current?.value ?? '';
+    if (passphraseRef.current) passphraseRef.current.value = '';
+    try {
+      setStatus('Unlocking your encrypted account…');
+      await restoreSession(passphrase);
+      setStatus('');
+      onModernSetupComplete(window.location.href);
+    } catch { setStatus('Could not unlock this account. Check the local passphrase and try again.'); }
+  };
+
+  const heading = view === 'initial' ? copy.welcome.title : view === 'create' ? copy.contact.title : view === 'join' ? 'Open an invitation' : view === 'modern' ? 'Create your private account' : view === 'restore' ? 'Welcome back' : 'Conversation closed';
   const description = view === 'initial'
     ? copy.welcome.tagline
     : view === 'create'
@@ -149,6 +160,8 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onM
         ? 'Paste the invitation someone shared with you.'
         : view === 'modern'
           ? 'Start a new private conversation with a lasting identity on this device.'
+          : view === 'restore'
+            ? 'Unlock the identity and conversations stored in this device’s encrypted vault.'
         : 'This invitation is no longer available.';
 
   return (
@@ -166,6 +179,7 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onM
           />
         )}
         {view === 'initial' && <button className="restore-identity" type="button" onClick={() => setView('modern')}>Create a private contact · modern mode</button>}
+        {view === 'initial' && accountState === 'locked' && <button className="restore-identity" type="button" onClick={() => setView('restore')}>Unlock this device</button>}
 
         {view === 'create' && (
           <CreateHashView
@@ -188,6 +202,14 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onM
           <p className="invite-note">This passphrase unlocks your identity on this device. Keep it private.</p>
           {modernInvite ? <><input className="message-input" readOnly value={modernInvite} aria-label="Modern invitation" /><button className="btn btn--secondary" type="button" onClick={() => navigator.clipboard.writeText(modernInvite)}>Copy invitation</button><button className="btn btn--primary" type="button" onClick={() => onModernSetupComplete(modernInvite)}>Continue to conversation</button></> : <button className="btn btn--primary" type="button" onClick={handleModernCreate}>Create private contact</button>}
           <button className="btn btn--secondary" type="button" onClick={handleBack}>Back</button>
+        </div>}
+
+        {view === 'restore' && <div className="create-hash-view">
+          <label className="input-group">Local passphrase<input ref={passphraseRef} type="password" autoComplete="current-password" minLength={12} /></label>
+          <p className="invite-note">K3ncrypt reads account and conversation routing data only after the local vault unlocks.</p>
+          <button className="btn btn--primary" type="button" onClick={handleRestore}>Unlock account</button>
+          <button className="btn btn--secondary" type="button" onClick={handleBack}>Back</button>
+          {sessionError && <p role="alert">{sessionError}</p>}
         </div>}
 
         {view === 'deleted' && (

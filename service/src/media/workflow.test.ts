@@ -23,3 +23,21 @@ it('rejects an invalid protected media reference and unauthorized retrieval', as
     const workflow = new MediaMessageWorkflow(gateway(new AttachmentService(new MemoryAttachmentDeliveryStore())));
     await expect(workflow.receive({ conversationId: 'conversation-1', participantId: 'participant-1' }, 'k3ncrypt-media-v1:{}')).rejects.toThrow('unavailable');
 });
+
+it('forwards user cancellation to the active ciphertext gateway', () => {
+    const cancel = jest.fn();
+    const workflow = new MediaMessageWorkflow({ ...gateway(new AttachmentService(new MemoryAttachmentDeliveryStore())), cancel });
+    workflow.cancel();
+    expect(cancel).toHaveBeenCalledTimes(1);
+});
+
+it('deletes a partial ciphertext upload after delivery failure', async () => {
+    const service = new AttachmentService(new MemoryAttachmentDeliveryStore());
+    const base = gateway(service);
+    const deleteUpload = jest.fn((context, id, capability) => service.deleteAttachment(context, id, capability));
+    const workflow = new MediaMessageWorkflow({ ...base, deleteUpload });
+    await expect(workflow.sendFile({ conversationId: 'conversation-1', participantId: 'participant-1' }, 'file', {
+        type: 'text/plain', arrayBuffer: async () => new Uint8Array([1]).buffer,
+    }, async () => { throw new Error('offline'); })).rejects.toThrow('offline');
+    expect(deleteUpload).toHaveBeenCalledTimes(1);
+});
