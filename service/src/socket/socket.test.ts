@@ -164,6 +164,19 @@ describe('SocketInstance', () => {
     });
 
     describe('sendEnvelope(message)', () => {
+        it('obtains and carries one fresh scoped proof for a protected message operation', async () => {
+            mockSocket.emit.mockImplementation((_event, _payload, ack) => ack?.({ id: 5, timestamp: 999 }));
+            const instance = createInstance();
+            const carrier = { deviceAuthorizationProof: { version: 1 as const, proofId: 'proof', accountIdentityReference: 'account', deviceId: 'device', deviceIdentityReference: 'identity', operation: 'relay:message', trustEpoch: 1, nonce: 'nonce', issuedAt: 1, expiresAt: Date.now() + 30_000, signature: 'signature' }, proofNonce: 'nonce' };
+            const acquire = jest.fn().mockResolvedValue(carrier);
+            instance.setDeviceProofProvider({ acquire });
+
+            await instance.sendEnvelope('message', { version: 1, strategy: 'test-strategy', data: {} });
+
+            expect(acquire).toHaveBeenCalledWith('relay:message');
+            expect(mockSocket.emit).toHaveBeenCalledWith('chat-message', { envelope: { version: 1, strategy: 'test-strategy', data: {} }, ...carrier, proofOperation: 'relay:message' }, expect.any(Function));
+        });
+
         it('emits "chat-message" with the envelope and resolves with the ack payload', async () => {
             mockSocket.emit.mockImplementation((_event, _payload, ack) => ack({ id: 5, timestamp: 999 }));
             const instance = createInstance();

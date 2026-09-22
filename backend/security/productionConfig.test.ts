@@ -1,7 +1,7 @@
 import { validateProductionConfig } from './productionConfig';
 
 describe('production safety validation', () => {
-  const base = { NODE_ENV: 'production', MONGO_URI: 'mongodb://shared', MONGO_DB_NAME: 'k3ncrypt', CHAT_LINK_DOMAIN: 'https://chat.example.test', K3NCRYPT_ALLOWED_ORIGINS: 'https://chat.example.test', K3NCRYPT_TRUST_PROXY: 'true' };
+  const base = { NODE_ENV: 'production', MONGO_URI: 'mongodb://shared', MONGO_DB_NAME: 'k3ncrypt', CHAT_LINK_DOMAIN: 'https://chat.example.test', K3NCRYPT_ALLOWED_ORIGINS: 'https://chat.example.test', K3NCRYPT_TRUST_PROXY: 'true', K3NCRYPT_DEVICE_TRUST_PROOF_SECRET: 'test-only-secure-device-trust-proof-secret-32-chars' };
 
   it('rejects volatile or unreviewed multi-instance production', () => {
     expect(() => validateProductionConfig({ NODE_ENV: 'production' })).toThrow('shared persistent storage');

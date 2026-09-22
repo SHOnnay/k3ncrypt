@@ -26,8 +26,9 @@ describe('invitation parser hardening', () => {
 describe('modern invitation discriminator', () => {
   const address = 'e0baf5c2-c114-4c4d-85a1-1cb2753f74f1';
   it('accepts only the explicit modern fragment', () => {
-    expect(parseModernInviteInput(`#modern=${room}&control=${control}&address=${address}`)).toEqual({ roomId: room, controlCapability: control, address });
-    expect(parseInviteFragment(`#modern=${room}&control=${control}&address=${address}`)).toBeNull();
+    const identity = 'K3 AAAA BBBB CCCC DDDD EEEE FFFF GGGG HHHH IIII';
+    expect(parseModernInviteInput(`#modern=${room}&control=${control}&address=${address}&identity=${encodeURIComponent(identity)}`)).toEqual({ roomId: room, controlCapability: control, address, identityCommitment: identity });
+    expect(parseInviteFragment(`#modern=${room}&control=${control}&address=${address}&identity=${encodeURIComponent(identity)}`)).toBeNull();
     expect(parseModernInviteInput(valid)).toBeNull();
   });
   it('rejects fields that could confuse or downgrade protocol selection', () => {

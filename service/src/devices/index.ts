@@ -5,5 +5,8 @@ export * from './epoch';
 export * from './lifecycle';
 export * from './runtime';
 export * from './trust';
+export * from './trustProtocol';
+export * from './deviceProofClient';
+export * from './bootstrap';
 export * from './freshness';
 export * from './join';

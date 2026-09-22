@@ -6,6 +6,7 @@ import { ModernConversation } from './modernConversation';
 import { publishVodozemacBundle, fetchVodozemacBundle, claimVodozemacOneTimeKey, renewVodozemacBundle } from '../api/prekeys';
 import { AuthenticatedCallSignalTransport } from '../calls/authenticatedTransport';
 import { SecureStorageDeviceLifecyclePersistence } from '../devices/runtime';
+import { fingerprintVodozemacIdentity } from '../identity/vodozemacIdentity';
 
 jest.mock('../api/prekeys', () => ({
     publishVodozemacBundle: jest.fn(), fetchVodozemacBundle: jest.fn(), claimVodozemacOneTimeKey: jest.fn(), renewVodozemacBundle: jest.fn(),
@@ -19,6 +20,7 @@ const remoteAddress = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const key = (byte: number) => Buffer.alloc(32, byte).toString('base64url');
 const bundle = { version: 1 as const, protocol: 'vodozemac-olm-v1' as const,
     identity: { curve25519: key(3), ed25519: key(4) }, oneTimeKeys: [{ id: 'otk-remote-test', key: key(5) }] };
+const remoteCommitment = async (): Promise<string> => fingerprintVodozemacIdentity(bundle.identity);
 
 class Storage implements SecureStorage {
     async compareAndSwapRecords(updates: readonly import('../core/contracts').SecureRecordUpdate[]): Promise<boolean> {
@@ -75,7 +77,7 @@ it('retries the identical persisted envelope after a lost ACK and after restart'
     const storage = new Storage();
     const firstTransport = fakeTransport();
     const first = new ModernConversation(storage, loader, firstTransport.transport);
-    await first.connect(room, key(9), remoteAddress);
+    await first.connect(room, key(9), remoteAddress, await remoteCommitment());
     await first.send('hello');
     expect(encryptions).toBe(1);
     expect(firstTransport.sent).toHaveLength(1);
@@ -90,7 +92,7 @@ it('retries the identical persisted envelope after a lost ACK and after restart'
     const secondTransport = fakeTransport();
     const second = new ModernConversation(storage, loader, secondTransport.transport);
     const later = jest.spyOn(Date, 'now').mockReturnValue(baseline + 12000);
-    await second.connect(room, key(9), remoteAddress);
+    await second.connect(room, key(9), remoteAddress, await remoteCommitment());
     await second.retryPending();
     expect(secondTransport.sent[0]).toEqual(firstTransport.sent[0]);
     expect(encryptions).toBe(1);
@@ -105,7 +107,7 @@ it('does not retry queued envelopes after durable future-epoch suspension', asyn
     const storage = new Storage();
     const transport = fakeTransport();
     const conversation = new ModernConversation(storage, loader, transport.transport);
-    await conversation.connect(room, key(9), remoteAddress);
+    await conversation.connect(room, key(9), remoteAddress, await remoteCommitment());
     try {
         await conversation.send('queued message');
         const state = (await conversation.getDeviceLifecycleState())!;
@@ -133,14 +135,14 @@ it('blocks a restored session when its pinned contact identity changes', async (
     jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
     const storage = new Storage();
     const first = new ModernConversation(storage, loader, fakeTransport().transport);
-    await first.connect(room, key(9), remoteAddress);
+    await first.connect(room, key(9), remoteAddress, await remoteCommitment());
     await first.close();
 
     jest.mocked(fetchVodozemacBundle).mockResolvedValue({
         ...bundle, identity: { ...bundle.identity, curve25519: key(8) },
     });
     const restored = new ModernConversation(storage, loader, fakeTransport().transport);
-    await expect(restored.connect(room, key(9), remoteAddress)).rejects.toThrow('identity changed');
+    await expect(restored.connect(room, key(9), remoteAddress, await remoteCommitment())).rejects.toThrow('identity changed');
 });
 
 it('keeps a fallback tab lease for the conversation lifetime and releases it on close', async () => {
@@ -169,7 +171,7 @@ it('exposes authenticated call composition only after modern identity verificati
     jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
     jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
     const conversation = new ModernConversation(new Storage(), loader, fakeTransport().transport);
-    await conversation.connect(room, key(9), remoteAddress);
+    await conversation.connect(room, key(9), remoteAddress, await remoteCommitment());
     await expect(conversation.createAuthenticatedCallComposition()).rejects.toThrow('Verify this contact');
     await conversation.verifyContact(true);
     const composition = await conversation.createAuthenticatedCallComposition();
@@ -177,5 +179,13 @@ it('exposes authenticated call composition only after modern identity verificati
     expect(composition.service).toBeDefined();
     const call = await composition.invite();
     expect(call.state).toBe('inviting');
+    await conversation.close();
+});
+
+it('rejects a server-substituted first-contact bundle that does not match the invitation identity commitment', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue({ ...bundle, identity: { curve25519: key(8), ed25519: key(9) } });
+    const conversation = new ModernConversation(new Storage(), loader, fakeTransport().transport);
+    await expect(conversation.connect(room, key(9), remoteAddress, await remoteCommitment())).rejects.toThrow('identity commitment');
     await conversation.close();
 });

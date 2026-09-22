@@ -101,8 +101,8 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onM
       if (passphraseRef.current) passphraseRef.current.value = '';
       try {
         setStatus('Opening your private contact…');
-        await joinModernChannel(modern.roomId, modern.controlCapability, modern.address, passphrase);
-        onModernSetupComplete(`${window.location.origin}${window.location.pathname}#modern=${encodeURIComponent(modern.roomId)}&control=${encodeURIComponent(modern.controlCapability)}&address=${encodeURIComponent(modern.address)}`);
+        await joinModernChannel(modern.roomId, modern.controlCapability, modern.address, modern.identityCommitment, passphrase);
+        onModernSetupComplete(`${window.location.origin}${window.location.pathname}#modern=${encodeURIComponent(modern.roomId)}&control=${encodeURIComponent(modern.controlCapability)}&address=${encodeURIComponent(modern.address)}&identity=${encodeURIComponent(modern.identityCommitment)}`);
         setStatus('');
       } catch { setStatus('Could not open this contact. Check the invitation and local passphrase.'); }
       return;

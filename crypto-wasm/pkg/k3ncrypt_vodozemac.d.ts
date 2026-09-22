@@ -25,6 +25,11 @@ export class K3ncryptAccount {
     markKeysAsPublished(): void;
     oneTimeKeys(): string;
     saveAccount(pickle_key: Uint8Array): string;
+    /**
+     * Signs only caller-provided, canonical control-plane bytes. The private
+     * Ed25519 key remains inside this opaque account handle.
+     */
+    signControlEvent(payload: Uint8Array): string;
 }
 
 export class K3ncryptSession {
@@ -63,6 +68,7 @@ export interface InitOutput {
     readonly k3ncryptaccount_markKeysAsPublished: (a: number) => void;
     readonly k3ncryptaccount_oneTimeKeys: (a: number) => [number, number, number, number];
     readonly k3ncryptaccount_saveAccount: (a: number, b: number, c: number) => [number, number, number, number];
+    readonly k3ncryptaccount_signControlEvent: (a: number, b: number, c: number) => [number, number, number, number];
     readonly k3ncryptsession_decrypt: (a: number, b: number, c: number) => [number, number, number, number];
     readonly k3ncryptsession_encrypt: (a: number, b: number, c: number) => [number, number, number, number];
     readonly k3ncryptsession_loadSession: (a: number, b: number) => [number, number, number];

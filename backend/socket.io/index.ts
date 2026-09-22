@@ -6,7 +6,9 @@ import { operationalLog } from '../operations/logger';
 
 export interface CustomSocket extends Socket {
   userID: string,
-  channelID: string
+  channelID: string,
+  deviceId?: string,
+  accountIdentityReference?: string
 }
 
 /** Opaque, versioned envelope — the server never inspects its contents. */

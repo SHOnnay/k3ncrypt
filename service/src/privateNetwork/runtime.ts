@@ -1,5 +1,7 @@
 import { sha256 } from 'hash-wasm';
 import type { PrivateNetworkAuthorization, PrivateNetworkMember, PrivateNetworkPersistence, PrivateNetworkState, NetworkTrustBoundary } from './contracts';
+import type { AuthenticatedDeviceContext } from '../devices/lifecycle';
+import { assertIssuedDeviceContext } from '../devices/authenticatedContext';
 
 const canonical = (value: unknown): string => JSON.stringify(value);
 const digest = async (value: unknown): Promise<string> => sha256(canonical(value));
@@ -18,16 +20,16 @@ export class PrivateNetworkRuntime {
     const state: PrivateNetworkState = { ...base, commitment: await privateNetworkCommitment(base) };
     if (!await this.persistence.compareAndSwap(networkId, undefined, state)) throw new Error('Private network creation conflict.'); return state;
   }
-  async authorize(networkId: string, target: Omit<PrivateNetworkMember, 'state'>, operation: 'join' | 'remove', ttlMs = 5 * 60_000): Promise<PrivateNetworkAuthorization> {
-    await this.trust.assertTrusted(); const state = await this.required(networkId); const trust = await this.trust.snapshot();
-    const issuer = trust.list.devices.find((item) => item.deviceId && item.state === 'active' && state.members.some((m) => m.deviceId === item.deviceId && m.role === 'owner' && m.state === 'active'));
+  async authorize(context: AuthenticatedDeviceContext, networkId: string, target: Omit<PrivateNetworkMember, 'state'>, operation: 'join' | 'remove', ttlMs = 5 * 60_000): Promise<PrivateNetworkAuthorization> {
+    assertIssuedDeviceContext(context); await this.trust.assertTrusted(); const state = await this.required(networkId); const trust = await this.trust.snapshot();
+    const issuer = trust.list.devices.find((item) => item.deviceId === context.authenticatedSender.deviceId && item.publicIdentityReference === context.authenticatedSender.identityReference && item.state === 'active' && state.members.some((m) => m.deviceId === item.deviceId && m.role === 'owner' && m.state === 'active'));
     if (!issuer || !UUID.test(target.deviceId) || !target.identityReference || (operation === 'join' && !target.role)) throw new Error('Private network authorization rejected.');
     const unsigned = { version: 1 as const, authorizationId: crypto.randomUUID(), networkId, accountScope: state.accountScope, issuerDeviceId: issuer.deviceId, issuerIdentityReference: issuer.publicIdentityReference, targetDeviceId: target.deviceId, targetIdentityReference: target.identityReference, operation, role: operation === 'join' ? target.role : undefined, previousEpoch: state.epoch, previousCommitment: state.commitment, expiresAt: this.now() + ttlMs };
     return { ...unsigned, digest: await privateNetworkAuthorizationDigest(unsigned) };
   }
-  async apply(authorization: PrivateNetworkAuthorization): Promise<PrivateNetworkState> {
+  async apply(context: AuthenticatedDeviceContext, authorization: PrivateNetworkAuthorization): Promise<PrivateNetworkState> {
     const { digest: claimedDigest, ...unsigned } = authorization;
-    await this.trust.assertTrusted(); if (!UUID.test(authorization.networkId) || authorization.expiresAt <= this.now() || claimedDigest !== await privateNetworkAuthorizationDigest(unsigned)) throw new Error('Private network authorization rejected.');
+    assertIssuedDeviceContext(context, authorization); await this.trust.assertTrusted(); if (context.authenticatedSender.deviceId !== authorization.issuerDeviceId || context.authenticatedSender.identityReference !== authorization.issuerIdentityReference || !UUID.test(authorization.networkId) || authorization.expiresAt <= this.now() || claimedDigest !== await privateNetworkAuthorizationDigest(unsigned)) throw new Error('Private network authorization rejected.');
     const current = await this.required(authorization.networkId); const trusted = await this.trust.snapshot();
     const issuer = trusted.list.devices.find((item) => item.deviceId === authorization.issuerDeviceId && item.publicIdentityReference === authorization.issuerIdentityReference && item.state === 'active');
     const owner = current.members.find((item) => item.deviceId === authorization.issuerDeviceId && item.identityReference === authorization.issuerIdentityReference && item.role === 'owner' && item.state === 'active');

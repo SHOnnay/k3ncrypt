@@ -8,6 +8,8 @@ export interface ConversationDescriptor {
   roomId: string;
   controlCapability: string;
   remoteAddress?: string;
+  /** Fingerprint carried by the out-of-band modern invitation. */
+  remoteIdentityCommitment?: string;
   label: string;
   updatedAt: number;
 }
@@ -24,6 +26,7 @@ const validate = (value: unknown): ConversationDescriptor => {
   if (item.version !== 1 || typeof item.roomId !== 'string' || !roomPattern.test(item.roomId)
     || typeof item.controlCapability !== 'string' || item.controlCapability.length < 16
     || (item.remoteAddress !== undefined && (typeof item.remoteAddress !== 'string' || item.remoteAddress.length < 8))
+    || (item.remoteIdentityCommitment !== undefined && (typeof item.remoteIdentityCommitment !== 'string' || !/^K3 [A-Z0-9_ -]{20,128}$/.test(item.remoteIdentityCommitment)))
     || typeof item.label !== 'string' || !item.label.trim() || item.label.length > 80
     || typeof item.updatedAt !== 'number' || !Number.isSafeInteger(item.updatedAt) || item.updatedAt < 0) {
     throw new Error('Saved conversation is invalid.');
@@ -33,6 +36,7 @@ const validate = (value: unknown): ConversationDescriptor => {
     roomId: item.roomId,
     controlCapability: item.controlCapability,
     ...(item.remoteAddress ? { remoteAddress: item.remoteAddress as string } : {}),
+    ...(item.remoteIdentityCommitment ? { remoteIdentityCommitment: item.remoteIdentityCommitment as string } : {}),
     label: item.label.trim(),
     updatedAt: item.updatedAt,
   });

@@ -12,6 +12,7 @@ export interface VodozemacPublicIdentity {
 
 export interface VodozemacAccountHandle {
     identityKeys(): string;
+    signControlEvent?(payload: Uint8Array): string;
     availableOneTimeKeys?(): string[];
     firstOneTimeKey?(): string;
     fallbackKey?(): string | undefined;
@@ -124,6 +125,15 @@ export class PersistentVodozemacIdentity implements IdentityManager<MessagingIde
     /** Returns authenticated-by-identity public material only. */
     public async getPublicBundle(): Promise<VodozemacPublicBundle> {
         return this.withAccount((account) => createVodozemacPublicBundle(account));
+    }
+
+    /** Signs canonical lifecycle-control bytes without exporting an identity secret. */
+    public async signControlEvent(payload: Uint8Array): Promise<string> {
+        if (!payload.byteLength || payload.byteLength > 16 * 1024) throw new Error('Control event is invalid.');
+        return this.withAccount((account) => {
+            if (!account.signControlEvent) throw new Error('Identity control signing is unavailable.');
+            return Promise.resolve(account.signControlEvent(payload));
+        });
     }
 
     public async markPublicKeysPublished(): Promise<void> {

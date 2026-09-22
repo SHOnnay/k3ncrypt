@@ -190,7 +190,7 @@ export class AuthenticatedDeviceControlChannel {
         if (!this.session.encrypted || !this.session.ready) throw new Error('Authenticated device control is unavailable.');
         const encoded = encoder.encode(`${CONTROL_PREFIX}${JSON.stringify(message)}`).buffer as ArrayBuffer;
         if (!decodeDeviceControl(encoded)) throw new Error('Invalid device control message.');
-        await this.transport.sendEnvelope('signaling', await this.session.encrypt('signaling', encoded));
+        await this.transport.sendEnvelope('signaling', await this.session.encrypt('signaling', encoded), undefined, 'device-control');
     }
     public async receive(envelope: EncryptedEnvelope): Promise<DeviceControlMessage | undefined> {
         if (!this.session.encrypted || !this.session.ready) throw new Error('Authenticated device control is unavailable.');

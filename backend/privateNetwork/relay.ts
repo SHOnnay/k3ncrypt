@@ -4,18 +4,26 @@ import { RateLimiter } from '../socket.io/rateLimiter';
 import { allowedCorsOrigins } from '../security/cors';
 import { operationalLog } from '../operations/logger';
 import { markRelayReady } from '../operations/status';
+import { type DeviceAuthorizationProof } from '../security/deviceTrust';
+import db from '../db';
+import { durableDeviceTrustAuthority } from '../security/durableDeviceTrust';
 
 export const PRIVATE_NETWORK_SOCKET_PATH = '/private-network/socket.io';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const validAuth = (value: unknown): value is { networkId: string; deviceId: string } => !!value && typeof value === 'object' && UUID.test((value as { networkId?: string }).networkId ?? '') && UUID.test((value as { deviceId?: string }).deviceId ?? '');
+const validAuth = (value: unknown): value is { networkId: string; deviceId: string; nonce: string; proof: DeviceAuthorizationProof } => !!value && typeof value === 'object' && UUID.test((value as { networkId?: string }).networkId ?? '') && UUID.test((value as { deviceId?: string }).deviceId ?? '') && typeof (value as { nonce?: unknown }).nonce === 'string' && !!(value as { proof?: unknown }).proof;
 const opaqueEnvelope = (value: unknown): boolean => !!value && typeof value === 'object' && JSON.stringify(value).length <= 196_608;
 
 /** User-hostable blind relay. Peer admission and payload authentication occur inside the encrypted SDK session. */
 export const initPrivateNetworkRelay = (http: HttpServer): Server => {
   const io = new Server(http, { path: PRIVATE_NETWORK_SOCKET_PATH, maxHttpBufferSize: 200 * 1024, allowEIO3: false, cors: { origin: allowedCorsOrigins(), credentials: false } });
   const routes = new Map<string, Map<string, Socket>>();
-  io.on('connection', (socket) => {
+  io.on('connection', (socket) => { void (async () => {
     const auth = socket.handshake.auth; if (!validAuth(auth)) { socket.disconnect(true); return; }
+    const authority = durableDeviceTrustAuthority(db.getDatabase());
+    try { if (!authority || auth.proof.deviceId !== auth.deviceId || auth.proof.nonce !== auth.nonce) throw new Error(); await authority.verify(auth.proof, 'private-network:relay', { networkId: auth.networkId }); } catch { socket.disconnect(true); return; }
+    const database = db.getDatabase();
+    const membership = database && await database.collection<{ networkId: string; deviceId: string; state: 'active' | 'removed'; epoch: number }>('private_network_members').findOne({ networkId: auth.networkId, deviceId: auth.deviceId, state: 'active' });
+    if (!membership || auth.proof.trustEpoch !== membership.epoch) { socket.disconnect(true); return; }
     const peers = routes.get(auth.networkId) ?? new Map<string, Socket>();
     if (peers.has(auth.deviceId) || peers.size >= 256) { socket.disconnect(true); return; }
     peers.set(auth.deviceId, socket); routes.set(auth.networkId, peers);
@@ -29,6 +37,6 @@ export const initPrivateNetworkRelay = (http: HttpServer): Server => {
       target.emit('private-network-envelope', { senderDeviceId: auth.deviceId, envelope: payload.envelope }); ack?.({ status: 'accepted' });
     });
     socket.on('disconnect', () => { const network = routes.get(auth.networkId); if (network?.get(auth.deviceId) === socket) network.delete(auth.deviceId); if (network?.size === 0) routes.delete(auth.networkId); });
-  });
+  })(); });
   markRelayReady('private-network'); operationalLog('info', 'private_network_relay_ready'); return io;
 };

@@ -20,19 +20,20 @@ export class DefaultTransportManager implements TransportManager {
         return this.transport.stop();
     }
 
-    public join(conversationId: string, peerRoutingId: string, controlCapability: string, routingProof?: string): void {
-        if (routingProof === undefined) this.transport.join(conversationId, peerRoutingId, controlCapability);
-        else this.transport.join(conversationId, peerRoutingId, controlCapability, routingProof);
+    public async join(conversationId: string, peerRoutingId: string, controlCapability: string, routingProof?: string): Promise<void> {
+        if (routingProof === undefined) await this.transport.join(conversationId, peerRoutingId, controlCapability);
+        else await this.transport.join(conversationId, peerRoutingId, controlCapability, routingProof);
     }
 
     public sendEnvelope(
         channel: CryptoChannel,
         envelope: EncryptedEnvelope,
         recipientRoutingId?: string,
+        proofOperation?: string,
     ): Promise<{ id?: string; timestamp?: number }> {
         return recipientRoutingId === undefined
-            ? this.transport.sendEnvelope(channel, envelope)
-            : this.transport.sendEnvelope(channel, envelope, recipientRoutingId);
+            ? this.transport.sendEnvelope(channel, envelope, undefined, proofOperation)
+            : this.transport.sendEnvelope(channel, envelope, recipientRoutingId, proofOperation);
     }
 
     public activeTransport(): Transport {

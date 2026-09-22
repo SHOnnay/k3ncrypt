@@ -9,6 +9,8 @@ import type {
     TransportEnvelopeHandler,
 } from '../core/contracts';
 import type { chatJoinPayloadType } from '../public/types';
+import type { DeviceProofCarrier, DeviceResourceContext } from '../devices/trustProtocol';
+import type { DeviceProofOperation } from '../devices/deviceProofClient';
 import { Logger } from '../utils/logger';
 
 export type SocketListenerType = 'limit-reached' | 'delivered' | 'on-alice-join' | 'on-alice-disconnect' | 'chat-message';
@@ -32,11 +34,14 @@ const WIRE_EVENTS = {
 } as const;
 
 type AckError = { error: string };
+export type DeviceProofProvider = { acquire(operation: DeviceProofOperation, resource?: DeviceResourceContext): Promise<DeviceProofCarrier> };
 
 /** Socket.IO implementation of the opaque relay transport boundary. */
 export class SocketIoRelayTransport implements Transport {
     private readonly socket: Socket;
     private readonly eventHandlerLogger: Logger;
+    private proofProvider?: DeviceProofProvider;
+    private activeConversationId?: string;
 
     constructor(
         private readonly subscriptionContext: () => SubscriptionType,
@@ -65,8 +70,12 @@ export class SocketIoRelayTransport implements Transport {
         this.socket.disconnect();
     }
 
-    public join(conversationId: string, peerRoutingId: string, controlCapability: string, routingProof?: string): void {
-        const payload: chatJoinPayloadType = { channelID: conversationId, userID: peerRoutingId, controlCapability, ...(routingProof ? { routingProof } : {}) };
+    public setDeviceProofProvider(provider: DeviceProofProvider | undefined): void { this.proofProvider = provider; }
+
+    public async join(conversationId: string, peerRoutingId: string, controlCapability: string, routingProof?: string): Promise<void> {
+        this.activeConversationId = conversationId;
+        const carrier = this.proofProvider ? await this.proofProvider.acquire('relay:message', { conversationId }) : undefined;
+        const payload: chatJoinPayloadType = { channelID: conversationId, userID: peerRoutingId, controlCapability, ...(routingProof ? { routingProof } : {}), ...(carrier ? carrier : {}) };
         this.socket.emit('chat-join', payload);
     }
 
@@ -74,11 +83,16 @@ export class SocketIoRelayTransport implements Transport {
         channel: CryptoChannel,
         envelope: EncryptedEnvelope,
         recipientRoutingId?: string,
+        proofOperation?: DeviceProofOperation,
     ): Promise<{ id?: string; timestamp?: number }> {
         if (channel === 'message') {
-            return await this.emitWithAck<{ id: string; timestamp: number }>('chat-message', { envelope, ...(recipientRoutingId ? { recipientRoutingId } : {}) });
+            const operation = proofOperation ?? 'relay:message';
+            const carrier = this.proofProvider ? await this.proofProvider.acquire(operation, this.activeConversationId ? { conversationId: this.activeConversationId } : undefined) : undefined;
+            return await this.emitWithAck<{ id: string; timestamp: number }>('chat-message', { envelope, ...(recipientRoutingId ? { recipientRoutingId } : {}), ...(carrier ? { ...carrier, proofOperation: operation } : {}) });
         }
-        await this.emitWithAck<{ status: string }>('webrtc-signal', { envelope });
+        const operation = proofOperation ?? 'relay:signal';
+        const carrier = this.proofProvider ? await this.proofProvider.acquire(operation, this.activeConversationId ? { conversationId: this.activeConversationId } : undefined) : undefined;
+        await this.emitWithAck<{ status: string }>('webrtc-signal', { envelope, ...(carrier ? { ...carrier, proofOperation: operation } : {}) });
         return {};
     }
 

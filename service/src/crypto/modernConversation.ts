@@ -32,6 +32,10 @@ import { GroupSecurityRuntime } from '../groups/runtime';
 import { SecureStorageGroupRuntimeAdapter } from '../groups/persistence';
 import { createProductionRecoveryRuntime } from '../recovery/production';
 import type { RecoveryRuntime } from '../recovery/runtime';
+import { DeviceProofClient } from '../devices/deviceProofClient';
+import { signEnrollmentEvent, type EnrollmentEvent } from '../devices/trustProtocol';
+import makeRequest from '../api/client';
+import { fromBase64Url } from './base64url';
 
 const OUTBOX_RECORD = 'modern-outbox';
 const SEEN_RECORD = 'modern-seen';
@@ -110,6 +114,7 @@ export class ModernConversation {
     private groupAdapter?: SecureStorageGroupRuntimeAdapter;
     private groupRuntime?: GroupSecurityRuntime;
     private recoveryRuntime?: RecoveryRuntime;
+    private durableProofs?: DeviceProofClient;
     private retryTimer?: ReturnType<typeof setInterval>;
     private onMessage?: (text: string) => void;
     private onContactChange?: (contact: StoredContactIdentity) => void;
@@ -143,11 +148,11 @@ export class ModernConversation {
         this.subscriptions.set('delivered', new Set([(id: string) => { void this.acceptDelivery(id); }]));
     }
 
-    public async connect(roomId: string, capability: string, remoteAddress?: string, onMessage?: (text: string) => void, onContactChange?: (contact: StoredContactIdentity) => void, onDeviceControl?: (message: DeviceControlEvent) => void): Promise<ModernConnectionDetails> {
-        return this.withTabLock(roomId, () => this.connectUnlocked(roomId, capability, remoteAddress, onMessage, onContactChange, onDeviceControl), true);
+    public async connect(roomId: string, capability: string, remoteAddress?: string, remoteIdentityCommitment?: string, onMessage?: (text: string) => void, onContactChange?: (contact: StoredContactIdentity) => void, onDeviceControl?: (message: DeviceControlEvent) => void): Promise<ModernConnectionDetails> {
+        return this.withTabLock(roomId, () => this.connectUnlocked(roomId, capability, remoteAddress, remoteIdentityCommitment, onMessage, onContactChange, onDeviceControl), true);
     }
 
-    private async connectUnlocked(roomId: string, capability: string, remoteAddress?: string, onMessage?: (text: string) => void, onContactChange?: (contact: StoredContactIdentity) => void, onDeviceControl?: (message: DeviceControlEvent) => void): Promise<ModernConnectionDetails> {
+    private async connectUnlocked(roomId: string, capability: string, remoteAddress?: string, remoteIdentityCommitment?: string, onMessage?: (text: string) => void, onContactChange?: (contact: StoredContactIdentity) => void, onDeviceControl?: (message: DeviceControlEvent) => void): Promise<ModernConnectionDetails> {
         if (!/^[0-9a-f-]{36}$/i.test(roomId) || !capability) throw new Error('Invalid private conversation invitation.');
         this.roomId = roomId;
         this.capability = capability;
@@ -169,7 +174,7 @@ export class ModernConversation {
         if (saved?.sessionId) await this.runtime.restoreSession(roomId, saved.sessionId);
         if (this.remoteAddress && saved?.sessionId) {
             const contactBundle = validateVodozemacPublicBundle(await fetchVodozemacBundle(roomId, capability, this.remoteAddress));
-            await this.observe(this.remoteAddress, contactBundle.identity);
+            await this.observe(this.remoteAddress, contactBundle.identity, remoteIdentityCommitment);
         }
 
         let localAddress = saved?.localAddress ?? publication?.address;
@@ -237,7 +242,7 @@ export class ModernConversation {
 
         if (this.remoteAddress && !saved?.sessionId) {
             const contact = validateVodozemacPublicBundle(await fetchVodozemacBundle(roomId, capability, this.remoteAddress));
-            await this.observe(this.remoteAddress, contact.identity);
+            await this.observe(this.remoteAddress, contact.identity, remoteIdentityCommitment);
             if (contact.oneTimeKeys.length === 0) throw new Error('The contact has no available invitation keys.');
             const claimed = await claimVodozemacOneTimeKey(roomId, capability, this.remoteAddress, contact.oneTimeKeys[0].id);
             if (claimed.key !== contact.oneTimeKeys[0].key) throw new Error('The claimed invitation key changed.');
@@ -246,9 +251,20 @@ export class ModernConversation {
         }
         this.prepareDeviceControl();
 
+        const activeTransport = this.transport.activeTransport();
+        if (activeTransport instanceof SocketIoRelayTransport) {
+            this.durableProofs = new DeviceProofClient(
+                { signControlEvent: (payload) => this.runtime.signControlEvent(payload) },
+                async () => {
+                    if (!this.userScope || !this.localDeviceId || !this.localIdentityId || this.trustEpoch === undefined) throw new Error('Device trust is unavailable.');
+                    return { accountIdentityReference: this.userScope, deviceId: this.localDeviceId, deviceIdentityReference: this.localIdentityId, epoch: this.trustEpoch };
+                },
+            );
+            activeTransport.setDeviceProofProvider(this.durableProofs);
+        }
         await this.transport.start();
         if (!routingProof) throw new Error('Modern routing ownership proof is unavailable.');
-        this.transport.join(roomId, localAddress, capability, routingProof);
+        await this.transport.join(roomId, localAddress, capability, routingProof);
         if (trustSnapshot.list.devices.filter((entry) => entry.state === 'active').length > 1) {
             void this.requestTrustRefresh().catch(() => undefined);
         }
@@ -311,6 +327,7 @@ export class ModernConversation {
         const request = createEnrollmentRequest({ ...input, userScope: this.userScope!, knownEpoch: state.list.epoch });
         const service = this.requireDeviceLifecycle();
         const authorization = await service.approveEnrollment(request, this.deviceContext(), { deviceId: input.requestedDeviceId, publicIdentityReference: input.requestedPublicIdentityReference });
+        await this.submitDurableEnrollment(authorization, input.requestedDeviceId, input.requestedPublicIdentityReference);
         const approvedState = await service.applyEnrollment(authorization, this.deviceContext());
         await this.deviceControlChannel.send({ type: 'enrollment-approval', payload: { version: 1, authorization, approvedState } satisfies EnrollmentApprovalPacket });
         return request;
@@ -320,6 +337,7 @@ export class ModernConversation {
         await this.assertCurrentDeviceTrust();
         const service = this.requireDeviceLifecycle();
         const authorization = await service.approveEnrollment(request, this.deviceContext(), confirmedTarget);
+        await this.submitDurableEnrollment(authorization, confirmedTarget.deviceId, confirmedTarget.publicIdentityReference);
         const approvedState = await service.applyEnrollment(authorization, this.deviceContext());
         await this.deviceControlChannel!.send({ type: 'enrollment-approval', payload: { version: 1, authorization, approvedState } satisfies EnrollmentApprovalPacket });
         return authorization;
@@ -343,6 +361,7 @@ export class ModernConversation {
         if (!author || author.state !== 'active') throw new Error('Enrollment issuer unavailable.');
         await this.deviceTrust.recordFreshnessEvidence({ version: 1, deviceId: author.deviceId, identityReference: author.publicIdentityReference, epoch: joined.state.list.epoch, commitment: joined.state.commitment, evidenceId: `enrollment:${joined.confirmation.confirmationDigest}` });
         this.trustEpoch = joined.state.list.epoch;
+        await this.activateDurableEnrollment();
         await this.deviceControlChannel!.send({ type: 'enrollment-confirmation', payload: { authorization, confirmation: joined.confirmation } });
         return joined.state;
     }
@@ -742,6 +761,43 @@ export class ModernConversation {
         this.deviceTrust?.configureFreshnessMembers(state.list.devices.filter((entry) => entry.state === 'active').map((entry) => entry.deviceId));
     }
 
+    /** Sends the durable counterpart of an already verified local enrollment approval. */
+    private async submitDurableEnrollment(authorization: DeviceAuthorization, targetDeviceId: string, targetIdentityReference: string): Promise<void> {
+        if (!this.durableProofs || !this.userScope || !this.localDeviceId || !this.localIdentityId || this.trustEpoch === undefined || !this.remoteAddress) throw new Error('Durable device enrollment is unavailable.');
+        if (authorization.operation !== 'enroll' || authorization.userScope !== this.userScope || authorization.authorDeviceId !== this.localDeviceId || authorization.authorIdentityReference !== this.localIdentityId || authorization.targetDeviceId !== targetDeviceId || authorization.targetPublicIdentityReference !== targetIdentityReference || authorization.previousEpoch !== this.trustEpoch) throw new Error('Durable device enrollment rejected.');
+        const contact = await this.registry.get(this.remoteAddress);
+        if (!contact || contact.identityId !== targetIdentityReference || contact.verification !== 'verified' || contact.changeStatus !== 'unchanged') throw new Error('Enrollment target identity is not authenticated.');
+        let targetVerificationKey: string;
+        try {
+            const publicIdentity = JSON.parse(decoder.decode(fromBase64Url(contact.publicKey))) as VodozemacPublicIdentity;
+            if (!publicIdentity || typeof publicIdentity.ed25519 !== 'string' || publicIdentity.ed25519.length < 40) throw new Error();
+            targetVerificationKey = publicIdentity.ed25519;
+        } catch { throw new Error('Enrollment target verification key is unavailable.'); }
+        const createdAt = Date.now();
+        const unsigned: Omit<EnrollmentEvent, 'signature'> = {
+            version: 1, eventId: crypto.randomUUID(), accountIdentityReference: this.userScope,
+            issuerDeviceId: this.localDeviceId, issuerIdentityReference: this.localIdentityId, issuerEpoch: this.trustEpoch,
+            targetDeviceId, targetIdentityReference, targetVerificationKey, targetFingerprint: targetIdentityReference,
+            nonce: crypto.randomUUID().replace(/-/g, ''), createdAt, expiresAt: createdAt + 30_000,
+        };
+        const event = await signEnrollmentEvent({ signControlEvent: (payload) => this.runtime.signControlEvent(payload) }, unsigned);
+        const carrier = await this.durableProofs.acquire('device-control');
+        await makeRequest<unknown, { event: EnrollmentEvent; deviceAuthorizationProof: typeof carrier.deviceAuthorizationProof; proofNonce: string }>('device-trust/enrollment', { method: 'POST', body: { event, ...carrier } });
+    }
+
+    /** Advances the pending durable target record to the confirmed local lifecycle epoch. */
+    private async activateDurableEnrollment(): Promise<void> {
+        if (!this.userScope || !this.localDeviceId || !this.localIdentityId || this.trustEpoch === undefined || this.trustEpoch < 1) throw new Error('Durable device activation is unavailable.');
+        const createdAt = Date.now();
+        const unsigned = { version: 1 as const, eventId: crypto.randomUUID(), accountIdentityReference: this.userScope,
+            issuerDeviceId: this.localDeviceId, issuerIdentityReference: this.localIdentityId,
+            targetDeviceId: this.localDeviceId, targetIdentityReference: this.localIdentityId,
+            operation: 'activate' as const, previousEpoch: this.trustEpoch - 1, nextEpoch: this.trustEpoch,
+            createdAt, expiresAt: createdAt + 30_000 };
+        const signature = await this.runtime.signControlEvent(encoder.encode(JSON.stringify(unsigned)));
+        await makeRequest<unknown, typeof unsigned & { signature: string }>('device-trust/activation', { method: 'POST', body: { ...unsigned, signature } });
+    }
+
     /** Every protected operation observes the current lifecycle epoch. */
     private async assertCurrentDeviceTrust(): Promise<void> {
         if (!this.deviceTrust) throw new Error('Device trust is unavailable.');
@@ -803,9 +859,14 @@ export class ModernConversation {
         }
     }
 
-    private async observe(address: string, identity: VodozemacPublicIdentity): Promise<void> {
+    private async observe(address: string, identity: VodozemacPublicIdentity, expectedCommitment?: string): Promise<void> {
+        const fingerprint = await fingerprintVodozemacIdentity(identity);
+        const known = await this.registry.get(address);
+        if (!known && (!expectedCommitment || fingerprint !== expectedCommitment)) {
+            throw new Error('The invitation identity commitment is missing or does not match the published identity.');
+        }
         const event = await this.registry.observe(address, {
-            identityId: await fingerprintVodozemacIdentity(identity),
+            identityId: fingerprint,
             publicKey: encoder.encode(JSON.stringify(identity)),
             algorithm: 'Olm-Curve25519+Ed25519', verification: 'unverified',
         });

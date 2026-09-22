@@ -6,6 +6,8 @@ import { RateLimiter } from "./rateLimiter";
 import { authorizeRoomControl, isValidControlCapability, isValidRoomId } from '../security/controlCapability';
 import db from '../db';
 import { PREKEY_COLLECTION } from '../db/const';
+import { durableDeviceTrustAuthority } from '../security/durableDeviceTrust';
+import type { DeviceAuthorizationProof, DeviceOperation } from '../security/deviceTrust';
 
 const clients = getClientInstance();
 
@@ -23,7 +25,7 @@ const routingProofHash = (proof: string): Buffer => createHash('sha256').update(
 
 export const authorizeRoutingAddress = async (channel: string, address: string, proof: unknown): Promise<boolean> => {
   const record = await db.findOneFromDB<{ renewalProofHash?: string; expiresAt?: Date }>({ channel, address }, PREKEY_COLLECTION);
-  if (!record) return true; // Legacy ephemeral routing identifiers have no pre-key ownership record.
+  if (!record) return false;
   if (!(record.expiresAt instanceof Date) || record.expiresAt.getTime() <= Date.now() || typeof proof !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(proof) || !/^[0-9a-f]{64}$/.test(record.renewalProofHash ?? '')) return false;
   return timingSafeEqual(routingProofHash(proof), Buffer.from(record.renewalProofHash!, 'hex'));
 };
@@ -50,11 +52,28 @@ export const isValidWireEnvelope = (value: unknown): value is WireEnvelope => {
     envelope.data !== undefined && envelope.data !== null;
 };
 
-const validEnvelopePayload = (payload: unknown): payload is { envelope: WireEnvelope; recipientRoutingId?: string } =>
+type ProofCarrier = { deviceAuthorizationProof: DeviceAuthorizationProof; proofNonce: string; proofOperation?: DeviceOperation };
+const validCarrier = (value: unknown): value is ProofCarrier => !!value && typeof value === 'object' &&
+  !!(value as ProofCarrier).deviceAuthorizationProof && typeof (value as ProofCarrier).proofNonce === 'string' &&
+  (value as ProofCarrier).proofNonce === (value as ProofCarrier).deviceAuthorizationProof.nonce;
+const validEnvelopePayload = (payload: unknown): payload is { envelope: WireEnvelope; recipientRoutingId?: string } & ProofCarrier =>
   !!payload && typeof payload === 'object' && !Array.isArray(payload) &&
-  (exactKeys(payload as Record<string, unknown>, ['envelope']) || exactKeys(payload as Record<string, unknown>, ['envelope', 'recipientRoutingId'])) &&
+  (exactKeys(payload as Record<string, unknown>, ['envelope', 'deviceAuthorizationProof', 'proofNonce', 'proofOperation']) || exactKeys(payload as Record<string, unknown>, ['envelope', 'recipientRoutingId', 'deviceAuthorizationProof', 'proofNonce', 'proofOperation'])) &&
   isValidWireEnvelope((payload as { envelope?: unknown }).envelope) &&
-  ((payload as { recipientRoutingId?: unknown }).recipientRoutingId === undefined || isValidRoomId((payload as { recipientRoutingId?: unknown }).recipientRoutingId));
+  ((payload as { recipientRoutingId?: unknown }).recipientRoutingId === undefined || isValidRoomId((payload as { recipientRoutingId?: unknown }).recipientRoutingId)) && validCarrier(payload) && typeof (payload as ProofCarrier).proofOperation === 'string';
+
+const verifyCarrier = async (socket: CustomSocket, carrier: ProofCarrier, operation: DeviceOperation, bind = false): Promise<boolean> => {
+  const authority = durableDeviceTrustAuthority(db.getDatabase());
+  if (!authority) return false;
+  try {
+    const record = await authority.verify(carrier.deviceAuthorizationProof, operation);
+    if (record.deviceId !== carrier.deviceAuthorizationProof.deviceId ||
+        (socket.deviceId && socket.deviceId !== record.deviceId) ||
+        (socket.accountIdentityReference && socket.accountIdentityReference !== record.accountIdentityReference)) return false;
+    if (bind) { socket.deviceId = record.deviceId; socket.accountIdentityReference = record.accountIdentityReference; }
+    return true;
+  } catch { return false; }
+};
 
 const envelopeDedupeKey = (channel: string, mailbox: string, sender: string, envelope: WireEnvelope): string =>
   createHash('sha256').update(JSON.stringify({ channel, mailbox, sender, envelope })).digest('hex');
@@ -87,9 +106,10 @@ const findPeerSid = (socket: CustomSocket): string | undefined => {
 
 const connectionListener = (socket: CustomSocket, io) => {
   socket.on("chat-join", async (data) => {
-    const { userID, channelID, controlCapability, routingProof } = data || {};
+    const { userID, channelID, controlCapability, routingProof, deviceAuthorizationProof, proofNonce } = data || {};
     if (!data || typeof data !== 'object' || Array.isArray(data) ||
-        !(exactKeys(data, ['userID', 'channelID', 'controlCapability']) || exactKeys(data, ['userID', 'channelID', 'controlCapability', 'routingProof'])) ||
+        !Object.keys(data).every((key) => ['userID', 'channelID', 'controlCapability', 'routingProof', 'deviceAuthorizationProof', 'proofNonce'].includes(key)) ||
+        !['userID', 'channelID', 'controlCapability', 'deviceAuthorizationProof', 'proofNonce'].every((key) => key in data) || !validCarrier({ deviceAuthorizationProof, proofNonce }) ||
         !isValidRoomId(userID) ||
         !isValidRoomId(channelID) || !isValidControlCapability(controlCapability)) {
       console.error("Rejected malformed channel join");
@@ -102,6 +122,11 @@ const connectionListener = (socket: CustomSocket, io) => {
     }
     if (!await authorizeRoutingAddress(channelID, userID, routingProof)) {
       console.error('Rejected unauthorized routing identity');
+      return;
+    }
+    if (!await verifyCarrier(socket, { deviceAuthorizationProof, proofNonce }, 'relay:message', true)) {
+      console.error('Rejected device authorization proof');
+      socket.disconnect();
       return;
     }
     const { valid } = await channelValid(channelID);
@@ -133,7 +158,7 @@ const connectionListener = (socket: CustomSocket, io) => {
     await deliverOffline(socket as CustomSocket);
   });
 
-  socket.on("chat-message", async (payload: { envelope: WireEnvelope; recipientRoutingId?: string }, ack: Ack = noop) => {
+  socket.on("chat-message", async (payload: { envelope: WireEnvelope; recipientRoutingId?: string } & ProofCarrier, ack: Ack = noop) => {
     if (!socket.userID || !socket.channelID) {
       ack({ error: "Join a channel before sending messages." });
       return;
@@ -146,6 +171,7 @@ const connectionListener = (socket: CustomSocket, io) => {
       ack({ error: "Invalid or oversized encrypted envelope." });
       return;
     }
+    if (payload.proofOperation !== 'relay:message' || payload.deviceAuthorizationProof.resource?.conversationId !== socket.channelID || !await verifyCarrier(socket, payload, 'relay:message')) { ack({ error: 'Device authorization rejected.' }); return; }
     const receiverSid = findPeerSid(socket);
     if (!receiverSid) {
       if (process.env.NODE_ENV === 'production' && !db.persistentStorageReady()) { ack({ error: "Offline delivery is unavailable." }); return; }
@@ -174,7 +200,7 @@ const connectionListener = (socket: CustomSocket, io) => {
     ack({ id, timestamp });
   });
 
-  socket.on("webrtc-signal", (payload: { envelope: WireEnvelope }, ack: Ack = noop) => {
+  socket.on("webrtc-signal", async (payload: { envelope: WireEnvelope } & ProofCarrier, ack: Ack = noop) => {
     if (!socket.userID || !socket.channelID) {
       ack({ error: "Join a channel before signaling." });
       return;
@@ -187,6 +213,9 @@ const connectionListener = (socket: CustomSocket, io) => {
       ack({ error: "Invalid or oversized encrypted envelope." });
       return;
     }
+    if (payload.proofOperation !== 'relay:signal' && payload.proofOperation !== 'device-control') { ack({ error: 'Device authorization rejected.' }); return; }
+    if (payload.deviceAuthorizationProof.resource?.conversationId !== socket.channelID) { ack({ error: 'Device authorization rejected.' }); return; }
+    if (!await verifyCarrier(socket, payload, payload.proofOperation)) { ack({ error: 'Device authorization rejected.' }); return; }
     const receiverSid = findPeerSid(socket);
     if (!receiverSid) {
       ack({ error: "No receiver is in the channel." });

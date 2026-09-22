@@ -1,16 +1,18 @@
 import { AuthenticatedPrivateNetworkTransport } from './transport';
 import { MemoryPrivateNetworkPersistence, PrivateNetworkRuntime } from './runtime';
+import { DeviceContextAuthority } from '../devices/authenticatedContext';
 
 const ownerId = '11111111-1111-4111-8111-111111111111'; const memberId = '22222222-2222-4222-8222-222222222222'; const networkId = '33333333-3333-4333-8333-333333333333';
 const trust = (revoked = false) => ({ assertTrusted: async () => { if (revoked) throw new Error('revoked'); }, snapshot: async () => ({ list: { identityReference: 'account', epoch: 1, devices: [{ deviceId: ownerId, publicIdentityReference: 'owner-identity', state: 'active' as const }] }, commitment: 'trusted' }) });
+const context = () => new DeviceContextAuthority({ ready: true, encrypted: true, initialize: async () => undefined, destroy: () => undefined, encrypt: async () => ({ version: 1, strategy: 'test', data: {} }), decrypt: async () => new ArrayBuffer(0) }, 'private-network', { deviceId: ownerId, identityReference: 'owner-identity', userScope: 'account', verified: true }).localContext();
 
 describe('private network trust and transport boundaries', () => {
   it('rejects fake, replayed, and revoked membership operations', async () => {
     const persistence = new MemoryPrivateNetworkPersistence(); const runtime = new PrivateNetworkRuntime(persistence, trust());
     await runtime.create(networkId, 'account', { deviceId: ownerId, identityReference: 'owner-identity' });
-    const join = await runtime.authorize(networkId, { deviceId: memberId, identityReference: 'member-identity', role: 'member' }, 'join');
-    await expect(runtime.apply({ ...join, digest: 'tampered' })).rejects.toThrow('authorization rejected');
-    await runtime.apply(join); await expect(runtime.apply(join)).rejects.toThrow('authorization rejected');
+    const join = await runtime.authorize(context(), networkId, { deviceId: memberId, identityReference: 'member-identity', role: 'member' }, 'join');
+    await expect(runtime.apply(context(), { ...join, digest: 'tampered' })).rejects.toThrow('authorization rejected');
+    await runtime.apply(context(), join); await expect(runtime.apply(context(), join)).rejects.toThrow('authorization rejected');
     const revoked = new PrivateNetworkRuntime(persistence, trust(true)); await expect(revoked.members(networkId)).rejects.toThrow('revoked');
   });
 

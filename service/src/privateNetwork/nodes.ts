@@ -1,5 +1,7 @@
 import { sha256 } from 'hash-wasm';
 import type { NetworkTrustBoundary } from './contracts';
+import type { AuthenticatedDeviceContext } from '../devices/lifecycle';
+import { assertIssuedDeviceContext } from '../devices/authenticatedContext';
 
 export type NodeRole = 'client' | 'active' | 'permanent';
 export type NodeCapabilities = { relay: boolean; bridge: boolean; storage: false };
@@ -16,15 +18,15 @@ const nodeDigest = async (value: Omit<NodeAuthorization, 'digest'>): Promise<str
 /** Existing trusted devices authorize optional routing helpers; node roles do not create identities or trust. */
 export class AdaptiveNodeRuntime {
   constructor(private readonly persistence: AdaptiveNodePersistence, private readonly trust: NetworkTrustBoundary, private readonly now: () => number = Date.now) {}
-  async authorize(networkId: string, issuer: { deviceId: string; identityReference: string }, target: { deviceId: string; identityReference: string }, operation: NodeAuthorization['operation'], role?: NodeRole, capabilities?: NodeCapabilities, ttlMs = 5 * 60_000): Promise<NodeAuthorization> {
-    await this.trust.assertTrusted(); const snapshot = await this.trust.snapshot();
+  async authorize(context: AuthenticatedDeviceContext, networkId: string, target: { deviceId: string; identityReference: string }, operation: NodeAuthorization['operation'], role?: NodeRole, capabilities?: NodeCapabilities, ttlMs = 5 * 60_000): Promise<NodeAuthorization> {
+    assertIssuedDeviceContext(context); const issuer = context.authenticatedSender; await this.trust.assertTrusted(); const snapshot = await this.trust.snapshot();
     if (!uuid.test(networkId) || !uuid.test(issuer.deviceId) || !uuid.test(target.deviceId) || !snapshot.list.devices.some((device) => device.deviceId === issuer.deviceId && device.publicIdentityReference === issuer.identityReference && device.state === 'active') || (operation !== 'remove' && (!role || !validCaps(capabilities)))) throw new Error('Node authorization rejected.');
     const unsigned = { version: 1 as const, authorizationId: crypto.randomUUID(), networkId, issuerDeviceId: issuer.deviceId, issuerIdentityReference: issuer.identityReference, targetDeviceId: target.deviceId, targetIdentityReference: target.identityReference, operation, role, capabilities, expiresAt: this.now() + ttlMs };
     return { ...unsigned, digest: await nodeDigest(unsigned) };
   }
-  async apply(authorization: NodeAuthorization): Promise<readonly AdaptiveNode[]> {
-    const { digest, ...unsigned } = authorization; await this.trust.assertTrusted(); const snapshot = await this.trust.snapshot();
-    if (authorization.expiresAt <= this.now() || digest !== await nodeDigest(unsigned) || !snapshot.list.devices.some((device) => device.deviceId === authorization.issuerDeviceId && device.publicIdentityReference === authorization.issuerIdentityReference && device.state === 'active') || !await this.persistence.claim(authorization.networkId, authorization.authorizationId, authorization.expiresAt)) throw new Error('Node authorization rejected.');
+  async apply(context: AuthenticatedDeviceContext, authorization: NodeAuthorization): Promise<readonly AdaptiveNode[]> {
+    const { digest, ...unsigned } = authorization; assertIssuedDeviceContext(context, authorization); await this.trust.assertTrusted(); const snapshot = await this.trust.snapshot();
+    if (context.authenticatedSender.deviceId !== authorization.issuerDeviceId || context.authenticatedSender.identityReference !== authorization.issuerIdentityReference || authorization.expiresAt <= this.now() || digest !== await nodeDigest(unsigned) || !snapshot.list.devices.some((device) => device.deviceId === authorization.issuerDeviceId && device.publicIdentityReference === authorization.issuerIdentityReference && device.state === 'active') || !await this.persistence.claim(authorization.networkId, authorization.authorizationId, authorization.expiresAt)) throw new Error('Node authorization rejected.');
     const nodes = [...await this.persistence.read(authorization.networkId)]; const index = nodes.findIndex((node) => node.deviceId === authorization.targetDeviceId);
     if (authorization.operation === 'remove') { if (index < 0) throw new Error('Unknown node.'); nodes.splice(index, 1); }
     else if (authorization.operation === 'register') { if (index >= 0 || !authorization.role || !validCaps(authorization.capabilities)) throw new Error('Node registration rejected.'); nodes.push({ version: 1, networkId: authorization.networkId, deviceId: authorization.targetDeviceId, identityReference: authorization.targetIdentityReference, role: authorization.role, capabilities: authorization.capabilities, status: 'offline', lastSeenAt: 0, expiresAt: authorization.expiresAt }); }

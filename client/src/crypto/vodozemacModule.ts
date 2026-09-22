@@ -23,6 +23,7 @@ export const loadVodozemacBindings = (): Promise<VodozemacBindings> => {
 
 const wrapAccount = (account: K3ncryptAccount) => ({
     identityKeys: () => account.identityKeys(),
+    signControlEvent: (payload: Uint8Array) => account.signControlEvent(payload),
     availableOneTimeKeys: () => JSON.parse(account.oneTimeKeys()),
     firstOneTimeKey: () => account.firstOneTimeKey(),
     fallbackKey: () => { try { return account.fallbackKey(); } catch { return undefined; } },

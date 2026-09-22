@@ -123,6 +123,14 @@ export class VodozemacRuntime {
         catch { throw new VodozemacBoundaryError('CORRUPTED_ACCOUNT', 'The public identity could not be read.'); }
     }
 
+    /** Signs canonical device-lifecycle control data without exposing identity keys. */
+    public async signControlEvent(payload: Uint8Array): Promise<string> {
+        this.requireState('identity-restored', 'active', 'persisted');
+        if (!this.identity) throw new VodozemacBoundaryError('CORRUPTED_ACCOUNT', 'The private identity is unavailable.');
+        try { return await this.identity.signControlEvent(payload); }
+        catch { throw new VodozemacBoundaryError('WASM_INIT_FAILED', 'Identity control signing is unavailable.'); }
+    }
+
     /** Marks the current public pre-key set as published and persists the account. */
     public async markPublicKeysPublished(): Promise<void> {
         this.requireState('identity-restored', 'active', 'persisted');

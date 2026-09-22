@@ -15,4 +15,10 @@ export const applyMigrations = async (database: Db): Promise<void> => {
   await database.collection('attachment_chunks').createIndex({ attachmentId: 1, index: 1 }, { unique: true });
   await database.collection('attachment_chunks').createIndex({ attachmentId: 1, storedAt: 1 });
   await database.collection('attachment_access').createIndex({ attachmentId: 1 }, { unique: true });
+  await database.collection('device_lifecycle').createIndex({ accountIdentityReference: 1, deviceId: 1 }, { unique: true });
+  await database.collection('device_identity_registry').createIndex({ deviceId: 1 }, { unique: true });
+  await database.collection('device_proof_nonces').createIndex({ proofId: 1, deviceId: 1 }, { unique: true });
+  await database.collection('device_proof_nonces').createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+  await database.collection('private_network_members').createIndex({ networkId: 1, deviceId: 1 }, { unique: true });
+  await database.collection('private_network_membership_events').createIndex({ eventId: 1 }, { unique: true });
 };

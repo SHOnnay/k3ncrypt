@@ -127,6 +127,16 @@ impl K3ncryptAccount {
         .map_err(js_error)
     }
 
+    /// Signs only caller-provided, canonical control-plane bytes. The private
+    /// Ed25519 key remains inside this opaque account handle.
+    #[wasm_bindgen(js_name = signControlEvent)]
+    pub fn sign_control_event(&self, payload: &[u8]) -> Result<String, JsValue> {
+        if payload.is_empty() || payload.len() > 16 * 1024 {
+            return Err(js_error("Control event is invalid or too large."));
+        }
+        Ok(self.inner.sign(payload).to_base64())
+    }
+
     #[wasm_bindgen(js_name = generateOneTimeKeys)]
     pub fn generate_one_time_keys(&mut self, count: usize) -> Result<(), JsValue> {
         if count == 0 || count > 100 {

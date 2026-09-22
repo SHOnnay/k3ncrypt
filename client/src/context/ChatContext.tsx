@@ -127,7 +127,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setMessages((current) => current.map((message) => message.id === clientId ? { ...message, delivery: state } : message));
     });
     try {
-      const details = await conversation.connect(descriptor.roomId, descriptor.controlCapability, descriptor.remoteAddress, (text) => {
+      const details = await conversation.connect(descriptor.roomId, descriptor.controlCapability, descriptor.remoteAddress, descriptor.remoteIdentityCommitment, (text) => {
         const message = displayMessage('contact', text, 'received');
         setMessages((previous) => [...previous, message]);
         deliverNotification({ kind: 'message', conversationId: descriptor.roomId, preview: message.text }, privacyPreferencesRef.current);
@@ -167,13 +167,13 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const descriptor: ConversationDescriptor = { version: 1, roomId: invite.hash, controlCapability: invite.controlCapability, label: 'Private contact', updatedAt: Date.now() };
     const details = await connectModern(secureVault, descriptor);
     setConversations(await saveConversationDescriptor(secureVault, descriptor));
-    const fragment = `modern=${encodeURIComponent(invite.hash)}&control=${encodeURIComponent(invite.controlCapability)}&address=${encodeURIComponent(details.ownAddress)}`;
+    const fragment = `modern=${encodeURIComponent(invite.hash)}&control=${encodeURIComponent(invite.controlCapability)}&address=${encodeURIComponent(details.ownAddress)}&identity=${encodeURIComponent(details.ownFingerprint)}`;
     return `${window.location.origin}${window.location.pathname}#${fragment}`;
   }, [chat, modern]);
 
-  const joinModernChannel = useCallback(async (roomId: string, capability: string, address: string, passphrase: string): Promise<void> => {
+  const joinModernChannel = useCallback(async (roomId: string, capability: string, address: string, identityCommitment: string, passphrase: string): Promise<void> => {
     const secureVault = await openModernVault(passphrase);
-    const descriptor: ConversationDescriptor = { version: 1, roomId, controlCapability: capability, remoteAddress: address, label: 'Private contact', updatedAt: Date.now() };
+    const descriptor: ConversationDescriptor = { version: 1, roomId, controlCapability: capability, remoteAddress: address, remoteIdentityCommitment: identityCommitment, label: 'Private contact', updatedAt: Date.now() };
     await connectModern(secureVault, descriptor);
     setConversations(await saveConversationDescriptor(secureVault, descriptor));
   }, [modern]);

@@ -5,6 +5,8 @@ import chatController from './messaging';
 import { createProductionAttachmentRouter } from './attachments/production';
 import operationsController from './operations';
 import { apiRateLimit } from '../middleware/apiRateLimit';
+import deviceTrustController from './deviceTrust';
+import networkMembershipController from './networkMembership';
 
 const router = express.Router({ mergeParams: true });
 
@@ -17,6 +19,8 @@ router.use(apiRateLimit);
 
 router.use("/chat", chatController);
 router.use("/chat-link", chatHashController);
+router.use('/device-trust', deviceTrustController);
+router.use('/network-membership', networkMembershipController);
 router.use('/attachments', createProductionAttachmentRouter());
 
 export default router;

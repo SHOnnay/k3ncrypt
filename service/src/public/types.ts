@@ -30,6 +30,8 @@ export type chatJoinPayloadType = {
     userID: string,
     controlCapability: string,
     routingProof?: string,
+    deviceAuthorizationProof?: import('../devices/trustProtocol').DeviceAuthorizationProof,
+    proofNonce?: string,
 }
 
 export interface IChatE2EE {
