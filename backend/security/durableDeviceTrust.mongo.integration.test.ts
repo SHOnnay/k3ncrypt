@@ -28,7 +28,8 @@ suite('durable device trust Mongo bootstrap', () => {
     const database = client.db(process.env.MONGO_DB_NAME);
     await applyMigrations(database);
     await database.collection('device_lifecycle').deleteMany({ accountIdentityReference: account });
-    await database.collection('device_proof_nonces').deleteMany({});
+    await database.collection('device_proof_nonces').deleteMany({ deviceId: { $in: [issuerDevice, targetDevice] } });
+    await database.collection('device_identity_registry').deleteMany({ deviceId: { $in: [issuerDevice, targetDevice] } });
     const issuer = generateKeyPairSync('ed25519'); const target = generateKeyPairSync('ed25519');
     issuerPrivate = issuer.privateKey; issuerPublic = rawPublic(issuer.publicKey); targetPrivate = target.privateKey; targetPublic = rawPublic(target.publicKey);
     const store = new MongoDeviceTrustStore(database);
@@ -58,6 +59,12 @@ suite('durable device trust Mongo bootstrap', () => {
     const proof = await authority.issue({ ...proofRequest, signature: signed(proofRequest as Record<string, unknown>, targetPrivate) });
     expect((await authority.verify(proof, 'relay:message')).deviceId).toBe(targetDevice);
 
+    const revocation: Omit<SignedLifecycleEvent, 'signature'> = { version: 1, eventId: randomUUID(), accountIdentityReference: account, issuerDeviceId: issuerDevice, issuerIdentityReference: 'issuer-identity', targetDeviceId: targetDevice, targetIdentityReference: 'target-identity', operation: 'revoke', previousEpoch: 1, nextEpoch: 2, createdAt: Date.now(), expiresAt: Date.now() + 30_000 };
+    const revoked = await authority.update({ ...revocation, signature: signed(revocation as Record<string, unknown>, issuerPrivate) }, await issuerProof('device-control', randomUUID().replace(/-/g, '')));
+    expect(revoked.state).toBe('revoked');
+    const revokedRequest: Omit<DeviceProofRequest, 'signature'> = { ...proofRequest, requestId: randomUUID(), nonce: randomUUID().replace(/-/g, ''), epoch: revoked.trustEpoch, createdAt: Date.now(), expiresAt: Date.now() + 30_000 };
+    await expect(authority.issue({ ...revokedRequest, signature: signed(revokedRequest as Record<string, unknown>, targetPrivate) })).rejects.toThrow('rejected');
+
     const restarted = new DurableDeviceTrustAuthority(new MongoDeviceTrustStore(client.db(process.env.MONGO_DB_NAME)), 'm'.repeat(32));
     await expect(restarted.verify(proof, 'relay:message')).rejects.toThrow('rejected');
     await expect(restarted.activate({ ...activation, signature: signed(activation as Record<string, unknown>, targetPrivate) })).rejects.toThrow('rejected');
@@ -79,5 +86,15 @@ suite('durable device trust Mongo bootstrap', () => {
     const proofRequest: Omit<DeviceProofRequest, 'signature'> = { version: 1, requestId: randomUUID(), accountIdentityReference: result.accountIdentityReference, deviceId: firstDevice, deviceIdentityReference: 'first-identity', operation: 'relay:message', nonce: randomUUID().replace(/-/g, ''), epoch: 1, createdAt: Date.now(), expiresAt: Date.now() + 30_000 };
     const proof = await authority.issue({ ...proofRequest, signature: signed(proofRequest as Record<string, unknown>, first.privateKey) });
     expect((await authority.verify(proof, 'relay:message')).deviceId).toBe(firstDevice);
+  });
+
+  it('rejects concurrent bootstrap attempts using the same device identifier', async () => {
+    const pair = generateKeyPairSync('ed25519'); const deviceId = randomUUID(); const verificationKey = rawPublic(pair.publicKey); const createdAt = Date.now();
+    const create = (requestId: string): BootstrapRequest => {
+      const request: Omit<BootstrapRequest, 'signature'> = { version: 1, requestId, deviceId, deviceIdentityReference: `identity-${requestId}`, verificationKey, fingerprint: `identity-${requestId}`, createdAt, expiresAt: createdAt + 30_000, nonce: randomUUID().replace(/-/g, '') };
+      return { ...request, signature: signed(request as Record<string, unknown>, pair.privateKey) };
+    };
+    const [one, two] = await Promise.allSettled([authority.bootstrap(create(randomUUID())), authority.bootstrap(create(randomUUID()))]);
+    expect([one, two].filter((result) => result.status === 'fulfilled')).toHaveLength(1);
   });
 });

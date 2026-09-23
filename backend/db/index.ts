@@ -98,7 +98,10 @@ const requiredIndexes: Record<string, string[]> = {
   attachment_chunks: ['attachmentId_1_index_1', 'attachmentId_1_storedAt_1'],
   attachment_access: ['attachmentId_1'],
   device_lifecycle: ['accountIdentityReference_1_deviceId_1'],
+  device_identity_registry: ['deviceId_1'],
   device_proof_nonces: ['proofId_1_deviceId_1', 'expiresAt_1'],
+  private_network_members: ['networkId_1_deviceId_1'],
+  private_network_membership_events: ['eventId_1'],
 };
 export const requiredIndexesReady = async (): Promise<boolean> => {
   if (inMem || !db) return false;

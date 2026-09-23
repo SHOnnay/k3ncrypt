@@ -13,7 +13,8 @@ export type ConsumedProofRecord = { proofId: string; deviceId: string; expiresAt
 export class MongoDeviceTrustStore {
   private readonly devices: Collection<DeviceLifecycleRecord>;
   private readonly proofs: Collection<ConsumedProofRecord>;
-  constructor(database: Db) { this.devices = database.collection<DeviceLifecycleRecord>('device_lifecycle'); this.proofs = database.collection<ConsumedProofRecord>('device_proof_nonces'); }
+  private readonly identities: Collection<{ deviceId: string; accountIdentityReference: string; createdAt: Date }>;
+  constructor(database: Db) { this.devices = database.collection<DeviceLifecycleRecord>('device_lifecycle'); this.proofs = database.collection<ConsumedProofRecord>('device_proof_nonces'); this.identities = database.collection('device_identity_registry'); }
   async read(accountIdentityReference: string, deviceId: string): Promise<DeviceLifecycleRecord | undefined> { return (await this.devices.findOne({ accountIdentityReference, deviceId })) ?? undefined; }
   async readAnyDevice(deviceId: string): Promise<DeviceLifecycleRecord | undefined> { return (await this.devices.findOne({ deviceId })) ?? undefined; }
   async upsert(record: DeviceLifecycleRecord, expectedEpoch?: number): Promise<boolean> {
@@ -28,6 +29,17 @@ export class MongoDeviceTrustStore {
     if (expiresAt <= Date.now()) return false;
     try { await this.proofs.insertOne({ proofId, deviceId, expiresAt: new Date(expiresAt), consumedAt: new Date() }); return true; } catch { return false; }
   }
+  async release(proofId: string, deviceId: string): Promise<void> { await this.proofs.deleteOne({ proofId, deviceId }); }
+  /** Globally reserves an immutable device identifier through the unique registry index. */
+  async reserveDeviceId(deviceId: string, accountIdentityReference: string): Promise<boolean> {
+    try { await this.identities.insertOne({ deviceId, accountIdentityReference, createdAt: new Date() }); return true; }
+    catch { return false; }
+  }
+  async bindReservedDeviceId(deviceId: string, accountIdentityReference: string): Promise<boolean> {
+    const result = await this.identities.updateOne({ deviceId, accountIdentityReference: 'bootstrap-pending' }, { $set: { accountIdentityReference } });
+    return result.matchedCount === 1;
+  }
+  async releaseDeviceId(deviceId: string, accountIdentityReference: string): Promise<void> { await this.identities.deleteOne({ deviceId, accountIdentityReference }); }
 }
 
 /** Durable authority: only a verified Ed25519 control event can mutate lifecycle state. */
@@ -37,10 +49,12 @@ export class DurableDeviceTrustAuthority {
   async bootstrap(request: BootstrapRequest): Promise<{ accountIdentityReference: string; deviceId: string; deviceIdentityReference: string; trustEpoch: number }> {
     const now = this.now();
     if (request.version !== 1 || !/^[0-9a-f-]{36}$/i.test(request.requestId) || !/^[0-9a-f-]{36}$/i.test(request.deviceId) || !request.deviceIdentityReference || request.fingerprint !== request.deviceIdentityReference || !/^[A-Za-z0-9_-]{43}$/.test(request.verificationKey) || !/^[A-Za-z0-9_-]{16,128}$/.test(request.nonce) || request.createdAt > now || request.expiresAt <= now || request.expiresAt - request.createdAt > 5 * 60_000 || !verifyBootstrapSignature(request, request.verificationKey)) throw new Error('Initial device bootstrap rejected.');
-    if (await this.store.readAnyDevice(request.deviceId) || !await this.store.consume(request.requestId, request.deviceId, request.expiresAt)) throw new Error('Initial device bootstrap rejected.');
+    if (await this.store.readAnyDevice(request.deviceId) || !await this.store.reserveDeviceId(request.deviceId, 'bootstrap-pending')) throw new Error('Initial device bootstrap rejected.');
     const accountIdentityReference = `account-${randomUUID()}`; const createdAt = now;
     const record: DeviceLifecycleRecord = { accountIdentityReference, deviceId: request.deviceId, deviceIdentityReference: request.deviceIdentityReference, verificationKeyReference: request.verificationKey, state: 'active', trustEpoch: 1, createdAt, lastTrustUpdate: createdAt };
-    if (!await this.store.upsert(record)) throw new Error('Initial device bootstrap rejected.');
+    if (!await this.store.upsert(record)) { await this.store.releaseDeviceId(request.deviceId, 'bootstrap-pending'); throw new Error('Initial device bootstrap rejected.'); }
+    // Bind the reservation without releasing uniqueness between the two writes.
+    if (!await this.store.bindReservedDeviceId(request.deviceId, accountIdentityReference) || !await this.store.consume(request.requestId, request.deviceId, request.expiresAt)) throw new Error('Initial device bootstrap rejected.');
     return { accountIdentityReference, deviceId: request.deviceId, deviceIdentityReference: request.deviceIdentityReference, trustEpoch: 1 };
   }
   async enroll(event: EnrollmentEvent, issuerProof: import('./deviceTrust').DeviceAuthorizationProof): Promise<DeviceLifecycleRecord> {
@@ -53,25 +67,34 @@ export class DurableDeviceTrustAuthority {
       !verifyDeviceControlSignature(event, issuerKey)) throw new Error('Lifecycle enrollment rejected.');
     const verified = await this.verify(issuerProof, 'device-control');
     if (verified.accountIdentityReference !== event.accountIdentityReference || verified.deviceId !== event.issuerDeviceId || verified.deviceIdentityReference !== event.issuerIdentityReference || verified.trustEpoch !== event.issuerEpoch) throw new Error('Lifecycle enrollment rejected.');
-    if (!await this.store.consume(event.eventId, event.issuerDeviceId, event.expiresAt)) throw new Error('Lifecycle enrollment rejected.');
+    if (!await this.store.reserveDeviceId(event.targetDeviceId, event.accountIdentityReference)) throw new Error('Lifecycle enrollment rejected.');
     const record: DeviceLifecycleRecord = { accountIdentityReference: event.accountIdentityReference, deviceId: event.targetDeviceId, deviceIdentityReference: event.targetIdentityReference, verificationKeyReference: event.targetVerificationKey, state: 'pending', trustEpoch: event.issuerEpoch + 1, createdAt: now, lastTrustUpdate: now };
-    if (!await this.store.upsert(record)) throw new Error('Lifecycle enrollment conflict.'); return record;
+    if (!await this.store.upsert(record)) { await this.store.releaseDeviceId(event.targetDeviceId, event.accountIdentityReference); throw new Error('Lifecycle enrollment conflict.'); }
+    // State first makes a retry idempotently fail on the existing target even
+    // if the process dies before the replay marker is recorded.
+    if (!await this.store.consume(event.eventId, event.issuerDeviceId, event.expiresAt)) throw new Error('Lifecycle enrollment replay protection unavailable.');
+    return record;
   }
   /** The enrolled device activates itself after local confirmation. Its durable epoch must advance exactly once. */
   async activate(event: SignedLifecycleEvent): Promise<DeviceLifecycleRecord> {
     const now = this.now(); const target = await this.store.read(event.accountIdentityReference, event.targetDeviceId);
-    if (!target || target.state !== 'pending' || event.operation !== 'activate' || event.issuerDeviceId !== target.deviceId || event.issuerIdentityReference !== target.deviceIdentityReference || event.targetIdentityReference !== target.deviceIdentityReference || event.previousEpoch !== target.trustEpoch || event.nextEpoch !== target.trustEpoch + 1 || !verifyLifecycleEvent(event, target.verificationKeyReference, now) || !await this.store.consume(event.eventId, target.deviceId, event.expiresAt)) throw new Error('Lifecycle activation rejected.');
+    if (!target || target.state !== 'pending' || event.operation !== 'activate' || event.issuerDeviceId !== target.deviceId || event.issuerIdentityReference !== target.deviceIdentityReference || event.targetIdentityReference !== target.deviceIdentityReference || event.previousEpoch !== target.trustEpoch || event.nextEpoch !== target.trustEpoch + 1 || !verifyLifecycleEvent(event, target.verificationKeyReference, now)) throw new Error('Lifecycle activation rejected.');
     const next: DeviceLifecycleRecord = { ...target, state: 'active', trustEpoch: event.nextEpoch, lastTrustUpdate: now };
-    if (!await this.store.upsert(next, target.trustEpoch)) throw new Error('Lifecycle activation conflict.'); return next;
+    if (!await this.store.upsert(next, target.trustEpoch)) throw new Error('Lifecycle activation conflict.');
+    if (!await this.store.consume(event.eventId, target.deviceId, event.expiresAt)) throw new Error('Lifecycle activation replay protection unavailable.');
+    return next;
   }
   async update(event: SignedLifecycleEvent, issuerProof: import('./deviceTrust').DeviceAuthorizationProof): Promise<DeviceLifecycleRecord> {
     const now = this.now(); const issuer = await this.store.read(event.accountIdentityReference, event.issuerDeviceId); const target = await this.store.read(event.accountIdentityReference, event.targetDeviceId);
-    if (!issuer || !target || issuer.state !== 'active' || target.state !== 'active' || event.operation !== 'revoke' || issuer.trustEpoch !== event.previousEpoch || target.trustEpoch !== event.previousEpoch || event.nextEpoch !== event.previousEpoch + 1 || !verifyLifecycleEvent(event, issuer.verificationKeyReference, now)) throw new Error('Lifecycle update rejected.');
+    if (!issuer || !target || issuer.state !== 'active' || target.state !== 'active' || event.issuerDeviceId === event.targetDeviceId || event.operation !== 'revoke' || issuer.trustEpoch !== event.previousEpoch || event.nextEpoch !== event.previousEpoch + 1 || !verifyLifecycleEvent(event, issuer.verificationKeyReference, now)) throw new Error('Lifecycle update rejected.');
     const verified = await this.verify(issuerProof, 'device-control');
     if (verified.accountIdentityReference !== event.accountIdentityReference || verified.deviceId !== event.issuerDeviceId || verified.trustEpoch !== event.previousEpoch) throw new Error('Lifecycle update rejected.');
-    if (!await this.store.consume(event.eventId, event.issuerDeviceId, event.expiresAt)) throw new Error('Lifecycle update rejected.');
-    const next: DeviceLifecycleRecord = { ...target, state: 'revoked', trustEpoch: event.nextEpoch, lastTrustUpdate: now, revokedAt: now };
-    if (!await this.store.upsert(next, target.trustEpoch)) throw new Error('Lifecycle update conflict.'); return next;
+    // Device epochs are per-device after enrollment. Advance the target from
+    // its own current epoch so every outstanding target proof is invalidated.
+    const next: DeviceLifecycleRecord = { ...target, state: 'revoked', trustEpoch: target.trustEpoch + 1, lastTrustUpdate: now, revokedAt: now };
+    if (!await this.store.upsert(next, target.trustEpoch)) throw new Error('Lifecycle update conflict.');
+    if (!await this.store.consume(event.eventId, event.issuerDeviceId, event.expiresAt)) throw new Error('Lifecycle update replay protection unavailable.');
+    return next;
   }
   async issue(request: DeviceProofRequest): Promise<import('./deviceTrust').DeviceAuthorizationProof> {
     const record = await this.store.read(request.accountIdentityReference, request.deviceId); const now = this.now();

@@ -22,20 +22,22 @@ export const initPrivateNetworkRelay = (http: HttpServer): Server => {
     const authority = durableDeviceTrustAuthority(db.getDatabase());
     try { if (!authority || auth.proof.deviceId !== auth.deviceId || auth.proof.nonce !== auth.nonce) throw new Error(); await authority.verify(auth.proof, 'private-network:relay', { networkId: auth.networkId }); } catch { socket.disconnect(true); return; }
     const database = db.getDatabase();
-    const membership = database && await database.collection<{ networkId: string; deviceId: string; state: 'active' | 'removed'; epoch: number }>('private_network_members').findOne({ networkId: auth.networkId, deviceId: auth.deviceId, state: 'active' });
-    if (!membership || auth.proof.trustEpoch !== membership.epoch) { socket.disconnect(true); return; }
+    const membership = database && await database.collection<{ networkId: string; accountIdentityReference: string; deviceId: string; identityReference: string; state: 'active' | 'removed'; epoch: number; deviceTrustEpoch: number }>('private_network_members').findOne({ networkId: auth.networkId, deviceId: auth.deviceId, state: 'active' });
+    if (!membership || membership.accountIdentityReference !== auth.proof.accountIdentityReference || membership.identityReference !== auth.proof.deviceIdentityReference || auth.proof.trustEpoch !== membership.deviceTrustEpoch) { socket.disconnect(true); return; }
     const peers = routes.get(auth.networkId) ?? new Map<string, Socket>();
     if (peers.has(auth.deviceId) || peers.size >= 256) { socket.disconnect(true); return; }
     peers.set(auth.deviceId, socket); routes.set(auth.networkId, peers);
     const limiter = new RateLimiter({ capacity: 32, refillPerSecond: 8 });
-    socket.on('private-network-envelope', (value: unknown, callback: unknown) => {
+    socket.on('private-network-envelope', (value: unknown, callback: unknown) => { void (async () => {
       const ack = typeof callback === 'function' ? callback as (value: { status: 'accepted' } | { error: 'unavailable' }) => void : undefined;
       const payload = value as { targetDeviceId?: unknown; envelope?: unknown };
       if (!limiter.consume(socket.id) || !payload || !UUID.test(payload.targetDeviceId as string) || payload.targetDeviceId === auth.deviceId || !opaqueEnvelope(payload.envelope)) { ack?.({ error: 'unavailable' }); return; }
+      const current = await database?.collection<{ accountIdentityReference: string; deviceId: string; identityReference: string; state: 'active' | 'removed'; deviceTrustEpoch: number }>('private_network_members').findOne({ networkId: auth.networkId, deviceId: auth.deviceId, state: 'active' });
+      if (!current || current.accountIdentityReference !== auth.proof.accountIdentityReference || current.identityReference !== auth.proof.deviceIdentityReference || current.deviceTrustEpoch !== auth.proof.trustEpoch) { socket.disconnect(true); ack?.({ error: 'unavailable' }); return; }
       const target = routes.get(auth.networkId)?.get(payload.targetDeviceId as string);
       if (!target?.connected) { ack?.({ error: 'unavailable' }); return; }
       target.emit('private-network-envelope', { senderDeviceId: auth.deviceId, envelope: payload.envelope }); ack?.({ status: 'accepted' });
-    });
+    })(); });
     socket.on('disconnect', () => { const network = routes.get(auth.networkId); if (network?.get(auth.deviceId) === socket) network.delete(auth.deviceId); if (network?.size === 0) routes.delete(auth.networkId); });
   })(); });
   markRelayReady('private-network'); operationalLog('info', 'private_network_relay_ready'); return io;
