@@ -1,0 +1,7 @@
+{
+  "fixtureVersion": 1,
+  "accepted": {"serialized": "{\"version\":2,\"strategy\":\"vodozemac-olm-v1\",\"data\":{\"version\":1,\"olmMessage\":\"fixture-wire-message\"}}", "messageType": "pre-key"},
+  "modifiedField": {"serialized": "{\"version\":2,\"strategy\":\"vodozemac-olm-v1\",\"data\":{\"version\":2,\"olmMessage\":\"fixture-wire-message\"}}", "accepted": false},
+  "wrongIdentity": {"accepted": false},
+  "replay": {"accepted": false}
+}

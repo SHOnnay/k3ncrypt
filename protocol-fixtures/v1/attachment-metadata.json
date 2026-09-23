@@ -1,0 +1,8 @@
+{
+  "fixtureVersion": 1,
+  "accepted": {"attachmentId": "55555555-5555-4555-8555-555555555555", "chunkIndex": 0, "chunkCount": 1, "aad": "k3ncrypt-attachment-v1:55555555-5555-4555-8555-555555555555:0:1", "metadataAad": "k3ncrypt-attachment-metadata-v1:55555555-5555-4555-8555-555555555555"},
+  "modifiedField": {"chunkIndex": 1, "accepted": false},
+  "wrongIdentity": {"accepted": false},
+  "expiredProof": {"accepted": false},
+  "replay": {"accepted": false}
+}

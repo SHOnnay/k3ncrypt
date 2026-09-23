@@ -1,0 +1,5 @@
+{
+  "fixtureVersion": 1,
+  "accepted": {"utf8": "abc", "base64url": "AQID", "sha256Hex": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"},
+  "rejected": [{"base64url": "AQI="}, {"base64url": "AQ I"}]
+}

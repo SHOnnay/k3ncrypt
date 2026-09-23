@@ -1,0 +1,10 @@
+{
+  "fixtureVersion": 1,
+  "accepted": {
+    "curve25519": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+    "ed25519": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8",
+    "fingerprint": "K3 HQIO A1J9 DNVI TEHH JHLB EA8F S3_9 HP6_ GVJM OUBY NLG",
+    "oneTimeKeyId": "otk-z6dpUWP53Q1cLThH_3nyA-"
+  },
+  "wrongIdentity": {"curve25519": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh4", "accepted": false}
+}
