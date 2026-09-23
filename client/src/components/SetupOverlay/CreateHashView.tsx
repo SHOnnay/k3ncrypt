@@ -18,6 +18,7 @@ interface CreateHashViewProps {
   onCopyClick: () => void;
   onBack: () => void;
   onNext: () => void;
+  onRetry?: () => void;
 }
 
 export const CreateHashView: React.FC<CreateHashViewProps> = ({
@@ -25,6 +26,7 @@ export const CreateHashView: React.FC<CreateHashViewProps> = ({
   onCopyClick,
   onBack,
   onNext,
+  onRetry,
 }) => {
   const [copied, setCopied] = useState(false);
 
@@ -67,6 +69,9 @@ export const CreateHashView: React.FC<CreateHashViewProps> = ({
         <Button id="join-btn" variant="primary" onClick={onNext} disabled={!inviteLink}>
           Continue to conversation
         </Button>
+        {!inviteLink && onRetry && <Button id="retry-invitation-btn" variant="primary" onClick={onRetry}>
+          Retry invitation
+        </Button>}
       </div>
     </div>
   );

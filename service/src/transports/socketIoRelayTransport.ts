@@ -54,8 +54,8 @@ export class SocketIoRelayTransport implements Transport {
         this.socket.on(WIRE_EVENTS.DELIVERED, (...args) => this.handleEvent('delivered', args));
         this.socket.on(WIRE_EVENTS.ON_ALICE_JOIN, (...args) => this.handleEvent('on-alice-join', args));
         this.socket.on(WIRE_EVENTS.ON_ALICE_DISCONNECT, (...args) => this.handleEvent('on-alice-disconnect', args));
-        this.socket.on(WIRE_EVENTS.CHAT_MESSAGE, (message: RawChatMessage) => {
-            void this.acceptChatEnvelope(message);
+        this.socket.on(WIRE_EVENTS.CHAT_MESSAGE, (message: RawChatMessage, ack?: (response: { accepted: boolean }) => void) => {
+            void this.acceptChatEnvelope(message, ack);
         });
         this.socket.on(WIRE_EVENTS.WEBRTC_SIGNAL, (message: RawSignalMessage) => {
             void this.onEnvelope({ channel: 'signaling', envelope: message.envelope }).catch(() => undefined);
@@ -76,7 +76,12 @@ export class SocketIoRelayTransport implements Transport {
         this.activeConversationId = conversationId;
         const carrier = this.proofProvider ? await this.proofProvider.acquire('relay:message', { conversationId }) : undefined;
         const payload: chatJoinPayloadType = { channelID: conversationId, userID: peerRoutingId, controlCapability, ...(routingProof ? { routingProof } : {}), ...(carrier ? carrier : {}) };
-        this.socket.emit('chat-join', payload);
+        await this.emitWithAck<{ status: 'accepted' }>('chat-join', payload);
+    }
+
+    /** Called only after the conversation transition has released its local lock. */
+    public async requestMailboxReplay(): Promise<void> {
+        await this.emitWithAck<{ status: 'accepted' }>('mailbox-replay', {});
     }
 
     public async sendEnvelope(
@@ -107,7 +112,7 @@ export class SocketIoRelayTransport implements Transport {
         return { envelopes: true, blobs: false, localOnly: false };
     }
 
-    private async acceptChatEnvelope(message: RawChatMessage): Promise<void> {
+    private async acceptChatEnvelope(message: RawChatMessage, ack?: (response: { accepted: boolean }) => void): Promise<void> {
         try {
             const accepted = await this.onEnvelope({
                 channel: 'message',
@@ -119,8 +124,10 @@ export class SocketIoRelayTransport implements Transport {
             if (accepted) {
                 this.socket.emit('received', { id: message.id });
             }
+            ack?.({ accepted });
         } catch {
             // Rejected/invalid envelopes are intentionally not acknowledged.
+            ack?.({ accepted: false });
         }
     }
 

@@ -20,6 +20,16 @@ interface SetupOverlayProps {
 
 type ViewType = 'initial' | 'create' | 'join' | 'modern' | 'restore' | 'deleted';
 
+const setupErrorMessage = (error: unknown, action: 'invitation' | 'contact'): string => {
+  const status = typeof error === 'object' && error !== null && 'status' in error ? (error as { status?: unknown }).status : undefined;
+  if (status === 503) return 'K3NCRYPT is starting or its secure storage is unavailable. Wait a moment, then retry.';
+  if (status === 404 || status === 502 || status === 504) return 'The K3NCRYPT backend is unavailable or is not the expected service. Check the server address, then retry.';
+  if (error instanceof TypeError) return 'Could not reach the K3NCRYPT backend. Check your connection, then retry.';
+  return action === 'invitation'
+    ? 'Could not create an invitation. Retry after checking the K3NCRYPT backend.'
+    : 'Could not create this contact. Use a passphrase of at least 12 characters, then retry.';
+};
+
 export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onModernSetupComplete, isHidden }) => {
   const { createNewChannel, createModernChannel, joinModernChannel, restoreSession, accountState, sessionError } = useChat();
   const [view, setView] = useState<ViewType>('initial');
@@ -38,7 +48,7 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onM
       setInvite({ roomId: created.roomId, secret: created.secret, controlCapability: created.controlCapability, link: created.absoluteLink || created.link });
       setStatus('');
     } catch (err) {
-      setStatus('Failed to generate invitation. Please try again.');
+      setStatus(setupErrorMessage(err, 'invitation'));
       debugError('Invitation generation failed', err);
     }
   }, [createNewChannel]);
@@ -137,7 +147,7 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onM
       const link = await createModernChannel(passphrase);
       setModernInvite(link);
       setStatus('Share this invitation with one person you trust.');
-    } catch { setStatus('Could not create this contact. Use a passphrase of at least 12 characters, or unlock this device with the existing one.'); }
+    } catch (error) { setStatus(setupErrorMessage(error, 'contact')); }
   };
 
   const handleRestore = async () => {
@@ -187,6 +197,7 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onM
             onCopyClick={handleCopyHash}
             onBack={handleBack}
             onNext={handleCreateNext}
+            onRetry={generateInvite}
           />
         )}
 

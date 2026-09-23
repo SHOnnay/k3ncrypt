@@ -149,9 +149,16 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setProtocolMode('modern');
       setChannelHash(descriptor.roomId);
       setOwnFingerprint(details.ownFingerprint);
-      setContactIdentity(details.contact);
+      // Mailbox replay is deliberately requested after authenticated join.
+      // An inbound first message can establish an unverified contact during
+      // that replay, so read the final durable contact state rather than
+      // overwriting it with connect()'s pre-replay snapshot.
+      setContactIdentity(await conversation.getContact());
       setUserId(details.ownAddress);
       setDeviceLifecycleState(await conversation.getDeviceLifecycleState());
+      if ((globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean; __k3ncryptGetCryptoSnapshot?: () => Promise<unknown> }).__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ === true) {
+        (globalThis as typeof globalThis & { __k3ncryptGetCryptoSnapshot?: () => Promise<unknown> }).__k3ncryptGetCryptoSnapshot = () => conversation.testOnlyCryptoSnapshot();
+      }
       setIsConnected(true);
       setSyncStatus((await conversation.getDeviceTrust()) === 'trusted' ? 'ready' : 'blocked');
       setSessionError(undefined);

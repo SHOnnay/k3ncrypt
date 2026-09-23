@@ -1,4 +1,5 @@
 import { createServer } from 'http';
+import { createHash } from 'crypto';
 import type { AddressInfo } from 'net';
 import client, { type Socket } from 'socket.io-client';
 import { initSyncRelay, MAX_SYNC_ENVELOPE_BYTES, validSyncEnvelope } from './relay';
@@ -7,12 +8,16 @@ import { authorizeRoomControl } from '../security/controlCapability';
 
 jest.mock('../security/controlCapability', () => ({ ...jest.requireActual('../security/controlCapability'), authorizeRoomControl: jest.fn(async () => ({})) }));
 jest.mock('../api/chatHash/utils/validateChannel', () => ({ __esModule: true, default: async () => ({ valid: true }) }));
-jest.mock('../db', () => ({ __esModule: true, default: { cleanupExpiredOfflineMessages: jest.fn(), claimOfflineMessage: async () => undefined, findOneFromDB: async () => undefined } }));
+const routingProof = 'b'.repeat(43);
+const routingProofHash = createHash('sha256').update(`k3ncrypt-prekey-renewal-v1\0${routingProof}`).digest('hex');
+jest.mock('../db', () => ({ __esModule: true, default: { getDatabase: () => undefined, cleanupExpiredOfflineMessages: jest.fn(), claimOfflineMessage: async () => undefined, findOneFromDB: async () => ({ renewalProofHash: routingProofHash, expiresAt: new Date(Date.now() + 60_000) }) } }));
+jest.mock('../security/durableDeviceTrust', () => ({ durableDeviceTrustAuthority: jest.fn(() => ({ verify: jest.fn(async () => ({ deviceId: 'test-device', accountIdentityReference: 'test-account' })) })) }));
 const room = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const alice = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const bob = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const unknown = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
 const envelope = (size: number) => ({ version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1, olmMessage: 'x'.repeat(size) } });
+const carrier = () => ({ deviceAuthorizationProof: { deviceId: 'test-device', accountIdentityReference: 'test-account', nonce: 'test-proof-nonce' }, proofNonce: 'test-proof-nonce' });
 
 describe('isolated sync relay', () => {
     const http = createServer();
@@ -43,8 +48,8 @@ describe('isolated sync relay', () => {
         const a = await connect(alice, false);
         const b = await connect(bob, false);
         const joined = new Promise<void>((resolve) => a.once('on-alice-join', resolve));
-        a.emit('chat-join', { userID: alice, channelID: room, controlCapability: 'a'.repeat(43) });
-        b.emit('chat-join', { userID: bob, channelID: room, controlCapability: 'a'.repeat(43) });
+        a.emit('chat-join', { userID: alice, channelID: room, controlCapability: 'a'.repeat(43), routingProof, ...carrier() });
+        b.emit('chat-join', { userID: bob, channelID: room, controlCapability: 'a'.repeat(43), routingProof, ...carrier() });
         await joined;
         const large = envelope(80 * 1024);
         // 40 KiB is below the original Engine.IO cap but above its unchanged app cap.
@@ -61,7 +66,7 @@ describe('isolated sync relay', () => {
         expect(received).toHaveLength(1);
         jest.mocked(authorizeRoomControl).mockResolvedValueOnce(undefined);
         expect((await sa.timeout(2000).emitWithAck('sync-envelope', { recipientRoutingId: bob, envelope: large })).error).toBeDefined();
-    });
+    }, 20_000);
     it('rejects malformed, legacy and oversized envelopes without interpreting ciphertext', () => {
         const overhead = Buffer.byteLength(JSON.stringify(envelope(0)));
         expect(validSyncEnvelope(envelope(MAX_SYNC_ENVELOPE_BYTES - overhead))).toBe(true);

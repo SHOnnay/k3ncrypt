@@ -159,7 +159,7 @@ describe('SocketInstance', () => {
         it('emits "chat-join" with the room control capability but no message key', () => {
             const payload = { channelID: 'chan-1', userID: 'alice', controlCapability: 'control-capability' };
             createInstance().join(payload.channelID, payload.userID, payload.controlCapability);
-            expect(mockSocket.emit).toHaveBeenCalledWith('chat-join', payload);
+            expect(mockSocket.emit).toHaveBeenCalledWith('chat-join', payload, expect.any(Function));
         });
     });
 
@@ -173,7 +173,7 @@ describe('SocketInstance', () => {
 
             await instance.sendEnvelope('message', { version: 1, strategy: 'test-strategy', data: {} });
 
-            expect(acquire).toHaveBeenCalledWith('relay:message');
+            expect(acquire).toHaveBeenCalledWith('relay:message', undefined);
             expect(mockSocket.emit).toHaveBeenCalledWith('chat-message', { envelope: { version: 1, strategy: 'test-strategy', data: {} }, ...carrier, proofOperation: 'relay:message' }, expect.any(Function));
         });
 

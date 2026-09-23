@@ -34,6 +34,9 @@ export type VodozemacBindingsLoader = () => Promise<VodozemacBindings>;
  * factories and handles; UI code cannot access account keys or pickles.
  */
 export class VodozemacRuntime {
+    private lastInboundFailureStage?: 'wasm-authentication' | 'session-state' | 'persistence';
+    private lastInboundEntry?: { lifecycle: VodozemacLifecycleState; identityPresent: boolean; bindingsPresent: boolean; senderPresent: boolean; messagePresent: boolean };
+    private lastInboundStage?: 'input-ready' | 'wasm-called' | 'wasm-returned' | 'session-created' | 'session-serialized' | 'returned';
     private state: VodozemacLifecycleState = 'uninitialized';
     private bindings?: VodozemacBindings;
     private identity?: PersistentVodozemacIdentity;
@@ -192,25 +195,62 @@ export class VodozemacRuntime {
         senderIdentityKey: string,
         preKeyMessage: string,
     ): Promise<ArrayBuffer> {
-        this.requireState('identity-restored', 'persisted');
+        this.lastInboundEntry = { lifecycle: this.state, identityPresent: !!this.identity, bindingsPresent: !!this.bindings, senderPresent: !!senderIdentityKey, messagePresent: !!preKeyMessage };
+        try { this.requireState('identity-restored', 'persisted'); }
+        catch (error) { this.lastInboundFailureStage = 'session-state'; throw error; }
         if (!this.identity || !senderIdentityKey || !preKeyMessage) {
             throw new VodozemacBoundaryError('IDENTITY_MISMATCH', 'The sender identity is invalid.');
         }
+        let result: import('../identity/vodozemacIdentity').VodozemacInboundSessionResult;
         try {
-            const result = await this.identity.withAccount(async (account) => {
+            this.lastInboundStage = 'input-ready';
+            result = await this.identity.withAccount(async (account) => {
                 if (!account.createInboundSession) throw new VodozemacBoundaryError('UNSUPPORTED_PROTOCOL', 'Inbound modern sessions are unavailable.');
-                return account.createInboundSession(senderIdentityKey, preKeyMessage);
+                this.lastInboundStage = 'wasm-called';
+                const inbound = account.createInboundSession(senderIdentityKey, preKeyMessage);
+                this.lastInboundStage = 'wasm-returned';
+                return inbound;
             });
-            const handle = result.takeSession();
-            await this.establishSession(conversationId, handle, handle.sessionId());
-            await this.commitAccountAndSession();
-            const plaintext = result.plaintext();
-            try { return plaintext.buffer.slice(plaintext.byteOffset, plaintext.byteOffset + plaintext.byteLength) as ArrayBuffer; }
-            finally { plaintext.fill(0); }
         } catch (error) {
+            this.lastInboundFailureStage = 'wasm-authentication';
             if (error instanceof VodozemacBoundaryError) throw error;
             throw new VodozemacBoundaryError('INVALID_CIPHERTEXT', 'The inbound session message could not be accepted.');
         }
+        let handle: VodozemacSessionHandle;
+        try {
+            handle = result.takeSession();
+            await this.establishSession(conversationId, handle, handle.sessionId());
+            this.lastInboundStage = 'session-created';
+        } catch (error) {
+            this.lastInboundFailureStage = 'session-state';
+            if (error instanceof VodozemacBoundaryError) throw error;
+            throw new VodozemacBoundaryError('CORRUPTED_SESSION', 'The inbound session state could not be established.');
+        }
+        try {
+            await this.commitAccountAndSession();
+            this.lastInboundStage = 'session-serialized';
+            const plaintext = result.plaintext();
+            try { this.lastInboundStage = 'returned'; return plaintext.buffer.slice(plaintext.byteOffset, plaintext.byteOffset + plaintext.byteLength) as ArrayBuffer; }
+            finally { plaintext.fill(0); }
+        } catch (error) {
+            this.lastInboundFailureStage = 'persistence';
+            if (error instanceof VodozemacBoundaryError) throw error;
+            throw new VodozemacBoundaryError('CORRUPTED_SESSION', 'The inbound session could not be persisted.');
+        }
+    }
+
+    public testOnlyInboundFailureStage(): string | undefined {
+        if ((globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean }).__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ !== true) throw new Error('Test-only diagnostics are disabled.');
+        return this.lastInboundFailureStage;
+    }
+
+    public testOnlyInboundEntry(): typeof this.lastInboundEntry {
+        if ((globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean }).__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ !== true) throw new Error('Test-only diagnostics are disabled.');
+        return this.lastInboundEntry;
+    }
+    public testOnlyInboundStage(): typeof this.lastInboundStage {
+        if ((globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean }).__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ !== true) throw new Error('Test-only diagnostics are disabled.');
+        return this.lastInboundStage;
     }
 
     public async restoreSession(conversationId: string, expectedSessionId: string): Promise<void> {

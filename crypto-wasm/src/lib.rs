@@ -383,6 +383,56 @@ mod tests {
     }
 
     #[test]
+    fn restored_recipient_accepts_first_pre_key_message() {
+        // Test-only restart diagnostic: retain only public identity/key facts
+        // and the wire-message category; no pickle or plaintext is reported.
+        let alice = K3ncryptAccount::create_account();
+        let mut recipient = K3ncryptAccount::create_account();
+        recipient.generate_one_time_keys(1).unwrap();
+        let one_time_key = recipient.first_one_time_key().unwrap();
+        let recipient_identity_before = recipient.identity_keys().unwrap();
+        recipient.mark_keys_as_published();
+        let pickle_key = [9_u8; 32];
+        let pickle = recipient.save_account(&pickle_key).unwrap();
+
+        let mut sender_session = alice
+            .create_outbound_session(&recipient.inner.curve25519_key().to_base64(), &one_time_key)
+            .unwrap();
+        let wire = sender_session.encrypt(b"test-only").unwrap();
+        let metadata: WireOlmMessage = serde_json::from_str(&wire).unwrap();
+        assert_eq!(metadata.message_type, 0, "expected an Olm pre-key message");
+
+        let mut restored = K3ncryptAccount::load_account(&pickle, &pickle_key).unwrap();
+        assert_eq!(recipient_identity_before, restored.identity_keys().unwrap(), "account identity changed across restart");
+        let inbound = restored.create_inbound_session(&alice.inner.curve25519_key().to_base64(), &wire);
+        assert!(inbound.is_ok(), "restored account rejected a valid pre-key message");
+    }
+
+    #[test]
+    fn restored_recipient_retains_prior_pre_key_during_replenishment() {
+        let alice = K3ncryptAccount::create_account();
+        let mut recipient = K3ncryptAccount::create_account();
+        recipient.generate_one_time_keys(1).unwrap();
+        let published_key = recipient.first_one_time_key().unwrap();
+        recipient.mark_keys_as_published();
+        let pickle_key = [10_u8; 32];
+        let pickle = recipient.save_account(&pickle_key).unwrap();
+        let mut sender = alice.create_outbound_session(
+            &recipient.inner.curve25519_key().to_base64(), &published_key,
+        ).unwrap();
+        let pre_key_message = sender.encrypt(b"test-only").unwrap();
+
+        let mut restored = K3ncryptAccount::load_account(&pickle, &pickle_key).unwrap();
+        // This mirrors the restart path when the available published-key
+        // count drops below the client's replenishment threshold.
+        restored.generate_one_time_keys(20).unwrap();
+        restored.mark_keys_as_published();
+        assert!(restored.create_inbound_session(
+            &alice.inner.curve25519_key().to_base64(), &pre_key_message
+        ).is_ok(), "replenishment invalidated a previously published pre-key");
+    }
+
+    #[test]
     fn legitimate_messages_decrypt_out_of_order() {
         let (_, _, mut alice, mut bob) = establish();
         let reply = bob.encrypt(b"ratchet reply").unwrap();

@@ -1,6 +1,5 @@
 import type { SecureStorage } from '../core/contracts';
 import type { LifecycleStateSnapshot } from '../devices/lifecycle';
-import { canonicalIdentityRecordId } from './machineIdentity';
 
 export interface LocalAccountBinding {
     readonly version: 1;
@@ -26,7 +25,7 @@ export const loadAccountBinding = async (storage: SecureStorage, identityReferen
     // Preserve existing commitment chains; never recreate a revoked entry during migration.
     const binding: LocalAccountBinding = {
         version: 1, userScope: legacy?.list.identityReference ?? `account-${crypto.randomUUID()}`,
-        deviceId: priorDevice?.[0]?.deviceId ?? `device-${await canonicalIdentityRecordId(identityReference)}`,
+        deviceId: priorDevice?.[0]?.deviceId ?? crypto.randomUUID(),
         identityReference,
     };
     const stored = await storage.compareAndSwapRecords([{ recordType: 'device-account-binding', recordId: 'local', expected: undefined, next: new TextEncoder().encode(JSON.stringify(binding)).buffer as ArrayBuffer }]);
@@ -56,7 +55,7 @@ export const adoptApprovedAccountBinding = async (storage: SecureStorage, identi
     // A target device creates an isolated bootstrap account before pairing. It
     // may replace that binding exactly once, while retaining its independent
     // cryptographic identity and the approved target device identifier.
-    if (!winner.userScope.startsWith('account-') || !winner.deviceId.startsWith('device-') ||
+    if (!winner.userScope.startsWith('account-') || !/^[0-9a-f-]{36}$/i.test(winner.deviceId) ||
         !await storage.compareAndSwapRecords([{ recordType: 'device-account-binding', recordId: 'local', expected: existing, next }])) {
         throw new Error('Account membership conflict.');
     }

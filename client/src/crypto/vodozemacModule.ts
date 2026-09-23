@@ -33,5 +33,11 @@ const wrapAccount = (account: K3ncryptAccount) => ({
     saveAccount: (key: Uint8Array) => account.saveAccount(key),
     createOutboundSession: (identity: string, oneTimeKey: string) => account.createOutboundSession(identity.replace(/-/g, '+').replace(/_/g, '/'), oneTimeKey.replace(/-/g, '+').replace(/_/g, '/')),
     createInboundSession: (identity: string, message: string) => account.createInboundSession(identity.replace(/-/g, '+').replace(/_/g, '/'), message),
+    inspectPublicStateForTest: () => {
+        if ((globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean }).__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ !== true) {
+            throw new Error('Test-only Vodozemac diagnostics are disabled.');
+        }
+        return { identityKeys: account.identityKeys(), oneTimeKeys: JSON.parse(account.oneTimeKeys()), fallbackKey: (() => { try { return account.fallbackKey(); } catch { return undefined; } })() };
+    },
     free: () => account.free(),
 });

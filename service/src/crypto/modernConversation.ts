@@ -23,7 +23,7 @@ import { createDeviceEntry } from '../devices/deviceIdentity';
 import { RuntimeSyncController } from '../sync/runtime';
 import type { SyncPersistence, SyncAuthorization } from '../sync/contracts';
 import { AuthenticatedSyncTransport, type SyncSessionBinding } from '../sync/authenticatedTransport';
-import { loadAccountBinding } from '../identity/accountBinding';
+import { adoptApprovedAccountBinding, loadAccountBinding } from '../identity/accountBinding';
 import { DeviceContextAuthority } from '../devices/authenticatedContext';
 import { SocketSyncRelay } from '../sync/relay';
 import { configContext } from '../configContext';
@@ -33,6 +33,7 @@ import { SecureStorageGroupRuntimeAdapter } from '../groups/persistence';
 import { createProductionRecoveryRuntime } from '../recovery/production';
 import type { RecoveryRuntime } from '../recovery/runtime';
 import { DeviceProofClient } from '../devices/deviceProofClient';
+import { bootstrapFirstDevice } from '../devices/bootstrap';
 import { signEnrollmentEvent, type EnrollmentEvent } from '../devices/trustProtocol';
 import makeRequest from '../api/client';
 import { fromBase64Url } from './base64url';
@@ -96,6 +97,11 @@ export class ModernConversation {
     private roomId?: string;
     private capability?: string;
     private remoteAddress?: string;
+    private selectedRemotePreKeyId?: string;
+    private lastInboundEnvelopeMetadata?: { protocolVersion: number; messageType: number; routingIdentity: string };
+    private lastInboundFailureCategory?: string;
+    /** A replay can arrive while connect() owns the conversation tab lock. */
+    private connecting = false;
     private localAddress?: string;
     private localIdentityId?: string;
     private userScope?: string;
@@ -141,7 +147,9 @@ export class ModernConversation {
                     } else if (this.callSignalTransport) await this.callSignalTransport.receive(message.envelope);
                     return false;
                 }
-                return this.receiveMutex.runExclusive(() => this.withTabLock(this.roomId ?? 'unknown', () => this.receive(message.envelope, message.senderRoutingId)));
+                return this.receiveMutex.runExclusive(() => this.connecting
+                    ? this.receive(message.envelope, message.senderRoutingId)
+                    : this.withTabLock(this.roomId ?? 'unknown', () => this.receive(message.envelope, message.senderRoutingId)));
             });
         this.transport = transportManager ?? new DefaultTransportManager(relay!);
         this.subscriptions.set('on-alice-join', new Set([() => { void this.retryPending(); }]));
@@ -149,7 +157,14 @@ export class ModernConversation {
     }
 
     public async connect(roomId: string, capability: string, remoteAddress?: string, remoteIdentityCommitment?: string, onMessage?: (text: string) => void, onContactChange?: (contact: StoredContactIdentity) => void, onDeviceControl?: (message: DeviceControlEvent) => void): Promise<ModernConnectionDetails> {
-        return this.withTabLock(roomId, () => this.connectUnlocked(roomId, capability, remoteAddress, remoteIdentityCommitment, onMessage, onContactChange, onDeviceControl), true);
+        const details = await this.withTabLock(roomId, async () => {
+            this.connecting = true;
+            try { return await this.connectUnlocked(roomId, capability, remoteAddress, remoteIdentityCommitment, onMessage, onContactChange, onDeviceControl); }
+            finally { this.connecting = false; }
+        }, true);
+        const activeTransport = this.transport.activeTransport();
+        if (activeTransport instanceof SocketIoRelayTransport) await activeTransport.requestMailboxReplay();
+        return details;
     }
 
     private async connectUnlocked(roomId: string, capability: string, remoteAddress?: string, remoteIdentityCommitment?: string, onMessage?: (text: string) => void, onContactChange?: (contact: StoredContactIdentity) => void, onDeviceControl?: (message: DeviceControlEvent) => void): Promise<ModernConnectionDetails> {
@@ -216,12 +231,23 @@ export class ModernConversation {
 
         this.deviceLifecyclePersistence = new SecureStorageDeviceLifecyclePersistence(this.storage);
         const legacyDeviceList = await this.deviceLifecyclePersistence.read(this.localIdentityId);
-        const binding = await loadAccountBinding(this.storage, this.localIdentityId, legacyDeviceList);
+        const existingBinding = await this.storage.read('device-account-binding', 'local');
+        let binding = await loadAccountBinding(this.storage, this.localIdentityId, legacyDeviceList);
+        let bootstrapEpoch = 0;
+        if (!existingBinding) {
+            const bundle = await this.runtime.getPublicBundle();
+            const bootstrapped = await bootstrapFirstDevice(
+                { signControlEvent: (payload) => this.runtime.signControlEvent(payload) },
+                { deviceId: binding.deviceId, deviceIdentityReference: this.localIdentityId, verificationKey: bundle.identity.ed25519, fingerprint: this.localIdentityId },
+            );
+            binding = await adoptApprovedAccountBinding(this.storage, this.localIdentityId, bootstrapped.accountIdentityReference, bootstrapped.deviceId);
+            bootstrapEpoch = bootstrapped.trustEpoch;
+        }
         this.userScope = binding.userScope;
         this.localDeviceId = binding.deviceId;
         const existingDeviceList = await this.deviceLifecyclePersistence.read(binding.userScope);
         if (!existingDeviceList) {
-            const initialList = createDeviceList({ version: 1, identityReference: binding.userScope, epoch: 0, previousCommitment: null,
+            const initialList = createDeviceList({ version: 1, identityReference: binding.userScope, epoch: bootstrapEpoch, previousCommitment: null,
                 devices: [createDeviceEntry({ deviceId: binding.deviceId, publicIdentityReference: this.localIdentityId, algorithm: 'Olm-Curve25519+Ed25519', state: 'active', createdAt: Date.now() })] });
             await this.deviceLifecyclePersistence.initialize(binding.userScope, initialList);
         }
@@ -246,6 +272,7 @@ export class ModernConversation {
             if (contact.oneTimeKeys.length === 0) throw new Error('The contact has no available invitation keys.');
             const claimed = await claimVodozemacOneTimeKey(roomId, capability, this.remoteAddress, contact.oneTimeKeys[0].id);
             if (claimed.key !== contact.oneTimeKeys[0].key) throw new Error('The claimed invitation key changed.');
+            this.selectedRemotePreKeyId = contact.oneTimeKeys[0].id;
             await this.runtime.establishOutboundSession(roomId, contact.identity.curve25519, claimed.key);
             await this.modes.write(roomId, { sessionId: this.runtime.activeSessionId, remoteAddress: this.remoteAddress });
         }
@@ -288,6 +315,13 @@ export class ModernConversation {
     public async getDeviceTrust(): Promise<DeviceTrustDecision> {
         if (!this.deviceTrust) return 'unavailable';
         return this.deviceTrust.decision();
+    }
+
+    /** Guarded test harness view of public crypto metadata only. */
+    public async testOnlyCryptoSnapshot(): Promise<{ identityFingerprint?: string; oneTimeKeyIds: string[]; availableKeyCount: number; selectedRecipientKeyId?: string; lastInboundEnvelope?: { protocolVersion: number; messageType: number; routingIdentity: string }; inboundFailureCategory?: string; runtimeEntry?: unknown; runtimeStage?: string }> {
+        if ((globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean }).__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ !== true) throw new Error('Test-only diagnostics are disabled.');
+        const bundle = await this.runtime.getPublicBundle();
+        return { identityFingerprint: this.localIdentityId, oneTimeKeyIds: bundle.oneTimeKeys.map((key) => key.id), availableKeyCount: bundle.oneTimeKeys.length, selectedRecipientKeyId: this.selectedRemotePreKeyId, lastInboundEnvelope: this.lastInboundEnvelopeMetadata, inboundFailureCategory: this.lastInboundFailureCategory, runtimeEntry: this.runtime.testOnlyInboundEntry(), runtimeStage: this.runtime.testOnlyInboundStage() };
     }
 
     /** Short-lived request proof for the host's authenticated ciphertext attachment adapter. */
@@ -616,7 +650,9 @@ export class ModernConversation {
     }
 
     private async receive(envelope: EncryptedEnvelope, senderAddress?: string): Promise<boolean> {
-        await this.assertCurrentDeviceTrust();
+        this.lastInboundFailureCategory = 'envelope-received';
+        try { await this.assertCurrentDeviceTrust(); }
+        catch (error) { this.lastInboundFailureCategory = 'device-trust'; throw error; }
         if (!this.roomId || !this.capability || !senderAddress ||
             (this.remoteAddress && senderAddress !== this.remoteAddress)) return false;
         const digest = await this.digest(envelope);
@@ -624,16 +660,39 @@ export class ModernConversation {
         if (seen.includes(digest)) return true;
         let text: string;
         if (!this.runtime.activeSessionId) {
-            const bundle = validateVodozemacPublicBundle(await fetchVodozemacBundle(this.roomId, this.capability, senderAddress));
+            this.lastInboundFailureCategory = 'sender-bundle-requested';
+            const wire = JSON.parse(firstMessage(envelope)) as { version?: unknown; message_type?: unknown };
+            if (wire.version === 1 && typeof wire.message_type === 'number') this.lastInboundEnvelopeMetadata = { protocolVersion: wire.version, messageType: wire.message_type, routingIdentity: senderAddress };
+            let bundle;
+            try { bundle = validateVodozemacPublicBundle(await fetchVodozemacBundle(this.roomId, this.capability, senderAddress)); this.lastInboundFailureCategory = 'sender-bundle-retrieved'; }
+            catch (error) { this.lastInboundFailureCategory = 'sender-bundle'; throw error; }
             const pinned = await this.registry.get(senderAddress);
             const fingerprint = await fingerprintVodozemacIdentity(bundle.identity);
             if (pinned && (pinned.identityId !== fingerprint || pinned.changeStatus !== 'unchanged')) {
+                this.lastInboundFailureCategory = 'sender-identity';
                 await this.observe(senderAddress, bundle.identity);
                 return false;
             }
-            const plaintext = await this.runtime.establishInboundSession(this.roomId, bundle.identity.curve25519, firstMessage(envelope));
-            text = unframeFirstMessage(plaintext);
-            await this.observe(senderAddress, bundle.identity);
+            this.lastInboundFailureCategory = 'runtime-entry';
+            let plaintext: ArrayBuffer;
+            try { plaintext = await this.runtime.establishInboundSession(this.roomId, bundle.identity.curve25519, firstMessage(envelope)); }
+            catch (error) {
+                // The public diagnostic hook is deliberately unavailable in a
+                // production browser. Keep the operational category generic
+                // there, while allowing the guarded test harness to refine it.
+                if ((globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean }).__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ === true) {
+                    this.lastInboundFailureCategory = this.runtime.testOnlyInboundFailureStage() ?? 'runtime-entry';
+                }
+                throw error;
+            }
+            try { text = unframeFirstMessage(plaintext); }
+            catch (error) { this.lastInboundFailureCategory = 'framing'; throw error; }
+            // The conversation creator has no peer identity commitment until
+            // the invitee speaks. At this point Olm has authenticated the
+            // sender identity carried by the pre-key message; persist it only
+            // as an unverified first-contact record. All later substitutions
+            // still fail closed in observe().
+            await this.observe(senderAddress, bundle.identity, undefined, true);
             this.remoteAddress = senderAddress;
             await this.modes.write(this.roomId, { sessionId: this.runtime.activeSessionId, remoteAddress: senderAddress });
         } else {
@@ -641,6 +700,7 @@ export class ModernConversation {
         }
         await this.storage.write(SEEN_RECORD, this.roomId, asBytes([...seen.slice(-(MAX_SEEN - 1)), digest]));
         this.onMessage?.(text);
+        this.lastInboundFailureCategory = undefined;
         return true;
     }
 
@@ -859,10 +919,10 @@ export class ModernConversation {
         }
     }
 
-    private async observe(address: string, identity: VodozemacPublicIdentity, expectedCommitment?: string): Promise<void> {
+    private async observe(address: string, identity: VodozemacPublicIdentity, expectedCommitment?: string, authenticatedInboundFirstContact = false): Promise<void> {
         const fingerprint = await fingerprintVodozemacIdentity(identity);
         const known = await this.registry.get(address);
-        if (!known && (!expectedCommitment || fingerprint !== expectedCommitment)) {
+        if (!known && !authenticatedInboundFirstContact && (!expectedCommitment || fingerprint !== expectedCommitment)) {
             throw new Error('The invitation identity commitment is missing or does not match the published identity.');
         }
         const event = await this.registry.observe(address, {

@@ -10,6 +10,7 @@ const captureOutbound = (page: Page, bodies: string[]) => {
 
 async function open(browser: Browser, link = BASE_URL): Promise<{ context: BrowserContext; page: Page; outbound: string[] }> {
   const context = await browser.newContext();
+  await context.addInitScript(() => { (window as Window & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean }).__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ = true; });
   const page = await context.newPage();
   const outbound: string[] = [];
   captureOutbound(page, outbound);
@@ -30,6 +31,8 @@ async function resume(context: BrowserContext, link: string, outbound: string[] 
   return page;
 }
 
+const cryptoSnapshot = (page: Page) => page.evaluate(() => (window as Window & { __k3ncryptGetCryptoSnapshot?: () => Promise<unknown> }).__k3ncryptGetCryptoSnapshot?.());
+
 test('modern private contact works after offline recipient and both browser restarts', async ({ browser }) => {
   test.setTimeout(120_000);
   const bob = await open(browser);
@@ -42,6 +45,7 @@ test('modern private contact works after offline recipient and both browser rest
   await expect(invitation).toHaveValue(/#modern=[^&]+&control=[^&]+&address=/);
   const link = await invitation.inputValue();
   await bob.page.getByRole('button', { name: 'Continue to conversation' }).click();
+  const beforeShutdown = await cryptoSnapshot(bob.page);
   await bob.page.close({ runBeforeUnload: true });
 
   const alice = await open(browser, link);
@@ -50,11 +54,16 @@ test('modern private contact works after offline recipient and both browser rest
   await alice.page.locator('input[type="password"]').fill(PASSPHRASE);
   await alice.page.getByRole('button', { name: 'Open conversation' }).click();
   await expect(alice.page.locator('#chat-container')).toBeVisible();
+  const senderSnapshot = await cryptoSnapshot(alice.page);
   await expect(alice.page.locator('.chat-header')).toContainText('Modern private');
   await alice.page.locator('#msg-input').fill('hello while you were away');
   await alice.page.locator('#send-btn').click();
 
   const bobReturned = await resume(bob.context, link, bob.outbound);
+  const afterRestore = await cryptoSnapshot(bobReturned);
+  expect(beforeShutdown).toEqual(expect.objectContaining({ identityFingerprint: expect.any(String), oneTimeKeyIds: expect.any(Array) }));
+  expect(senderSnapshot).toEqual(expect.objectContaining({ selectedRecipientKeyId: expect.any(String) }));
+  expect(afterRestore).toEqual(expect.objectContaining({ identityFingerprint: expect.any(String), oneTimeKeyIds: expect.any(Array), lastInboundEnvelope: expect.objectContaining({ protocolVersion: 1, messageType: 0 }), runtimeStage: 'returned' }));
   await expect(bobReturned.locator('#messages-area')).toContainText('hello while you were away', { timeout: 20_000 });
   await bobReturned.getByRole('button', { name: 'Open settings' }).click();
   await bobReturned.getByRole('button', { name: /Identity/ }).click();

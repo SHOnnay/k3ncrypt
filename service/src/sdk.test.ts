@@ -201,7 +201,7 @@ describe('setChannel() / isEncrypted()', () => {
 
         await instance.setChannel(ROOM_ID, SECRET, USER_ID, CONTROL_CAPABILITY);
 
-        expect(mockSocket.emit).toHaveBeenCalledWith('chat-join', { userID: USER_ID, channelID: ROOM_ID, controlCapability: CONTROL_CAPABILITY });
+        expect(mockSocket.emit).toHaveBeenCalledWith('chat-join', { userID: USER_ID, channelID: ROOM_ID, controlCapability: CONTROL_CAPABILITY }, expect.any(Function));
         const [, joinPayload] = mockSocket.emit.mock.calls.find(([event]) => event === 'chat-join')!;
         expect(JSON.stringify(joinPayload)).not.toContain(SECRET);
     });

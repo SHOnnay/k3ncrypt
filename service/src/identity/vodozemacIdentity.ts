@@ -24,6 +24,8 @@ export interface VodozemacAccountHandle {
     createOutboundSession?(recipientIdentityKey: string, recipientOneTimeKey: string): import('../core/vodozemacCryptoSession').VodozemacSessionHandle;
     createInboundSession?(senderIdentityKey: string, preKeyMessage: string): VodozemacInboundSessionResult;
     free?(): void;
+    /** Test-only public metadata; unavailable unless the diagnostic harness enables it. */
+    inspectPublicStateForTest?(): { identityKeys: string; oneTimeKeys: string[]; fallbackKey?: string };
 }
 
 export interface VodozemacInboundSessionResult {
@@ -125,6 +127,17 @@ export class PersistentVodozemacIdentity implements IdentityManager<MessagingIde
     /** Returns authenticated-by-identity public material only. */
     public async getPublicBundle(): Promise<VodozemacPublicBundle> {
         return this.withAccount((account) => createVodozemacPublicBundle(account));
+    }
+
+    /** Narrow test harness hook. It returns only public material and fails closed outside explicit diagnostics. */
+    public async inspectPublicStateForTest(): Promise<{ identityKeys: string; oneTimeKeys: string[]; fallbackKey?: string }> {
+        if ((globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean }).__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ !== true) {
+            throw new Error('Test-only Vodozemac diagnostics are disabled.');
+        }
+        return this.withAccount((account) => {
+            if (!account.inspectPublicStateForTest) throw new Error('Test-only Vodozemac diagnostics are unavailable.');
+            return Promise.resolve(account.inspectPublicStateForTest());
+        });
     }
 
     /** Signs canonical lifecycle-control bytes without exporting an identity secret. */

@@ -21,6 +21,6 @@ describe('DefaultTransportManager', () => {
 
         expect(manager.activeTransport()).toBe(transport);
         expect(transport.join).toHaveBeenCalledWith('conversation', 'routing-peer', 'control-capability');
-        expect(transport.sendEnvelope).toHaveBeenCalledWith('message', envelope);
+        expect(transport.sendEnvelope).toHaveBeenCalledWith('message', envelope, undefined, undefined);
     });
 });

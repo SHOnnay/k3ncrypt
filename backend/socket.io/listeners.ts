@@ -16,6 +16,7 @@ export const MAX_ENVELOPE_BYTES = 32 * 1024;
 export const MAX_OFFLINE_PER_MAILBOX = 64;
 export const OFFLINE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const OFFLINE_LEASE_MS = 30 * 1000;
+const OFFLINE_REPLAY_ACK_MS = 10 * 1000;
 /** Burst of 40 messages, refilling at 10/s — plenty for normal signaling/chat traffic. */
 const rateLimiter = new RateLimiter({ capacity: 40, refillPerSecond: 10 });
 
@@ -85,7 +86,15 @@ const deliverOffline = async (socket: CustomSocket): Promise<void> => {
     const message = await db.claimOfflineMessage<{ id: string; timestamp: number; sender: string; envelope: WireEnvelope; mailbox: string; channel: string }>(
       socket.userID, socket.channelID, new Date(Date.now() + OFFLINE_LEASE_MS));
     if (!message) return;
-    socket.emit(SOCKET_TOPIC.CHAT_MESSAGE, { id: message.id, timestamp: message.timestamp, sender: message.sender, envelope: message.envelope });
+    const accepted = await new Promise<boolean>((resolve) => {
+      const timeout = setTimeout(() => resolve(false), OFFLINE_REPLAY_ACK_MS);
+      socket.emit(SOCKET_TOPIC.CHAT_MESSAGE, { id: message.id, timestamp: message.timestamp, sender: message.sender, envelope: message.envelope }, (response?: { accepted?: unknown }) => {
+        clearTimeout(timeout);
+        resolve(response?.accepted === true);
+      });
+    });
+    if (!accepted) return;
+    await db.ackOfflineMessage(message.id, socket.userID, socket.channelID);
   }
 };
 
@@ -105,7 +114,7 @@ const findPeerSid = (socket: CustomSocket): string | undefined => {
 };
 
 const connectionListener = (socket: CustomSocket, io) => {
-  socket.on("chat-join", async (data) => {
+  socket.on("chat-join", async (data, ack: Ack = noop) => {
     const { userID, channelID, controlCapability, routingProof, deviceAuthorizationProof, proofNonce } = data || {};
     if (!data || typeof data !== 'object' || Array.isArray(data) ||
         !Object.keys(data).every((key) => ['userID', 'channelID', 'controlCapability', 'routingProof', 'deviceAuthorizationProof', 'proofNonce'].includes(key)) ||
@@ -113,25 +122,30 @@ const connectionListener = (socket: CustomSocket, io) => {
         !isValidRoomId(userID) ||
         !isValidRoomId(channelID) || !isValidControlCapability(controlCapability)) {
       console.error("Rejected malformed channel join");
+      ack({ error: 'Channel join rejected.' });
       return;
     }
 
     if (!await authorizeRoomControl(channelID, controlCapability)) {
       console.error('Rejected unauthorized channel join');
+      ack({ error: 'Channel join rejected.' });
       return;
     }
     if (!await authorizeRoutingAddress(channelID, userID, routingProof)) {
       console.error('Rejected unauthorized routing identity');
+      ack({ error: 'Channel join rejected.' });
       return;
     }
     if (!await verifyCarrier(socket, { deviceAuthorizationProof, proofNonce }, 'relay:message', true)) {
       console.error('Rejected device authorization proof');
+      ack({ error: 'Device authorization rejected.' });
       socket.disconnect();
       return;
     }
     const { valid } = await channelValid(channelID);
     if (!valid) {
       console.error("Rejected invalid channel join");
+      ack({ error: 'Channel join rejected.' });
       return;
     }
     const usersInChannel = clients.getClientsByChannel(channelID) || {};
@@ -139,6 +153,7 @@ const connectionListener = (socket: CustomSocket, io) => {
 
     if (userCount === 2) {
       socketEmit<SOCKET_TOPIC.LIMIT_REACHED>(SOCKET_TOPIC.LIMIT_REACHED, socket.id, null);
+      ack({ error: 'Channel is full.' });
       socket.disconnect();
       return;
     }
@@ -155,7 +170,16 @@ const connectionListener = (socket: CustomSocket, io) => {
     if (receiver) {
       socketEmit<SOCKET_TOPIC.ON_ALICE_JOIN>(SOCKET_TOPIC.ON_ALICE_JOIN, receiver.sid, null);
     }
+    ack({ status: 'accepted' });
+  });
+
+  socket.on('mailbox-replay', async (_payload: unknown, ack: Ack = noop) => {
+    if (!socket.userID || !socket.channelID || !socket.deviceId || !socket.accountIdentityReference) {
+      ack({ error: 'Mailbox replay rejected.' });
+      return;
+    }
     await deliverOffline(socket as CustomSocket);
+    ack({ status: 'accepted' });
   });
 
   socket.on("chat-message", async (payload: { envelope: WireEnvelope; recipientRoutingId?: string } & ProofCarrier, ack: Ack = noop) => {

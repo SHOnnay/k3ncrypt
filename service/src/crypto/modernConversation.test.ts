@@ -11,6 +11,14 @@ import { fingerprintVodozemacIdentity } from '../identity/vodozemacIdentity';
 jest.mock('../api/prekeys', () => ({
     publishVodozemacBundle: jest.fn(), fetchVodozemacBundle: jest.fn(), claimVodozemacOneTimeKey: jest.fn(), renewVodozemacBundle: jest.fn(),
 }));
+// Bootstrap is exercised against the durable authority integration suite. These
+// conversation tests model its already-verified result so their fake WASM
+// account does not stand in for an identity signer.
+jest.mock('../devices/bootstrap', () => ({
+    bootstrapFirstDevice: jest.fn(async (_signer: unknown, input: { deviceId: string; deviceIdentityReference: string }) => ({
+        accountIdentityReference: 'account-test', deviceId: input.deviceId, deviceIdentityReference: input.deviceIdentityReference, trustEpoch: 0,
+    })),
+}));
 Object.assign(globalThis, { window: { btoa: (value: string) => Buffer.from(value, 'binary').toString('base64'), atob: (value: string) => Buffer.from(value, 'base64').toString('binary') } });
 if (!globalThis.crypto) Object.defineProperty(globalThis, 'crypto', { value: webcrypto });
 
