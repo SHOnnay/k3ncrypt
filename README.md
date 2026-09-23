@@ -68,7 +68,9 @@ See [docs/LOCAL_DEVELOPMENT.md](docs/LOCAL_DEVELOPMENT.md) for Mongo and environ
 
 ## Current status
 
-K3NCRYPT is in beta development. Device bootstrap, lifecycle authority, durable proof authorization, resource binding, private-network membership authority, and security verification documentation are present. Native packaging, production deployment, operational backup testing, and broader infrastructure validation remain preparation work.
+K3NCRYPT is in private beta development. Device bootstrap, durable lifecycle authority, resource-bound proof authorization, private-network membership authority, browser voice/video calling, and offline encrypted-message replay validation are present. The current supported client is the browser application.
+
+Native Android packaging, production TURN deployment, multi-relay operational testing, backup/restore exercises, and broader deployment validation remain before a wider release. See [docs/PHASE8_FINAL_RELEASE_READINESS.md](docs/PHASE8_FINAL_RELEASE_READINESS.md) for the Phase 8 freeze assessment.
 
 ## License
 
