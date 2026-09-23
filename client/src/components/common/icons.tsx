@@ -88,6 +88,8 @@ export const PhoneIcon: React.FC<IconProps> = ({ size = 24, className = '' }) =>
   </svg>
 );
 
+export const VideoIcon: React.FC<IconProps> = (props) => <Icon {...props}><rect x="3" y="6" width="13" height="12" rx="2" /><path d="m16 10 5-3v10l-5-3" /></Icon>;
+
 export const SendIcon: React.FC<IconProps> = ({ size = 24, className = '' }) => (
   <svg
     viewBox="0 0 24 24"

@@ -16,7 +16,7 @@ interface ChatContainerProps {
 }
 
 export const ChatContainer: React.FC<ChatContainerProps> = ({ isHidden }) => {
-  const { startCall, callLifecycleState } = useChat();
+  const { startCall, startVideoCall, callLifecycleState } = useChat();
   const [, setIsStartingCall] = useState<boolean>(false);
   const isCallBusy = ['initiating', 'ringing', 'incoming', 'connecting', 'connected', 'ending'].includes(callLifecycleState);
 
@@ -32,10 +32,22 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ isHidden }) => {
     }
   };
 
+  const handleStartVideoCall = async () => {
+    try {
+      setIsStartingCall(true);
+      await startVideoCall();
+    } catch (err) {
+      debugError('Video call start failed', err);
+      alert((err as any).message || 'Failed to start video call');
+    } finally {
+      setIsStartingCall(false);
+    }
+  };
+
   return (
     <>
       <div id="chat-container" className={`chat-container ${isHidden ? 'hidden' : ''}`}>
-        <ChatHeader onStartCall={handleStartCall} disableStartCall={isCallBusy} />
+        <ChatHeader onStartCall={handleStartCall} onStartVideoCall={handleStartVideoCall} disableStartCall={isCallBusy} />
         <MessagesArea />
         <ChatFooter />
       </div>

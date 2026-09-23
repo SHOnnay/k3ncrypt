@@ -114,6 +114,7 @@ class ChatE2EE implements IChatE2EE {
     private signalSeq = 0;
     private chatSeq = 0;
     private activeCallId?: string;
+    private callMediaKind: 'audio' | 'video' = 'audio';
     private outgoingInviteTimeout?: ReturnType<typeof setTimeout>;
     private callLifecycleState: CallLifecycleState = 'idle';
     private lastSignalSeqByCall: Map<string, number> = new Map();
@@ -123,7 +124,7 @@ class ChatE2EE implements IChatE2EE {
 
 
     private callSignalRouter: CallSignalRouter = new CallSignalRouter(
-        () => this.createWebRtcCall(this.activeCallId || this.callSignalRouter.pendingCallId),
+        () => this.createWebRtcCall(this.activeCallId || this.callSignalRouter.pendingCallId, this.callMediaKind),
         () => {
             this.callSubscriptions.get("call-added")?.forEach((cb) => cb(this.activeCall));
         },
@@ -131,7 +132,7 @@ class ChatE2EE implements IChatE2EE {
             this.activeCallId = callId;
             if (this.callLifecycleState !== 'incoming') {
                 this.updateCallLifecycle('incoming');
-                this.callSubscriptions.get("call-invite")?.forEach((cb) => cb({ callId }));
+                this.callSubscriptions.get("call-invite")?.forEach((cb) => cb({ callId, mediaKind: this.callMediaKind }));
             }
         },
         this.callLogger,
@@ -301,6 +302,14 @@ class ChatE2EE implements IChatE2EE {
     }
 
     public async startCall(): Promise<E2ECall> {
+        return this.startMediaCall('audio');
+    }
+
+    public async startVideoCall(): Promise<E2ECall> {
+        return this.startMediaCall('video');
+    }
+
+    private async startMediaCall(mediaKind: 'audio' | 'video'): Promise<E2ECall> {
         // isSupported() is a basic RTCPeerConnection feature-detection check
         // (see WebRTCCall.isSupported) — there is no encoded-transform
         // capability gate any more, since media relies solely on WebRTC's
@@ -313,11 +322,12 @@ class ChatE2EE implements IChatE2EE {
         }
         await this.assertCallPreconditions();
         this.activeCallId = generateUUID();
+        this.callMediaKind = mediaKind;
         this.signalSeq = 0;
-        const webrtcCall = this.createWebRtcCall(this.activeCallId);
+        const webrtcCall = this.createWebRtcCall(this.activeCallId, mediaKind);
         this.callSignalRouter.attachCall(webrtcCall, this.activeCallId);
         this.updateCallLifecycle('initiating');
-        await this.sendControlSignal('call-invite');
+        await this.sendControlSignal('call-invite', undefined, mediaKind);
         this.updateCallLifecycle('ringing');
         this.scheduleOutgoingInviteTimeout();
         const call = new E2ECall(webrtcCall);
@@ -401,14 +411,17 @@ class ChatE2EE implements IChatE2EE {
             return;
         }
         if (data.type === 'call-invite') {
+            if (data.mediaKind !== undefined && data.mediaKind !== 'audio' && data.mediaKind !== 'video') return;
             if (this.callSignalRouter.activeCall || this.callSignalRouter.pendingCallId) {
                 this.activeCallId = data.callId;
                 await this.sendControlSignal('call-reject', 'rejected');
                 return;
             }
             this.activeCallId = data.callId;
+            this.callMediaKind = data.mediaKind ?? 'audio';
             this.updateCallLifecycle('incoming');
-            this.callSubscriptions.get("call-invite")?.forEach((cb) => cb({ callId: data.callId }));
+            this.scheduleIncomingInviteTimeout(data.callId);
+            this.callSubscriptions.get("call-invite")?.forEach((cb) => cb({ callId: data.callId, mediaKind: this.callMediaKind }));
             return;
         }
 
@@ -466,7 +479,7 @@ class ChatE2EE implements IChatE2EE {
         this.assertChannelReady();
     }
 
-    private async sendControlSignal(type: CallControlSignal['type'], reason?: CallEndReason): Promise<void> {
+    private async sendControlSignal(type: CallControlSignal['type'], reason?: CallEndReason, mediaKind?: 'audio' | 'video'): Promise<void> {
         if (!this.activeCallId) {
             throw new Error('Cannot send control signal without active call ID.');
         }
@@ -476,6 +489,7 @@ class ChatE2EE implements IChatE2EE {
             seq: ++this.signalSeq,
             timestamp: Date.now(),
             ...(reason ? { reason } : {}),
+            ...(mediaKind ? { mediaKind } : {}),
         };
         await this.sendSignal(signal);
     }
@@ -503,6 +517,16 @@ class ChatE2EE implements IChatE2EE {
         }, 30_000);
     }
 
+    private scheduleIncomingInviteTimeout(callId: string): void {
+        this.clearOutgoingInviteTimeout();
+        this.outgoingInviteTimeout = setTimeout(async () => {
+            if (this.callLifecycleState !== 'incoming' || this.activeCallId !== callId) return;
+            try { await this.sendControlSignal('call-timeout', 'timeout'); } catch (error) { this.callLogger.log('Unable to send incoming timeout signal', error); }
+            this.callSubscriptions.get("call-timeout")?.forEach((cb) => cb({ callId }));
+            this.endLocalCall('timeout', 'timeout');
+        }, 30_000);
+    }
+
     private clearOutgoingInviteTimeout(): void {
         if (this.outgoingInviteTimeout) {
             clearTimeout(this.outgoingInviteTimeout);
@@ -521,6 +545,7 @@ class ChatE2EE implements IChatE2EE {
     }
 
     private endLocalCall(reason: CallEndReason, terminalState: CallLifecycleState = 'ended'): void {
+        if (['ended', 'rejected', 'cancelled', 'timeout'].includes(this.callLifecycleState) && !this.activeCallId) return;
         this.clearOutgoingInviteTimeout();
         this.updateCallLifecycle('ending', reason);
         this.callSignalRouter.activeCall?.endCall();
@@ -533,6 +558,7 @@ class ChatE2EE implements IChatE2EE {
             this.updateCallLifecycle(terminalState, reason);
         }
         this.activeCallId = undefined;
+        this.callMediaKind = 'audio';
         this.updateCallLifecycle('ended', reason);
     }
 
@@ -605,7 +631,7 @@ class ChatE2EE implements IChatE2EE {
         this.lastSignalSeqByCall.clear();
     }
 
-    private createWebRtcCall(callId?: string): WebRTCCall {
+    private createWebRtcCall(callId?: string, mediaKind: 'audio' | 'video' = 'audio'): WebRTCCall {
         this.checkInitialized();
         const resolvedCallId = callId || generateUUID();
         const call = new WebRTCCall(
@@ -617,6 +643,7 @@ class ChatE2EE implements IChatE2EE {
                 timestamp: Date.now(),
             }),
             configContext().webrtc,
+            mediaKind,
         );
         this.setupCallSubs(call)
         return call;

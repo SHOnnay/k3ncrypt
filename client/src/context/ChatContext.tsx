@@ -60,6 +60,14 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [callDuration, setCallDuration] = useState<number>(0);
   const [callLifecycleState, setCallLifecycleState] = useState<CallLifecycleState>('idle');
   const [isIncomingCall, setIsIncomingCall] = useState<boolean>(false);
+  const [callMediaMode, setCallMediaMode] = useState<'audio' | 'video'>('audio');
+  const [localCallStream, setLocalCallStream] = useState<MediaStream>();
+  const [remoteCallStream, setRemoteCallStream] = useState<MediaStream>();
+  const [microphoneMuted, setMicrophoneMutedState] = useState(false);
+  const [cameraEnabled, setCameraEnabledState] = useState(false);
+  const [callError, setCallError] = useState<string>();
+  const activeLegacyCall = useRef<IE2ECall>();
+  const callMediaPoll = useRef<ReturnType<typeof setInterval>>();
   useEffect(() => { privacyPreferencesRef.current = privacyPreferences; }, [privacyPreferences]);
   // Chat message decryption happens inside the SDK; only plaintext ever
   // reaches this context. No private key material is held here any more.
@@ -351,6 +359,43 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return modern.attachmentAuthorizationHeaders();
   }, [modern, protocolMode]);
 
+  const describeMediaError = (error: unknown, mediaMode: 'audio' | 'video'): string => {
+    const name = error instanceof DOMException ? error.name : '';
+    if (name === 'NotAllowedError' || name === 'SecurityError') return mediaMode === 'video' ? 'Camera permission is required for video calls.' : 'Microphone permission is required for calls.';
+    if (name === 'NotFoundError' || name === 'OverconstrainedError') return mediaMode === 'video' ? 'No camera or microphone was found.' : 'No microphone was found.';
+    if (name === 'NotSupportedError') return 'This browser does not support video calls.';
+    return error instanceof Error ? error.message : 'Unable to start the call.';
+  };
+
+  const clearCallMedia = useCallback((): void => {
+    if (callMediaPoll.current) clearInterval(callMediaPoll.current);
+    callMediaPoll.current = undefined;
+    activeLegacyCall.current = undefined;
+    setLocalCallStream(undefined);
+    setRemoteCallStream(undefined);
+    setMicrophoneMutedState(false);
+    setCameraEnabledState(false);
+    setCallMediaMode('audio');
+  }, []);
+
+  const reflectCallMedia = useCallback((call: IE2ECall): void => {
+    setLocalCallStream(call.localStream);
+    setRemoteCallStream(call.remoteStream);
+    setCameraEnabledState(Boolean(call.localStream?.getVideoTracks().some((track) => track.enabled && track.readyState === 'live')));
+  }, []);
+
+  const setupLegacyCallMedia = useCallback((call: IE2ECall): void => {
+    if (callMediaPoll.current) clearInterval(callMediaPoll.current);
+    activeLegacyCall.current = call;
+    setCallMediaMode(call.mediaKind);
+    reflectCallMedia(call);
+    // WebRTC publishes streams asynchronously. This observes SDK-owned media
+    // state for rendering; it does not create a second media lifecycle.
+    callMediaPoll.current = setInterval(() => reflectCallMedia(call), 250);
+  }, [reflectCallMedia]);
+
+  useEffect(() => () => { if (callMediaPoll.current) clearInterval(callMediaPoll.current); }, []);
+
   // Start call
   const startCall = useCallback(async () => {
     if (protocolMode === 'modern') {
@@ -369,6 +414,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (!chat) throw new Error('Chat not initialized');
     try {
       const call = await chat.startCall();
+      setCallMediaMode('audio');
+      setCallError(undefined);
       setCallActive(true);
        setIsIncomingCall(false);
       setCallLifecycleState('ringing');
@@ -376,9 +423,31 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setupCallListeners(call);
     } catch (err) {
       debugError('Call start failed', err);
-      throw err;
+      const message = describeMediaError(err, 'audio');
+      setCallError(message);
+      throw new Error(message);
     }
   }, [chat, modern, modernCallComposition, protocolMode]);
+
+  const startVideoCall = useCallback(async () => {
+    if (protocolMode === 'modern') throw new Error('Video calls are not available for this session yet.');
+    if (!chat) throw new Error('Chat not initialized');
+    try {
+      setCallMediaMode('video');
+      setCallError(undefined);
+      const call = await chat.startVideoCall();
+      setCallActive(true);
+      setIsIncomingCall(false);
+      setCallLifecycleState('ringing');
+      setCallStatus('Ringing...');
+      setupCallListeners(call);
+    } catch (error) {
+      const message = describeMediaError(error, 'video');
+      setCallError(message);
+      setCallMediaMode('audio');
+      throw new Error(message);
+    }
+  }, [chat, protocolMode]);
 
   const acceptCall = useCallback(async () => {
     if (protocolMode === 'modern') {
@@ -458,10 +527,25 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setCallDuration(0);
       setCallLifecycleState('ended');
       setCallStatus('Call Ended');
+      clearCallMedia();
     } catch (err) {
       debugError('Call end failed', err);
     }
-  }, [chat, modernCallComposition, modernCallId, protocolMode]);
+  }, [chat, clearCallMedia, modernCallComposition, modernCallId, protocolMode]);
+
+  const setMicrophoneMuted = useCallback((muted: boolean): void => {
+    const call = activeLegacyCall.current;
+    if (!call) return;
+    call.setMicrophoneEnabled(!muted);
+    setMicrophoneMutedState(muted);
+  }, []);
+
+  const setCameraEnabled = useCallback((enabled: boolean): void => {
+    const call = activeLegacyCall.current;
+    if (!call || !call.localStream?.getVideoTracks().length) return;
+    call.setCameraEnabled(enabled);
+    setCameraEnabledState(enabled);
+  }, []);
 
   // Add message to state
   const addMessage = useCallback((message: Message) => {
@@ -493,9 +577,10 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setupCallListeners(call);
     });
 
-    chatInstance.on('call-invite', () => {
+    chatInstance.on('call-invite', (invite: { mediaKind?: 'audio' | 'video' }) => {
       setCallActive(true);
       setIsIncomingCall(true);
+      setCallMediaMode(invite.mediaKind ?? 'audio');
       setCallLifecycleState('incoming');
       setCallStatus('Incoming Call...');
       playBeep();
@@ -520,11 +605,13 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setCallActive(false);
       setIsIncomingCall(false);
       setCallDuration(0);
+      clearCallMedia();
     });
   };
 
   // Setup call listeners
   const setupCallListeners = (call: IE2ECall) => {
+    setupLegacyCallMedia(call);
     call.on('state-changed', async () => {
       const state = call.state;
       setCallStatus(state.charAt(0).toUpperCase() + state.slice(1));
@@ -535,6 +622,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         setCallDuration(0);
         setCallLifecycleState(state === 'failed' ? 'ice-failed' : 'ended');
         setCallStatus(state === 'failed' ? 'Connection Failed' : 'Call Ended');
+        clearCallMedia();
       }
     });
   };
@@ -609,6 +697,12 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     callDuration,
     callLifecycleState,
     isIncomingCall,
+    callMediaMode,
+    localCallStream,
+    remoteCallStream,
+    microphoneMuted,
+    cameraEnabled,
+    callError,
     protocolMode,
     ownFingerprint,
     contactIdentity,
@@ -638,10 +732,13 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     sendMessage,
     retryMessage,
     startCall,
+    startVideoCall,
     acceptCall,
     rejectCall,
     cancelCall,
     endCall,
+    setMicrophoneMuted,
+    setCameraEnabled,
     addMessage,
     setCallDuration,
     deleteChannel,

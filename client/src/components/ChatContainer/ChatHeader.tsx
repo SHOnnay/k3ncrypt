@@ -5,7 +5,7 @@
 import React, { useState } from 'react';
 import { useChat } from '../../context/ChatContext';
 import { Button } from '../common/Button';
-import { CopyIcon, ShareIcon, PhoneIcon, TrashIcon } from '../common/icons';
+import { CopyIcon, ShareIcon, PhoneIcon, TrashIcon, VideoIcon } from '../common/icons';
 import { Avatar } from '../common/Avatar';
 import { StatusPill } from '../common/StatusPill';
 import './ChatHeader.css';
@@ -13,10 +13,11 @@ import { debugError } from '../../utils/debug';
 
 interface ChatHeaderProps {
   onStartCall: () => void;
+  onStartVideoCall: () => void;
   disableStartCall?: boolean;
 }
 
-export const ChatHeader: React.FC<ChatHeaderProps> = ({ onStartCall, disableStartCall = false }) => {
+export const ChatHeader: React.FC<ChatHeaderProps> = ({ onStartCall, onStartVideoCall, disableStartCall = false }) => {
   const { isConnected, channelHash, deleteChannel, protocolMode } = useChat();
   const [hashCopied, setHashCopied] = useState(false);
 
@@ -97,6 +98,15 @@ const handleDelete = async () => {
           disabled={disableStartCall || !isConnected}
         >
           <PhoneIcon size={20} />
+        </Button>
+        <Button
+          className="btn--icon"
+          variant="secondary"
+          onClick={onStartVideoCall}
+          title="Start Video Call"
+          disabled={disableStartCall || !isConnected || protocolMode === 'modern'}
+        >
+          <VideoIcon size={20} />
         </Button>
         <Button
           className="btn--icon"

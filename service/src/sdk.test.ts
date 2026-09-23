@@ -479,6 +479,19 @@ describe('receiving webrtc signal', () => {
         expect(cb).toHaveBeenCalledWith(expect.objectContaining({ callId: 'call-1' }));
     });
 
+    it('delivers the authenticated video media mode with an incoming invitation', async () => {
+        const instance = await buildInitializedInstance();
+        await instance.setChannel(ROOM_ID, SECRET, USER_ID, CONTROL_CAPABILITY);
+        const cb = jest.fn();
+        instance.on('call-invite', cb);
+        const envelope = await sealWithDefaultStrategy('signaling', { type: 'call-invite', mediaKind: 'video', callId: 'video-call', seq: 1, timestamp: 1 });
+
+        wireHandlerFor('webrtc-session-description')({ envelope });
+        await flushAsync();
+
+        expect(cb).toHaveBeenCalledWith({ callId: 'video-call', mediaKind: 'video' });
+    });
+
     it('drops a replayed/duplicate signal (same sequence number twice for the same call)', async () => {
         const instance = await buildInitializedInstance();
         await instance.setChannel(ROOM_ID, SECRET, USER_ID, CONTROL_CAPABILITY);

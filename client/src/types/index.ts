@@ -56,6 +56,12 @@ export interface ChatContextType {
   callDuration: number;
   callLifecycleState: CallLifecycleState;
   isIncomingCall: boolean;
+  callMediaMode: 'audio' | 'video';
+  localCallStream?: MediaStream;
+  remoteCallStream?: MediaStream;
+  microphoneMuted: boolean;
+  cameraEnabled: boolean;
+  callError?: string;
   protocolMode: 'legacy' | 'modern';
   ownFingerprint?: string;
   contactIdentity?: StoredContactIdentity;
@@ -87,10 +93,13 @@ export interface ChatContextType {
   sendMessage: (text: string) => Promise<void>;
   retryMessage: (messageId: string) => Promise<void>;
   startCall: () => Promise<void>;
+  startVideoCall: () => Promise<void>;
   acceptCall: () => Promise<void>;
   rejectCall: () => Promise<void>;
   cancelCall: () => Promise<void>;
   endCall: () => Promise<void>;
+  setMicrophoneMuted: (muted: boolean) => void;
+  setCameraEnabled: (enabled: boolean) => void;
   addMessage: (message: Message) => void;
   setCallDuration: (duration: number) => void;
   deleteChannel: () => Promise<void>;

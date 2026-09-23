@@ -4,12 +4,20 @@ import type { WebRtcSignalPayload } from './types';
 const mockPeerSignal = jest.fn();
 const mockPeerDispose = jest.fn();
 const mockCreateAndSendOffer = jest.fn().mockResolvedValue(undefined);
+const mockSetMicrophoneEnabled = jest.fn();
+const mockSetCameraEnabled = jest.fn();
+const localStream = { getVideoTracks: jest.fn(() => []) } as unknown as MediaStream;
+const remoteStream = { getVideoTracks: jest.fn(() => []) } as unknown as MediaStream;
 
 jest.mock('./peer', () => ({
     Peer: jest.fn().mockImplementation(() => ({
         signal: mockPeerSignal,
         dispose: mockPeerDispose,
         createAndSendOffer: mockCreateAndSendOffer,
+        setMicrophoneEnabled: mockSetMicrophoneEnabled,
+        setCameraEnabled: mockSetCameraEnabled,
+        localStream,
+        getRemoteStream: jest.fn(() => remoteStream),
         callState: 'connected',
     })),
 }));
@@ -63,6 +71,24 @@ describe('WebRTCCall', () => {
         call.endCall();
 
         expect(mockPeerDispose).toHaveBeenCalledTimes(1);
+    });
+
+    it('exposes SDK-owned streams and forwards microphone and camera controls', () => {
+        const call = makeCall();
+
+        expect(call.localStream).toBe(localStream);
+        expect(call.remoteStream).toBe(remoteStream);
+        call.setMicrophoneEnabled(false);
+        call.setCameraEnabled(false);
+
+        expect(mockSetMicrophoneEnabled).toHaveBeenCalledWith(false);
+        expect(mockSetCameraEnabled).toHaveBeenCalledWith(false);
+    });
+
+    it('preserves video media mode for callers that render video streams', () => {
+        const call = new WebRTCCall(jest.fn().mockResolvedValue(undefined), new Logger('test'), undefined, undefined, 'video');
+
+        expect(call.mediaKind).toBe('video');
     });
 
     it('on() registers a listener only once for the same callback', () => {

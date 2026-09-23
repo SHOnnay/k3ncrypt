@@ -48,6 +48,7 @@ export interface IChatE2EE {
     on(listener: SocketListenerType | PeerConnectionEventType, callback: (...args: any) => void): void;
     // webrtc call
     startCall(): Promise<E2ECall>;
+    startVideoCall(): Promise<E2ECall>;
     acceptCall(): Promise<void>;
     rejectCall(): Promise<void>;
     cancelCall(): Promise<void>;

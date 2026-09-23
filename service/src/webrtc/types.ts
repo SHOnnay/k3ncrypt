@@ -61,8 +61,9 @@ export interface IceCandidateSignalWithMetadata extends IceCandidateSignalData, 
 }
 
 export interface CallControlSignal extends SignalMetadata {
-    type: CallControlSignalType;
-    reason?: CallEndReason;
+  type: CallControlSignalType;
+  reason?: CallEndReason;
+  mediaKind?: 'audio' | 'video';
 }
 
 export interface CallLifecycleUpdate {

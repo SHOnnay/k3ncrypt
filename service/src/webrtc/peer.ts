@@ -19,6 +19,7 @@ import { BrowserCaptureController } from '../privacy/capture';
  * how to hand a payload off.
  */
 export type SignalSender = (signal: WebRtcSignalPayload) => Promise<void>;
+export type CallMediaKind = 'audio' | 'video';
 
 export class Peer {
     private readonly capture = new BrowserCaptureController();
@@ -27,8 +28,10 @@ export class Peer {
 
     private audioSink: AudioSink;
     private audioStream?: MediaStream;
+    private remoteStream?: MediaStream;
     private fallbackSignalSeq = 0;
     private fallbackCallId = generateUUID();
+    private readonly mediaKind: CallMediaKind;
 
     private localStreamAcquisatonPromise?: Promise<void>
     constructor(
@@ -37,7 +40,9 @@ export class Peer {
         private logger: Logger,
         private signalMetadataProvider?: () => SignalMetadata,
         private rtcConfig: WebRtcConfig = { iceServers: [], iceTransportPolicy: 'all' },
+        mediaKind: CallMediaKind = 'audio',
     ) {
+        this.mediaKind = mediaKind;
         this.audioSink = new AudioSink(this.logger.createChild('AudioSink'));
 
         // Media is protected exclusively by WebRTC's mandatory DTLS-SRTP
@@ -70,6 +75,7 @@ export class Peer {
         };
 
         this.pc.ontrack = (event: RTCTrackEvent) => {
+            this.remoteStream = event.streams[0];
             event.streams[0].getAudioTracks().forEach(() => {
                 this.logger.log('Adding remote audio track');
                 this.audioSink.attach(event.streams[0], 'remote');
@@ -83,6 +89,11 @@ export class Peer {
     public get callState(): RTCPeerConnectionState {
         return this.state;
     }
+
+    public setMicrophoneEnabled(enabled: boolean): void { this.audioStream?.getAudioTracks().forEach((track) => { track.enabled = enabled; }); }
+    public setCameraEnabled(enabled: boolean): void { this.audioStream?.getVideoTracks().forEach((track) => { track.enabled = enabled; }); }
+    public get localStream(): MediaStream | undefined { return this.audioStream; }
+    public getRemoteStream(): MediaStream | undefined { return this.remoteStream; }
 
     public async createAndSendOffer() {
         await this.localStreamAcquisatonPromise;
@@ -132,6 +143,7 @@ export class Peer {
             this.audioStream = undefined;
         }
         this.audioSink.detach();
+        this.remoteStream = undefined;
         this.logger.log('Dispose');
         this.pc?.close();
         this.pc = undefined as unknown as RTCPeerConnection;
@@ -145,7 +157,7 @@ export class Peer {
 
     private async getAudioStream(): Promise<MediaStream> {
         this.logger.log('getAudioStream');
-        return this.capture.request({ audio: true, video: false });
+        return this.capture.request({ audio: true, video: this.mediaKind === 'video' });
     }
 
     private resolveSignalMetadata(): SignalMetadata {

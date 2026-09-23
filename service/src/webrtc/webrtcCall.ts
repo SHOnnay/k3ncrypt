@@ -1,5 +1,5 @@
 import { Logger } from "../utils/logger";
-import { Peer, type SignalSender } from "./peer";
+import { Peer, type SignalSender, type CallMediaKind } from "./peer";
 import {
     type callEvents,
     type WebRtcSignalPayload,
@@ -18,6 +18,11 @@ export interface IE2ECall {
     on(event: callEvents, cb: () => void): void;
     state: RTCPeerConnectionState;
     endCall(): Promise<void>;
+    setMicrophoneEnabled(enabled: boolean): void;
+    setCameraEnabled(enabled: boolean): void;
+    readonly localStream: MediaStream | undefined;
+    readonly remoteStream: MediaStream | undefined;
+    readonly mediaKind: 'audio' | 'video';
 }
 
 export class WebRTCCall {
@@ -50,6 +55,7 @@ export class WebRTCCall {
         private logger: Logger,
         private signalMetadataProvider?: () => SignalMetadata,
         rtcConfig?: WebRtcConfig,
+        private readonly mediaKindValue: CallMediaKind = 'audio',
     ) {
         this.logger.log('Creating WebRTCCall');
         this.peer = new Peer(
@@ -58,6 +64,7 @@ export class WebRTCCall {
             this.logger.createChild('Peer'),
             this.signalMetadataProvider,
             rtcConfig,
+            mediaKindValue,
         );
     }
 
@@ -84,6 +91,11 @@ export class WebRTCCall {
         }
         this.peer.signal(data);
     }
+    public setMicrophoneEnabled(enabled: boolean): void { this.peer?.setMicrophoneEnabled(enabled); }
+    public setCameraEnabled(enabled: boolean): void { this.peer?.setCameraEnabled(enabled); }
+    public get localStream(): MediaStream | undefined { return this.peer?.localStream; }
+    public get remoteStream(): MediaStream | undefined { return this.peer?.getRemoteStream(); }
+    public get mediaKind(): CallMediaKind { return this.mediaKindValue; }
 }
 
 /**
@@ -234,4 +246,9 @@ export class E2ECall implements IE2ECall {
     public async endCall(): Promise<void> {
         return this.webRtcCall.endCall();
     }
+    public setMicrophoneEnabled(enabled: boolean): void { this.webRtcCall.setMicrophoneEnabled(enabled); }
+    public setCameraEnabled(enabled: boolean): void { this.webRtcCall.setCameraEnabled(enabled); }
+    public get localStream(): MediaStream | undefined { return this.webRtcCall.localStream; }
+    public get remoteStream(): MediaStream | undefined { return this.webRtcCall.remoteStream; }
+    public get mediaKind(): CallMediaKind { return this.webRtcCall.mediaKind; }
 }
