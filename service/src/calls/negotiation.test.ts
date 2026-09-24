@@ -3,8 +3,8 @@ import { CallMediaController } from './media';
 import type { CallSession, CallSignal } from './contracts';
 import type { CallMediaConnection } from './webrtc';
 
-const session = (): CallSession => ({ callId: 'call-1', conversationId: 'room', participants: [{ participantId: 'alice', identityId: 'alice-id', verification: 'verified' }, { participantId: 'bob', identityId: 'bob-id', verification: 'verified' }], identityBinding: 'bound', state: 'accepted', createdAt: Date.now(), updatedAt: Date.now(), expiresAt: Date.now() + 60_000 });
-const signal = (kind: CallSignal['kind'], payload: unknown): CallSignal => ({ callId: 'call-1', conversationId: 'room', sender: { participantId: 'bob', identityId: 'bob-id', verification: 'verified' }, event: kind === 'offer' ? 'connect' : 'connected', kind, payload, sequence: 2, timestamp: Date.now(), expiresAt: Date.now() + 60_000, identityBinding: 'bound', payloadDigest: 'digest' });
+const session = (): CallSession => ({ callId: 'call-1', conversationId: 'room', participants: [{ participantId: 'alice', identityId: 'alice-id', verification: 'verified' }, { participantId: 'bob', identityId: 'bob-id', verification: 'verified' }], mediaMode: 'audio', identityBinding: 'bound', state: 'accepted', createdAt: Date.now(), updatedAt: Date.now(), expiresAt: Date.now() + 60_000 });
+const signal = (kind: CallSignal['kind'], payload: unknown): CallSignal => ({ callId: 'call-1', conversationId: 'room', sender: { participantId: 'bob', identityId: 'bob-id', verification: 'verified' }, receiverIdentityId: 'alice-id', mediaMode: 'audio', nonce: '11111111-1111-4111-8111-111111111111', event: kind === 'offer' ? 'connect' : 'connected', kind, payload, sequence: 2, timestamp: Date.now(), expiresAt: Date.now() + 60_000, identityBinding: 'bound', payloadDigest: 'digest' });
 const track = { stop: jest.fn() } as unknown as MediaStreamTrack;
 const stream = { getTracks: () => [track] } as unknown as MediaStream;
 

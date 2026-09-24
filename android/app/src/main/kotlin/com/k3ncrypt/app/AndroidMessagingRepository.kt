@@ -17,10 +17,12 @@ import com.k3ncrypt.network.DeviceProofClient
 import com.k3ncrypt.network.DeviceProofIdentity
 import com.k3ncrypt.network.K3ncryptApi
 import com.k3ncrypt.network.RelayJoin
+import com.k3ncrypt.network.RelayCallSignal
 import com.k3ncrypt.network.SocketRelay
 import com.k3ncrypt.network.awaitConnected
 import com.k3ncrypt.network.joinAndReplay
 import com.k3ncrypt.network.sendEnvelopeAwait
+import com.k3ncrypt.network.sendCallSignalAwait
 import com.k3ncrypt.network.VodozemacBundleCodec
 import com.k3ncrypt.security.ProofResource
 import com.k3ncrypt.storage.CryptoStateStore
@@ -87,9 +89,11 @@ class AndroidMessagingRepository(
     @Volatile private var conversation: ConversationInvitation? = null
     private var observer: ((AndroidChatMessage) -> Unit)? = null
     private var peerIdentityObserver: ((String, String) -> Unit)? = null
+    @Volatile private var callSignalObserver: ((String) -> Unit)? = null
     private val firstContactCandidates = ConcurrentHashMap<String, String>()
 
     init {
+        relay.onCallSignal { signal -> scope.launch { receiveCallSignal(signal) } }
         relay.onDelivery { delivery, acknowledge ->
             scope.launch {
                 if (BuildConfig.DEBUG) DebugInspectionStore.setDeliveryStage("mailbox-received")
@@ -100,6 +104,76 @@ class AndroidMessagingRepository(
                 if (BuildConfig.DEBUG && accepted) DebugInspectionStore.setDeliveryStage("acknowledgement")
             }
         }
+    }
+
+    fun observeCallSignals(observer: (String) -> Unit) { callSignalObserver = observer }
+    suspend fun activeConversation(): ConversationInvitation = mutex.withLock { conversation?.takeIf(SavedConversationIndex::isTrusted) ?: error("A verified conversation is required for calls") }
+
+    /** Encrypts through the existing Olm/Vodozemac session, commits the mutated session, then signals through the proof-checked relay. */
+    suspend fun sendCallSignal(plaintext: String) = mutex.withLock {
+        val binding = conversation ?: error("Call conversation is unavailable")
+        require(binding.peerRoutingId.isNotEmpty() && binding.peerIdentityReference.startsWith("K3 ")) { "Verified contact is required for calls" }
+        require(plaintext.toByteArray(Charsets.UTF_8).size in 1..65_536) { "Call signal is malformed" }
+        val local = identity.activeState()
+        val account = identity.activeAccount()
+        val session = sessions.existing(binding.peerRoutingId) ?: error("An established encrypted conversation session is required before calling")
+        val bytes = plaintext.toByteArray(Charsets.UTF_8)
+        var mutated = false
+        try {
+            val encrypted = crypto.encrypt(session, bytes)
+            mutated = true
+            val pickleKey = pickleKeys.load(local.deviceIdentityReference)
+            try {
+                val accountPickle = crypto.saveAccount(account, pickleKey)
+                val sessionPickle = crypto.saveSession(session)
+                try { stateStore.commitAccountAndSession(local.deviceIdentityReference, accountPickle, SessionState(binding.peerRoutingId, sessionPickle)) }
+                finally { sessionPickle.fill(0) }
+            } finally { pickleKey.fill(0) }
+            sessions.remember(binding.peerRoutingId, session)
+            val envelope = JSONObject().put("version", 2).put("strategy", "vodozemac-olm-v1")
+                .put("data", JSONObject().put("version", 1).put("olmMessage", encrypted)).toString()
+            val proof = proofs.acquire(account, local.toProofIdentity(), "relay:signal", ProofResource(conversationId = binding.conversationId))
+            if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("proof-issued")
+            relay.awaitConnected()
+            if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("relay-connected")
+            relay.sendCallSignalAwait(envelope, proof) {
+                if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("signal-sent")
+            }
+            if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("signal-ack")
+        } catch (error: Throwable) {
+            if (mutated) runCatching { invalidateAfterMutation() }
+            throw error
+        } finally { bytes.fill(0) }
+    }
+
+    private suspend fun receiveCallSignal(signal: RelayCallSignal) = mutex.withLock {
+        val binding = conversation ?: return@withLock
+        if (binding.conversationId != signal.conversationId || binding.peerRoutingId.isEmpty()) return@withLock
+        val current = identity.activeState()
+        val account = identity.activeAccount()
+        var session: SessionHandle? = null
+        var mutated = false
+        var plaintext: ByteArray? = null
+        try {
+            val wire = com.k3ncrypt.messaging.EncryptedEnvelopeParser.parse(signal.envelope)
+            session = sessions.existing(binding.peerRoutingId)
+            require(session != null) { "Established encrypted conversation session is required for calls" }
+            plaintext = crypto.decrypt(session, wire.olmMessage)
+            mutated = true
+            val pickleKey = pickleKeys.load(current.deviceIdentityReference)
+            try {
+                val accountPickle = crypto.saveAccount(account, pickleKey)
+                val sessionPickle = crypto.saveSession(session!!)
+                try { stateStore.commitAccountAndSession(current.deviceIdentityReference, accountPickle, SessionState(binding.peerRoutingId, sessionPickle)) }
+                finally { sessionPickle.fill(0) }
+            } finally { pickleKey.fill(0) }
+            sessions.remember(binding.peerRoutingId, session!!)
+            mutated = false
+            callSignalObserver?.invoke(plaintext!!.decodeToString())
+            if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("signal-received")
+        } catch (_: Throwable) {
+            if (mutated) { session?.let { runCatching { crypto.closeSession(it) } }; runCatching { invalidateAfterMutation() } }
+        } finally { plaintext?.fill(0) }
     }
 
     /** Creates a local conversation only from an existing authenticated invitation and pinned peer identity. */
@@ -350,7 +424,7 @@ class AndroidMessagingRepository(
         } catch (_: Exception) { false }
     }
 
-    private suspend fun newOutboundSession(binding: ConversationInvitation, setStage: (String) -> Unit): SessionHandle {
+    private suspend fun newOutboundSession(binding: ConversationInvitation, setStage: (String) -> Unit = {}): SessionHandle {
         setStage("fetch_peer_prekeys")
         val bundle = api.fetchPrekeys(binding.conversationId, binding.controlCapability, binding.peerRoutingId)
         setStage("validate_peer_bundle")

@@ -27,7 +27,7 @@ class DebugInspectionProvider : ContentProvider() {
         val snapshot = DebugInspectionStore.snapshot()
         return MatrixCursor(COLUMNS).apply {
             if (snapshot != null) {
-                addRow(arrayOf(snapshot.conversationHash, snapshot.trustState, snapshot.connectionState, snapshot.deliveryState, snapshot.lastActivityTimestamp, DebugInspectionStore.stageHistory().joinToString(";"), snapshot.connectionPhase))
+                addRow(arrayOf(snapshot.conversationHash, snapshot.trustState, snapshot.connectionState, snapshot.deliveryState, snapshot.lastActivityTimestamp, DebugInspectionStore.stageHistory().joinToString(";"), snapshot.connectionPhase, DebugInspectionStore.callSignalStageHistory().joinToString(";")))
             }
         }
     }
@@ -53,7 +53,7 @@ class DebugInspectionProvider : ContentProvider() {
     override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?): Int = 0
 
     private companion object {
-        val COLUMNS = arrayOf("conversationHash", "trustState", "connectionState", "deliveryState", "lastActivityTimestamp", "messageDeliveryStages", "connectionPhase")
+        val COLUMNS = arrayOf("conversationHash", "trustState", "connectionState", "deliveryState", "lastActivityTimestamp", "messageDeliveryStages", "connectionPhase", "callSignalStages")
 
         fun decode(value: String?): String = String(
             Base64.decode(requireNotNull(value), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING),

@@ -96,6 +96,17 @@ const testOnlyDeliveryStage = (stage: string): void => {
     if (events.length > 100) events.shift();
 };
 
+const testOnlyCallSignalStage = (stage: 'signal-received'): void => {
+    const diagnostic = globalThis as typeof globalThis & {
+        __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean;
+        __k3ncryptCallSignalStages?: string[];
+    };
+    if (diagnostic.__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ !== true) return;
+    const stages = diagnostic.__k3ncryptCallSignalStages ??= [];
+    stages.push(stage);
+    if (stages.length > 32) stages.shift();
+};
+
 const asBytes = (value: unknown): ArrayBuffer => encoder.encode(JSON.stringify(value)).buffer as ArrayBuffer;
 const parseList = <T>(bytes: ArrayBuffer | undefined): T[] => {
     if (!bytes) return [];
@@ -184,8 +195,14 @@ export class ModernConversation {
                         const plaintext = await this.runtime.decrypt('signaling', message.envelope);
                         const control = this.deviceControlChannel.decode(plaintext);
                         if (control) await this.handleDeviceControl(control);
-                        else if (this.callSignalTransport) await this.callSignalTransport.receivePlaintext(plaintext);
-                    } else if (this.callSignalTransport) await this.callSignalTransport.receive(message.envelope);
+                        else if (this.callSignalTransport) {
+                            await this.callSignalTransport.receivePlaintext(plaintext);
+                            testOnlyCallSignalStage('signal-received');
+                        }
+                    } else if (this.callSignalTransport) {
+                        await this.callSignalTransport.receive(message.envelope);
+                        testOnlyCallSignalStage('signal-received');
+                    }
                     return false;
                 }
                 return this.receiveMutex.runExclusive(() => this.connecting

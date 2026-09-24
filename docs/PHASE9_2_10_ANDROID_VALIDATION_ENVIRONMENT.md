@@ -45,6 +45,10 @@ ANDROID_HOME="$ANDROID_HOME" android/scripts/run-disposable-instrumentation.sh
 
 The guard script refuses to run unless exactly one Android device is attached, its AVD name is `k3ncrypt-instrumentation-disposable`, and the persistent AVD process is not running. This keeps UTP's uninstall behavior away from the persistent profile.
 
+The Gradle `:app:connectedDebugAndroidTest` task now runs the same guard before UTP starts. Direct Gradle invocation is therefore rejected on the persistent AVD as well. For persistent-profile builds, `android/scripts/install-persistent-debug.sh` requires `K3NCRYPT_PERSISTENT_SERIAL`, verifies the AVD name, and performs only `adb install -r`; it has no uninstall, package-clear, or wipe path.
+
+Use the persistent profile for trusted conversation restore, signed proof acquisition, relay signaling, app process death/restart, and Room/Keystore continuity checks. Use the disposable profile for instrumentation suites, clean installation, schema migration, and tests that allow UTP to remove the target application.
+
 ## Interoperability sequence
 
 1. On the persistent AVD, create the Android identity through the normal bootstrap flow.
@@ -78,3 +82,13 @@ Post-fix validation:
 | Android Gradle `test :app:assembleDebug` | Passed |
 | Disposable AVD `:app:connectedDebugAndroidTest` | Passed, 2 tests |
 | `git diff --check` | Passed |
+
+## Persistent profile protection and current state (2026-09-25)
+
+A later connected-instrumentation run removed the previously used Android app sandbox. No snapshot or backup was available, so that trusted Android state was not recoverable. The direct Gradle `:app:connectedDebugAndroidTest` task is now guarded as well as the wrapper script; running it while the persistent AVD is attached is refused before UTP can start. The persistent installer validates the named AVD and only performs `adb install -r`.
+
+A replacement Android first-device identity was created normally through the durable backend authority and remains on `k3ncrypt-persistent-beta`. The updated debug APK was installed in place and Android unit tests/build passed. The Chrome profile currently has no browser identity; browser onboarding is waiting for the account owner to set a local passphrase in the UI. No trusted Browser ↔ Android conversation or Phase 9.3 signaling result is claimed for this new state yet. Continue with ordinary invitation exchange and explicit fingerprint confirmation before the relay signal test.
+
+The debug call inspection surface records only the fixed labels `identity-restored`, `conversation-restored`, `proof-issued`, `relay-connected`, `signal-sent`, `signal-received`, and `signal-ack`. Its debug-only relay validation action sends a normal encrypted audio invitation after the existing trusted-conversation and proof checks, but does not request media permission or start a peer connection. The release source path does not expose the inspection provider or validation action.
+
+Current validation for this hardening: `:app:testDebugUnitTest` and `:app:assembleDebug` passed with JDK 17; the direct instrumentation guard was verified to refuse the persistent AVD; service SDK build and call tests passed. Real relay signaling remains pending until the browser owner completes local identity setup and a trusted conversation is confirmed. Android's first conversation creation action also remained busy without an invitation or error appearing; its exact failure boundary is not yet known, and no process/data reset was performed.

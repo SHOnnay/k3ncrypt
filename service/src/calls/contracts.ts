@@ -1,6 +1,7 @@
 export type CallState = 'idle' | 'inviting' | 'ringing' | 'accepted' | 'connecting' | 'connected' | 'reconnecting' | 'ended' | 'rejected' | 'cancelled' | 'expired' | 'failed';
 export type CallParticipant = { participantId: string; identityId: string; verification: 'unknown' | 'unverified' | 'verified' | 'changed-pending-review' };
-export type CallSession = { callId: string; conversationId: string; participants: readonly [CallParticipant, CallParticipant]; state: CallState; createdAt: number; updatedAt: number; expiresAt: number; identityBinding: string };
+export type CallMediaMode = 'audio' | 'video';
+export type CallSession = { callId: string; conversationId: string; participants: readonly [CallParticipant, CallParticipant]; mediaMode: CallMediaMode; state: CallState; createdAt: number; updatedAt: number; expiresAt: number; identityBinding: string };
 export type CallEvent = 'invite' | 'accept' | 'reject' | 'cancel' | 'connect' | 'connected' | 'reconnect' | 'end' | 'expire' | 'fail' | 'heartbeat';
 export type PermissionState = 'unknown' | 'requested' | 'granted' | 'active' | 'released' | 'denied';
 export type CallPermissions = { microphone: PermissionState; camera: PermissionState };
@@ -12,5 +13,5 @@ export interface CallIdentityVerifier {
 }
 
 export type CallSignalKind = 'control' | 'offer' | 'answer' | 'ice-candidate';
-export interface CallSignal { callId: string; conversationId: string; sender: CallParticipant; event: Exclude<CallEvent, 'heartbeat'>; kind?: CallSignalKind; payload?: unknown; sequence: number; timestamp: number; expiresAt: number; identityBinding: string; payloadDigest: string; }
+export interface CallSignal { callId: string; conversationId: string; sender: CallParticipant; receiverIdentityId: string; mediaMode: CallMediaMode; nonce: string; event: Exclude<CallEvent, 'heartbeat'>; kind?: CallSignalKind; payload?: unknown; sequence: number; timestamp: number; expiresAt: number; identityBinding: string; payloadDigest: string; }
 export interface CallSignalTransport { send(signal: CallSignal): Promise<void>; onSignal(listener: (signal: CallSignal) => Promise<void>): () => void; }

@@ -15,6 +15,11 @@ internal object DebugInspectionStore {
     @Volatile private var lastActivityTimestamp: Long = 0L
     @Volatile private var deliveryStage: String? = null
     private val deliveryStages = java.util.concurrent.CopyOnWriteArrayList<String>()
+    private val callSignalStages = java.util.concurrent.CopyOnWriteArrayList<String>()
+    private val allowedCallSignalStages = setOf(
+        "identity-restored", "conversation-restored", "proof-issued", "relay-connected",
+        "signal-sent", "signal-received", "signal-ack",
+    )
 
     fun update(
         conversationId: String?,
@@ -41,6 +46,16 @@ internal object DebugInspectionStore {
     }
 
     fun stageHistory(): List<String> = if (BuildConfig.DEBUG) deliveryStages.toList() else emptyList()
+
+    /** Debug-only call authorization trace. Arbitrary strings are rejected to keep it metadata-only. */
+    fun setCallSignalStage(stage: String) {
+        if (!BuildConfig.DEBUG) return
+        require(stage in allowedCallSignalStages)
+        callSignalStages.add(stage)
+        while (callSignalStages.size > 32) callSignalStages.removeAt(0)
+    }
+
+    fun callSignalStageHistory(): List<String> = if (BuildConfig.DEBUG) callSignalStages.toList() else emptyList()
 
     /** Safe connection phase label for isolated interoperability diagnostics. */
     fun setConnectionStage(stage: String) {

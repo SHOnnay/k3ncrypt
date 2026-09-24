@@ -10,7 +10,7 @@ export class AuthenticatedCallSignalTransport implements CallSignalTransport {
   private listener?: (signal: CallSignal) => Promise<void>;
   constructor(private readonly session: CryptoSession, private readonly transport: TransportManager, private readonly conversationId: string, private readonly localIdentityId: string, private readonly remote: CallParticipant, private readonly identity: CallIdentityVerifier) {}
   async send(signal: CallSignal): Promise<void> {
-    if (signal.conversationId !== this.conversationId || signal.sender.identityId !== this.localIdentityId) throw new Error('Call signal origin rejected.');
+    if (signal.conversationId !== this.conversationId || signal.sender.identityId !== this.localIdentityId || !signal.receiverIdentityId || !signal.nonce) throw new Error('Call signal origin rejected.');
     if (!(await this.identity.isParticipant(this.conversationId, signal.sender.participantId)) || signal.sender.verification !== 'verified') throw new Error('Call signal origin rejected.');
     if (!(await verifySignalDigest(signal))) throw new Error('Call signal integrity rejected.');
     await this.transport.sendEnvelope('signaling', await this.session.encrypt('signaling', encode(signal)));
@@ -21,7 +21,7 @@ export class AuthenticatedCallSignalTransport implements CallSignalTransport {
   }
   async receivePlaintext(plaintext: ArrayBuffer): Promise<void> {
     const signal = decode(plaintext);
-    if (signal.conversationId !== this.conversationId || signal.sender.identityId !== this.remote.identityId || signal.sender.verification !== 'verified' || !(await this.identity.isParticipant(this.conversationId, signal.sender.participantId)) || !(await verifySignalDigest(signal))) throw new Error('Call signal origin rejected.');
+    if (signal.conversationId !== this.conversationId || signal.sender.identityId !== this.remote.identityId || signal.receiverIdentityId !== this.localIdentityId || !signal.nonce || signal.sender.verification !== 'verified' || !(await this.identity.isParticipant(this.conversationId, signal.sender.participantId)) || !(await verifySignalDigest(signal))) throw new Error('Call signal origin rejected.');
     if (this.listener) await this.listener(signal);
   }
 }

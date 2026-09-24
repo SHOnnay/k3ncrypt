@@ -10,6 +10,7 @@ import org.json.JSONObject
 data class RelayJoin(val routingId: String, val conversationId: String, val controlCapability: String, val routingProof: String, val proof: ProofCarrier)
 data class RelayDelivery(val id: String, val timestamp: Long, val sender: String, val envelope: String, val conversationId: String)
 data class RelaySendReceipt(val id: String, val timestamp: Long)
+data class RelayCallSignal(val envelope: String, val conversationId: String)
 
 /** Socket.IO only transports encrypted envelopes. It never decrypts or accepts a mailbox item itself. */
 class SocketRelay(url: String) {
@@ -18,6 +19,7 @@ class SocketRelay(url: String) {
     @Volatile private var activeConversationId: String? = null
     @Volatile private var lastJoinFailureCategory: String? = null
     private val pendingDeliveryListeners = java.util.concurrent.CopyOnWriteArrayList<(RelayDelivery, (Boolean) -> Unit) -> Unit>()
+    private val pendingCallSignalListeners = java.util.concurrent.CopyOnWriteArrayList<(RelayCallSignal) -> Unit>()
     val connected: StateFlow<Boolean> = _connected
     fun lastJoinFailureCategory(): String? = lastJoinFailureCategory
     init {
@@ -31,6 +33,7 @@ class SocketRelay(url: String) {
         created.on(Socket.EVENT_DISCONNECT, io.socket.emitter.Emitter.Listener { _connected.value = false })
         socket = created
         pendingDeliveryListeners.forEach { attachDeliveryListener(created, it) }
+        pendingCallSignalListeners.forEach { attachCallSignalListener(created, it) }
     }
     fun connect() = (socket ?: error("backend_endpoint_unconfigured")).connect()
     fun close() { activeConversationId = null; _connected.value = false; socket?.disconnect() }
@@ -63,6 +66,14 @@ class SocketRelay(url: String) {
         pendingDeliveryListeners.add(listener)
         socket?.let { attachDeliveryListener(it, listener) }
     }
+    fun onCallSignal(listener: (RelayCallSignal) -> Unit) { pendingCallSignalListeners.add(listener); socket?.let { attachCallSignalListener(it, listener) } }
+    fun sendCallSignal(envelope: String, proof: ProofCarrier, onSent: () -> Unit = {}, ack: (Boolean) -> Unit) {
+        val conversationId = activeConversationId ?: run { ack(false); return }
+        if (proof.deviceAuthorizationProof.operation != "relay:signal" || proof.deviceAuthorizationProof.resource?.conversationId != conversationId || proof.proofNonce != proof.deviceAuthorizationProof.nonce) { ack(false); return }
+        val value = JSONObject().put("envelope", JSONObject(envelope)).put("deviceAuthorizationProof", proofJson(proof)).put("proofNonce", proof.proofNonce).put("proofOperation", "relay:signal")
+        (socket ?: run { ack(false); return }).emit("webrtc-signal", value, io.socket.client.Ack { response -> ack((response.firstOrNull() as? JSONObject)?.optString("status") == "ok") })
+        onSent()
+    }
     private fun attachDeliveryListener(socket: Socket, listener: (RelayDelivery, (Boolean) -> Unit) -> Unit) { socket.on("chat-message", io.socket.emitter.Emitter.Listener { args ->
         val raw = args.firstOrNull() as? JSONObject
         val acceptance = args.lastOrNull() as? io.socket.client.Ack
@@ -76,6 +87,12 @@ class SocketRelay(url: String) {
                     acknowledge = { value -> acceptance.call(JSONObject().put("accepted", value)) })
             }
         } catch (_: Exception) { acceptance.call(JSONObject().put("accepted", false)) }
+    }) }
+    private fun attachCallSignalListener(socket: Socket, listener: (RelayCallSignal) -> Unit) { socket.on("webrtc-session-description", io.socket.emitter.Emitter.Listener { args ->
+        val raw = args.firstOrNull() as? JSONObject ?: return@Listener
+        val conversationId = activeConversationId ?: return@Listener
+        val envelope = raw.optJSONObject("envelope") ?: return@Listener
+        runCatching { listener(RelayCallSignal(envelope.toString(), conversationId)) }
     }) }
     private fun proofJson(carrier: ProofCarrier): JSONObject = carrier.deviceAuthorizationProof.let { proof ->
         val resource = proof.resource?.let { r -> linkedMapOf<String, Any?>().apply { r.conversationId?.let { put("conversationId", it) }; r.networkId?.let { put("networkId", it) }; r.attachmentId?.let { put("attachmentId", it) }; r.bridgeRouteId?.let { put("bridgeRouteId", it) } } }

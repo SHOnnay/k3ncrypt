@@ -5,7 +5,7 @@ export class SecureCallSignaling {
   constructor(private readonly identity: CallIdentityVerifier, private readonly transport: CallSignalTransport, private readonly replay: ReplayProtectionStore = new MemoryReplayProtectionStore()) {}
   async send(session: CallSession, signal: CallSignal): Promise<void> {
     const now = Date.now();
-    if (signal.callId !== session.callId || signal.conversationId !== session.conversationId || signal.identityBinding !== session.identityBinding || signal.expiresAt > session.expiresAt || signal.expiresAt <= now || signal.timestamp > now + 30_000 || signal.timestamp > signal.expiresAt || !(await verifySignalDigest(signal))) throw new Error('Invalid call signal.');
+    if (signal.callId !== session.callId || signal.conversationId !== session.conversationId || signal.identityBinding !== session.identityBinding || signal.mediaMode !== session.mediaMode || !signal.nonce || !signal.receiverIdentityId || signal.expiresAt > session.expiresAt || signal.expiresAt <= now || signal.timestamp > now + 30_000 || signal.timestamp > signal.expiresAt || !(await verifySignalDigest(signal))) throw new Error('Invalid call signal.');
     if (!(await this.identity.isParticipant(session.conversationId, signal.sender.participantId))) throw new Error('Unauthorized call participant.');
     if (signal.sender.verification === 'changed-pending-review') throw new Error('Call identity requires review.');
     const key = `${signal.callId}:${signal.sender.participantId}:${signal.sequence}`;
@@ -17,7 +17,7 @@ export class SecureCallSignaling {
   /** Validates and replay-checks a signal after authenticated decryption. */
   async receive(signal: CallSignal, listener: (signal: CallSignal) => Promise<void>): Promise<void> {
     const now = Date.now();
-    if (!signal.callId || !signal.conversationId || signal.expiresAt <= now || signal.timestamp > now + 30_000 ||
+    if (!signal.callId || !signal.conversationId || !signal.nonce || !signal.receiverIdentityId || !['audio', 'video'].includes(signal.mediaMode) || signal.expiresAt <= now || signal.timestamp > now + 30_000 ||
       signal.timestamp > signal.expiresAt || !(await verifySignalDigest(signal))) throw new Error('Invalid call signal.');
     if (!(await this.identity.isParticipant(signal.conversationId, signal.sender.participantId)) || signal.sender.verification !== 'verified') {
       throw new Error('Unauthorized call participant.');

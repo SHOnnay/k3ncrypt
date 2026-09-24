@@ -221,8 +221,18 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setModernCallComposition(composition);
     callNegotiator.current?.dispose();
     callNegotiator.current = new ProductionCallNegotiator(composition, new BrowserCallTransport(), async () => getRuntimeConfig().webrtc);
+    callNegotiator.current.onMediaUpdate((update) => {
+      if (update.callId !== modernCallId && modernCallId) return;
+      setLocalCallStream(update.local);
+      setRemoteCallStream(update.remote);
+      if (update.local) setCameraEnabledState(update.local.getVideoTracks().some((track) => track.enabled && track.readyState === 'live'));
+      if (update.state === 'connected') { setCallLifecycleState('connected'); setCallStatus('Connected'); }
+      if (update.state === 'reconnecting') { setCallLifecycleState('connecting'); setCallStatus('Reconnecting...'); }
+      if (update.state === 'failed') { setCallLifecycleState('ice-failed'); setCallStatus('Connection Failed'); }
+    });
     composition.onCallUpdate((session) => {
       setModernCallId(session.callId);
+      setCallMediaMode(session.mediaMode);
       setCallLifecycleState(session.state === 'inviting' ? 'ringing' : session.state === 'rejected' ? 'rejected' : session.state === 'cancelled' ? 'cancelled' : session.state === 'ended' ? 'ended' : session.state === 'accepted' ? 'connecting' : 'ringing');
       setIsIncomingCall(session.state === 'ringing');
       setCallActive(!['rejected', 'cancelled', 'ended', 'expired', 'failed'].includes(session.state));
@@ -412,6 +422,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (!modern) throw new Error('Modern conversation is not ready for calling.');
       const composition = modernCallComposition ?? await modern.createAuthenticatedCallComposition();
       setModernCallComposition(composition);
+      if (!callNegotiator.current) throw new Error('Authenticated call media is not ready. Reverify this contact.');
+      await callNegotiator.current.requestMedia('microphone');
       const call = await composition.invite();
       await callNegotiator.current?.prepareOutgoing(call);
       setModernCallId(call.callId);
@@ -440,7 +452,23 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, [chat, modern, modernCallComposition, protocolMode]);
 
   const startVideoCall = useCallback(async () => {
-    if (protocolMode === 'modern') throw new Error('Video calls are not available for this session yet.');
+    if (protocolMode === 'modern') {
+      if (!modern) throw new Error('Modern conversation is not ready for calling.');
+      const composition = modernCallComposition ?? await modern.createAuthenticatedCallComposition();
+      setModernCallComposition(composition);
+      if (!callNegotiator.current) throw new Error('Authenticated call media is not ready. Reverify this contact.');
+      await callNegotiator.current.requestMedia('camera');
+      const call = await composition.invite('video');
+      try { await callNegotiator.current.prepareOutgoing(call, 'camera'); }
+      catch (error) { await composition.cancel(call.callId).catch(() => undefined); throw error; }
+      setModernCallId(call.callId);
+      setCallActive(true);
+      setIsIncomingCall(false);
+      setCallMediaMode('video');
+      setCallLifecycleState('ringing');
+      setCallStatus('Ringing...');
+      return;
+    }
     if (!chat) throw new Error('Chat not initialized');
     try {
       setCallMediaMode('video');
@@ -457,7 +485,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setCallMediaMode('audio');
       throw new Error(message);
     }
-  }, [chat, protocolMode]);
+  }, [chat, modern, modernCallComposition, protocolMode]);
 
   const acceptCall = useCallback(async () => {
     if (protocolMode === 'modern') {
@@ -544,18 +572,28 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, [chat, clearCallMedia, modernCallComposition, modernCallId, protocolMode]);
 
   const setMicrophoneMuted = useCallback((muted: boolean): void => {
+    if (protocolMode === 'modern') {
+      callNegotiator.current?.setMicrophoneEnabled(!muted);
+      setMicrophoneMutedState(muted);
+      return;
+    }
     const call = activeLegacyCall.current;
     if (!call) return;
     call.setMicrophoneEnabled(!muted);
     setMicrophoneMutedState(muted);
-  }, []);
+  }, [protocolMode]);
 
   const setCameraEnabled = useCallback((enabled: boolean): void => {
+    if (protocolMode === 'modern') {
+      callNegotiator.current?.setCameraEnabled(enabled);
+      setCameraEnabledState(enabled);
+      return;
+    }
     const call = activeLegacyCall.current;
     if (!call || !call.localStream?.getVideoTracks().length) return;
     call.setCameraEnabled(enabled);
     setCameraEnabledState(enabled);
-  }, []);
+  }, [protocolMode]);
 
   // Add message to state
   const addMessage = useCallback((message: Message) => {

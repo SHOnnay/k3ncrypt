@@ -53,3 +53,15 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:core:1.6.1")
 }
+
+// UTP may uninstall the target app after connected tests. Guard the Gradle task
+// itself so direct invocation cannot target the persistent identity profile.
+tasks.matching { it.name == "connectedDebugAndroidTest" }.configureEach {
+    doFirst {
+        val result = ProcessBuilder("bash", "${rootProject.projectDir}/scripts/verify-disposable-avd.sh")
+            .inheritIO()
+            .start()
+            .waitFor()
+        check(result == 0) { "Refusing destructive instrumentation without the disposable AVD." }
+    }
+}

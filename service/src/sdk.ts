@@ -95,6 +95,18 @@ const encodePayload = (payload: unknown): ArrayBuffer => new TextEncoder().encod
 /** Deserialize raw bytes produced by `EncryptionStrategy.decrypt()` back into JSON. */
 const decodePayload = <T>(bytes: ArrayBuffer): T => JSON.parse(new TextDecoder().decode(bytes)) as T;
 
+/** Test-only call receive marker. It records a fixed stage label and no signal fields. */
+const testOnlyCallSignalStage = (stage: 'signal-received'): void => {
+    const diagnostic = globalThis as typeof globalThis & {
+        __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean;
+        __k3ncryptCallSignalStages?: string[];
+    };
+    if (diagnostic.__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ !== true) return;
+    const stages = diagnostic.__k3ncryptCallSignalStages ??= [];
+    stages.push(stage);
+    if (stages.length > 32) stages.shift();
+};
+
 class ChatE2EE implements IChatE2EE {
     private roomId?: string;
     private userId?: string;
@@ -403,6 +415,7 @@ class ChatE2EE implements IChatE2EE {
     private async handleRawWebrtcSignal(msg: InboundTransportEnvelope): Promise<void> {
         this.assertChannelReady();
         const payload = decodePayload<WebRtcSignalPayload>(await this.cryptoSession.decrypt('signaling', msg.envelope));
+        testOnlyCallSignalStage('signal-received');
         await this.handleCallSignal(payload);
     }
 

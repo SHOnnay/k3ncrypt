@@ -7,6 +7,7 @@ import { AuthenticatedCallSignalTransport } from './authenticatedTransport';
 import type { ReplayProtectionStore } from './replayProtection';
 import { SecureCallSignaling } from './signaling';
 import { signalDigest } from './signalBinding';
+import { generateUUID } from '../utils/uuid';
 
 export interface AuthenticatedCallCompositionInput {
   session: CryptoSession;
@@ -26,7 +27,7 @@ export interface AuthenticatedCallComposition {
   readonly signalTransport: AuthenticatedCallSignalTransport;
   readonly repository: MemoryCallRepository;
   /** Starts a call only after the authenticated identity binding is derived. */
-  readonly invite: () => Promise<CallSession>;
+  readonly invite: (mediaMode?: 'audio' | 'video') => Promise<CallSession>;
   readonly accept: (callId: string) => Promise<CallSession>;
   readonly reject: (callId: string) => Promise<CallSession>;
   readonly cancel: (callId: string) => Promise<CallSession>;
@@ -60,6 +61,9 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
       callId: session.callId,
       conversationId: session.conversationId,
       sender: localParticipant,
+      receiverIdentityId: session.participants.find((item) => item.identityId !== localParticipant.identityId)?.identityId ?? '',
+      mediaMode: session.mediaMode,
+      nonce: generateUUID(),
       event,
       kind,
       payload,
@@ -75,11 +79,12 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
     await input.deviceTrust.assertTrusted();
     const existing = await repository.get(signal.callId);
     if (!existing) {
-      if (signal.event !== 'invite' || signal.identityBinding !== await input.identity.identityBinding(input.conversationId, [localParticipant, input.remoteParticipant])) throw new Error('Unknown call.');
+      if (signal.event !== 'invite' || signal.receiverIdentityId !== localParticipant.identityId || signal.mediaMode !== 'audio' && signal.mediaMode !== 'video' || signal.identityBinding !== await input.identity.identityBinding(input.conversationId, [localParticipant, input.remoteParticipant])) throw new Error('Unknown call.');
       const incoming: CallSession = {
         callId: signal.callId,
         conversationId: signal.conversationId,
         participants: [localParticipant, input.remoteParticipant],
+        mediaMode: signal.mediaMode,
         identityBinding: signal.identityBinding,
         state: 'inviting',
         createdAt: signal.timestamp,
@@ -90,19 +95,19 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
       notify(received);
       return;
     }
-    if (signal.conversationId !== existing.conversationId || signal.identityBinding !== existing.identityBinding) throw new Error('Call signal binding rejected.');
+    if (signal.conversationId !== existing.conversationId || signal.identityBinding !== existing.identityBinding || signal.receiverIdentityId !== localParticipant.identityId || signal.mediaMode !== existing.mediaMode) throw new Error('Call signal binding rejected.');
     if (signal.kind && signal.kind !== 'control') { for (const listener of mediaListeners) await listener(existing, signal); return; }
     const updated = await service.event(signal.callId, signal.event);
     notify(updated);
   });
-  const invite = async (): Promise<CallSession> => {
+  const invite = async (mediaMode: 'audio' | 'video' = 'audio'): Promise<CallSession> => {
     await input.deviceTrust?.assertTrusted();
     const participants: readonly [CallParticipant, CallParticipant] = [
       localParticipant,
       input.remoteParticipant,
     ];
     const binding = await input.identity.identityBinding(input.conversationId, participants);
-    const session = await service.invite(input.conversationId, participants, binding);
+    const session = await service.invite(input.conversationId, participants, binding, mediaMode);
     await sendEvent(session, 'invite', 1);
     sequences.set(session.callId, 1);
     notify(session);

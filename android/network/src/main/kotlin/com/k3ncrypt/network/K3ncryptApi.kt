@@ -86,7 +86,9 @@ class K3ncryptApi(baseUrl: String, private val client: OkHttpClient = OkHttpClie
                 if (continuation.isActive) {
                     // Preserve only a transport category for callers. Response bodies can
                     // contain server implementation details and must not reach UI state.
-                    if (!it.isSuccessful || text.isNullOrBlank()) continuation.resumeWith(Result.failure(IllegalStateException("request-rejected-${it.code}")))
+                    if (!it.isSuccessful || text.isNullOrBlank()) {
+                        continuation.resumeWith(Result.failure(IllegalStateException("request-rejected-${it.code}")))
+                    }
                     else try { continuation.resumeWith(Result.success(JSONObject(text))) } catch (_: Exception) { continuation.resumeWith(Result.failure(IllegalStateException("response-invalid"))) }
                 }
             }

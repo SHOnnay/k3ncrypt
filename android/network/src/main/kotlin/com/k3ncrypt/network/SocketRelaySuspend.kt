@@ -26,3 +26,8 @@ suspend fun SocketRelay.sendEnvelopeAwait(envelope: String, recipientRoutingId: 
         }
     }
 }
+
+suspend fun SocketRelay.sendCallSignalAwait(envelope: String, proof: ProofCarrier, timeoutMillis: Long = 20_000, onSent: () -> Unit = {}) = withTimeout(timeoutMillis) {
+    suspendCancellableCoroutine { continuation -> sendCallSignal(envelope, proof, onSent) { accepted -> if (continuation.isActive) continuation.resume(accepted) } }
+        .also { check(it) { "Call signaling authorization was rejected" } }
+}
