@@ -23,8 +23,12 @@ data class SecureRecordEntity(val namespace: String, val recordId: String, val c
 interface SecureRecordDao {
     @Query("SELECT * FROM secure_records WHERE namespace = :namespace AND recordId = :recordId")
     suspend fun get(namespace: String, recordId: String): SecureRecordEntity?
+    @Query("SELECT * FROM secure_records WHERE namespace = :namespace ORDER BY updatedAt, recordId")
+    suspend fun list(namespace: String): List<SecureRecordEntity>
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun put(record: SecureRecordEntity)
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertIfAbsent(record: SecureRecordEntity): Long
     @Query("DELETE FROM secure_records WHERE namespace = :namespace AND recordId = :recordId")
     suspend fun remove(namespace: String, recordId: String)
 }
@@ -60,7 +64,10 @@ class KeystoreAead(private val alias: String = "k3ncrypt.android.v1.storage") {
 class EncryptedRecordStore(private val database: K3ncryptSecureDatabase, private val aead: KeystoreAead, private val now: () -> Long = { System.currentTimeMillis() }) {
     private fun aad(namespace: String, id: String) = "k3ncrypt:android:storage:v1:$namespace:$id".encodeToByteArray()
     suspend fun get(namespace: String, id: String): ByteArray? = database.records().get(namespace, id)?.let { aead.decrypt(it.ciphertext, aad(namespace, id)) }
+    suspend fun list(namespace: String): List<Pair<String, ByteArray>> = database.records().list(namespace).map { it.recordId to aead.decrypt(it.ciphertext, aad(namespace, it.recordId)) }
     suspend fun put(namespace: String, id: String, value: ByteArray) { database.records().put(SecureRecordEntity(namespace, id, aead.encrypt(value, aad(namespace, id)), now())) }
     suspend fun remove(namespace: String, id: String) { database.records().remove(namespace, id) }
     suspend fun <T> transaction(block: suspend SecureRecordDao.() -> T): T = database.withTransaction { database.records().block() }
+    internal fun seal(namespace: String, id: String, value: ByteArray): SecureRecordEntity = SecureRecordEntity(namespace, id, aead.encrypt(value, aad(namespace, id)), now())
+    internal fun open(record: SecureRecordEntity): ByteArray = aead.decrypt(record.ciphertext, aad(record.namespace, record.recordId))
 }

@@ -6,6 +6,11 @@ import java.util.UUID
 
 data class SignedControlEvent(val canonicalUnsignedJson: String, val signature: String)
 
+internal fun signedControlWireJson(canonicalUnsignedJson: String, signature: String): String {
+    require(canonicalUnsignedJson.startsWith("{") && canonicalUnsignedJson.endsWith("}"))
+    return canonicalUnsignedJson.removeSuffix("}") + ",\"signature\":" + org.json.JSONObject.quote(signature) + "}"
+}
+
 /** Builds only the Phase 8 field order; server authority remains the verifier. */
 class DeviceLifecycleRequests(private val crypto: CryptoPort, private val now: () -> Long = { System.currentTimeMillis() }) {
     private fun sign(account: AccountHandle, fields: List<Pair<String, Any?>>): SignedControlEvent {

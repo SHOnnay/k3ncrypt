@@ -164,6 +164,9 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setSessionError(undefined);
       return details;
     } catch (error) {
+      if ((globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean; __k3ncryptGetCryptoSnapshot?: () => Promise<unknown> }).__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ === true) {
+        (globalThis as typeof globalThis & { __k3ncryptGetCryptoSnapshot?: () => Promise<unknown> }).__k3ncryptGetCryptoSnapshot = () => conversation.testOnlyCryptoSnapshot();
+      }
       await conversation.close().catch(() => undefined);
       setSyncStatus('blocked');
       setSessionError(error instanceof Error ? error.message : 'Could not open the private session.');

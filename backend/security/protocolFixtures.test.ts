@@ -1,6 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash, verify } from 'node:crypto';
+import { verifyBootstrapSignature, verifyDeviceControlSignature, verifyLifecycleEvent } from './lifecycleEvent';
+import type { BootstrapRequest, EnrollmentEvent } from '../../service/src/devices/trustProtocol';
+import type { SignedLifecycleEvent } from './lifecycleEvent';
 
 const fixture = (name: string) => JSON.parse(readFileSync(join(process.cwd(), 'protocol-fixtures', 'v1', name), 'utf8')) as Record<string, unknown>;
 
@@ -28,5 +31,24 @@ describe('Phase 9 cross-platform protocol fixtures', () => {
     expect(accepted.version).toBe(2);
     expect(accepted.strategy).toBe('vodozemac-olm-v1');
     expect(Object.keys(accepted.data)).toEqual(['version', 'olmMessage']);
+  });
+
+  it('verifies the shared bootstrap, enrollment, and activation signatures and rejects field changes', () => {
+    const value = fixture('device-lifecycle-events.json') as unknown as {
+      publicVerificationKey: string;
+      bootstrap: { canonicalPayload: string; signature: string };
+      enrollment: { canonicalPayload: string; signature: string };
+      activation: { canonicalPayload: string; signature: string };
+    };
+    const publicKey = value.publicVerificationKey as string;
+    const bootstrap = { ...JSON.parse(value.bootstrap.canonicalPayload) as Record<string, unknown>, signature: value.bootstrap.signature } as BootstrapRequest;
+    const enrollment = { ...JSON.parse(value.enrollment.canonicalPayload) as Record<string, unknown>, signature: value.enrollment.signature } as EnrollmentEvent;
+    const activation = { ...JSON.parse(value.activation.canonicalPayload) as Record<string, unknown>, signature: value.activation.signature } as SignedLifecycleEvent;
+    expect(verifyBootstrapSignature(bootstrap, publicKey)).toBe(true);
+    expect(verifyDeviceControlSignature(enrollment, publicKey)).toBe(true);
+    expect(verifyLifecycleEvent(activation, publicKey, 1_700_000_000_000)).toBe(true);
+    expect(verifyBootstrapSignature({ ...bootstrap, deviceId: '66666666-6666-4666-8666-666666666666' }, publicKey)).toBe(false);
+    expect(verifyDeviceControlSignature({ ...enrollment, targetDeviceId: '66666666-6666-4666-8666-666666666666' }, publicKey)).toBe(false);
+    expect(verifyLifecycleEvent({ ...activation, nextEpoch: activation.nextEpoch + 1 }, publicKey, 1_700_000_000_000)).toBe(false);
   });
 });

@@ -140,9 +140,12 @@ fn java_long(env: &mut JNIEnv, value: Result<i64, String>) -> jlong {
     }
 }
 fn java_bytes(env: &mut JNIEnv, value: Result<Vec<u8>, String>) -> jbyteArray {
-    match value.and_then(|value| {
-        env.byte_array_from_slice(&value)
-            .map_err(|_| "unable to allocate JNI byte array".to_owned())
+    match value.and_then(|mut value| {
+        let result = env
+            .byte_array_from_slice(&value)
+            .map_err(|_| "unable to allocate JNI byte array".to_owned());
+        value.zeroize();
+        result
     }) {
         Ok(value) => value.into_raw(),
         Err(error) => {
@@ -398,6 +401,9 @@ pub extern "system" fn Java_com_k3ncrypt_crypto_NativeCryptoBridge_nativeCreateI
             .ok_or_else(|| "unknown account handle".to_owned())?
             .create_inbound_session(SessionConfig::version_1(), curve(&identity)?, &prekey)
             .map_err(|_| "unable to authenticate or create inbound session".to_owned())?;
+        let mut plaintext = result.plaintext;
+        let encoded_plaintext = STANDARD_NO_PAD.encode(&plaintext);
+        plaintext.zeroize();
         let id = new_handle();
         SESSIONS
             .lock()
@@ -405,7 +411,7 @@ pub extern "system" fn Java_com_k3ncrypt_crypto_NativeCryptoBridge_nativeCreateI
             .insert(id, result.session);
         serde_json::to_string(&InboundResult {
             session_handle: id,
-            plaintext: STANDARD_NO_PAD.encode(result.plaintext),
+            plaintext: encoded_plaintext,
         })
         .map_err(|_| "unable to encode inbound result".to_owned())
     })();
@@ -419,15 +425,18 @@ pub extern "system" fn Java_com_k3ncrypt_crypto_NativeCryptoBridge_nativeEncrypt
     plaintext: JByteArray,
 ) -> jstring {
     let result = (|| {
-        let plaintext = bytes(&mut env, plaintext)?;
+        let mut plaintext = bytes(&mut env, plaintext)?;
         if plaintext.len() > MAX_MESSAGE_BYTES {
+            plaintext.zeroize();
             return Err("Olm plaintext is too large".to_owned());
         };
-        let message = session(handle)?
+        let encrypted = session(handle)?
             .get_mut(&handle)
             .ok_or_else(|| "unknown session handle".to_owned())?
             .encrypt(&plaintext)
-            .map_err(|_| "Olm encryption failed".to_owned())?;
+            .map_err(|_| "Olm encryption failed".to_owned());
+        plaintext.zeroize();
+        let message = encrypted?;
         wire(message)
     })();
     java_string(&mut env, result)
@@ -473,12 +482,15 @@ pub extern "system" fn Java_com_k3ncrypt_crypto_NativeCryptoBridge_nativeLoadSes
     serialized: JByteArray,
 ) -> jlong {
     let result = (|| {
-        let serialized = bytes(&mut env, serialized)?;
+        let mut serialized = bytes(&mut env, serialized)?;
         if serialized.len() > MAX_SESSION_BYTES {
+            serialized.zeroize();
             return Err("session pickle is too large".to_owned());
         };
-        let pickle: SessionPickle = serde_json::from_slice(&serialized)
-            .map_err(|_| "corrupted session pickle".to_owned())?;
+        let parsed = serde_json::from_slice::<SessionPickle>(&serialized)
+            .map_err(|_| "corrupted session pickle".to_owned());
+        serialized.zeroize();
+        let pickle = parsed?;
         let id = new_handle();
         SESSIONS
             .lock()
@@ -544,6 +556,55 @@ mod tests {
             restored
                 .create_inbound_session(SessionConfig::version_1(), alice.curve25519_key(), &prekey)
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn browser_olm_envelope_and_text_frame_round_trip_after_session_restore() {
+        let alice = Account::new();
+        let mut bob = Account::new();
+        bob.generate_one_time_keys(1);
+        let one_time_key = bob.one_time_keys().values().next().unwrap().to_base64();
+        let bob_identity = bob.curve25519_key().to_base64();
+        let mut alice_session = alice
+            .create_outbound_session(
+                SessionConfig::version_1(),
+                curve(&bob_identity).unwrap(),
+                curve(&one_time_key).unwrap(),
+            )
+            .unwrap();
+        bob.mark_keys_as_published();
+
+        let mut frame = vec![1_u8, 1_u8];
+        frame.extend_from_slice("cross-platform hello".as_bytes());
+        let first_wire = wire(alice_session.encrypt(&frame).unwrap()).unwrap();
+        let envelope = serde_json::json!({"version": 2, "strategy": "vodozemac-olm-v1", "data": {"version": 1, "olmMessage": first_wire}});
+        assert_eq!(envelope["version"], 2);
+        let olm = envelope["data"]["olmMessage"].as_str().unwrap();
+
+        let prekey = match parse_wire(olm).unwrap() {
+            OlmMessage::PreKey(value) => value,
+            _ => panic!("expected first-message pre-key"),
+        };
+        let inbound = bob
+            .create_inbound_session(SessionConfig::version_1(), alice.curve25519_key(), &prekey)
+            .unwrap();
+        assert_eq!(inbound.plaintext, frame);
+
+        let bob_session = inbound.session;
+        let bob_pickle = serde_json::to_vec(&bob_session.pickle()).unwrap();
+        let mut bob_session: Session = serde_json::from_slice::<SessionPickle>(&bob_pickle)
+            .unwrap()
+            .into();
+        let alice_pickle = serde_json::to_vec(&alice_session.pickle()).unwrap();
+        let mut alice_session: Session = serde_json::from_slice::<SessionPickle>(&alice_pickle)
+            .unwrap()
+            .into();
+
+        let reply = wire(bob_session.encrypt(b"browser reply").unwrap()).unwrap();
+        assert_eq!(
+            alice_session.decrypt(&parse_wire(&reply).unwrap()).unwrap(),
+            b"browser reply"
         );
     }
 }

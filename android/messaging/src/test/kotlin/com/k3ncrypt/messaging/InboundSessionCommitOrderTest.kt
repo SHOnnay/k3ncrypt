@@ -9,8 +9,8 @@ class InboundSessionCommitOrderTest {
         val calls = mutableListOf<String>()
 
         try {
-            persistThenRememberSession(
-                persist = { calls += "persist"; throw IllegalStateException("storage unavailable") },
+            commitAndRememberSession(
+                commit = { calls += "persist"; throw IllegalStateException("storage unavailable") },
                 remember = { calls += "remember" },
             )
         } catch (_: IllegalStateException) {
@@ -23,11 +23,20 @@ class InboundSessionCommitOrderTest {
     @Test fun `session is published only after durable commit`() = runBlocking {
         val calls = mutableListOf<String>()
 
-        persistThenRememberSession(
-            persist = { calls += "persist" },
+        commitAndRememberSession(
+            commit = { calls += "persist"; com.k3ncrypt.storage.InboundCommitResult.STORED },
             remember = { calls += "remember" },
         )
 
         assertEquals(listOf("persist", "remember"), calls)
+    }
+
+    @Test fun `duplicate durable commit does not publish session`() = runBlocking {
+        val calls = mutableListOf<String>()
+        commitAndRememberSession(
+            commit = { calls += "persist"; com.k3ncrypt.storage.InboundCommitResult.DUPLICATE },
+            remember = { calls += "remember" },
+        )
+        assertEquals(listOf("persist"), calls)
     }
 }

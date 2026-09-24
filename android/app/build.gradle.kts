@@ -17,6 +17,10 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0-beta"
+        val backendUrl = providers.gradleProperty("k3ncryptBackendUrl").orElse("").get()
+        buildConfigField("String", "K3NCRYPT_BACKEND_URL", "\"$backendUrl\"")
+        val socketUrl = providers.gradleProperty("k3ncryptSocketUrl").orElse(backendUrl).get()
+        buildConfigField("String", "K3NCRYPT_SOCKET_URL", "\"$socketUrl\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -40,7 +44,12 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("com.google.dagger:hilt-android:2.52")
+    implementation("androidx.room:room-runtime:2.6.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     ksp("com.google.dagger:hilt-compiler:2.52")
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:core:1.6.1")
 }

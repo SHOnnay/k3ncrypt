@@ -41,8 +41,28 @@ import { fromBase64Url } from './base64url';
 const OUTBOX_RECORD = 'modern-outbox';
 const SEEN_RECORD = 'modern-seen';
 const PUBLICATION_RECORD = 'modern-publication';
+const SESSION_AUDIT_RECORD = 'conversation-session-audit';
 const MAX_PENDING = 32;
 const MAX_SEEN = 1024;
+
+type SessionAudit = {
+    version: 1;
+    classification: 'unused-outbound' | 'retired-unused-outbound' | 'session-with-message-history' | 'active-established' | 'legacy-unclassified';
+    direction?: 'outbound' | 'inbound';
+    origin?: 'join' | 'first-message';
+};
+
+const parseSessionAudit = (bytes: ArrayBuffer | undefined): SessionAudit | undefined => {
+    if (!bytes) return undefined;
+    const value = JSON.parse(decoder.decode(bytes)) as SessionAudit;
+    if (!value || value.version !== 1 ||
+        !['unused-outbound', 'retired-unused-outbound', 'session-with-message-history', 'active-established', 'legacy-unclassified'].includes(value.classification) ||
+        (value.direction !== undefined && value.direction !== 'outbound' && value.direction !== 'inbound') ||
+        (value.origin !== undefined && value.origin !== 'join' && value.origin !== 'first-message')) {
+        throw new Error('Conversation session audit record is invalid.');
+    }
+    return value;
+};
 const TAB_LEASE_MS = 15_000;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -55,6 +75,26 @@ export interface ModernConnectionDetails {
     contact?: StoredContactIdentity;
 }
 export type DeviceControlEvent = DeviceControlMessage;
+
+type InboundDiagnosticStage = 'received' | 'parsed' | 'session-found' | 'decrypted' | 'frame-parsed' | 'persisted' | 'acknowledged';
+type InboundDiagnosticEvent = {
+    conversationId: string;
+    stage: InboundDiagnosticStage;
+    senderFingerprintHash?: string;
+    receiverFingerprintHash?: string;
+    failureCategory?: string;
+};
+
+const testOnlyDeliveryStage = (stage: string): void => {
+    const diagnostic = globalThis as typeof globalThis & {
+        __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean;
+        __k3ncryptDeliveryStages?: Array<{ stage: string; reached: boolean }>;
+    };
+    if (diagnostic.__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ !== true) return;
+    const events = diagnostic.__k3ncryptDeliveryStages ??= [];
+    events.push({ stage, reached: true });
+    if (events.length > 100) events.shift();
+};
 
 const asBytes = (value: unknown): ArrayBuffer => encoder.encode(JSON.stringify(value)).buffer as ArrayBuffer;
 const parseList = <T>(bytes: ArrayBuffer | undefined): T[] => {
@@ -97,9 +137,10 @@ export class ModernConversation {
     private roomId?: string;
     private capability?: string;
     private remoteAddress?: string;
-    private selectedRemotePreKeyId?: string;
-    private lastInboundEnvelopeMetadata?: { protocolVersion: number; messageType: number; routingIdentity: string };
+    private remoteIdentityCommitment?: string;
     private lastInboundFailureCategory?: string;
+    private lastConnectionFailureCategory?: string;
+    private inboundDiagnosticEvents: InboundDiagnosticEvent[] = [];
     /** A replay can arrive while connect() owns the conversation tab lock. */
     private connecting = false;
     private localAddress?: string;
@@ -170,7 +211,9 @@ export class ModernConversation {
     private async connectUnlocked(roomId: string, capability: string, remoteAddress?: string, remoteIdentityCommitment?: string, onMessage?: (text: string) => void, onContactChange?: (contact: StoredContactIdentity) => void, onDeviceControl?: (message: DeviceControlEvent) => void): Promise<ModernConnectionDetails> {
         if (!/^[0-9a-f-]{36}$/i.test(roomId) || !capability) throw new Error('Invalid private conversation invitation.');
         this.roomId = roomId;
+        this.lastConnectionFailureCategory = undefined;
         this.capability = capability;
+        this.remoteIdentityCommitment = remoteIdentityCommitment;
         this.onMessage = onMessage;
         this.onContactChange = onContactChange;
         this.onDeviceControl = onDeviceControl;
@@ -182,14 +225,21 @@ export class ModernConversation {
         if (publication && (publication.version !== 1 || !publication.address || publication.roomId !== roomId)) {
             throw new Error('A previous key publication has an uncertain outcome. This identity cannot publish again automatically.');
         }
-        const saved = await this.modes.read(roomId);
+        let saved = await this.modes.read(roomId);
+        if (!saved?.sessionId) await this.cleanupRetiredSession(roomId);
+        if (saved?.sessionId && await this.auditAndMigratePersistedSession(roomId, saved.sessionId)) {
+            saved = await this.modes.read(roomId);
+        }
         const requestedContact = remoteAddress === saved?.localAddress ? undefined : remoteAddress;
         if (saved?.remoteAddress && requestedContact && saved.remoteAddress !== requestedContact) throw new Error('The contact address changed. Review the connection before continuing.');
         this.remoteAddress = requestedContact ?? saved?.remoteAddress;
         if (saved?.sessionId) await this.runtime.restoreSession(roomId, saved.sessionId);
         if (this.remoteAddress && saved?.sessionId) {
-            const contactBundle = validateVodozemacPublicBundle(await fetchVodozemacBundle(roomId, capability, this.remoteAddress));
-            await this.observe(this.remoteAddress, contactBundle.identity, remoteIdentityCommitment);
+            let contactBundle;
+            try { contactBundle = validateVodozemacPublicBundle(await fetchVodozemacBundle(roomId, capability, this.remoteAddress)); }
+            catch (error) { this.lastConnectionFailureCategory = 'prekey-session-lookup-failure'; throw error; }
+            try { await this.observe(this.remoteAddress, contactBundle.identity, remoteIdentityCommitment); }
+            catch (error) { this.lastConnectionFailureCategory = 'sender-identity-mismatch'; throw error; }
         }
 
         let localAddress = saved?.localAddress ?? publication?.address;
@@ -267,14 +317,16 @@ export class ModernConversation {
         await this.syncController.recover();
 
         if (this.remoteAddress && !saved?.sessionId) {
-            const contact = validateVodozemacPublicBundle(await fetchVodozemacBundle(roomId, capability, this.remoteAddress));
-            await this.observe(this.remoteAddress, contact.identity, remoteIdentityCommitment);
-            if (contact.oneTimeKeys.length === 0) throw new Error('The contact has no available invitation keys.');
-            const claimed = await claimVodozemacOneTimeKey(roomId, capability, this.remoteAddress, contact.oneTimeKeys[0].id);
-            if (claimed.key !== contact.oneTimeKeys[0].key) throw new Error('The claimed invitation key changed.');
-            this.selectedRemotePreKeyId = contact.oneTimeKeys[0].id;
-            await this.runtime.establishOutboundSession(roomId, contact.identity.curve25519, claimed.key);
-            await this.modes.write(roomId, { sessionId: this.runtime.activeSessionId, remoteAddress: this.remoteAddress });
+            // Validate and pin the invitation identity during join, but defer
+            // claiming a peer one-time key until this device actually sends.
+            // Otherwise both peers can independently create outbound Olm
+            // sessions before the first message, and the first inbound
+            // pre-key message is incorrectly routed to an unrelated session.
+            let contact;
+            try { contact = validateVodozemacPublicBundle(await fetchVodozemacBundle(roomId, capability, this.remoteAddress)); }
+            catch (error) { this.lastConnectionFailureCategory = 'prekey-session-lookup-failure'; throw error; }
+            try { await this.observe(this.remoteAddress, contact.identity, remoteIdentityCommitment); }
+            catch (error) { this.lastConnectionFailureCategory = 'sender-identity-mismatch'; throw error; }
         }
         this.prepareDeviceControl();
 
@@ -317,11 +369,31 @@ export class ModernConversation {
         return this.deviceTrust.decision();
     }
 
-    /** Guarded test harness view of public crypto metadata only. */
-    public async testOnlyCryptoSnapshot(): Promise<{ identityFingerprint?: string; oneTimeKeyIds: string[]; availableKeyCount: number; selectedRecipientKeyId?: string; lastInboundEnvelope?: { protocolVersion: number; messageType: number; routingIdentity: string }; inboundFailureCategory?: string; runtimeEntry?: unknown; runtimeStage?: string }> {
+    /** Guarded test harness view containing only approved message lifecycle metadata. */
+    public async testOnlyCryptoSnapshot(): Promise<{ conversationId?: string; inboundEvents: InboundDiagnosticEvent[]; inboundFailureCategory?: string; connectionFailureCategory?: string }> {
         if ((globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean }).__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ !== true) throw new Error('Test-only diagnostics are disabled.');
-        const bundle = await this.runtime.getPublicBundle();
-        return { identityFingerprint: this.localIdentityId, oneTimeKeyIds: bundle.oneTimeKeys.map((key) => key.id), availableKeyCount: bundle.oneTimeKeys.length, selectedRecipientKeyId: this.selectedRemotePreKeyId, lastInboundEnvelope: this.lastInboundEnvelopeMetadata, inboundFailureCategory: this.lastInboundFailureCategory, runtimeEntry: this.runtime.testOnlyInboundEntry(), runtimeStage: this.runtime.testOnlyInboundStage() };
+        return { conversationId: this.roomId, inboundEvents: [...this.inboundDiagnosticEvents], inboundFailureCategory: this.lastInboundFailureCategory, connectionFailureCategory: this.lastConnectionFailureCategory };
+    }
+
+    private async testOnlyRecordInboundStage(stage: InboundDiagnosticStage, senderFingerprint?: string, failureCategory?: string): Promise<void> {
+        if ((globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean }).__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ !== true || !this.roomId) return;
+        try {
+            const fingerprintHash = async (value?: string): Promise<string | undefined> => {
+                if (!value || !globalThis.crypto?.subtle) return undefined;
+                const digest = await globalThis.crypto.subtle.digest('SHA-256', encoder.encode(value));
+                return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+            };
+            this.inboundDiagnosticEvents.push({
+                conversationId: this.roomId,
+                stage,
+                receiverFingerprintHash: await fingerprintHash(this.localIdentityId),
+                senderFingerprintHash: await fingerprintHash(senderFingerprint),
+                ...(failureCategory ? { failureCategory } : {}),
+            });
+            if (this.inboundDiagnosticEvents.length > 100) this.inboundDiagnosticEvents.splice(0, this.inboundDiagnosticEvents.length - 100);
+        } catch {
+            // Test diagnostics must never affect message acceptance.
+        }
     }
 
     /** Short-lived request proof for the host's authenticated ciphertext attachment adapter. */
@@ -448,20 +520,50 @@ export class ModernConversation {
     public onDeliveryUpdate(observer: (clientId: string, state: 'accepted') => void): void { this.deliveryObserver = observer; }
 
     private async sendUnlocked(text: string): Promise<string> {
-        if (!this.roomId || !this.runtime.activeSessionId || !text.trim()) throw new Error('The private contact is not ready.');
+        if (!this.roomId || !text.trim()) throw new Error('The private contact is not ready.');
+        testOnlyDeliveryStage('send-start');
         await this.assertCurrentDeviceTrust();
         const contact = await this.getContact();
         if (contact?.changeStatus !== 'unchanged') throw new Error('Review this contact’s changed identity before sending.');
+        await this.ensureOutboundSession();
         const clientId = crypto.randomUUID();
         await this.deliveryMutex.runExclusive(async () => {
             const pending = await this.readPending();
             if (pending.length >= MAX_PENDING) throw new Error('Too many messages are waiting to send.');
             const envelope = await this.runtime.encrypt('message', encoder.encode(text).buffer as ArrayBuffer);
+            testOnlyDeliveryStage('envelope-created');
             pending.push({ envelope, clientId });
             await this.storage.write(OUTBOX_RECORD, this.roomId!, asBytes(pending));
         });
         await this.retryPending();
         return clientId;
+    }
+
+    /** Establishes the initial outbound session only when this device sends first. */
+    private async ensureOutboundSession(): Promise<void> {
+        if (this.runtime.activeSessionId) return;
+        if (!this.roomId || !this.capability || !this.remoteAddress) throw new Error('The private contact is not ready.');
+        let contact;
+        try { contact = validateVodozemacPublicBundle(await fetchVodozemacBundle(this.roomId, this.capability, this.remoteAddress)); }
+        catch (error) { this.lastConnectionFailureCategory = 'prekey-session-lookup-failure'; throw error; }
+        try { await this.observe(this.remoteAddress, contact.identity, this.remoteIdentityCommitment); }
+        catch (error) { this.lastConnectionFailureCategory = 'sender-identity-mismatch'; throw error; }
+        if (contact.oneTimeKeys.length === 0) {
+            this.lastConnectionFailureCategory = 'prekey-session-lookup-failure';
+            throw new Error('The contact has no available invitation keys.');
+        }
+        let claimed;
+        try { claimed = await claimVodozemacOneTimeKey(this.roomId, this.capability, this.remoteAddress, contact.oneTimeKeys[0].id); }
+        catch (error) { this.lastConnectionFailureCategory = 'prekey-session-lookup-failure'; throw error; }
+        if (claimed.key !== contact.oneTimeKeys[0].key) {
+            this.lastConnectionFailureCategory = 'prekey-session-lookup-failure';
+            throw new Error('The claimed invitation key changed.');
+        }
+        try { await this.runtime.establishOutboundSession(this.roomId, contact.identity.curve25519, claimed.key); }
+        catch (error) { this.lastConnectionFailureCategory = 'prekey-session-lookup-failure'; throw error; }
+        await this.modes.write(this.roomId, { sessionId: this.runtime.activeSessionId, remoteAddress: this.remoteAddress });
+        await this.writeSessionAudit('outbound', 'first-message');
+        this.lastConnectionFailureCategory = undefined;
     }
 
     public async retryPending(): Promise<void> {
@@ -472,6 +574,7 @@ export class ModernConversation {
                 if (item.relayId && item.sentAt && Date.now() - item.sentAt < 5000) continue;
                 try {
                     await this.assertCurrentDeviceTrust();
+                    testOnlyDeliveryStage('relay-dispatch');
                     const sent = await this.transport.sendEnvelope('message', item.envelope, this.remoteAddress);
                     item.relayId = sent.id;
                     item.sentAt = Date.now();
@@ -512,6 +615,11 @@ export class ModernConversation {
         if (!contact || contact.changeStatus !== 'unchanged' || contact.verification !== 'verified') {
             throw new Error('Verify this contact before starting a call.');
         }
+        // Calls use the established session as their encrypted signaling
+        // channel. A call can be the first protected operation, so establish
+        // the outbound session here only after the user explicitly verified
+        // the peer.
+        await this.ensureOutboundSession();
         const localParticipant: CallParticipant = { participantId: this.localAddress, identityId: this.localIdentityId, verification: 'verified' };
         const remoteParticipant: CallParticipant = { participantId: this.remoteAddress, identityId: contact.identityId, verification: contact.verification };
         const identity = new VerifiedCallIdentityVerifier(
@@ -610,6 +718,7 @@ export class ModernConversation {
         if (!this.roomId || !this.remoteAddress) throw new Error('No changed contact is open.');
         await this.registry.acceptPendingChange(this.remoteAddress);
         await this.storage.delete('vodozemac-session', this.roomId);
+        await this.storage.delete(SESSION_AUDIT_RECORD, this.roomId);
         await this.modes.write(this.roomId, { sessionId: undefined });
         this.runtime.close();
         this.callComposition = undefined;
@@ -643,65 +752,153 @@ export class ModernConversation {
         await deleteLink({ channelID: this.roomId, controlCapability: this.capability });
         await this.storage.delete(OUTBOX_RECORD, this.roomId);
         await this.storage.delete(SEEN_RECORD, this.roomId);
+        await this.storage.delete(SESSION_AUDIT_RECORD, this.roomId);
         await this.storage.delete('vodozemac-session', this.roomId);
         await this.storage.delete('conversation-protocol', this.roomId);
         if (this.remoteAddress) await this.storage.delete('contact-identity', this.remoteAddress);
         await this.close();
     }
 
+    /**
+     * Audits pre-direction session records before restoring them. Older
+     * conversation records do not say whether their session was created on
+     * join, on first send, or on first receive. Keep those records unless a
+     * durable audit marker proves they are an unused join-created outbound
+     * session. Message evidence upgrades an unmarked record to preserved
+     * history; absence of evidence alone is deliberately not deletion proof.
+     */
+    private async auditAndMigratePersistedSession(conversationId: string, sessionId: string): Promise<boolean> {
+        const auditBytes = await this.storage.read(SESSION_AUDIT_RECORD, conversationId);
+        const audit = parseSessionAudit(auditBytes);
+        if (audit?.classification === 'unused-outbound' && audit.direction === 'outbound' && audit.origin === 'join') {
+            const modeBytes = await this.storage.read('conversation-protocol', conversationId);
+            if (!modeBytes || !auditBytes || !this.storage.compareAndSwapRecords) return false;
+            const mode = JSON.parse(decoder.decode(modeBytes)) as Record<string, unknown>;
+            if (mode.version !== 1 || mode.mode !== 'modern' || mode.sessionId !== sessionId) return false;
+            const modeWithoutSession = { ...mode };
+            delete modeWithoutSession.sessionId;
+            const retired: SessionAudit = { version: 1, classification: 'retired-unused-outbound', direction: 'outbound', origin: 'join' };
+            const transitioned = await this.storage.compareAndSwapRecords([
+                { recordType: 'conversation-protocol', recordId: conversationId, expected: modeBytes, next: asBytes(modeWithoutSession) },
+                { recordType: SESSION_AUDIT_RECORD, recordId: conversationId, expected: auditBytes, next: asBytes(retired) },
+            ]);
+            if (!transitioned) return false;
+            await this.cleanupRetiredSession(conversationId);
+            return true;
+        }
+        if (audit) return false;
+
+        const [seenBytes, outboxBytes, messageBytes] = await Promise.all([
+            this.storage.read(SEEN_RECORD, conversationId),
+            this.storage.read(OUTBOX_RECORD, conversationId),
+            this.storage.read('product-messages', conversationId),
+        ]);
+        const seen = parseList<string>(seenBytes);
+        const outbox = parseList<PendingEnvelope>(outboxBytes);
+        let hasProductHistory = false;
+        if (messageBytes) {
+            const messages: unknown = JSON.parse(decoder.decode(messageBytes));
+            if (!Array.isArray(messages)) throw new Error('Saved conversation history is invalid.');
+            hasProductHistory = messages.length > 0;
+        }
+        const classification: SessionAudit['classification'] = seen.length > 0 || outbox.length > 0 || hasProductHistory
+            ? 'session-with-message-history'
+            : 'legacy-unclassified';
+        const migrationAudit: SessionAudit = { version: 1, classification };
+        await this.storage.write(SESSION_AUDIT_RECORD, conversationId, asBytes(migrationAudit));
+        // sessionId is intentionally read/validated here so malformed or
+        // incomplete mode records cannot be treated as migration candidates.
+        if (!sessionId) throw new Error('Persisted conversation session identity is missing.');
+        return false;
+    }
+
+    private async cleanupRetiredSession(conversationId: string): Promise<void> {
+        const audit = parseSessionAudit(await this.storage.read(SESSION_AUDIT_RECORD, conversationId));
+        if (audit?.classification !== 'retired-unused-outbound') return;
+        await this.storage.delete('vodozemac-session', conversationId);
+        await this.storage.delete(SESSION_AUDIT_RECORD, conversationId);
+    }
+
+    private async writeSessionAudit(direction: 'outbound' | 'inbound', origin: 'join' | 'first-message'): Promise<void> {
+        if (!this.roomId) throw new Error('Conversation session cannot be audited without a conversation.');
+        const audit: SessionAudit = { version: 1, classification: 'active-established', direction, origin };
+        await this.storage.write(SESSION_AUDIT_RECORD, this.roomId, asBytes(audit));
+    }
+
     private async receive(envelope: EncryptedEnvelope, senderAddress?: string): Promise<boolean> {
-        this.lastInboundFailureCategory = 'envelope-received';
-        try { await this.assertCurrentDeviceTrust(); }
-        catch (error) { this.lastInboundFailureCategory = 'device-trust'; throw error; }
-        if (!this.roomId || !this.capability || !senderAddress ||
-            (this.remoteAddress && senderAddress !== this.remoteAddress)) return false;
-        const digest = await this.digest(envelope);
-        const seen = parseList<string>(await this.storage.read(SEEN_RECORD, this.roomId));
-        if (seen.includes(digest)) return true;
-        let text: string;
-        if (!this.runtime.activeSessionId) {
-            this.lastInboundFailureCategory = 'sender-bundle-requested';
-            const wire = JSON.parse(firstMessage(envelope)) as { version?: unknown; message_type?: unknown };
-            if (wire.version === 1 && typeof wire.message_type === 'number') this.lastInboundEnvelopeMetadata = { protocolVersion: wire.version, messageType: wire.message_type, routingIdentity: senderAddress };
-            let bundle;
-            try { bundle = validateVodozemacPublicBundle(await fetchVodozemacBundle(this.roomId, this.capability, senderAddress)); this.lastInboundFailureCategory = 'sender-bundle-retrieved'; }
-            catch (error) { this.lastInboundFailureCategory = 'sender-bundle'; throw error; }
-            const pinned = await this.registry.get(senderAddress);
-            const fingerprint = await fingerprintVodozemacIdentity(bundle.identity);
-            if (pinned && (pinned.identityId !== fingerprint || pinned.changeStatus !== 'unchanged')) {
-                this.lastInboundFailureCategory = 'sender-identity';
-                await this.observe(senderAddress, bundle.identity);
+        this.lastInboundFailureCategory = undefined;
+        let senderFingerprint: string | undefined;
+        await this.testOnlyRecordInboundStage('received');
+        try {
+            try { await this.assertCurrentDeviceTrust(); }
+            catch (error) { this.lastInboundFailureCategory = 'device-trust-failure'; throw error; }
+            if (!this.roomId || !this.capability || !senderAddress || (this.remoteAddress && senderAddress !== this.remoteAddress)) {
+                this.lastInboundFailureCategory = 'routing-mismatch';
+                await this.testOnlyRecordInboundStage('received', undefined, this.lastInboundFailureCategory);
                 return false;
             }
-            this.lastInboundFailureCategory = 'runtime-entry';
-            let plaintext: ArrayBuffer;
-            try { plaintext = await this.runtime.establishInboundSession(this.roomId, bundle.identity.curve25519, firstMessage(envelope)); }
-            catch (error) {
-                // The public diagnostic hook is deliberately unavailable in a
-                // production browser. Keep the operational category generic
-                // there, while allowing the guarded test harness to refine it.
-                if ((globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean }).__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ === true) {
-                    this.lastInboundFailureCategory = this.runtime.testOnlyInboundFailureStage() ?? 'runtime-entry';
-                }
-                throw error;
+            let wireText: string;
+            try { wireText = firstMessage(envelope); }
+            catch (error) { this.lastInboundFailureCategory = 'malformed-envelope'; throw error; }
+            this.lastInboundFailureCategory = undefined;
+            await this.testOnlyRecordInboundStage('parsed');
+            const digest = await this.digest(envelope);
+            const seen = parseList<string>(await this.storage.read(SEEN_RECORD, this.roomId));
+            if (seen.includes(digest)) {
+                await this.testOnlyRecordInboundStage('persisted');
+                await this.testOnlyRecordInboundStage('acknowledged');
+                return true;
             }
-            try { text = unframeFirstMessage(plaintext); }
-            catch (error) { this.lastInboundFailureCategory = 'framing'; throw error; }
-            // The conversation creator has no peer identity commitment until
-            // the invitee speaks. At this point Olm has authenticated the
-            // sender identity carried by the pre-key message; persist it only
-            // as an unverified first-contact record. All later substitutions
-            // still fail closed in observe().
-            await this.observe(senderAddress, bundle.identity, undefined, true);
-            this.remoteAddress = senderAddress;
-            await this.modes.write(this.roomId, { sessionId: this.runtime.activeSessionId, remoteAddress: senderAddress });
-        } else {
-            text = decoder.decode(await this.runtime.decrypt('message', envelope));
+            let text: string;
+            if (!this.runtime.activeSessionId) {
+                let bundle;
+                try { bundle = validateVodozemacPublicBundle(await fetchVodozemacBundle(this.roomId, this.capability, senderAddress)); }
+                catch (error) { this.lastInboundFailureCategory = 'prekey-session-lookup-failure'; throw error; }
+                const pinned = await this.registry.get(senderAddress);
+                senderFingerprint = await fingerprintVodozemacIdentity(bundle.identity);
+                if (pinned && (pinned.identityId !== senderFingerprint || pinned.changeStatus !== 'unchanged')) {
+                    this.lastInboundFailureCategory = 'sender-identity-mismatch';
+                    await this.observe(senderAddress, bundle.identity);
+                    await this.testOnlyRecordInboundStage('parsed', senderFingerprint, this.lastInboundFailureCategory);
+                    return false;
+                }
+                let plaintext: ArrayBuffer;
+                try { plaintext = await this.runtime.establishInboundSession(this.roomId, bundle.identity.curve25519, wireText); }
+                catch (error) { this.lastInboundFailureCategory = 'prekey-session-lookup-failure'; throw error; }
+                await this.testOnlyRecordInboundStage('session-found', senderFingerprint);
+                await this.testOnlyRecordInboundStage('decrypted', senderFingerprint);
+                try { text = unframeFirstMessage(plaintext); }
+                catch (error) { this.lastInboundFailureCategory = 'message-frame-parsing-failure'; throw error; }
+                await this.testOnlyRecordInboundStage('frame-parsed', senderFingerprint);
+                // First contact is persisted only after Olm authenticates the
+                // peer identity; subsequent changes still fail closed.
+                await this.observe(senderAddress, bundle.identity, undefined, true);
+                this.remoteAddress = senderAddress;
+                await this.modes.write(this.roomId, { sessionId: this.runtime.activeSessionId, remoteAddress: senderAddress });
+                await this.writeSessionAudit('inbound', 'first-message');
+            } else {
+                const contact = this.remoteAddress ? await this.registry.get(this.remoteAddress) : undefined;
+                senderFingerprint = contact?.identityId;
+                await this.testOnlyRecordInboundStage('session-found', senderFingerprint);
+                let plaintext: ArrayBuffer;
+                try { plaintext = await this.runtime.decrypt('message', envelope); }
+                catch (error) { this.lastInboundFailureCategory = 'decryption-failure'; throw error; }
+                await this.testOnlyRecordInboundStage('decrypted', senderFingerprint);
+                text = decoder.decode(plaintext);
+                await this.testOnlyRecordInboundStage('frame-parsed', senderFingerprint);
+            }
+            try { await this.storage.write(SEEN_RECORD, this.roomId, asBytes([...seen.slice(-(MAX_SEEN - 1)), digest])); }
+            catch (error) { this.lastInboundFailureCategory = 'persistence-failure'; throw error; }
+            await this.testOnlyRecordInboundStage('persisted', senderFingerprint);
+            try { this.onMessage?.(text); }
+            catch (error) { this.lastInboundFailureCategory = 'ui-state-update-failure'; throw error; }
+            await this.testOnlyRecordInboundStage('acknowledged', senderFingerprint);
+            this.lastInboundFailureCategory = undefined;
+            return true;
+        } catch (error) {
+            if (this.lastInboundFailureCategory) await this.testOnlyRecordInboundStage('parsed', senderFingerprint, this.lastInboundFailureCategory);
+            throw error;
         }
-        await this.storage.write(SEEN_RECORD, this.roomId, asBytes([...seen.slice(-(MAX_SEEN - 1)), digest]));
-        this.onMessage?.(text);
-        this.lastInboundFailureCategory = undefined;
-        return true;
     }
 
     private requireDeviceLifecycle(): DeviceLifecycleService {

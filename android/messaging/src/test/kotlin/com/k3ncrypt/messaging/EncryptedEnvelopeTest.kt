@@ -18,7 +18,7 @@ class EncryptedEnvelopeTest {
     }
 
     private fun sharedFixture(name: String): JSONObject {
-        var directory: File? = File(System.getProperty("user.dir"))
+        var directory: File? = File(System.getProperty("user.dir") ?: ".")
         repeat(8) {
             val candidate = directory?.resolve("protocol-fixtures/v1/$name")
             if (candidate?.isFile == true) return JSONObject(candidate.readText())

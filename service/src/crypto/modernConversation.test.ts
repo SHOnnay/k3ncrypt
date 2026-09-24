@@ -49,17 +49,25 @@ class Storage implements SecureStorage {
 }
 
 let encryptions = 0;
+let outboundSessionCreations = 0;
+let inboundSessionCreations = 0;
+let sessionDecryptions = 0;
 const session = (): VodozemacSessionHandle => ({
     sessionId: () => 'session-test',
     encrypt: () => { encryptions++; return JSON.stringify({ version: 1, message_type: 0, ciphertext: 'opaque' }); },
-    decrypt: () => new Uint8Array(), saveSession: () => new Uint8Array([1, 2]),
+    decrypt: () => { sessionDecryptions++; return new Uint8Array([1, 1, ...new TextEncoder().encode('restored established message')]); }, saveSession: () => new Uint8Array([1, 2]),
 });
 const account = (): VodozemacAccountHandle => ({
     identityKeys: () => JSON.stringify({ curve25519: key(1), ed25519: key(2) }),
     availableOneTimeKeys: () => [key(6)], fallbackKey: () => key(7),
     generateOneTimeKeys: () => undefined, generateFallbackKey: () => undefined,
     markKeysAsPublished: () => undefined, saveAccount: () => 'encrypted-account',
-    createOutboundSession: () => session(),
+    createOutboundSession: () => { outboundSessionCreations++; return session(); },
+    createInboundSession: () => {
+        inboundSessionCreations++;
+        const plaintext = new Uint8Array([1, 1, ...new TextEncoder().encode('android first message')]);
+        return { takeSession: () => session(), plaintext: () => plaintext };
+    },
 });
 const loader = async () => ({ protocolVersion: 1 as const,
     accountFactory: { createAccount: account, loadAccount: account },
@@ -75,7 +83,7 @@ const fakeTransport = () => {
     return { transport, sent };
 };
 
-beforeEach(() => jest.clearAllMocks());
+beforeEach(() => { jest.clearAllMocks(); outboundSessionCreations = 0; inboundSessionCreations = 0; sessionDecryptions = 0; });
 
 it('retries the identical persisted envelope after a lost ACK and after restart', async () => {
     encryptions = 0;
@@ -86,7 +94,11 @@ it('retries the identical persisted envelope after a lost ACK and after restart'
     const firstTransport = fakeTransport();
     const first = new ModernConversation(storage, loader, firstTransport.transport);
     await first.connect(room, key(9), remoteAddress, await remoteCommitment());
+    expect(claimVodozemacOneTimeKey).not.toHaveBeenCalled();
+    expect(outboundSessionCreations).toBe(0);
     await first.send('hello');
+    expect(claimVodozemacOneTimeKey).toHaveBeenCalledTimes(1);
+    expect(outboundSessionCreations).toBe(1);
     expect(encryptions).toBe(1);
     expect(firstTransport.sent).toHaveLength(1);
     const baseline = Date.now();
@@ -106,6 +118,118 @@ it('retries the identical persisted envelope after a lost ACK and after restart'
     expect(encryptions).toBe(1);
     await second.close();
     later.mockRestore();
+});
+
+it('accepts the peer first-message pre-key after joining without creating a competing outbound session', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    const storage = new Storage();
+    const transport = fakeTransport();
+    const received: string[] = [];
+    const conversation = new ModernConversation(storage, loader, transport.transport);
+    await conversation.connect(room, key(9), remoteAddress, await remoteCommitment(), (text) => received.push(text));
+    expect(outboundSessionCreations).toBe(0);
+    expect(claimVodozemacOneTimeKey).not.toHaveBeenCalled();
+
+    const envelope: EncryptedEnvelope = {
+        version: 2,
+        strategy: 'vodozemac-olm-v1',
+        data: { version: 1, olmMessage: JSON.stringify({ version: 1, message_type: 0, ciphertext: 'opaque' }) },
+    };
+    const accepted = await (conversation as unknown as { receive: (value: EncryptedEnvelope, sender: string) => Promise<boolean> }).receive(envelope, remoteAddress);
+    expect(accepted).toBe(true);
+    expect(inboundSessionCreations).toBe(1);
+    expect(sessionDecryptions).toBe(0);
+    expect(received).toEqual(['android first message']);
+    await conversation.close();
+});
+
+it('creates the browser outbound session only when the browser sends first', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
+    const storage = new Storage();
+    const transport = fakeTransport();
+    const conversation = new ModernConversation(storage, loader, transport.transport);
+    await conversation.connect(room, key(9), remoteAddress, await remoteCommitment());
+    expect(outboundSessionCreations).toBe(0);
+    expect(claimVodozemacOneTimeKey).not.toHaveBeenCalled();
+    await conversation.send('browser first message');
+    expect(outboundSessionCreations).toBe(1);
+    expect(claimVodozemacOneTimeKey).toHaveBeenCalledTimes(1);
+    expect(transport.sent).toHaveLength(1);
+    const audit = JSON.parse(new TextDecoder().decode((await storage.read('conversation-session-audit', room))!));
+    expect(audit).toMatchObject({ classification: 'active-established', direction: 'outbound', origin: 'first-message' });
+    await conversation.close();
+});
+
+it('preserves an existing established conversation session and decrypts after the audit migration', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
+    const storage = new Storage();
+    const initialTransport = fakeTransport();
+    const initial = new ModernConversation(storage, loader, initialTransport.transport);
+    await initial.connect(room, key(9), remoteAddress, await remoteCommitment());
+    await initial.send('establish the existing session');
+    await initial.acceptDelivery('relay-1');
+    await initial.close();
+
+    // Simulate a pre-migration persisted session record with durable message evidence.
+    await storage.delete('conversation-session-audit', room);
+    await storage.write('product-messages', room, new TextEncoder().encode(JSON.stringify([
+        { id: 'sent-1', sender: 'self', text: 'previous encrypted message', type: 'sent', timestamp: '2026-09-24T00:00:00.000Z', delivery: 'accepted' },
+    ])).buffer as ArrayBuffer);
+    const received: string[] = [];
+    const restored = new ModernConversation(storage, loader, fakeTransport().transport);
+    await restored.connect(room, key(9), remoteAddress, await remoteCommitment(), (text) => received.push(text));
+    const envelope: EncryptedEnvelope = {
+        version: 2,
+        strategy: 'vodozemac-olm-v1',
+        data: { version: 1, olmMessage: JSON.stringify({ version: 1, message_type: 1, ciphertext: 'opaque' }) },
+    };
+    const accepted = await (restored as unknown as { receive: (value: EncryptedEnvelope, sender: string) => Promise<boolean> }).receive(envelope, remoteAddress);
+    expect(accepted).toBe(true);
+    expect(sessionDecryptions).toBe(1);
+    expect(received).toEqual(['restored established message']);
+    expect(JSON.parse(new TextDecoder().decode((await storage.read('conversation-session-audit', room))!)))
+        .toMatchObject({ classification: 'session-with-message-history' });
+    await restored.close();
+});
+
+it('keeps an unclassified legacy session when history evidence is absent', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    const storage = new Storage();
+    await storage.write('conversation-protocol', room, new TextEncoder().encode(JSON.stringify({
+        version: 1, mode: 'modern', sessionId: 'session-test', localAddress, remoteAddress, routingProof: 'r'.repeat(43),
+    })).buffer as ArrayBuffer);
+    await storage.write('vodozemac-session', room, new Uint8Array([9]).buffer);
+    const conversation = new ModernConversation(storage, loader, fakeTransport().transport);
+    await conversation.connect(room, key(9), remoteAddress, await remoteCommitment());
+    expect(await storage.read('vodozemac-session', room)).toBeDefined();
+    expect(JSON.parse(new TextDecoder().decode((await storage.read('conversation-session-audit', room))!)))
+        .toMatchObject({ classification: 'legacy-unclassified' });
+    await conversation.close();
+});
+
+it('retires only a session explicitly proven unused and created outbound during join', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    const storage = new Storage();
+    await storage.write('conversation-protocol', room, new TextEncoder().encode(JSON.stringify({
+        version: 1, mode: 'modern', sessionId: 'session-test', localAddress, remoteAddress, routingProof: 'r'.repeat(43),
+    })).buffer as ArrayBuffer);
+    await storage.write('vodozemac-session', room, new Uint8Array([9]).buffer);
+    await storage.write('conversation-session-audit', room, new TextEncoder().encode(JSON.stringify({
+        version: 1, classification: 'unused-outbound', direction: 'outbound', origin: 'join',
+    })).buffer as ArrayBuffer);
+    const conversation = new ModernConversation(storage, loader, fakeTransport().transport);
+    await conversation.connect(room, key(9), remoteAddress, await remoteCommitment());
+    expect(await storage.read('vodozemac-session', room)).toBeUndefined();
+    expect(outboundSessionCreations).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode((await storage.read('conversation-protocol', room))!)).sessionId).toBeUndefined();
+    await conversation.close();
 });
 
 it('does not retry queued envelopes after durable future-epoch suspension', async () => {

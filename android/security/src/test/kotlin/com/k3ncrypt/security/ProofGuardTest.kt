@@ -10,5 +10,6 @@ class ProofGuardTest {
         assertTrue(ProofGuard.validateFor(proof(), "relay:message", ProofResource(conversationId = "c"), 1_500).isSuccess)
         assertFalse(ProofGuard.validateFor(proof(), "relay:message", ProofResource(conversationId = "other"), 1_500).isSuccess)
         assertFalse(ProofGuard.validateFor(proof(expiry = 1_500), "relay:message", ProofResource(conversationId = "c"), 1_500).isSuccess)
+        assertFalse(ProofGuard.validateFor(proof(), "device-control", ProofResource(conversationId = "c"), 1_500).isSuccess)
     }
 }

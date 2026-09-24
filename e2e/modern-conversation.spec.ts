@@ -61,9 +61,20 @@ test('modern private contact works after offline recipient and both browser rest
 
   const bobReturned = await resume(bob.context, link, bob.outbound);
   const afterRestore = await cryptoSnapshot(bobReturned);
-  expect(beforeShutdown).toEqual(expect.objectContaining({ identityFingerprint: expect.any(String), oneTimeKeyIds: expect.any(Array) }));
-  expect(senderSnapshot).toEqual(expect.objectContaining({ selectedRecipientKeyId: expect.any(String) }));
-  expect(afterRestore).toEqual(expect.objectContaining({ identityFingerprint: expect.any(String), oneTimeKeyIds: expect.any(Array), lastInboundEnvelope: expect.objectContaining({ protocolVersion: 1, messageType: 0 }), runtimeStage: 'returned' }));
+  expect(beforeShutdown).toEqual(expect.objectContaining({ conversationId: expect.any(String), inboundEvents: expect.any(Array) }));
+  expect(senderSnapshot).toEqual(expect.objectContaining({ conversationId: expect.any(String), inboundEvents: expect.any(Array) }));
+  expect(afterRestore).toEqual(expect.objectContaining({
+    conversationId: expect.any(String),
+    inboundEvents: expect.arrayContaining([
+      expect.objectContaining({ stage: 'received' }),
+      expect.objectContaining({ stage: 'parsed' }),
+      expect.objectContaining({ stage: 'session-found' }),
+      expect.objectContaining({ stage: 'decrypted' }),
+      expect.objectContaining({ stage: 'frame-parsed' }),
+      expect.objectContaining({ stage: 'persisted' }),
+      expect.objectContaining({ stage: 'acknowledged' }),
+    ]),
+  }));
   await expect(bobReturned.locator('#messages-area')).toContainText('hello while you were away', { timeout: 20_000 });
   await bobReturned.getByRole('button', { name: 'Open settings' }).click();
   await bobReturned.getByRole('button', { name: /Identity/ }).click();
