@@ -7,6 +7,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.k3ncrypt.storage.CryptoStateStore
 import com.k3ncrypt.storage.K3ncryptSecureDatabase
 import com.k3ncrypt.storage.KeystoreAead
+import com.k3ncrypt.storage.LocalVaultGate
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -26,9 +27,10 @@ class ConversationRestorationTest {
         val databaseName = "conversation-index-${UUID.randomUUID()}.db"
         val trusted = invitation("trusted-room", "trusted-route", "K3 trusted-peer")
         val pending = invitation("pending-room", "", "")
-        val aead = KeystoreAead("k3ncrypt.android.test.conversation-index")
+        val aead = KeystoreAead()
         var database = Room.databaseBuilder(context, K3ncryptSecureDatabase::class.java, databaseName).build()
         try {
+            LocalVaultGate(database, aead).openAfterSystemAuthentication()
             val state = CryptoStateStore(database, aead)
             state.write("conversation", trusted.conversationId, encode(trusted))
             state.write("conversation", pending.conversationId, encode(pending))

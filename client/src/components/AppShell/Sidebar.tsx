@@ -13,6 +13,7 @@ interface SidebarProps {
   onNewConversation: () => void;
   onOpenConversation: (roomId?: string) => void;
   onOpenSettings: () => void;
+  settingsOpen?: boolean;
 }
 
 const formatSidebarTime = (date?: Date): string => {
@@ -20,7 +21,7 @@ const formatSidebarTime = (date?: Date): string => {
   return new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(date);
 };
 
-export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection, onNavigate, onNewConversation, onOpenConversation, onOpenSettings }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection, onNavigate, onNewConversation, onOpenConversation, onOpenSettings, settingsOpen = false }) => {
   const { channelHash, messages, isConnected, conversations, syncStatus, sessionHealth } = useChat();
   const latest = messages.at(-1);
 
@@ -43,14 +44,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection
         <button type="button" className={activeSection === 'chats' ? 'active' : ''} onClick={() => onNavigate('chats')} aria-current={activeSection === 'chats' ? 'page' : undefined}><ApprovedIcon name="chat" /><span>Chats</span></button>
         <button type="button" className={activeSection === 'contacts' ? 'active' : ''} onClick={() => onNavigate('contacts')} aria-current={activeSection === 'contacts' ? 'page' : undefined}><ApprovedIcon name="contacts" /><span>Contacts</span></button>
         <button type="button" className={activeSection === 'calls' ? 'active' : ''} onClick={() => onNavigate('calls')} aria-current={activeSection === 'calls' ? 'page' : undefined}><ApprovedIcon name="call" /><span>Calls</span></button>
-        <button type="button" onClick={onOpenSettings}><ApprovedIcon name="settings" /><span>Settings</span></button>
+        <button type="button" className={settingsOpen ? 'active' : ''} onClick={onOpenSettings} aria-current={settingsOpen ? 'page' : undefined}><ApprovedIcon name="settings" /><span>Settings</span></button>
       </nav>
 
       <div className="conversation-section">
         <p className="section-label">Conversations</p>
         {(conversations.length > 0 ? conversations : channelHash ? [{ roomId: channelHash, label: 'Private conversation', updatedAt: latest?.timestamp.getTime() ?? 0 }] : []).map((conversation) => (
           <button key={conversation.roomId} className={`conversation-row ${!isWelcomeActive && channelHash === conversation.roomId ? 'active' : ''}`} type="button" onClick={() => onOpenConversation(conversation.roomId)}>
-            <Avatar label="Private conversation" size="medium" status={isConnected ? 'online' : 'offline'} />
+            <Avatar label={conversation.label} size="medium" status={isConnected ? 'online' : 'offline'} />
             <span className="conversation-copy">
               <span className="conversation-name-row"><span className="conversation-name">{conversation.label}</span><time>{channelHash === conversation.roomId ? formatSidebarTime(latest?.timestamp) : ''}</time></span>
               <span className="conversation-preview">{channelHash === conversation.roomId && sessionHealth !== 'healthy' ? 'Security update required' : channelHash === conversation.roomId && latest?.text ? latest.text : syncStatus === 'blocked' ? 'Security update required' : isConnected ? 'Protected session ready' : 'Stored on this device'}</span>

@@ -10,6 +10,7 @@ import React, { useEffect } from 'react';
 import { Input } from '../common/Input';
 import { Button } from '../common/Button';
 import { useUrlHash } from '../../hooks/useUrlHash';
+import { InvitationQrScanner } from './InvitationQr';
 import './JoinHashView.css';
 
 interface JoinHashViewProps {
@@ -17,6 +18,7 @@ interface JoinHashViewProps {
   onInviteInputChange: (value: string) => void;
   onBack: () => void;
   onJoin: () => void;
+  isLoading?: boolean;
 }
 
 export const JoinHashView: React.FC<JoinHashViewProps> = ({
@@ -24,6 +26,7 @@ export const JoinHashView: React.FC<JoinHashViewProps> = ({
   onInviteInputChange,
   onBack,
   onJoin,
+  isLoading = false,
 }) => {
   const { invite } = useUrlHash();
 
@@ -43,13 +46,14 @@ export const JoinHashView: React.FC<JoinHashViewProps> = ({
         value={inviteInput}
         onChange={onInviteInputChange}
       />
+      <InvitationQrScanner onScanned={onInviteInputChange} />
 
       <div className="button-group">
-        <Button id="back-btn" variant="secondary" onClick={onBack}>
+        <Button id="back-btn" variant="secondary" onClick={onBack} disabled={isLoading}>
           Back
         </Button>
-        <Button id="join-btn" variant="primary" onClick={onJoin} disabled={!inviteInput.trim()}>
-          Open conversation
+        <Button id="join-btn" variant="primary" onClick={onJoin} disabled={!inviteInput.trim() || isLoading}>
+          {isLoading ? 'Opening conversation…' : 'Continue'}
         </Button>
       </div>
     </div>

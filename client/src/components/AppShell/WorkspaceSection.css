@@ -1,4 +1,4 @@
-.workspace-page { width: min(100%, 920px); height: 100%; margin: 0 auto; overflow: auto; padding: clamp(22px, 4vw, 48px); color: var(--ink); animation: workspace-enter 260ms ease both; }
+.workspace-page { width: min(100%, 920px); height: 100%; margin: 0 auto; overflow: auto; padding: clamp(22px, 4vw, 48px); color: var(--ink); animation: workspace-enter var(--motion-normal) ease both; }
 @keyframes workspace-enter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 .workspace-page__header { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin: 4px 0 26px; }
 .workspace-page__header h1 { margin: 5px 0 7px; font-family: var(--font-display); font-size: clamp(1.8rem, 4vw, 2.6rem); font-weight: 600; letter-spacing: -.035em; }
@@ -8,7 +8,7 @@
 .workspace-search input { width: 100%; border: 0; outline: 0; color: var(--ink); background: transparent; font: inherit; font-size: .78rem; }
 .workspace-search input::placeholder { color: var(--muted); }
 .eyebrow { color: var(--brand-strong); font-size: .68rem; font-weight: 750; letter-spacing: .11em; text-transform: uppercase; }
-.workspace-contact-list { display: flex; flex-direction: column; gap: 7px; }
+.workspace-contact-list { display: flex; flex-direction: column; gap: 9px; }
 .workspace-contact { width: 100%; display: flex; align-items: center; gap: 14px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 17px; color: var(--ink); background: var(--surface); text-align: left; cursor: pointer; box-shadow: var(--shadow-sm); transition: transform var(--motion-fast), border-color var(--motion-fast), background var(--motion-fast); }
 .workspace-contact:hover { transform: translateY(-1px); border-color: var(--border-strong); background: var(--surface-raised); }
 .workspace-contact__copy { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
@@ -34,8 +34,14 @@
 .calls-note p { font-size: .72rem; line-height: 1.55; }
 .calls-note__dot { width: 8px; height: 8px; flex: 0 0 8px; margin-top: 4px; border-radius: 50%; background: var(--success); }
 .workspace-contact:focus-visible { outline: 3px solid color-mix(in srgb, var(--brand) 35%, transparent); outline-offset: 2px; }
-.workspace-empty { animation: workspace-enter 260ms ease both; }
+.workspace-empty { animation: workspace-enter var(--motion-normal) ease both; }
 .call-launch-card { transition: border-color var(--motion-fast), box-shadow var(--motion-fast); }
 .call-launch-card:focus-within { border-color: color-mix(in srgb, var(--brand) 38%, var(--border)); box-shadow: var(--shadow-md); }
 .calls-note { border: 1px solid color-mix(in srgb, var(--success) 16%, var(--border)); line-height: 1.55; }
 @media (max-width: 620px) { .workspace-page { height: calc(100% - env(safe-area-inset-bottom)); padding: 24px 18px; }.workspace-page__header { align-items: flex-start; flex-direction: column; margin-bottom: 20px; gap: 12px; }.workspace-page__header > button { align-self: stretch; justify-content: center; }.call-launch-card { padding: 16px; }.call-launch-card__actions { display: grid; grid-template-columns: 1fr; }.call-launch-card__actions button { justify-content: center; min-height: 46px; } }
+.workspace-page__header { padding-bottom: 18px; border-bottom: 1px solid var(--border); }
+.workspace-search { transition: border-color var(--motion-fast), box-shadow var(--motion-fast), background var(--motion-fast); }
+.workspace-contact { min-height: 76px; }
+.workspace-contact:active { transform: scale(.995); }
+.call-launch-card__actions button { min-height: 46px; }
+.calls-note { max-width: 680px; }

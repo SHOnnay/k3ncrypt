@@ -10,6 +10,7 @@ import com.k3ncrypt.storage.CryptoStateStore
 import com.k3ncrypt.storage.InboundCommitResult
 import com.k3ncrypt.storage.K3ncryptSecureDatabase
 import com.k3ncrypt.storage.KeystoreAead
+import com.k3ncrypt.storage.LocalVaultGate
 import com.k3ncrypt.storage.SessionState
 import com.k3ncrypt.storage.StoredMessage
 import kotlinx.coroutines.runBlocking
@@ -32,7 +33,8 @@ class AndroidCryptoPersistenceInteropTest {
         val sender = crypto.createAccount()
         val recipient = crypto.createAccount()
         val database = Room.databaseBuilder(context, K3ncryptSecureDatabase::class.java, databaseName).build()
-        val aead = KeystoreAead("k3ncrypt.android.test.${UUID.randomUUID()}")
+        val aead = KeystoreAead()
+        LocalVaultGate(database, aead).openAfterSystemAuthentication()
         val state = CryptoStateStore(database, aead)
         var senderSession: com.k3ncrypt.crypto.SessionHandle? = null
         var inboundSession: com.k3ncrypt.crypto.SessionHandle? = null

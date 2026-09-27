@@ -9,4 +9,9 @@
 .overlay-content > p { max-width: 360px; margin: 14px auto 30px; color: var(--muted-strong); font-size: .87rem; line-height: 1.65; }
 .setup-status { margin-top: 18px; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--brand) 22%, var(--border)); border-radius: 13px; color: var(--brand-strong); background: var(--brand-soft); font-size: .78rem; line-height: 1.5; text-align: left; animation: notice-in 180ms ease-out both; }
 .deleted-state { display: flex; justify-content: center; }
+.invitation-qr { margin: 18px auto; max-width: 330px; }
+.invitation-qr img { display: block; width: min(100%, 320px); height: auto; margin: auto; padding: 8px; border-radius: 12px; background: #fff; }
+.invitation-qr p { margin: 8px 0 0; color: var(--muted-strong); font-size: .75rem; }
+.invitation-scanner { margin: 12px auto; }
+.invitation-scanner video { display: block; width: 100%; max-height: 300px; margin: 10px 0; border-radius: 12px; background: #111; }
 @media (max-width: 620px) { .overlay { padding: 16px 16px calc(84px + env(safe-area-inset-bottom)); align-items: center; }.overlay-content { padding: 34px 22px; border-radius: 22px; }.overlay-content > p { margin-bottom: 24px; }.welcome-wordmark { margin-bottom: 18px; } }

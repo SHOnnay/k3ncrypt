@@ -12,8 +12,9 @@
   --radius-lg: 20px;
   --radius-xl: 28px;
   --radius-round: 999px;
-  --motion-fast: 150ms;
-  --motion-normal: 220ms;
+  --motion-fast: 120ms;
+  --motion-normal: 240ms;
+  --motion-slow: 400ms;
 }
 
 :root,

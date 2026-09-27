@@ -89,11 +89,10 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
                 <SettingsRow icon={<NetworkIcon size={18} />} title="Connection" description="How this space reaches others" onClick={() => setView('network')} />
                 <SettingsRow icon={<PaletteIcon size={18} />} title="Appearance" description={theme === 'paper' ? 'Paper & Ink' : 'Slate Dusk'} onClick={() => setView('appearance')} />
               </section>
-              <section className="settings-group" aria-label="Future settings">
+              <section className="settings-group" aria-label="More settings">
                 <SettingsRow icon={<BellIcon size={18} />} title="Notifications" description={privacyPreferences.notificationsEnabled ? 'Private alerts are on' : 'Notifications are off'} onClick={() => setView('notifications')} />
                 <SettingsRow icon={<MicIcon size={18} />} title="Calls" description="Ringtone and media permissions" onClick={() => setView('calls')} />
-                <SettingsRow icon={<StorageIcon size={18} />} title="Storage" description="Local message storage" status="Not available" disabled />
-                <SettingsRow icon={<InfoIcon size={18} />} title="About" description="K3ncrypt · private by design" status="Prototype" />
+                <SettingsRow icon={<InfoIcon size={18} />} title="About" description="K3NCRYPT · private communication" status="Private beta" />
               </section>
             </>
           )}
@@ -142,18 +141,14 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
 
           {view === 'network' && (
             <section className="settings-detail">
-              <div className="detail-intro"><h3>A simple connection</h3><p>K3ncrypt currently uses its configured relay to help two people meet.</p></div>
+              <div className="detail-intro"><h3>A simple connection</h3><p>The K3NCRYPT service helps trusted contacts reach one another while your messages remain protected.</p></div>
               <div className="network-status">
                 <span className={`network-pulse ${isConnected ? 'online' : ''}`} />
-                <div><strong>{isConnected ? 'Conversation connected' : 'Waiting for the other person'}</strong><p>Relay connection · browser</p></div>
+                <div><strong>{isConnected ? 'Secure conversation connected' : 'Waiting for your contact'}</strong><p>Connection for this conversation</p></div>
                 <StatusPill tone={isConnected ? 'positive' : 'quiet'}>{isConnected ? 'Online' : 'Waiting'}</StatusPill>
               </div>
-              <div className="network-status"><span className={`network-pulse ${syncStatus === 'ready' ? 'online' : ''}`} /><div><strong>Device sync</strong><p>Authenticated state synchronization</p></div><StatusPill tone={syncStatus === 'ready' ? 'positive' : 'quiet'}>{syncStatus}</StatusPill></div>
-              <div className="preference-list">
-                <SettingsRow icon={<NetworkIcon size={17} />} title="Local communication mode" description="Connect without the internet when nearby" status="Coming soon" disabled />
-                <SettingsRow icon={<ShieldIcon size={17} />} title="Private routing" description="Alternative network routes" status="Not available" disabled />
-              </div>
-              <p className="detail-note">No network mode shown here is simulated. Only the current relay connection is active.</p>
+              <div className="network-status"><span className={`network-pulse ${syncStatus === 'ready' ? 'online' : ''}`} /><div><strong>Device sync</strong><p>Your approved devices stay in sync</p></div><StatusPill tone={syncStatus === 'ready' ? 'positive' : 'quiet'}>{syncStatus === 'ready' ? 'Ready' : 'Waiting'}</StatusPill></div>
+              <p className="detail-note">This beta uses the configured K3NCRYPT service to connect trusted contacts.</p>
             </section>
           )}
 
@@ -218,7 +213,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
                   <strong>Your devices</strong>
                   <p>Device changes require an authenticated modern session and explicit approval.</p>
                   {deviceLifecycleState?.list.devices.map((device) => <div className="network-status" key={device.deviceId}>
-                    <div><strong>{device.deviceId === userId ? 'This device' : device.deviceId}</strong><p>{device.state}</p></div>
+                    <div><strong>{device.deviceId === userId ? 'This device' : 'Approved device'}</strong><p>{device.state === 'revoked' ? 'Removed' : device.state === 'active' ? 'Active' : 'Approval pending'}</p></div>
                     {device.deviceId !== userId && device.state !== 'revoked' && <button className="btn btn--danger" type="button" onClick={() => { if (window.confirm('Confirm removing this device from your private device list?')) revokeDevice(device.deviceId).catch(() => setVerificationError('Could not revoke this device.')); }}>Revoke</button>}
                   </div>)}
                   <label htmlFor="device-id-input">New device ID</label>
@@ -226,13 +221,12 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
                   <label htmlFor="device-identity-input">New public identity reference</label>
                   <input id="device-identity-input" className="verification-qr-payload" value={deviceIdentityInput} onChange={(event) => setDeviceIdentityInput(event.target.value)} placeholder="Public identity reference" />
                   <button className="btn btn--secondary" type="button" disabled={!deviceIdInput || !deviceIdentityInput} onClick={() => requestDeviceEnrollment(deviceIdInput, deviceIdentityInput, 'Olm-Curve25519+Ed25519').then(() => { setDeviceIdInput(''); setDeviceIdentityInput(''); setRecoveryNotice('Enrollment request sent through the protected session.'); }).catch(() => setVerificationError('Could not send the enrollment request.'))}>Request device approval</button>
-                  {pendingDeviceEnrollment && <div className="state-card state-card--positive"><strong>Device approval requested</strong><p>{pendingDeviceEnrollment.requestedDeviceId}</p><div className="verification-actions"><button className="btn btn--primary" type="button" onClick={() => approveDeviceEnrollment().catch(() => setVerificationError('Could not approve this device.'))}>Approve</button><button className="btn btn--secondary" type="button" onClick={() => rejectDeviceEnrollment().catch(() => setVerificationError('Could not reject this device.'))}>Reject</button></div></div>}
-                  {pendingDeviceApproval && <div className="state-card state-card--positive"><strong>Device approval received</strong><p>{pendingDeviceApproval.authorization.targetDeviceId}</p><button className="btn btn--primary" type="button" onClick={() => confirmDeviceEnrollment().then(() => setRecoveryNotice('This independent device is now active on the account.')).catch(() => setVerificationError('Could not confirm device enrollment.'))}>Confirm on this device</button></div>}
+                  {pendingDeviceEnrollment && <div className="state-card state-card--positive"><strong>A device is waiting for approval</strong><div className="verification-actions"><button className="btn btn--primary" type="button" onClick={() => approveDeviceEnrollment().catch(() => setVerificationError('Could not approve this device.'))}>Approve</button><button className="btn btn--secondary" type="button" onClick={() => rejectDeviceEnrollment().catch(() => setVerificationError('Could not reject this device.'))}>Reject</button></div></div>}
+                  {pendingDeviceApproval && <div className="state-card state-card--positive"><strong>Device approval received</strong><button className="btn btn--primary" type="button" onClick={() => confirmDeviceEnrollment().then(() => setRecoveryNotice('This independent device is now active on the account.')).catch(() => setVerificationError('Could not confirm device enrollment.'))}>Confirm on this device</button></div>}
                 </div>}
                 {recoveryNotice && <p role="status">{recoveryNotice}</p>}
                 {verificationError && <p role="alert">{verificationError}</p>}
               </div> : <div className="unavailable-card"><StatusPill tone="quiet">Not available in this conversation</StatusPill><p>Verification is available for new modern private contacts.</p></div>}
-              {channelHash && <p className="room-reference">Current room reference <code>{channelHash.slice(0, 8)}…</code></p>}
             </section>
           )}
         </div>

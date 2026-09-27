@@ -42,6 +42,6 @@ export const WorkspaceSection: React.FC<WorkspaceSectionProps> = ({ section, onO
       <div className="call-launch-card__actions"><Button variant="secondary" disabled={!callReady} onClick={() => void startCall().then(() => setCallMessage('Calling…')).catch(() => setCallMessage('Call could not start. Check the secure connection and microphone permission.'))}><PhoneIcon size={18} /> Voice call</Button><Button variant="primary" disabled={!callReady || protocolMode !== 'legacy'} onClick={() => void startVideoCall().then(() => setCallMessage('Calling…')).catch(() => setCallMessage('Video call could not start. Check the secure connection and device permissions.'))}><VideoIcon size={18} /> Video call</Button></div>
       {callMessage && <p className="workspace-feedback" role="status">{callMessage}</p>}
     </section> : <div className="workspace-empty"><span className="workspace-empty__mark"><img src="/branding/k3ncrypt-cluster-white.svg" alt="" /></span><h2>No active conversation</h2><p>Open a saved contact before starting a call. Call authorization remains tied to that conversation.</p></div>}
-    <section className="calls-note"><span className="calls-note__dot" /><p>Call controls appear when a call is active. Your browser will ask for microphone or camera access only when you start or accept a call.</p></section>
+    <section className="calls-note"><span className="calls-note__dot" /><p>Call history is not saved on this device yet. Your browser asks for microphone or camera access only when you start or accept a call.</p></section>
   </main>;
 };

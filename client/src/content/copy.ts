@@ -1,20 +1,20 @@
 export const copy = {
   welcome: {
     title: 'K3ncrypt',
-    tagline: 'A private space for the people who matter most.',
+    tagline: 'Private messages and calls with people you trust.',
     primary: 'Get started',
     restore: 'Restore identity',
   },
   contact: {
     title: 'Bring someone in',
-    description: 'Connect with people you trust.',
+    description: 'Share an invitation, compare security details, then start a private conversation.',
   },
   verification: {
     title: 'Confirm connection',
-    description: 'Review this connection together.',
+    description: 'Compare your security details through another trusted channel before confirming.',
   },
   empty: {
     title: 'Your private space is ready.',
-    description: 'Connect with people you trust.',
+    description: 'Add someone you trust to start messaging and calling privately.',
   },
 } as const;

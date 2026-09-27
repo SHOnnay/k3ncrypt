@@ -12,6 +12,7 @@ import com.k3ncrypt.storage.CryptoStateStore
 import com.k3ncrypt.storage.EncryptedRecordStore
 import com.k3ncrypt.storage.K3ncryptSecureDatabase
 import com.k3ncrypt.storage.KeystoreAead
+import com.k3ncrypt.storage.LocalVaultGate
 import com.k3ncrypt.storage.PickleKeyVault
 import dagger.Module
 import dagger.Provides
@@ -27,6 +28,7 @@ object RuntimeModule {
         Room.databaseBuilder(context, K3ncryptSecureDatabase::class.java, "k3ncrypt-secure.db").build()
 
     @Provides @Singleton fun keystoreAead() = KeystoreAead()
+    @Provides @Singleton fun localVaultGate(database: K3ncryptSecureDatabase, aead: KeystoreAead) = LocalVaultGate(database, aead)
     @Provides @Singleton fun encryptedRecords(database: K3ncryptSecureDatabase, aead: KeystoreAead) = EncryptedRecordStore(database, aead)
     @Provides @Singleton fun cryptoState(database: K3ncryptSecureDatabase, aead: KeystoreAead) = CryptoStateStore(database, aead)
     @Provides @Singleton fun pickleKeyVault(records: EncryptedRecordStore) = PickleKeyVault(records)

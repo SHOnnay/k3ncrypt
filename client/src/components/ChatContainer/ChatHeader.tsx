@@ -18,8 +18,9 @@ interface ChatHeaderProps {
 }
 
 export const ChatHeader: React.FC<ChatHeaderProps> = ({ onStartCall, onStartVideoCall, disableStartCall = false }) => {
-  const { isConnected, channelHash, deleteChannel, protocolMode, sessionHealth } = useChat();
+  const { isConnected, channelHash, deleteChannel, protocolMode, sessionHealth, conversations, contactIdentity } = useChat();
   const [hashCopied, setHashCopied] = useState(false);
+  const contactLabel = conversations.find((conversation) => conversation.roomId === channelHash)?.label ?? 'Trusted contact';
 
   const handleCopyHash = () => {
     navigator.clipboard.writeText(window.location.href);
@@ -55,11 +56,12 @@ const handleDelete = async () => {
 
   return (
     <header className={`chat-header glass ${isConnected ? 'active' : ''}`}>
-      <Avatar label="Private conversation" size="medium" status={isConnected ? 'online' : 'offline'} />
+      <Avatar label={contactLabel} size="medium" status={isConnected ? 'online' : 'offline'} />
       <div className="header-info">
         <div className="title-row">
-          <h2 className="channel-title">Private conversation</h2>
-          <StatusPill tone="neutral">{protocolMode === 'modern' ? 'Modern private' : 'Private'}</StatusPill>
+          <h2 className="channel-title">{contactLabel}</h2>
+          <StatusPill tone="neutral">{protocolMode === 'modern' ? 'Encrypted' : 'Private'}</StatusPill>
+          {protocolMode === 'modern' && contactIdentity && <StatusPill tone={contactIdentity.verification === 'verified' && contactIdentity.changeStatus === 'unchanged' ? 'positive' : 'quiet'}>{contactIdentity.verification === 'verified' && contactIdentity.changeStatus === 'unchanged' ? 'Verified contact' : 'Review identity'}</StatusPill>}
         </div>
         {channelHash && protocolMode === 'legacy' && (
           <div className="hash-badge-container">
@@ -77,7 +79,7 @@ const handleDelete = async () => {
           </div>
         )}
         <p id="participant-info" className="participant-info">
-          {sessionHealth === 'unhealthy' ? 'Encrypted session needs verified renewal. Saved history and identity are preserved.' : sessionHealth === 'renewal-pending' ? 'Verified renewal pending. Send one message after your contact prepares to receive it.' : isConnected ? 'Peer joined. Communication is encrypted.' : 'Waiting for someone you trust'}
+          {sessionHealth === 'unhealthy' ? 'Your saved secure connection needs a verified update. Your identity and history are preserved.' : sessionHealth === 'renewal-pending' ? 'Secure connection update is waiting for your contact. Send a message after they are ready.' : isConnected ? 'Secure connection established' : 'Waiting for your contact to connect'}
         </p>
       </div>
       <div className="header-actions">

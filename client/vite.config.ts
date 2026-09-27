@@ -2,8 +2,21 @@ import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import { fileURLToPath } from 'node:url';
 
+const validateProductionApiOrigin = (raw: string): void => {
+    if (!raw.trim()) return; // Same-origin API is the supported default.
+    let url: URL;
+    try { url = new URL(raw.trim()); } catch { throw new Error('Production CHATE2EE_API_URL must be an HTTPS origin.'); }
+    const host = url.hostname.toLowerCase().replace(/\.$/, '');
+    const placeholder = host === 'localhost' || host === 'example.com' || host.endsWith('.example.com') ||
+        host.endsWith('.example') || host.endsWith('.test') || host.endsWith('.invalid') || host === '10.0.2.2' || host === '127.0.0.1';
+    if (url.protocol !== 'https:' || !url.host || url.username || url.password || url.pathname !== '/' || url.search || url.hash || placeholder) {
+        throw new Error('Production CHATE2EE_API_URL must be a real HTTPS origin.');
+    }
+};
+
 export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, process.cwd(), '');
+    if (mode === 'production') validateProductionApiOrigin(env.CHATE2EE_API_URL ?? '');
     return {
         plugins: [react()],
         resolve: {

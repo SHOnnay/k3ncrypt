@@ -1,8 +1,17 @@
 package com.k3ncrypt.app
 
 import android.content.Context
+import android.content.Intent
+import android.app.Activity
+import android.app.KeyguardManager
+import android.hardware.biometrics.BiometricPrompt
+import android.os.Build
+import android.os.CancellationSignal
 import android.net.Uri
 import android.os.Bundle
+import android.os.SystemClock
+import android.provider.Settings
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -20,6 +29,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.Image
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -55,11 +66,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.Contacts
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
@@ -70,6 +87,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -82,9 +100,19 @@ import com.k3ncrypt.network.NetworkEndpoint
 import com.k3ncrypt.network.SocketRelay
 import com.k3ncrypt.calls.CallPermissionFeedback
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.security.MessageDigest
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
 import javax.inject.Inject
+import com.k3ncrypt.storage.LocalVaultGate
+import com.k3ncrypt.storage.KeystoreAead
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
@@ -93,10 +121,81 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var api: K3ncryptApi
     @Inject lateinit var relay: SocketRelay
     @Inject lateinit var calls: AndroidCallController
+    @Inject lateinit var vaultGate: LocalVaultGate
+    @Inject lateinit var storageCipher: KeystoreAead
+    private var vaultReady by mutableStateOf(false)
+    private var unlockMessage by mutableStateOf("Authenticate with your device to open your private space.")
+    private var backgroundSince: Long? = null
+    private var lockCleanupInProgress by mutableStateOf(false)
+    private val credentialPrompt = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == Activity.RESULT_OK) finishLocalUnlock()
+        else unlockMessage = "Device authentication was cancelled. Your local data remains locked."
+    }
+
+    private fun finishLocalUnlock() {
+        lifecycleScope.launch {
+            runCatching { withContext(Dispatchers.IO) { vaultGate.openAfterSystemAuthentication() } }
+                .onSuccess { vaultReady = true; unlockMessage = "" }
+                .onFailure { unlockMessage = "Could not unlock local storage. Your existing data was preserved; authenticate again or check the device lock." }
+        }
+    }
+
+    private fun requestLocalUnlock() {
+        if (lockCleanupInProgress) return
+        val keyguard = getSystemService(KeyguardManager::class.java)
+        if (!keyguard.isDeviceSecure) {
+            unlockMessage = "Set a device PIN, password, or pattern in Android settings before using K3NCRYPT."
+            return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val prompt = BiometricPrompt.Builder(this)
+                .setTitle("Unlock K3NCRYPT")
+                .setSubtitle("Use biometrics or your device credential")
+                .setAllowedAuthenticators(android.hardware.biometrics.BiometricManager.Authenticators.BIOMETRIC_STRONG or
+                    android.hardware.biometrics.BiometricManager.Authenticators.DEVICE_CREDENTIAL)
+                .build()
+            prompt.authenticate(CancellationSignal(), mainExecutor, object : BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) { finishLocalUnlock() }
+                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                    unlockMessage = "Device authentication did not complete. Your local data remains locked."
+                }
+            })
+        } else {
+            @Suppress("DEPRECATION")
+            val intent = keyguard.createConfirmDeviceCredentialIntent("Unlock K3NCRYPT", "Confirm your device credential")
+            if (intent != null) credentialPrompt.launch(intent)
+            else unlockMessage = "Device credential authentication is unavailable. Your local data remains locked."
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        val awaySince = backgroundSince
+        backgroundSince = null
+        if (awaySince != null && vaultReady && SystemClock.elapsedRealtime() - awaySince >= 60_000L &&
+            (!this::calls.isInitialized || calls.state.value.callId == null)) {
+            vaultReady = false
+            storageCipher.lock()
+            unlockMessage = "Authenticate with your device to continue."
+            lockCleanupInProgress = true
+            lifecycleScope.launch {
+                try {
+                    runCatching { messaging.disconnect() }
+                    runCatching { identities.invalidateVolatileIdentity() }
+                } finally { lockCleanupInProgress = false }
+            }
+        }
+    }
+
+    override fun onStop() {
+        if (vaultReady) backgroundSince = SystemClock.elapsedRealtime()
+        super.onStop()
+    }
 
     override fun onResume() {
         super.onResume()
         if (this::calls.isInitialized) calls.recordApplicationLifecycle(backgrounded = false)
+        if (!vaultReady) return
         lifecycleScope.launch {
             runCatching { messaging.ensureActiveRelayRegistration() }
                 .onFailure { if (BuildConfig.DEBUG) DebugInspectionStore.setConnectionStage("resume_rejoin_failed") }
@@ -110,6 +209,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         setContent {
             val appearance = remember { getSharedPreferences("k3ncrypt-runtime", Context.MODE_PRIVATE) }
             var themeMode by remember { mutableStateOf(appearance.getString("theme-mode", "system") ?: "system") }
@@ -122,9 +222,27 @@ class MainActivity : ComponentActivity() {
             }
             K3ncryptTheme(darkTheme = dark) {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                    IdentityAndConversationScreen(this, identities, messaging, api, relay, calls, themeMode) { mode ->
-                        themeMode = mode
-                        appearance.edit().putString("theme-mode", mode).apply()
+                    if (vaultReady) {
+                        IdentityAndConversationScreen(this, identities, messaging, api, relay, calls, themeMode) { mode ->
+                            themeMode = mode
+                            appearance.edit().putString("theme-mode", mode).apply()
+                        }
+                    } else {
+                        Column(Modifier.fillMaxSize().padding(28.dp), verticalArrangement = Arrangement.Center,
+                            horizontalAlignment = Alignment.CenterHorizontally) {
+                            K3ncryptBrandMark()
+                            Spacer(Modifier.height(20.dp))
+                            Text("Unlock your private space", style = MaterialTheme.typography.headlineMedium)
+                            Spacer(Modifier.height(12.dp))
+                            Text(unlockMessage, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.height(20.dp))
+                            Button(onClick = ::requestLocalUnlock, enabled = !lockCleanupInProgress) { Text("Unlock with device") }
+                            if (!getSystemService(KeyguardManager::class.java).isDeviceSecure) {
+                                OutlinedButton(onClick = { startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS)) }) {
+                                    Text("Open device security settings")
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -142,6 +260,18 @@ internal fun appendUniqueChatMessage(target: MutableList<AndroidChatMessage>, me
 internal fun appendUniqueChatMessages(target: MutableList<AndroidChatMessage>, incoming: Iterable<AndroidChatMessage>) {
     val knownIds = target.mapTo(mutableSetOf()) { it.id }
     incoming.forEach { message -> if (knownIds.add(message.id)) target.add(message) }
+}
+
+private fun formatChatTime(timestamp: Long): String = runCatching {
+    DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT).withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(timestamp))
+}.getOrDefault("")
+
+private fun sharePrivateInvitation(context: Context, invitation: String) {
+    val send = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_TEXT, invitation)
+    }
+    context.startActivity(Intent.createChooser(send, "Share private invitation"))
 }
 
 private data class ModernInvitation(val conversationId: String, val controlCapability: String, val peerRoutingId: String, val peerFingerprint: String)
@@ -216,22 +346,41 @@ private fun IdentityAndConversationScreen(
     var endpoint by remember { mutableStateOf(preferences.getString("backend", BuildConfig.K3NCRYPT_BACKEND_URL).orEmpty()) }
     var socketEndpoint by remember { mutableStateOf(preferences.getString("socket", BuildConfig.K3NCRYPT_SOCKET_URL).orEmpty()) }
     var invitationInput by remember { mutableStateOf("") }
+    var showNewConversation by remember { mutableStateOf(false) }
+    var showConversationList by remember { mutableStateOf(true) }
+    var selectedTab by remember { mutableStateOf("chats") }
     var fingerprintConfirmation by remember { mutableStateOf("") }
     var conversation by remember { mutableStateOf<ConversationInvitation?>(null) }
     var savedTrustedConversations by remember { mutableStateOf<List<SavedConversationSummary>>(emptyList()) }
+    val allStoredMessages = remember { mutableStateListOf<AndroidChatMessage>() }
     var outgoingInvite by remember { mutableStateOf("") }
     var pendingPeer by remember { mutableStateOf<Pair<String, String>?>(null) }
     var showPeerComparison by remember { mutableStateOf(false) }
     var draft by remember { mutableStateOf("") }
     val chatMessages = remember { mutableStateListOf<AndroidChatMessage>() }
     var messageStatus by remember { mutableStateOf("") }
-    var status by remember { mutableStateOf("Configure the backend, then create or join a private conversation.") }
+    var status by remember { mutableStateOf("Set up this device to start a private conversation.") }
+    val invitationScanner = rememberLauncherForActivityResult(ScanContract()) { result ->
+        val scanned = result.contents ?: return@rememberLauncherForActivityResult
+        if (runCatching { parseModernInvitation(scanned) }.isSuccess) {
+            invitationInput = scanned
+            selectedTab = "add-contact"
+            showNewConversation = true
+            status = "Invitation scanned. Compare the security code before joining."
+        } else {
+            status = "This QR code is not a valid K3NCRYPT invitation."
+        }
+    }
+    fun scanInvitation() {
+        invitationScanner.launch(ScanOptions().setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+            .setPrompt("Scan a K3NCRYPT invitation").setBeepEnabled(false))
+    }
     var busy by remember { mutableStateOf(false) }
     var showAdvancedVerification by remember { mutableStateOf(false) }
-    var showNewConversation by remember { mutableStateOf(false) }
+    var showAdvancedNetwork by remember { mutableStateOf(false) }
     var identityChecked by remember { mutableStateOf(false) }
-    var selectedTab by remember { mutableStateOf("chats") }
     val callState by calls.state.collectAsState()
+    val relayConnected by relay.connected.collectAsState()
     var callElapsedSeconds by remember(callState.callId) { mutableStateOf(0) }
     var pendingCallAction by remember { mutableStateOf<String?>(null) }
     val callPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
@@ -278,19 +427,21 @@ private fun IdentityAndConversationScreen(
 
     LaunchedEffect(conversation?.conversationId, conversation?.peerIdentityReference, conversation?.peerRoutingId, pendingPeer?.second, status, messageStatus, chatMessages.size) {
         savedTrustedConversations = runCatching { messaging.savedTrustedConversations() }.getOrDefault(emptyList())
+        allStoredMessages.clear()
+        allStoredMessages.addAll(runCatching { messaging.messages() }.getOrDefault(emptyList()))
     }
 
     fun onMessage(message: AndroidChatMessage) {
         scope.launch {
             if (conversation?.conversationId != message.conversationId) return@launch
             if (!appendUniqueChatMessage(chatMessages, message)) {
-                messageStatus = "Duplicate encrypted delivery ignored."
+                messageStatus = "This message was already received."
                 return@launch
             }
             messageStatus = if (message.senderRoutingId == conversation?.localRoutingId) {
-                "Sent; relay acknowledgement received."
+                "Message delivered."
             } else {
-                "Received, persisted, and accepted by the relay."
+                "New message received."
             }
         }
     }
@@ -298,7 +449,7 @@ private fun IdentityAndConversationScreen(
         scope.launch {
             pendingPeer = route to fingerprint
             showPeerComparison = false
-            status = "A new peer is waiting for identity confirmation. Do not accept unless this fingerprint matches through a trusted channel."
+            status = "A new contact is waiting. Compare the security code with them through another trusted channel before confirming."
         }
     }
 
@@ -319,18 +470,19 @@ private fun IdentityAndConversationScreen(
             state = restored
             identityChecked = true
             if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("identity-restored")
-            status = "Saved identity restored. Protected actions still require current server authorization."
+            status = "Your saved identity is ready."
             if (restored.lifecycleState == "active" && endpoint.isNotBlank()) {
                 messaging.restoreConversation()?.let { saved ->
                     runCatching {
                         conversation = saved
+                        showConversationList = true
                         messaging.connect(saved, saved.peerIdentityReference.ifBlank { null }, ::onMessage, ::onPeerPending)
                         appendUniqueChatMessages(chatMessages, messaging.messages().filter { it.conversationId == saved.conversationId })
                     }.onSuccess {
                         if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("conversation-restored")
-                        status = "Conversation restored and authenticated relay join completed."
+                        status = "Your conversation is ready."
                     }
-                        .onFailure { status = "Conversation reconnect failed closed. Check the connection and retry." }
+                        .onFailure { status = "Could not reconnect to your conversation. Your saved messages remain on this device." }
                 }
             }
         }.onFailure {
@@ -340,24 +492,20 @@ private fun IdentityAndConversationScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-      Column(modifier = Modifier.fillMaxSize().statusBarsPadding().animateContentSize()) {
+      Column(modifier = Modifier.fillMaxSize().statusBarsPadding().animateContentSize(animationSpec = tween(K3ncryptMotion.normal))) {
        K3ncryptTopBar(
-           title = when (selectedTab) { "contacts" -> "Contacts"; "calls" -> "Calls"; "settings" -> "Settings"; else -> "K3NCRYPT" },
+           title = when (selectedTab) { "contacts" -> "Contacts"; "add-contact" -> "Add contact"; "calls" -> "Calls"; "settings" -> "Settings"; else -> if (state == null) "Welcome" else "K3NCRYPT" },
            subtitle = when (selectedTab) {
                "contacts" -> "Trusted conversations on this device"
+               "add-contact" -> "Share or scan a private invitation"
                "calls" -> "Private voice and video calls"
                "settings" -> "Your device and privacy preferences"
-               else -> if (conversation != null && SavedConversationIndex.isTrusted(conversation!!)) "Trusted contact · secure connection" else "Private communication you control"
+               else -> if (state == null) "Set up your private device" else if (conversation != null && SavedConversationIndex.isTrusted(conversation!!)) "Trusted contact · secure connection" else "Private communication you control"
            },
-           action = if (selectedTab == "chats") ({
+           action = if (selectedTab == "chats" || selectedTab == "contacts") ({
                Row {
-                   if (conversation != null && !showNewConversation) {
-                       IconButton(onClick = { showNewConversation = true }) {
-                           Icon(Icons.Filled.Add, contentDescription = "New conversation", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                       }
-                   }
-                   IconButton(onClick = { selectedTab = "settings" }) {
-                       Icon(Icons.Filled.Settings, contentDescription = "Open settings", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                   IconButton(onClick = { selectedTab = "add-contact"; showNewConversation = true }) {
+                       Icon(Icons.Filled.Add, contentDescription = "Add contact", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                    }
                }
            }) else null,
@@ -374,56 +522,82 @@ private fun IdentityAndConversationScreen(
                 }
             }
         }
-       } else if (selectedTab == "chats") {
-        val focusedChat = conversation != null && !showNewConversation
+       } else if (selectedTab == "chats" || selectedTab == "add-contact") {
+        val focusedChat = conversation != null && !showNewConversation && !showConversationList
         Column(
           modifier = if (focusedChat) Modifier.weight(1f).padding(horizontal = 16.dp, vertical = 8.dp)
                      else Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(20.dp),
           verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
         if (!focusedChat) {
-            K3ncryptSectionTitle("Private messaging", if (showNewConversation) "New conversation" else "Chats", "Your conversations stay protected on this device.")
-            if (showNewConversation && conversation != null) {
-                OutlinedButton(onClick = { showNewConversation = false }) { Text("Back to conversation") }
+            K3ncryptSectionTitle(
+                if (state == null) "Welcome to K3NCRYPT" else if (showNewConversation) "Add someone" else "Private messaging",
+                if (state == null) "A private space for your people" else if (showNewConversation) "Start a conversation" else "Chats",
+                if (state == null) "Create a secure identity on this device, then connect with someone you trust." else if (showNewConversation) "Share a private invitation or enter one from someone you trust." else "Your conversations stay protected on this device."
+            )
+            if (selectedTab == "add-contact") {
+                OutlinedButton(onClick = { selectedTab = "contacts"; showNewConversation = false }) { Text("Back to contacts") }
+            } else if (showNewConversation && conversation != null) {
+                OutlinedButton(onClick = { showNewConversation = false; showConversationList = true }) { Text("Back to chats") }
             }
             if (status.isNotBlank()) K3ncryptNotice(status, k3ncryptNoticeToneFor(status))
+            if (state == null) {
+                K3ncryptCard {
+                    Column(
+                        Modifier.fillMaxWidth().padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        K3ncryptBrandMark()
+                        Text("Your device is your identity", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Create your private identity on this device. Add someone with an invitation, then compare security details before you trust the conversation.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                }
+            }
         }
 
         if (!showNewConversation) conversation?.let { active ->
             pendingPeer?.let { (route, fingerprint) ->
-                Text("New contact request")
-                Text("Compare this peer’s identity with a trusted channel before pinning. Messages remain unaccepted until verification.")
-                Button(enabled = !busy, onClick = { showPeerComparison = !showPeerComparison }) {
-                    Text(if (showPeerComparison) "Hide fingerprint comparison" else "Compare fingerprint")
-                }
-                if (showPeerComparison) {
-                    Text("Peer identity fingerprint: $fingerprint")
-                    OutlinedTextField(fingerprintConfirmation, { fingerprintConfirmation = it }, label = { Text("Type the fingerprint after verifying it out of band") }, modifier = Modifier.fillMaxWidth())
-                    Button(enabled = !busy && fingerprintConfirmation.trim() == fingerprint, onClick = {
-                        scope.launch {
-                            busy = true
-                            runCatching { messaging.confirmFirstContact(route, fingerprintConfirmation.trim(), ::onMessage, ::onPeerPending) }
-                                .onSuccess {
-                                    conversation = active.copy(peerRoutingId = route, peerIdentityReference = fingerprint)
-                                    pendingPeer = null
-                                    showPeerComparison = false
-                                    fingerprintConfirmation = ""
-                                    status = "Secure connection established."
-                                }
-                                .onFailure { status = "Peer confirmation failed; the encrypted mailbox item remains unaccepted." }
-                            busy = false
+                K3ncryptCard {
+                    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        K3ncryptSectionTitle("Contact request", "Review before connecting", "Compare the security code with your contact through a separate trusted channel. Messages stay on hold until you confirm.")
+                        Button(enabled = !busy, onClick = { showPeerComparison = !showPeerComparison }) {
+                            Text(if (showPeerComparison) "Hide security code" else "View security code")
                         }
-                    }) { Text("Confirm and pin peer") }
+                        if (showPeerComparison) {
+                            Text(fingerprint, style = MaterialTheme.typography.bodySmall)
+                            OutlinedTextField(fingerprintConfirmation, { fingerprintConfirmation = it }, label = { Text("Enter the code shown by your contact") }, modifier = Modifier.fillMaxWidth())
+                            Button(enabled = !busy && fingerprintConfirmation.trim() == fingerprint, onClick = {
+                                scope.launch {
+                                    busy = true
+                                    runCatching { messaging.confirmFirstContact(route, fingerprintConfirmation.trim(), ::onMessage, ::onPeerPending) }
+                                        .onSuccess {
+                                            conversation = active.copy(peerRoutingId = route, peerIdentityReference = fingerprint)
+                                            pendingPeer = null
+                                            showPeerComparison = false
+                                            fingerprintConfirmation = ""
+                                            status = "Secure connection established."
+                                        }
+                                        .onFailure { status = "Could not confirm this contact. Messages remain safely on hold." }
+                                    busy = false
+                                }
+                            }) { Text("Confirm and add contact") }
+                        }
+                    }
                 }
             }
         }
 
         if (!focusedChat && (state == null || showAdvancedVerification)) K3ncryptCard {
           Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("Connection setup", style = MaterialTheme.typography.titleMedium)
-        Text("Choose the service endpoint for this device. Use HTTPS for hosted deployments.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        OutlinedTextField(endpoint, { endpoint = it }, label = { Text("Backend service address") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(socketEndpoint, { socketEndpoint = it }, label = { Text("Realtime service address") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        Text("Connect to your K3NCRYPT service", style = MaterialTheme.typography.titleMedium)
+        Text("If your beta invitation included a service address, enter it here. Hosted services should use HTTPS.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        OutlinedTextField(endpoint, { endpoint = it }, label = { Text("Service address") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(socketEndpoint, { socketEndpoint = it }, label = { Text("Realtime address (if different)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         Button(enabled = !busy && endpoint.isNotBlank(), onClick = {
             scope.launch {
                 busy = true
@@ -443,68 +617,127 @@ private fun IdentityAndConversationScreen(
         }
 
         if (!focusedChat) state?.let { identity ->
-            Text(if (identity.lifecycleState == "active") "Verified device" else "Device setup: ${identity.lifecycleState}")
+            Text(when (identity.lifecycleState) {
+                "active" -> "This device is ready"
+                "bootstrap-pending" -> "Device setup needs a retry"
+                "target-awaiting-approval" -> "Waiting for device approval"
+                else -> "Device setup in progress"
+            })
             if (showAdvancedVerification) {
                 Text("Device identity fingerprint: ${identity.deviceIdentityReference}")
-                Text("Device reference: ${identity.deviceId} · trust epoch ${identity.trustEpoch}")
             }
             if (identity.lifecycleState == "bootstrap-pending") {
                 Button(enabled = !busy && endpoint.isNotBlank(), onClick = {
                     scope.launch {
                         busy = true
                         runCatching { identities.retryPendingBootstrap() }
-                            .onSuccess { state = it; status = "Initial device bootstrap was accepted." }
-                            .onFailure { status = "Bootstrap was rejected or remains unavailable. The original signed request is retained." }
+                            .onSuccess { state = it; status = "Your device is ready." }
+                            .onFailure { status = "We couldn’t connect yet. Your device setup is safe. Check the service address and try again." }
                         busy = false
                     }
-                }) { Text("Retry first-device bootstrap") }
+            }) { Text("Retry device setup") }
             }
             if (identity.lifecycleState == "active") {
+              if (showNewConversation) {
                 Button(enabled = !busy && endpoint.isNotBlank(), onClick = {
                     scope.launch {
                         busy = true
                         runCatching {
                             val created = messaging.createNewConversation(::onMessage, ::onPeerPending)
                             conversation = created
+                            showConversationList = false
                             showNewConversation = false
+                            selectedTab = "chats"
                             outgoingInvite = "#modern=${Uri.encode(created.conversationId)}&control=${Uri.encode(created.controlCapability)}&address=${Uri.encode(created.localRoutingId)}&identity=${Uri.encode(identity.deviceIdentityReference)}"
                             chatMessages.clear()
-                            status = "Private conversation created. Share the invitation securely; first peer messages remain held until you confirm their identity fingerprint."
+                            status = "Invitation ready. Share it privately; you’ll confirm the contact before messages are accepted."
                         }.onFailure { status = "Conversation could not be created. Check the connection and retry." }
                         busy = false
                     }
-                }) { Text("Create private conversation") }
+                }) { Text("Create invitation") }
+              }
 
+              if (!showNewConversation) {
                 if (savedTrustedConversations.isNotEmpty()) {
-                    Text("Saved trusted conversations", style = MaterialTheme.typography.titleMedium)
+                    Text("Your saved conversations", style = MaterialTheme.typography.titleMedium)
                     savedTrustedConversations.forEach { saved ->
-                        Button(enabled = !busy, onClick = {
-                            scope.launch {
-                                busy = true
-                                runCatching {
-                                    val selected = messaging.selectSavedTrustedConversation(saved.conversationHash, ::onMessage, ::onPeerPending)
-                                    conversation = selected
-                                    pendingPeer = null
-                                    showPeerComparison = false
-                                    outgoingInvite = ""
-                                    chatMessages.clear()
-                                    appendUniqueChatMessages(chatMessages, messaging.messages().filter { it.conversationId == selected.conversationId })
-                                    if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("conversation-restored")
-                            status = "Secure connection established."
-                                }.onFailure { status = "Saved trusted conversation could not be restored." }
-                                busy = false
+                        val preview = allStoredMessages.asSequence()
+                            .filter { SavedConversationIndex.hash(it.conversationId) == saved.conversationHash }
+                            .maxByOrNull { it.timestamp }
+                        Surface(
+                            modifier = Modifier.fillMaxWidth().animateContentSize(animationSpec = tween(K3ncryptMotion.normal)).clickable(enabled = !busy) {
+                                scope.launch {
+                                    busy = true
+                                    runCatching {
+                                        val selected = messaging.selectSavedTrustedConversation(saved.conversationHash, ::onMessage, ::onPeerPending)
+                                        conversation = selected
+                                        pendingPeer = null
+                                        showPeerComparison = false
+                                        outgoingInvite = ""
+                                        showConversationList = false
+                                        chatMessages.clear()
+                                        val stored = messaging.messages()
+                                        appendUniqueChatMessages(chatMessages, stored.filter { it.conversationId == selected.conversationId })
+                                        allStoredMessages.clear()
+                                        allStoredMessages.addAll(stored)
+                                        if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("conversation-restored")
+                                        status = "Secure connection established."
+                                    }.onFailure { status = "Saved trusted conversation could not be restored." }
+                                    busy = false
+                                }
+                            },
+                            shape = MaterialTheme.shapes.large,
+                            color = MaterialTheme.colorScheme.surface,
+                            tonalElevation = 1.dp,
+                        ) {
+                            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(13.dp)) {
+                                Box(Modifier.size(46.dp).background(MaterialTheme.colorScheme.primary.copy(alpha = .12f), RoundedCornerShape(16.dp)), contentAlignment = Alignment.Center) {
+                                    Image(painter = painterResource(R.drawable.k3ncrypt_cluster_white), contentDescription = null, modifier = Modifier.size(27.dp), contentScale = ContentScale.Fit)
+                                }
+                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Text("Trusted contact", style = MaterialTheme.typography.titleMedium)
+                                    Text(preview?.text?.take(64) ?: "Messages are end-to-end encrypted", maxLines = 1, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                                    Text(if (preview != null) formatChatTime(preview.timestamp) else if (saved.connectionState == "connected") "Secure connection established" else "Saved on this device", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
+                                }
+                                K3ncryptStatus("Verified", positive = saved.trustState == "verified")
                             }
-                        }) {
-                            Text("Open trusted conversation")
                         }
                     }
+                } else if (state?.lifecycleState == "active" && !showNewConversation) {
+                    K3ncryptEmptyState("No conversations yet", "Add someone you trust to start your first private chat.")
                 }
+              }
 
-                OutlinedTextField(invitationInput, { invitationInput = it }, label = { Text("Paste a K3NCRYPT modern invitation") }, modifier = Modifier.fillMaxWidth())
-                if (showAdvancedVerification) {
-                    OutlinedTextField(fingerprintConfirmation, { fingerprintConfirmation = it }, label = { Text("Confirm invited peer fingerprint") }, modifier = Modifier.fillMaxWidth())
+              if (showNewConversation) {
+                OutlinedTextField(
+                    invitationInput,
+                    { invitationInput = it },
+                    label = { Text("Private invitation") },
+                    supportingText = { Text("Paste the invitation shared with you.") },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 2,
+                    maxLines = 4,
+                )
+                OutlinedButton(enabled = !busy, onClick = ::scanInvitation) { Text("Scan invitation QR") }
+                val invitationFingerprint = runCatching { parseModernInvitation(invitationInput.trim()).peerFingerprint }.getOrNull()
+                if (invitationFingerprint != null) {
+                    K3ncryptNotice("Before connecting, compare this security code with the one shown on your contact’s device using another trusted channel. This helps ensure you are talking to the right person.", K3ncryptNoticeTone.Attention)
+                    K3ncryptCard {
+                        Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("Security code to compare", style = MaterialTheme.typography.labelLarge)
+                            Text(invitationFingerprint, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                    OutlinedTextField(
+                        fingerprintConfirmation,
+                        { fingerprintConfirmation = it },
+                        label = { Text("Enter the code shown by your contact") },
+                        supportingText = { Text("Only continue after comparing with your contact.") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                    )
                 }
-                Button(enabled = !busy && endpoint.isNotBlank() && showAdvancedVerification, onClick = {
+                Button(enabled = !busy && endpoint.isNotBlank() && invitationFingerprint != null && fingerprintConfirmation.isNotBlank(), onClick = {
                     scope.launch {
                         busy = true
                         runCatching {
@@ -514,44 +747,41 @@ private fun IdentityAndConversationScreen(
                             val joined = ConversationInvitation(parsed.conversationId, local.getString("address"), parsed.peerRoutingId, parsed.peerFingerprint, parsed.controlCapability, local.getString("renewalProof"))
                             messaging.connect(joined, fingerprintConfirmation.trim(), ::onMessage, ::onPeerPending)
                             conversation = joined
+                            showConversationList = false
                             showNewConversation = false
+                            selectedTab = "chats"
                             chatMessages.clear()
                             appendUniqueChatMessages(chatMessages, messaging.messages().filter { it.conversationId == joined.conversationId })
                             status = "Secure connection established."
                         }.onFailure { status = "Invitation could not be joined. Verify it and check connectivity." }
                         busy = false
                     }
-                }) { Text("Join conversation") }
-                if (!showAdvancedVerification) Text("Identity comparison is available in Settings → Security → Advanced verification.")
+                }) { Text("Continue after comparison") }
+              }
             }
         } ?: run {
             Button(enabled = !busy && endpoint.isNotBlank(), onClick = {
                 scope.launch {
                     busy = true
                     runCatching { identities.createFirstDevice() }
-                        .onSuccess { state = it; status = "First device registered with the durable backend trust authority." }
-                        .onFailure { status = "Bootstrap was not accepted. Local signed state is retained; configure a reachable backend and retry."; state = runCatching { identities.restore() }.getOrNull() }
+                        .onSuccess { state = it; status = "Your device is ready." }
+                        .onFailure { status = "We couldn’t connect yet. Your device setup is safe. Check the service address and try again."; state = runCatching { identities.restore() }.getOrNull() }
                     busy = false
                 }
-            }) { Text("Create first device") }
+            }) { Text("Create my secure identity") }
             Button(enabled = !busy, onClick = {
                 scope.launch {
                     busy = true
                     runCatching { target = identities.createEnrollmentTarget(); identities.restore() }
-                        .onSuccess { state = it; status = "Independent device identity created; it still needs trusted-device approval and activation." }
-                        .onFailure { status = "Enrollment identity could not be prepared." }
+                        .onSuccess { state = it; status = "This device is ready for approval from another trusted device." }
+                        .onFailure { status = "Could not prepare this device for approval. Please try again." }
                     busy = false
                 }
-            }) { Text("Prepare device enrollment") }
+            }) { Text("Set up another device") }
         }
 
-        if (!focusedChat) target?.let { newDevice ->
+        if (!focusedChat && target != null) {
             Text("A separate device identity is ready for trusted approval.")
-            if (showAdvancedVerification) {
-                Text("Target device: ${newDevice.deviceId}")
-                Text("Target fingerprint: ${newDevice.fingerprint}")
-                Text("Public verification key: ${newDevice.verificationKey}")
-            }
         }
 
         if (!focusedChat) state?.takeIf { it.lifecycleState == "active" && showAdvancedVerification }?.let { identity ->
@@ -569,7 +799,7 @@ private fun IdentityAndConversationScreen(
                     busy = false
                 }
             }) { Text("Approve and enroll device") }
-            if (approvedAccountReference.isNotBlank()) Text("Target activation data: $approvedAccountReference · epoch $approvedPendingEpoch")
+            if (approvedAccountReference.isNotBlank()) Text("Device enrollment is ready for confirmation on the new device.")
             if (identity.lifecycleState == "target-awaiting-approval") {
                 Text("Enter the account reference and pending epoch provided by the approving device.")
                 OutlinedTextField(approvedAccountReference, { approvedAccountReference = it }, label = { Text("Account reference") }, modifier = Modifier.fillMaxWidth())
@@ -600,8 +830,20 @@ private fun IdentityAndConversationScreen(
                 Text(if (SavedConversationIndex.isTrusted(active)) "Trusted contact" else "New contact", style = MaterialTheme.typography.titleMedium)
             }
             if (outgoingInvite.isNotBlank()) {
-                Text("Share this invitation securely with a trusted contact.")
-                Button(onClick = { clipboard.setText(AnnotatedString(outgoingInvite)); status = "Invitation copied." }) { Text("Copy invitation") }
+                K3ncryptCard {
+                    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                        Text("Your private invitation", style = MaterialTheme.typography.titleMedium)
+                        Text("Share this link only with the person you want to contact. You’ll compare security codes before trusting the conversation.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                        InvitationQr(outgoingInvite)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(onClick = {
+                                sharePrivateInvitation(context, outgoingInvite)
+                                status = "Choose a private way to share your invitation."
+                            }) { Text("Share invitation") }
+                            OutlinedButton(onClick = { clipboard.setText(AnnotatedString(outgoingInvite)); status = "Invitation copied. Share it privately." }) { Text("Copy link") }
+                        }
+                    }
+                }
             }
             LazyColumn(
                 modifier = Modifier.fillMaxWidth().then(if (focusedChat) Modifier.weight(1f) else Modifier.height(320.dp)).padding(vertical = 8.dp),
@@ -627,7 +869,7 @@ private fun IdentityAndConversationScreen(
                             Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                                 Text(message.text, color = if (sentByThisDevice) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyMedium)
                                 Text(
-                                    if (sentByThisDevice) "Sent · delivered" else "Received securely",
+                                    if (sentByThisDevice) "Sent · delivered · ${formatChatTime(message.timestamp)}" else "Received securely · ${formatChatTime(message.timestamp)}",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = if (sentByThisDevice) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.78f) else MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -636,29 +878,41 @@ private fun IdentityAndConversationScreen(
                     }
                 }
             }
-            OutlinedTextField(draft, { draft = it }, label = { Text("Message") }, modifier = Modifier.fillMaxWidth(), maxLines = 4)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(enabled = !busy && draft.isNotBlank() && active.peerRoutingId.isNotBlank(), onClick = {
+            Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
+              Row(Modifier.fillMaxWidth().padding(start = 8.dp, end = 7.dp, top = 5.dp, bottom = 5.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                IconButton(enabled = false, onClick = {}, modifier = Modifier.size(40.dp)) {
+                    Icon(Icons.Filled.AttachFile, contentDescription = "Attachments are not available yet", tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
+                }
+                OutlinedTextField(draft, { draft = it }, placeholder = { Text("Write a message") }, modifier = Modifier.weight(1f), maxLines = 4, shape = RoundedCornerShape(16.dp))
+                IconButton(enabled = false, onClick = {}, modifier = Modifier.size(40.dp)) {
+                    Icon(Icons.Filled.Mic, contentDescription = "Voice messages are not available yet", tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
+                }
+                IconButton(enabled = !busy && draft.isNotBlank() && active.peerRoutingId.isNotBlank(), onClick = {
                     val text = draft
                     scope.launch {
                         busy = true
                         messageStatus = "Encrypting and sending…"
                         runCatching { messaging.sendText(text) }
-                            .onSuccess { draft = ""; messageStatus = "Sent; relay acknowledgement received." }
-                            .onFailure { messageStatus = "Send failed. The encrypted outbox is retained for retry after reconnect." }
+                            .onSuccess { draft = ""; messageStatus = "Message delivered." }
+                            .onFailure { messageStatus = "Message not sent. It is saved on this device and can be sent when the connection returns." }
                         busy = false
                     }
-                }) { Text("Send") }
-                Button(enabled = !busy && endpoint.isNotBlank(), onClick = {
-                    scope.launch {
-                        busy = true
-                        runCatching { messaging.connect(active, active.peerIdentityReference.ifBlank { null }, ::onMessage, ::onPeerPending) }
-                            .onSuccess { messageStatus = "Reconnected; encrypted mailbox replay requested." }
-                            .onFailure { messageStatus = "Reconnect failed; stored messages and outbox are retained." }
-                        busy = false
+                }) {
+                    Surface(shape = RoundedCornerShape(14.dp), color = if (draft.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant) {
+                        Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
+                            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send encrypted message", tint = if (draft.isNotBlank()) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
-                }) { Text("Reconnect") }
+                }
+              }
             }
+            Text(
+                "File sharing and voice messages are not available in Android chat yet.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 8.dp),
+            )
+            if (!relayConnected) K3ncryptNotice("Connection interrupted. Saved messages stay on this device while K3NCRYPT tries to reconnect.", K3ncryptNoticeTone.Attention)
             if (messageStatus.isNotBlank()) K3ncryptNotice(messageStatus, k3ncryptNoticeToneFor(messageStatus))
             if (SavedConversationIndex.isTrusted(active)) {
                 if (showAdvancedVerification) {
@@ -687,6 +941,21 @@ private fun IdentityAndConversationScreen(
        } else if (selectedTab == "contacts") {
         Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             K3ncryptSectionTitle("Your people", "Contacts", "Trusted conversations saved on this device.")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Button(onClick = { selectedTab = "add-contact"; showNewConversation = true }) { Icon(Icons.Filled.Add, contentDescription = null); Spacer(Modifier.size(6.dp)); Text("Add contact") }
+                OutlinedButton(onClick = ::scanInvitation) { Text("Scan QR") }
+            }
+            OutlinedButton(onClick = { selectedTab = "chats"; showNewConversation = true; showConversationList = true; outgoingInvite = "" }) { Text("Create invitation QR") }
+            pendingPeer?.let {
+                K3ncryptCard {
+                    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                        K3ncryptStatus("Needs review")
+                        Text("New contact request", style = MaterialTheme.typography.titleMedium)
+                        Text("Compare the security code in your conversation before confirming this contact.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                        Button(onClick = { selectedTab = "chats"; showNewConversation = false; showConversationList = false }) { Text("Review request") }
+                    }
+                }
+            }
             if (savedTrustedConversations.isEmpty()) {
                 Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
                     K3ncryptEmptyState("Your contacts will appear here", "Create or join a private conversation to connect with someone you trust.")
@@ -694,8 +963,14 @@ private fun IdentityAndConversationScreen(
             } else savedTrustedConversations.forEach { saved ->
                 Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface, tonalElevation = 1.dp) {
                     Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("Trusted contact", style = MaterialTheme.typography.titleMedium)
-                        Text("Saved privately on this device", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                Text("Trusted contact", style = MaterialTheme.typography.titleMedium)
+                                Text(if (saved.connectionState == "connected") "Connected on this device" else "Saved on this device", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                                if (saved.lastActivityTimestamp > 0L) Text("Last message · ${formatChatTime(saved.lastActivityTimestamp)}", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
+                            }
+                            K3ncryptStatus("Verified", positive = saved.trustState == "verified")
+                        }
                         Button(enabled = !busy, onClick = {
                             scope.launch {
                                 busy = true
@@ -709,6 +984,7 @@ private fun IdentityAndConversationScreen(
                                     appendUniqueChatMessages(chatMessages, messaging.messages().filter { it.conversationId == selected.conversationId })
                                     status = "Secure connection established."
                                     selectedTab = "chats"
+                                    showConversationList = false
                                 }.onFailure { status = "Saved trusted conversation could not be restored." }
                                 busy = false
                             }
@@ -719,16 +995,17 @@ private fun IdentityAndConversationScreen(
         }
        } else if (selectedTab == "calls") {
         Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            K3ncryptSectionTitle("Stay in touch", "Calls", "Start a call from a trusted, connected conversation.")
+            K3ncryptSectionTitle("Stay in touch", "Calls", "Start a voice or video call from a trusted conversation.")
             val active = conversation
             if (active == null) {
                 Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
                     K3ncryptEmptyState("No active conversation", "Open a saved contact before calling. Call authorization remains bound to that conversation.")
                 }
+                OutlinedButton(onClick = { selectedTab = "contacts" }) { Text("Open contacts") }
             } else {
                 Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
                     Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text("Trusted contact", style = MaterialTheme.typography.titleMedium)
+                        Text("Your trusted contact", style = MaterialTheme.typography.titleMedium)
                         Text(if (SavedConversationIndex.isTrusted(active) && callState.callId == null) "Secure connection established" else "Finish contact verification before calling.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             Button(enabled = !busy && callState.callId == null && SavedConversationIndex.isTrusted(active), onClick = { requestCallPermissions("audio") }) { Text("Voice call") }
@@ -738,6 +1015,7 @@ private fun IdentityAndConversationScreen(
                     }
                 }
             }
+            K3ncryptNotice("Call history is not saved on this device yet. Incoming and active calls appear here while they are in progress.")
         }
        } else {
         Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -756,25 +1034,28 @@ private fun IdentityAndConversationScreen(
             }
             K3ncryptCard {
                 Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("Connection", style = MaterialTheme.typography.titleMedium)
-                    Text("Configure the service this device connects to. Hosted services should use HTTPS.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
-                    OutlinedTextField(endpoint, { endpoint = it }, label = { Text("Backend HTTPS origin") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                    OutlinedTextField(socketEndpoint, { socketEndpoint = it }, label = { Text("Socket.IO origin") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                    Button(enabled = !busy && endpoint.isNotBlank(), onClick = {
-                        scope.launch {
-                            busy = true
-                            runCatching {
-                                val backend = NetworkEndpoint.validate(endpoint, allowEmulatorHttp = BuildConfig.DEBUG)
-                                val socketUrl = NetworkEndpoint.validate(socketEndpoint.ifBlank { backend }, allowEmulatorHttp = BuildConfig.DEBUG)
-                                api.configureBaseUrl(backend, allowEmulatorHttp = BuildConfig.DEBUG)
-                                relay.configureUrl(socketUrl, allowEmulatorHttp = BuildConfig.DEBUG)
-                                preferences.edit().putString("backend", backend).putString("socket", socketUrl).apply()
-                                socketEndpoint = socketUrl
-                                status = "Backend endpoint configured."
-                            }.onFailure { status = "Backend endpoint configuration failed. Use a valid HTTPS service address." }
-                            busy = false
-                        }
-                    }) { Text("Save connection") }
+                    Text("Advanced", style = MaterialTheme.typography.titleMedium)
+                    OutlinedButton(onClick = { showAdvancedNetwork = !showAdvancedNetwork }) { Text(if (showAdvancedNetwork) "Hide network settings" else "Network settings") }
+                    if (showAdvancedNetwork) {
+                        Text("Configure the service this device connects to. Hosted services should use HTTPS.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                        OutlinedTextField(endpoint, { endpoint = it }, label = { Text("Service address") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                        OutlinedTextField(socketEndpoint, { socketEndpoint = it }, label = { Text("Realtime address (if different)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                        Button(enabled = !busy && endpoint.isNotBlank(), onClick = {
+                            scope.launch {
+                                busy = true
+                                runCatching {
+                                    val backend = NetworkEndpoint.validate(endpoint, allowEmulatorHttp = BuildConfig.DEBUG)
+                                    val socketUrl = NetworkEndpoint.validate(socketEndpoint.ifBlank { backend }, allowEmulatorHttp = BuildConfig.DEBUG)
+                                    api.configureBaseUrl(backend, allowEmulatorHttp = BuildConfig.DEBUG)
+                                    relay.configureUrl(socketUrl, allowEmulatorHttp = BuildConfig.DEBUG)
+                                    preferences.edit().putString("backend", backend).putString("socket", socketUrl).apply()
+                                    socketEndpoint = socketUrl
+                                    status = "Backend endpoint configured."
+                                }.onFailure { status = "Backend endpoint configuration failed. Use a valid HTTPS service address." }
+                                busy = false
+                            }
+                        }) { Text("Save connection") }
+                    }
                 }
             }
             K3ncryptCard {
@@ -792,8 +1073,18 @@ private fun IdentityAndConversationScreen(
             K3ncryptCard {
                 Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                     Text("Privacy", style = MaterialTheme.typography.titleMedium)
-                    Text("Messages are shown from this device’s saved conversation data. No analytics controls are needed here.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
-                    Text("Message previews stay inside the app. Passphrases and private keys are not shown in settings.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                    Text("Your messages are protected for the people in your trusted conversation. Notification preview controls are not available in this beta yet.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                    Text("K3NCRYPT never asks you to share a passphrase or private key.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            K3ncryptCard {
+                Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                    Text("Application", style = MaterialTheme.typography.titleMedium)
+                    Text("Notifications", style = MaterialTheme.typography.labelLarge)
+                    Text("Private notification preferences are not available in this beta yet.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.height(4.dp))
+                    Text("Local storage", style = MaterialTheme.typography.labelLarge)
+                    Text("Your encrypted account and saved messages remain on this device.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                 }
             }
         }
@@ -801,8 +1092,8 @@ private fun IdentityAndConversationScreen(
        NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
         listOf("chats" to "Chats", "contacts" to "Contacts", "calls" to "Calls", "settings" to "Settings").forEach { (route, label) ->
             NavigationBarItem(
-                selected = selectedTab == route,
-                onClick = { selectedTab = route },
+                selected = selectedTab == route || (selectedTab == "add-contact" && route == "contacts"),
+                onClick = { selectedTab = route; if (route == "chats") { showNewConversation = false; showConversationList = true } },
                 icon = { Icon(imageVector = when (route) { "chats" -> Icons.Filled.ChatBubbleOutline; "contacts" -> Icons.Filled.Contacts; "calls" -> Icons.Filled.Call; else -> Icons.Filled.Settings }, contentDescription = null) },
                 label = { Text(label) },
                 alwaysShowLabel = true,
@@ -813,8 +1104,8 @@ private fun IdentityAndConversationScreen(
       }
       AnimatedVisibility(
           visible = callState.callId != null,
-          enter = fadeIn() + scaleIn(initialScale = 0.97f),
-          exit = fadeOut() + scaleOut(targetScale = 0.98f),
+          enter = fadeIn(animationSpec = tween(K3ncryptMotion.normal)) + scaleIn(initialScale = 0.97f, animationSpec = tween(K3ncryptMotion.normal)),
+          exit = fadeOut(animationSpec = tween(K3ncryptMotion.fast)) + scaleOut(targetScale = 0.98f, animationSpec = tween(K3ncryptMotion.fast)),
       ) {
           val callLabel = when (callState.status.lowercase()) {
               "ringing" -> if (callState.incoming) "Incoming call" else "Calling…"
@@ -874,7 +1165,7 @@ private fun IdentityAndConversationScreen(
                                   OutlinedButton(onClick = { calls.setCameraEnabled(!callState.cameraEnabled) }) {
                                       Text(if (callState.cameraEnabled) "Camera off" else "Camera on")
                                   }
-                                  OutlinedButton(onClick = calls::switchCamera) { Text("Switch") }
+                                  OutlinedButton(onClick = calls::switchCamera) { Text("Switch camera") }
                               }
                               Button(
                                   colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),

@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -65,6 +66,12 @@ private val SlateTypography = Typography().copy(
     labelSmall = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Medium, fontSize = 12.sp, lineHeight = 16.sp, letterSpacing = 0.1.sp),
 )
 
+object K3ncryptMotion {
+    const val fast = 120
+    const val normal = 240
+    const val slow = 400
+}
+
 @Composable
 fun K3ncryptTheme(darkTheme: Boolean, content: @Composable () -> Unit) {
     MaterialTheme(
@@ -122,7 +129,7 @@ fun K3ncryptSectionTitle(kicker: String, title: String, description: String? = n
 @Composable
 fun K3ncryptCard(content: @Composable () -> Unit) {
     Surface(
-        modifier = Modifier.fillMaxWidth().animateContentSize(),
+        modifier = Modifier.fillMaxWidth().animateContentSize(animationSpec = tween(durationMillis = K3ncryptMotion.normal)),
         shape = RoundedCornerShape(20.dp),
         color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.58f)),
@@ -163,7 +170,7 @@ fun K3ncryptNotice(text: String, tone: K3ncryptNoticeTone = K3ncryptNoticeTone.N
         K3ncryptNoticeTone.Neutral -> MaterialTheme.colorScheme.primary
     }
     Surface(
-        modifier = Modifier.fillMaxWidth().animateContentSize(),
+        modifier = Modifier.fillMaxWidth().animateContentSize(animationSpec = tween(durationMillis = K3ncryptMotion.fast)),
         shape = RoundedCornerShape(14.dp),
         color = accent.copy(alpha = 0.08f),
         border = BorderStroke(1.dp, accent.copy(alpha = 0.22f)),

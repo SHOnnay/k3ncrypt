@@ -13,7 +13,7 @@ import { attachMediaStream } from './mediaStream';
 import './CallOverlay.css';
 
 export const CallOverlay: React.FC = () => {
-  const { callActive, callStatus, isIncomingCall, callLifecycleState, callMediaMode, localCallStream, remoteCallStream, microphoneMuted, cameraEnabled, callError, endCall, acceptCall, rejectCall, cancelCall, setMicrophoneMuted, setCameraEnabled, privacyPreferences } = useChat();
+  const { callActive, callStatus, isIncomingCall, callLifecycleState, callMediaMode, localCallStream, remoteCallStream, microphoneMuted, cameraEnabled, callError, endCall, acceptCall, rejectCall, cancelCall, setMicrophoneMuted, setCameraEnabled, privacyPreferences, conversations, channelHash } = useChat();
   const { duration, formatDuration, startTimer, stopTimer } = useCallTimer();
   const remoteAudio = useRef<HTMLAudioElement>(null);
   const localVideo = useRef<HTMLVideoElement>(null);
@@ -75,6 +75,7 @@ export const CallOverlay: React.FC = () => {
   };
 
   const isVideo = callMediaMode === 'video';
+  const callContact = conversations.find((conversation) => conversation.roomId === channelHash)?.label ?? 'Trusted contact';
 
   return (
     <div className="blur-overlay">
@@ -87,8 +88,9 @@ export const CallOverlay: React.FC = () => {
             <span className="call-video-indicator">{cameraEnabled ? 'Camera on' : 'Camera off'}</span>
           </div>
         </div>}
-        {(!isVideo || isIncomingCall) && <div className="call-avatar shimmer"><Avatar label="Private conversation" size="hero" /></div>}
+        {(!isVideo || isIncomingCall) && <div className="call-avatar shimmer"><Avatar label={callContact} size="hero" /></div>}
         <span className="call-kicker">Private {isVideo ? 'video' : 'audio'} call</span>
+        <span className="call-contact-name">{callContact}</span>
         <h3 id="call-status" className="call-status">
           {callStatus || 'Calling...'}
         </h3>

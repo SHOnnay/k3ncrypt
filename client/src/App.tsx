@@ -66,6 +66,7 @@ const AppContent: React.FC = () => {
           if (roomId) openConversation(roomId).catch(() => setError('Could not open this saved conversation. Your stored data was not changed.'));
         }}
         onOpenSettings={() => setShowSettings(true)}
+        settingsOpen={showSettings}
       />
       <section className="conversation-workspace" aria-label="Conversation workspace">
         <SetupOverlay onSetupComplete={handleSetupComplete} onModernSetupComplete={() => {

@@ -10,6 +10,8 @@ import androidx.room.Query
 import androidx.room.RoomDatabase
 import androidx.room.Transaction
 import androidx.room.withTransaction
+import android.os.Build
+import android.security.keystore.KeyProperties
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -21,6 +23,8 @@ data class SecureRecordEntity(val namespace: String, val recordId: String, val c
 
 @Dao
 interface SecureRecordDao {
+    @Query("SELECT * FROM secure_records")
+    suspend fun all(): List<SecureRecordEntity>
     @Query("SELECT * FROM secure_records WHERE namespace = :namespace AND recordId = :recordId")
     suspend fun get(namespace: String, recordId: String): SecureRecordEntity?
     @Query("SELECT * FROM secure_records WHERE namespace = :namespace ORDER BY updatedAt, recordId")
@@ -36,28 +40,70 @@ interface SecureRecordDao {
 @Database(entities = [SecureRecordEntity::class], version = 1, exportSchema = true)
 abstract class K3ncryptSecureDatabase : RoomDatabase() { abstract fun records(): SecureRecordDao }
 
-/** AES-GCM key material is non-exportable and remains in Android Keystore. */
-class KeystoreAead(private val alias: String = "k3ncrypt.android.v1.storage") {
-    private fun key(): SecretKey {
+/** Storage encryption is unavailable until system authentication unlocks the v2 Keystore key. */
+class KeystoreAead {
+    private val legacyAlias = "k3ncrypt.android.v1.storage"
+    private val authenticatedAlias = "k3ncrypt.android.v2.authenticated.storage"
+    @Volatile private var unlocked = false
+
+    private fun key(alias: String): SecretKey? {
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        (store.getKey(alias, null) as? SecretKey)?.let { return it }
+        return store.getKey(alias, null) as? SecretKey
+    }
+
+    private fun authenticatedKey(create: Boolean = false): SecretKey {
+        key(authenticatedAlias)?.let { return it }
+        check(create) { "Authenticated storage key is unavailable; local records were preserved" }
         val generator = KeyGenerator.getInstance("AES", "AndroidKeyStore")
-        generator.init(android.security.keystore.KeyGenParameterSpec.Builder(alias, android.security.keystore.KeyProperties.PURPOSE_ENCRYPT or android.security.keystore.KeyProperties.PURPOSE_DECRYPT)
-            .setBlockModes(android.security.keystore.KeyProperties.BLOCK_MODE_GCM)
-            .setEncryptionPaddings(android.security.keystore.KeyProperties.ENCRYPTION_PADDING_NONE)
+        val spec = android.security.keystore.KeyGenParameterSpec.Builder(authenticatedAlias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
             .setKeySize(256)
-            .setUserAuthenticationRequired(false)
-            .build())
+            .setUserAuthenticationRequired(true)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            spec.setUserAuthenticationParameters(8 * 60 * 60,
+                KeyProperties.AUTH_BIOMETRIC_STRONG or KeyProperties.AUTH_DEVICE_CREDENTIAL)
+        } else {
+            @Suppress("DEPRECATION")
+            spec.setUserAuthenticationValidityDurationSeconds(8 * 60 * 60)
+        }
+        generator.init(spec.build())
         return generator.generateKey()
     }
 
-    fun encrypt(plaintext: ByteArray, aad: ByteArray): ByteArray {
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key()); updateAAD(aad) }
+    private fun seal(plaintext: ByteArray, aad: ByteArray, key: SecretKey): ByteArray {
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key); updateAAD(aad) }
         return cipher.iv + cipher.doFinal(plaintext)
     }
-    fun decrypt(sealed: ByteArray, aad: ByteArray): ByteArray {
+
+    private fun open(sealed: ByteArray, aad: ByteArray, key: SecretKey): ByteArray {
         require(sealed.size > 12 + 16) { "Corrupted encrypted record" }
-        return Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, sealed.copyOfRange(0, 12))); updateAAD(aad) }.doFinal(sealed.copyOfRange(12, sealed.size))
+        return Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, sealed.copyOfRange(0, 12))); updateAAD(aad) }.doFinal(sealed.copyOfRange(12, sealed.size))
+    }
+
+    internal fun prepareAuthenticatedKey() { authenticatedKey(create = true) }
+    internal fun decryptLegacy(sealed: ByteArray, aad: ByteArray): ByteArray =
+        open(sealed, aad, key(legacyAlias) ?: error("Legacy storage key is unavailable; local records were preserved"))
+    internal fun encryptAuthenticated(plaintext: ByteArray, aad: ByteArray): ByteArray = seal(plaintext, aad, authenticatedKey())
+    internal fun verifyAuthenticatedKey() {
+        val probe = byteArrayOf(1)
+        check(open(seal(probe, byteArrayOf(2), authenticatedKey()), byteArrayOf(2), authenticatedKey()).contentEquals(probe))
+    }
+    internal fun discardLegacyKey() {
+        KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.deleteEntry(legacyAlias)
+    }
+    internal fun unlock() { verifyAuthenticatedKey(); unlocked = true }
+    fun lock() { unlocked = false }
+    private fun unlockedKey(): SecretKey {
+        check(unlocked) { "Local storage is locked" }
+        return authenticatedKey()
+    }
+
+    fun encrypt(plaintext: ByteArray, aad: ByteArray): ByteArray {
+        return seal(plaintext, aad, unlockedKey())
+    }
+    fun decrypt(sealed: ByteArray, aad: ByteArray): ByteArray {
+        return open(sealed, aad, unlockedKey())
     }
 }
 
