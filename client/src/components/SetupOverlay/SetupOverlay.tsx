@@ -15,7 +15,7 @@ import { copy } from '../../content/copy';
 interface SetupOverlayProps {
   onSetupComplete: (roomId: string, secret: string, controlCapability: string) => Promise<void>;
   isHidden: boolean;
-  onModernSetupComplete: (inviteLink: string) => void;
+  onModernSetupComplete: () => void;
 }
 
 type ViewType = 'initial' | 'create' | 'join' | 'modern' | 'restore' | 'deleted';
@@ -39,7 +39,6 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onM
   const [, setIsLoading] = useState<boolean>(false);
   const passphraseRef = useRef<HTMLInputElement>(null);
   const [modernInvite, setModernInvite] = useState('');
-
   // Generate the invitation (room id from the server + a locally generated secret) when entering create view
   const generateInvite = useCallback(async () => {
     try {
@@ -112,7 +111,7 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onM
       try {
         setStatus('Opening your private contact…');
         await joinModernChannel(modern.roomId, modern.controlCapability, modern.address, modern.identityCommitment, passphrase);
-        onModernSetupComplete(`${window.location.origin}${window.location.pathname}#modern=${encodeURIComponent(modern.roomId)}&control=${encodeURIComponent(modern.controlCapability)}&address=${encodeURIComponent(modern.address)}&identity=${encodeURIComponent(modern.identityCommitment)}`);
+        onModernSetupComplete();
         setStatus('');
       } catch { setStatus('Could not open this contact. Check the invitation and local passphrase.'); }
       return;
@@ -157,8 +156,14 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onM
       setStatus('Unlocking your encrypted account…');
       await restoreSession(passphrase);
       setStatus('');
-      onModernSetupComplete(window.location.href);
-    } catch { setStatus('Could not unlock this account. Check the local passphrase and try again.'); }
+      onModernSetupComplete();
+    } catch (error) {
+      const category = error && typeof error === 'object' && 'restoreFailureCategory' in error
+        ? (error as { restoreFailureCategory?: unknown }).restoreFailureCategory : undefined;
+      setStatus(category === 'session-record-missing'
+        ? 'The vault unlocked, but this conversation’s saved encrypted session is missing. Keep this device’s data intact while you check for an encrypted backup.'
+        : 'Could not unlock this account. Check the local passphrase and try again.');
+    }
   };
 
   const heading = view === 'initial' ? copy.welcome.title : view === 'create' ? copy.contact.title : view === 'join' ? 'Open an invitation' : view === 'modern' ? 'Create your private account' : view === 'restore' ? 'Welcome back' : 'Conversation closed';
@@ -177,7 +182,7 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onM
   return (
     <div className={`overlay ${isHidden ? 'hidden' : ''}`}>
       <div className="overlay-content">
-        <div className="welcome-wordmark" aria-hidden="true">K</div>
+        <img className="welcome-wordmark" src="/branding/k3ncrypt-appicon.svg" alt="K3NCRYPT" />
         <span className="welcome-kicker">A place for your people</span>
         <h1>{heading}</h1>
         <p>{description}</p>
@@ -211,7 +216,7 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onM
         {view === 'modern' && <div className="create-hash-view">
           <label className="input-group">Local passphrase<input ref={passphraseRef} type="password" autoComplete="off" minLength={12} /></label>
           <p className="invite-note">This passphrase unlocks your identity on this device. Keep it private.</p>
-          {modernInvite ? <><input className="message-input" readOnly value={modernInvite} aria-label="Modern invitation" /><button className="btn btn--secondary" type="button" onClick={() => navigator.clipboard.writeText(modernInvite)}>Copy invitation</button><button className="btn btn--primary" type="button" onClick={() => onModernSetupComplete(modernInvite)}>Continue to conversation</button></> : <button className="btn btn--primary" type="button" onClick={handleModernCreate}>Create private contact</button>}
+          {modernInvite ? <><input className="message-input" readOnly value={modernInvite} aria-label="Modern invitation" /><button className="btn btn--secondary" type="button" onClick={() => navigator.clipboard.writeText(modernInvite)}>Copy invitation</button><button className="btn btn--primary" type="button" onClick={() => onModernSetupComplete()}>Continue to conversation</button></> : <button className="btn btn--primary" type="button" onClick={handleModernCreate}>Create private contact</button>}
           <button className="btn btn--secondary" type="button" onClick={handleBack}>Back</button>
         </div>}
 

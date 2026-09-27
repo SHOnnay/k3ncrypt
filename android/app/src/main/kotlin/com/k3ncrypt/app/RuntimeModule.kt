@@ -31,8 +31,8 @@ object RuntimeModule {
     @Provides @Singleton fun cryptoState(database: K3ncryptSecureDatabase, aead: KeystoreAead) = CryptoStateStore(database, aead)
     @Provides @Singleton fun pickleKeyVault(records: EncryptedRecordStore) = PickleKeyVault(records)
     @Provides @Singleton fun cryptoPort(): CryptoPort = NativeCryptoBridge()
-    @Provides @Singleton fun api(): K3ncryptApi = K3ncryptApi(BuildConfig.K3NCRYPT_BACKEND_URL)
-    @Provides @Singleton fun relay(): SocketRelay = SocketRelay(BuildConfig.K3NCRYPT_SOCKET_URL)
+    @Provides @Singleton fun api(): K3ncryptApi = K3ncryptApi(BuildConfig.K3NCRYPT_BACKEND_URL, allowEmulatorHttp = BuildConfig.DEBUG)
+    @Provides @Singleton fun relay(): SocketRelay = SocketRelay(BuildConfig.K3NCRYPT_SOCKET_URL, allowEmulatorHttp = BuildConfig.DEBUG)
     @Provides @Singleton fun lifecycleRequests(crypto: CryptoPort) = DeviceLifecycleRequests(crypto)
     @Provides @Singleton fun proofClient(crypto: CryptoPort, api: K3ncryptApi) = DeviceProofClient(crypto, api)
     @Provides @Singleton fun identityLifecycle(

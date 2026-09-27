@@ -1,3 +1,4 @@
+import { testDiagnosticsEnabled } from '../utils/testDiagnostics';
 import type { CryptoSession, SecureStorage } from '../core/contracts';
 import { VodozemacCryptoSession, type VodozemacSessionHandle } from '../core/vodozemacCryptoSession';
 import { PersistentVodozemacIdentity, type VodozemacAccountFactory } from '../identity/vodozemacIdentity';
@@ -240,29 +241,36 @@ export class VodozemacRuntime {
     }
 
     public testOnlyInboundFailureStage(): string | undefined {
-        if ((globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean }).__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ !== true) throw new Error('Test-only diagnostics are disabled.');
+        if (!testDiagnosticsEnabled()) throw new Error('Test-only diagnostics are disabled.');
         return this.lastInboundFailureStage;
     }
 
     public testOnlyInboundEntry(): typeof this.lastInboundEntry {
-        if ((globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean }).__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ !== true) throw new Error('Test-only diagnostics are disabled.');
+        if (!testDiagnosticsEnabled()) throw new Error('Test-only diagnostics are disabled.');
         return this.lastInboundEntry;
     }
     public testOnlyInboundStage(): typeof this.lastInboundStage {
-        if ((globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean }).__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ !== true) throw new Error('Test-only diagnostics are disabled.');
+        if (!testDiagnosticsEnabled()) throw new Error('Test-only diagnostics are disabled.');
         return this.lastInboundStage;
     }
 
     public async restoreSession(conversationId: string, expectedSessionId: string): Promise<void> {
         this.requireState('identity-restored', 'persisted');
         if (!this.sessionStore) throw new VodozemacBoundaryError('WASM_INIT_FAILED', 'Modern crypto is unavailable.');
+        let stage: 'session-load' | 'session-bind' = 'session-load';
         try {
             const handle = await this.sessionStore.load(conversationId);
+            stage = 'session-bind';
             await this.establishSession(conversationId, handle, expectedSessionId);
         } catch (error) {
             if (error instanceof VodozemacBoundaryError) throw error;
-            this.state = 'error';
-            throw new VodozemacBoundaryError('CORRUPTED_SESSION', 'The conversation session could not be restored.');
+            const missingRecord = stage === 'session-load' && error instanceof Error && error.message === 'Vodozemac session state is missing.';
+            this.state = missingRecord ? 'identity-restored' : 'error';
+            const failure = new VodozemacBoundaryError('CORRUPTED_SESSION', 'The conversation session could not be restored.');
+            Object.assign(failure, { restoreFailureCategory: stage === 'session-load'
+                ? missingRecord ? 'session-record-missing' : 'session-load-failed'
+                : 'session-bind-failed' });
+            throw failure;
         }
     }
 

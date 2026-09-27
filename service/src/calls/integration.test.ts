@@ -86,4 +86,46 @@ describe('authenticated bidirectional call flow', () => {
     const envelope = await session().encrypt('signaling', new TextEncoder().encode(JSON.stringify({ ...unsigned, payloadDigest: await signalDigest(unsigned) })).buffer);
     await expect(bob.signalTransport.receive(envelope)).rejects.toThrow('origin rejected');
   });
+
+  it('publishes local cancellation before a failed relay send can strand the ringing UI', async () => {
+    let sends = 0;
+    const transport: TransportManager = {
+      start: async () => undefined,
+      stop: async () => undefined,
+      join: () => undefined,
+      activeTransport: () => undefined,
+      sendEnvelope: async () => {
+        sends += 1;
+        if (sends > 1) throw new Error('relay unavailable');
+        return {};
+      },
+    };
+    const caller = createAuthenticatedCallComposition({ session: session(), transport, conversationId, localIdentityId: 'alice-id', localParticipantId: 'alice', remoteParticipant: participant('bob', 'bob-id'), identity: identity('alice', 'bob'), deviceTrust });
+    const observed: string[] = [];
+    caller.onCallUpdate((call) => observed.push(call.state));
+    const call = await caller.invite();
+
+    await expect(caller.cancel(call.callId)).rejects.toThrow('relay unavailable');
+
+    expect(await caller.service.get(call.callId)).toMatchObject({ state: 'cancelled' });
+    expect(observed).toContain('cancelled');
+  });
+
+  it('expires unanswered local invitations and publishes terminal state', async () => {
+    jest.useFakeTimers();
+    try {
+      const transports = connectedTransports();
+      const caller = createAuthenticatedCallComposition({ session: session(), transport: transports.alice, conversationId, localIdentityId: 'alice-id', localParticipantId: 'alice', remoteParticipant: participant('bob', 'bob-id'), identity: identity('alice', 'bob'), deviceTrust });
+      const observed: string[] = [];
+      caller.onCallUpdate((call) => observed.push(call.state));
+      const call = await caller.invite();
+
+      await jest.advanceTimersByTimeAsync(60_001);
+
+      expect(await caller.service.get(call.callId)).toMatchObject({ state: 'expired' });
+      expect(observed).toContain('expired');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
 });

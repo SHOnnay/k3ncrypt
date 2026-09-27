@@ -1,3 +1,4 @@
+import { testDiagnosticsEnabled } from './utils/testDiagnostics';
 import { configContext, setConfig } from './configContext';
 import { resolveEncryptionStrategyFactory } from './crypto/registry';
 import type { CryptoSession, InboundTransportEnvelope, TransportManager } from './core/contracts';
@@ -101,7 +102,7 @@ const testOnlyCallSignalStage = (stage: 'signal-received'): void => {
         __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean;
         __k3ncryptCallSignalStages?: string[];
     };
-    if (diagnostic.__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ !== true) return;
+    if (!testDiagnosticsEnabled()) return;
     const stages = diagnostic.__k3ncryptCallSignalStages ??= [];
     stages.push(stage);
     if (stages.length > 32) stages.shift();

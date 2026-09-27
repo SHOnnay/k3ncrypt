@@ -1,5 +1,5 @@
 plugins { id("com.android.library"); id("org.jetbrains.kotlin.android") }
-android { namespace = "com.k3ncrypt.calls"; compileSdk = 35; compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }; defaultConfig { minSdk = 26 } }
+android { namespace = "com.k3ncrypt.calls"; compileSdk = 35; buildFeatures { buildConfig = true }; compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }; defaultConfig { minSdk = 26 } }
 dependencies {
     implementation(project(":core")); implementation(project(":crypto")); implementation(project(":security")); implementation(project(":network"))
     api("io.github.webrtc-sdk:android:150.7871.01")

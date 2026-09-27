@@ -13,38 +13,49 @@ data class RelaySendReceipt(val id: String, val timestamp: Long)
 data class RelayCallSignal(val envelope: String, val conversationId: String)
 
 /** Socket.IO only transports encrypted envelopes. It never decrypts or accepts a mailbox item itself. */
-class SocketRelay(url: String) {
+class SocketRelay(url: String, private val allowEmulatorHttp: Boolean = false) {
     @Volatile private var socket: Socket? = null
     private val _connected = MutableStateFlow(false)
     @Volatile private var activeConversationId: String? = null
+    @Volatile private var joined = false
     @Volatile private var lastJoinFailureCategory: String? = null
+    @Volatile private var lastCallSignalResultCategory: String? = null
     private val pendingDeliveryListeners = java.util.concurrent.CopyOnWriteArrayList<(RelayDelivery, (Boolean) -> Unit) -> Unit>()
     private val pendingCallSignalListeners = java.util.concurrent.CopyOnWriteArrayList<(RelayCallSignal) -> Unit>()
     val connected: StateFlow<Boolean> = _connected
+    fun isJoinedTo(conversationId: String): Boolean = joined && _connected.value && activeConversationId == conversationId
     fun lastJoinFailureCategory(): String? = lastJoinFailureCategory
+    /** Safe allowlisted result for local diagnostics; raw relay responses are never retained. */
+    fun lastCallSignalResultCategory(): String? = lastCallSignalResultCategory
+    fun markCallSignalAckTimeout() {
+        if (lastCallSignalResultCategory == "ack_pending") lastCallSignalResultCategory = "ack_timeout"
+    }
     init {
         if (url.isNotBlank()) configureUrl(url)
     }
-    @Synchronized fun configureUrl(url: String) {
-        val normalized = NetworkEndpoint.validate(url)
+    @Synchronized fun configureUrl(url: String, allowEmulatorHttp: Boolean = this.allowEmulatorHttp) {
+        val normalized = NetworkEndpoint.validate(url, allowEmulatorHttp)
+        joined = false
         socket?.let { it.off(); it.disconnect() }
         val created = IO.socket(normalized)
-        created.on(Socket.EVENT_CONNECT, io.socket.emitter.Emitter.Listener { _connected.value = true })
-        created.on(Socket.EVENT_DISCONNECT, io.socket.emitter.Emitter.Listener { _connected.value = false })
+        created.on(Socket.EVENT_CONNECT, io.socket.emitter.Emitter.Listener { joined = false; _connected.value = true })
+        created.on(Socket.EVENT_DISCONNECT, io.socket.emitter.Emitter.Listener { joined = false; _connected.value = false })
         socket = created
         pendingDeliveryListeners.forEach { attachDeliveryListener(created, it) }
         pendingCallSignalListeners.forEach { attachCallSignalListener(created, it) }
     }
     fun connect() = (socket ?: error("backend_endpoint_unconfigured")).connect()
-    fun close() { activeConversationId = null; _connected.value = false; socket?.disconnect() }
+    fun close() { activeConversationId = null; joined = false; _connected.value = false; socket?.disconnect() }
     fun join(value: RelayJoin, ack: (Boolean) -> Unit) {
         require(value.proof.deviceAuthorizationProof.resource?.conversationId == value.conversationId)
         activeConversationId = value.conversationId
+        joined = false
         val payload = JSONObject().put("userID", value.routingId).put("channelID", value.conversationId).put("controlCapability", value.controlCapability).put("routingProof", value.routingProof)
             .put("deviceAuthorizationProof", proofJson(value.proof)).put("proofNonce", value.proof.proofNonce)
         (socket ?: error("backend_endpoint_unconfigured")).emit("chat-join", payload, io.socket.client.Ack { response ->
             val result = response.firstOrNull() as? JSONObject
             val accepted = result?.optString("status") == "accepted"
+            joined = accepted
             lastJoinFailureCategory = if (accepted) null else result?.optString("code")?.takeIf { it.isNotBlank() } ?: "join-rejected"
             ack(accepted)
         })
@@ -69,9 +80,20 @@ class SocketRelay(url: String) {
     fun onCallSignal(listener: (RelayCallSignal) -> Unit) { pendingCallSignalListeners.add(listener); socket?.let { attachCallSignalListener(it, listener) } }
     fun sendCallSignal(envelope: String, proof: ProofCarrier, onSent: () -> Unit = {}, ack: (Boolean) -> Unit) {
         val conversationId = activeConversationId ?: run { ack(false); return }
-        if (proof.deviceAuthorizationProof.operation != "relay:signal" || proof.deviceAuthorizationProof.resource?.conversationId != conversationId || proof.proofNonce != proof.deviceAuthorizationProof.nonce) { ack(false); return }
+        if (proof.deviceAuthorizationProof.operation != "relay:signal" || proof.deviceAuthorizationProof.resource?.conversationId != conversationId || proof.proofNonce != proof.deviceAuthorizationProof.nonce) {
+            lastCallSignalResultCategory = "proof_rejected"
+            ack(false)
+            return
+        }
         val value = JSONObject().put("envelope", JSONObject(envelope)).put("deviceAuthorizationProof", proofJson(proof)).put("proofNonce", proof.proofNonce).put("proofOperation", "relay:signal")
-        (socket ?: run { ack(false); return }).emit("webrtc-signal", value, io.socket.client.Ack { response -> ack((response.firstOrNull() as? JSONObject)?.optString("status") == "ok") })
+        val activeSocket = socket ?: run { lastCallSignalResultCategory = "relay_disconnected"; ack(false); return }
+        lastCallSignalResultCategory = "ack_pending"
+        activeSocket.emit("webrtc-signal", value, io.socket.client.Ack { response ->
+            val category = callSignalAckCategory(response.firstOrNull() as? JSONObject)
+            lastCallSignalResultCategory = category
+            if (category == "sender_not_joined") joined = false
+            ack(category == "accepted")
+        })
         onSent()
     }
     private fun attachDeliveryListener(socket: Socket, listener: (RelayDelivery, (Boolean) -> Unit) -> Unit) { socket.on("chat-message", io.socket.emitter.Emitter.Listener { args ->
@@ -101,6 +123,20 @@ class SocketRelay(url: String) {
             "trustEpoch" to proof.trustEpoch, "nonce" to proof.nonce, "resource" to resource, "issuedAt" to proof.issuedAt,
             "expiresAt" to proof.expiresAt, "signature" to proof.signature))
         JSONObject(json)
+    }
+}
+
+/** Converts the backend's response to a non-sensitive diagnostic category. */
+internal fun callSignalAckCategory(response: JSONObject?): String {
+    if (response == null) return "invalid_response"
+    if (response.optString("status") == "ok") return "accepted"
+    return when (response.optString("error")) {
+        "Join a channel before signaling." -> "sender_not_joined"
+        "Rate limit exceeded." -> "rate_limited"
+        "Invalid or oversized encrypted envelope." -> "invalid_envelope"
+        "Device authorization rejected." -> "proof_rejected"
+        "No receiver is in the channel." -> "recipient_unavailable"
+        else -> "rejected"
     }
 }
 

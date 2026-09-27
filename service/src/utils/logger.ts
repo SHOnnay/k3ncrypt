@@ -5,7 +5,7 @@ export class Logger {
     private disableLog = false;
     
     constructor(private name = '@chat-e2ee/service', private childs: string[] = []) {
-        this.disableLog = configContext().settings.disableLog
+        this.disableLog = process.env.NODE_ENV === 'production' || configContext().settings.disableLog
     }
 
     private get logTitle(): string {

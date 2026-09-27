@@ -2,6 +2,8 @@ package com.k3ncrypt.app
 
 import android.content.Context
 import com.k3ncrypt.calls.AndroidCallObserver
+import com.k3ncrypt.calls.AndroidCallHealthSnapshot
+import com.k3ncrypt.calls.AndroidRemoteDescriptionDiagnostic
 import com.k3ncrypt.calls.AndroidWebRtcEngine
 import com.k3ncrypt.calls.CallSignalCodec
 import com.k3ncrypt.calls.CallSignalValue
@@ -12,6 +14,7 @@ import com.k3ncrypt.calls.SdpValue
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -35,6 +38,14 @@ data class AndroidCallUiState(
     val errorCategory: String? = null,
 )
 
+/** Expire an abandoned call setup before considering a newer authenticated invite. */
+internal fun shouldExpireCallSetupBeforeInvite(
+    activeCallId: String?,
+    status: String,
+    expiresAt: Long,
+    now: Long,
+): Boolean = activeCallId != null && expiresAt <= now && status !in setOf("connected", "reconnecting")
+
 /** Owns only call/media state. Identity, Vodozemac signaling, and device proof stay in existing repositories. */
 class AndroidCallController @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -56,59 +67,42 @@ class AndroidCallController @Inject constructor(
     private var signalingReady = false
     private var isInitiator = false
     private var restartAttempted = false
+    private var firstRemoteCandidateTimingRecorded = false
     private val queuedIce = mutableListOf<IceValue>()
     private val queuedLocalIce = mutableListOf<IceValue>()
     private val replayGuard = CallReplayGuard()
     private val signalMutex = Mutex()
+    private var postConnectHealthJob: Job? = null
 
     fun eglContext() = peer?.eglContext() ?: error("Call video is not active")
 
-    init { messaging.observeCallSignals { raw -> scope.launch { handle(raw) } } }
+    init {
+        if (BuildConfig.DEBUG) CallSignalCodec.installDebugDigestDiagnosticSink { diagnostic ->
+            DebugInspectionStore.setCallDigestInputDiagnostic(diagnostic.kind, diagnostic.byteLength, diagnostic.payloadJsonLength, diagnostic.sdpValueLength, diagnostic.metadataLength, diagnostic.escapingCategory)
+        }
+        messaging.observeCallSignals { raw -> scope.launch { handle(raw) } }
+    }
 
     suspend fun startVoice(iceServers: List<IceServerConfig> = emptyList()) = start("audio", iceServers)
     suspend fun startVideo(iceServers: List<IceServerConfig> = emptyList()) = start("video", iceServers)
 
-    /** Sends one normal encrypted call invitation for debug authorization validation, without opening media or a peer connection. */
-    suspend fun sendSignalingValidationInvite() {
-        check(BuildConfig.DEBUG) { "Signaling validation is available only in debug builds." }
-        check(mutableState.value.callId == null) { "A call is already active." }
-        val trusted = messaging.activeConversation()
-        val local = identities.activeState()
-        require(local.lifecycleState == "active" && local.accountIdentityReference != null && trusted.peerIdentityReference.startsWith("K3 ")) {
-            "Verified device and contact are required for calls."
-        }
-        val now = System.currentTimeMillis()
-        val callId = UUID.randomUUID().toString()
-        val signalBinding = CallSignalCodec.binding(trusted.conversationId, trusted.localRoutingId, local.deviceIdentityReference, trusted.peerRoutingId, trusted.peerIdentityReference)
-        val signal = CallSignalCodec.create(
-            callId = callId,
-            conversationId = trusted.conversationId,
-            senderParticipantId = trusted.localRoutingId,
-            senderIdentityId = local.deviceIdentityReference,
-            receiverIdentityId = trusted.peerIdentityReference,
-            mediaMode = "audio",
-            event = "invite",
-            sequence = 1,
-            timestamp = now,
-            expiresAt = now + 60_000,
-            identityBinding = signalBinding,
-        )
-        messaging.sendCallSignal(CallSignalCodec.encode(signal))
-    }
-
     suspend fun accept(iceServers: List<IceServerConfig> = emptyList()) {
         val current = mutableState.value
         check(current.incoming && callId != null) { "No incoming call is waiting" }
+        if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("accept-action")
         startPeer(iceServers)
         send("accept", "control")
         signalingReady = true
         flushLocalIce()
         mutableState.value = current.copy(incoming = false, status = "connecting")
-        createAndSendOffer()
+        // The incoming caller owns offer creation. Creating an offer here causes
+        // offer glare: both peers enter HAVE_LOCAL_OFFER before either applies
+        // the other's offer. The caller creates its offer after receiving accept.
     }
 
     suspend fun reject() {
         check(mutableState.value.incoming && callId != null)
+        if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("decline-action")
         send("reject", "control")
         finish("rejected")
     }
@@ -123,8 +117,15 @@ class AndroidCallController @Inject constructor(
     fun setCameraEnabled(enabled: Boolean) { peer?.setCameraEnabled(enabled); mutableState.value = mutableState.value.copy(cameraEnabled = enabled) }
     fun switchCamera() { peer?.switchCamera() }
 
+    fun recordApplicationLifecycle(backgrounded: Boolean) {
+        if (BuildConfig.DEBUG && callId != null) {
+            DebugInspectionStore.setCallSignalStage(if (backgrounded) "app-lifecycle-background" else "app-lifecycle-foreground")
+        }
+    }
+
     private suspend fun start(mode: String, iceServers: List<IceServerConfig>) {
         check(mutableState.value.callId == null) { "A call is already active" }
+        if (BuildConfig.DEBUG) DebugInspectionStore.clearCallSignalStages()
         val trusted = messaging.activeConversation()
         val local = identities.activeState()
         require(local.lifecycleState == "active" && local.accountIdentityReference != null && trusted.peerIdentityReference.startsWith("K3 ")) { "Verified device and contact are required for calls" }
@@ -133,6 +134,7 @@ class AndroidCallController @Inject constructor(
         isInitiator = true
         restartAttempted = false
         callId = UUID.randomUUID().toString()
+        if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("call-created")
         expiresAt = System.currentTimeMillis() + 60_000
         identityBinding = CallSignalCodec.binding(trusted.conversationId, trusted.localRoutingId, local.deviceIdentityReference, trusted.peerRoutingId, trusted.peerIdentityReference)
         nextSequence = 1
@@ -142,22 +144,45 @@ class AndroidCallController @Inject constructor(
         send("invite", "control")
         signalingReady = true
         flushLocalIce()
-        scope.launch { delay(60_000); if (this@AndroidCallController.callId == callId && mutableState.value.status == "ringing") finish("timeout") }
+        val startedCallId = requireNotNull(callId)
+        scope.launch {
+            delay((expiresAt - System.currentTimeMillis()).coerceAtLeast(0))
+            if (this@AndroidCallController.callId == startedCallId && mutableState.value.status in setOf("ringing", "connecting")) finish("timeout")
+        }
     }
 
     private suspend fun startPeer(iceServers: List<IceServerConfig>) {
         if (peer != null) return
+        if (BuildConfig.DEBUG) DebugInspectionStore.beginCallTimingTrace()
         val engine = AndroidWebRtcEngine(context)
+        engine.setDebugIceDiagnosticSink { stage -> if (BuildConfig.DEBUG) DebugInspectionStore.setIceDiagnostic(stage) }
+        engine.setDebugTimingDiagnosticSink { stage -> if (BuildConfig.DEBUG) DebugInspectionStore.setCallTimingDiagnostic(stage) }
+        engine.setDebugHealthDiagnosticSink { snapshot: AndroidCallHealthSnapshot -> if (BuildConfig.DEBUG) DebugInspectionStore.recordCallHealthSnapshot(snapshot) }
+        engine.setDebugRemoteDescriptionDiagnosticSink { diagnostic: AndroidRemoteDescriptionDiagnostic ->
+            if (BuildConfig.DEBUG) DebugInspectionStore.recordRemoteDescriptionDiagnostic(diagnostic)
+        }
+        engine.setDebugSdpObserverDiagnosticSink { stage ->
+            if (BuildConfig.DEBUG) DebugInspectionStore.setSdpObserverStage(stage)
+        }
         try { engine.start(iceServers, mediaMode == "video", object : AndroidCallObserver {
             override fun onLocalIce(candidate: IceValue) {
+                if (BuildConfig.DEBUG) DebugInspectionStore.setIceDiagnostic("ice-local-candidate-${candidateType(candidate.candidate)}")
                 scope.launch {
                     if (signalingReady) sendIce(candidate) else queuedLocalIce.add(candidate)
                 }
             }
             override fun onState(state: String) {
                 when (state) {
-                    "connected", "completed" -> mutableState.value = mutableState.value.copy(status = "connected")
+                    "connected", "completed" -> {
+                        if (BuildConfig.DEBUG) {
+                            DebugInspectionStore.setCallSignalStage("ice-connected")
+                            DebugInspectionStore.setCallSignalStage("media-connected")
+                        }
+                        mutableState.value = mutableState.value.copy(status = "connected")
+                        startPostConnectHealthPolling(engine)
+                    }
                     "disconnected" -> {
+                        if (BuildConfig.DEBUG) engine.collectPostConnectHealthSnapshot()
                         val wasConnected = mutableState.value.status == "connected" || mutableState.value.status == "reconnecting"
                         if (wasConnected) {
                             mutableState.value = mutableState.value.copy(status = "reconnecting")
@@ -191,7 +216,16 @@ class AndroidCallController @Inject constructor(
         if (!CallSignalCodec.validate(signal, trusted.conversationId, local.deviceIdentityReference, now)) return
         if (signal.senderParticipantId != trusted.peerRoutingId || signal.senderIdentityId != trusted.peerIdentityReference) return
         if (signal.identityBinding != CallSignalCodec.binding(trusted.conversationId, trusted.localRoutingId, local.deviceIdentityReference, trusted.peerRoutingId, trusted.peerIdentityReference)) return
+        if (signal.event == "invite" && signal.kind == "control" &&
+            shouldExpireCallSetupBeforeInvite(callId, mutableState.value.status, expiresAt, now)) {
+            finish("timeout")
+        }
         if (signal.sequence != receivedSequence + 1 || !replayGuard.accept(signal.callId, signal.nonce, signal.expiresAt, now)) return
+        if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("signal-received")
+        if (BuildConfig.DEBUG && signal.event == "accept") DebugInspectionStore.setCallSignalStage("accept-signal-received")
+        if (BuildConfig.DEBUG && callId == null && signal.event == "invite" && signal.kind == "control") {
+            DebugInspectionStore.setCallSignalStage("incoming-signal-received")
+        }
         receivedSequence = signal.sequence
         val activeId = callId
         if (activeId == null) {
@@ -205,25 +239,34 @@ class AndroidCallController @Inject constructor(
             expiresAt = signal.expiresAt
         nextSequence = 2
             mutableState.value = AndroidCallUiState(signal.callId, signal.mediaMode, "incoming", incoming = true, cameraEnabled = signal.mediaMode == "video")
-            scope.launch { delay((signal.expiresAt - System.currentTimeMillis()).coerceAtLeast(0)); if (callId == signal.callId && mutableState.value.incoming) finish("timeout") }
+            if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("call-state-created")
+            scope.launch {
+                delay((signal.expiresAt - System.currentTimeMillis()).coerceAtLeast(0))
+                if (callId == signal.callId && mutableState.value.status in setOf("incoming", "connecting")) finish("timeout")
+            }
             return
         }
         if (signal.callId != activeId || signal.mediaMode != mediaMode || signal.expiresAt > expiresAt) return
         when (signal.event) {
             "accept" -> {
                 mutableState.value = mutableState.value.copy(status = "connecting")
-                createAndSendOffer()
+                // Only the originating device creates the initial offer. A callee
+                // waits for that offer and answers it in the connect/offer branch.
+                if (isInitiator) createAndSendOffer()
             }
             "reject", "cancel", "end", "expire", "fail" -> finish(if (signal.event == "fail") "failed" else signal.event)
             "connect", "reconnect" -> if (signal.kind == "offer") {
+                if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("offer-received")
                 val description = signal.payload?.let { SdpValue(it.getString("type"), it.getString("sdp")) } ?: return
                 val answer = peer?.acceptOffer(description) ?: return
+                if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("answer-created")
                 remoteDescriptionReady = true
                 flushIce()
                 send("connected", "answer", JSONObject().put("type", answer.type).put("sdp", answer.sdp))
             }
             "connected" -> when (signal.kind) {
                 "answer" -> {
+                    if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("answer-received")
                     val description = signal.payload?.let { SdpValue(it.getString("type"), it.getString("sdp")) } ?: return
                     peer?.acceptAnswer(description) ?: return
                     remoteDescriptionReady = true
@@ -232,13 +275,28 @@ class AndroidCallController @Inject constructor(
                 "ice-candidate" -> {
                     val payload = signal.payload ?: return
                     val value = IceValue(payload.getString("candidate"), payload.optString("sdpMid").takeIf { it != "null" }, payload.getInt("sdpMLineIndex"))
-                    if (remoteDescriptionReady) peer?.addIce(value) else queuedIce.add(value)
+                    val candidateType = candidateType(value.candidate)
+                    if (!firstRemoteCandidateTimingRecorded) {
+                        firstRemoteCandidateTimingRecorded = true
+                        if (BuildConfig.DEBUG) DebugInspectionStore.setCallTimingDiagnostic("first-remote-candidate-received")
+                    }
+                    if (BuildConfig.DEBUG) DebugInspectionStore.setIceDiagnostic("ice-remote-candidate-$candidateType-received")
+                    if (remoteDescriptionReady) addRemoteIce(value, candidateType) else queuedIce.add(value)
                 }
             }
         }
     }
 
-    private suspend fun flushIce() { queuedIce.toList().forEach { peer?.addIce(it) }; queuedIce.clear() }
+    private suspend fun flushIce() { queuedIce.toList().forEach { addRemoteIce(it, candidateType(it.candidate)) }; queuedIce.clear() }
+
+    private fun addRemoteIce(value: IceValue, candidateType: String) {
+        val added = peer?.addIce(value) == true
+        if (BuildConfig.DEBUG) {
+            DebugInspectionStore.setIceDiagnostic("ice-remote-candidate-$candidateType-${if (added) "added" else "rejected"}")
+            if (!added) DebugInspectionStore.setIceDiagnostic("ice-candidate-add-failed")
+        }
+        check(added) { "call_ice_candidate_rejected" }
+    }
 
     private suspend fun flushLocalIce() {
         queuedLocalIce.toList().forEach { sendIce(it) }
@@ -251,6 +309,7 @@ class AndroidCallController @Inject constructor(
 
     private suspend fun createAndSendOffer(restart: Boolean = false) {
         val offer = peer?.createOffer(iceRestart = restart) ?: return
+        if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("offer-created")
         send(if (restart) "reconnect" else "connect", "offer", JSONObject().put("type", offer.type).put("sdp", offer.sdp))
     }
 
@@ -267,17 +326,50 @@ class AndroidCallController @Inject constructor(
                 timestamp = System.currentTimeMillis(), expiresAt = expiresAt, identityBinding = identityBinding,
             )
             messaging.sendCallSignal(CallSignalCodec.encode(signal))
+            if (BuildConfig.DEBUG) {
+                when {
+                    event == "connect" && kind == "offer" -> DebugInspectionStore.setCallSignalStage("offer-signal-sent")
+                    event == "connected" && kind == "answer" -> DebugInspectionStore.setCallSignalStage("answer-signal-sent")
+                    kind == "ice-candidate" -> DebugInspectionStore.setCallSignalStage("ice-signal-sent")
+                }
+            }
             nextSequence = sequence + 1
         }
     }
 
     private fun finish(status: String) {
+        if (BuildConfig.DEBUG) {
+            val cleanupCategory = when (status) {
+                "timeout" -> "call-cleanup-timeout"
+                "failed" -> "call-cleanup-failure"
+                "rejected" -> "call-cleanup-rejected"
+                "cancelled", "cancel" -> "call-cleanup-cancelled"
+                "expired", "expire" -> "call-cleanup-expired"
+                else -> "call-cleanup-ended"
+            }
+            DebugInspectionStore.setCallSignalStage(cleanupCategory)
+        }
+        if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("call-ended")
+        postConnectHealthJob?.cancel()
+        postConnectHealthJob = null
         callId?.let { replayGuard.finish(it, expiresAt, System.currentTimeMillis()) }
         peer?.close(); peer = null
         mutableState.value = AndroidCallUiState(status = status)
         callId = null; binding = null; identityBinding = ""; expiresAt = 0
         remoteDescriptionReady = false; queuedIce.clear(); receivedSequence = 0; nextSequence = 1
         signalingReady = false; queuedLocalIce.clear()
-        isInitiator = false; restartAttempted = false
+        isInitiator = false; restartAttempted = false; firstRemoteCandidateTimingRecorded = false
     }
+
+    private fun startPostConnectHealthPolling(engine: AndroidWebRtcEngine) {
+        if (!BuildConfig.DEBUG || postConnectHealthJob?.isActive == true) return
+        postConnectHealthJob = scope.launch {
+            while (peer === engine && mutableState.value.status in setOf("connected", "reconnecting")) {
+                engine.collectPostConnectHealthSnapshot()
+                delay(10_000)
+            }
+        }
+    }
+
+    private fun candidateType(candidate: String): String = candidate.substringAfter(" typ ", "").substringBefore(' ').takeIf { it in setOf("host", "srflx", "relay", "prflx") } ?: "unknown"
 }

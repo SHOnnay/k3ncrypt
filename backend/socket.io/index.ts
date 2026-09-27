@@ -9,6 +9,7 @@ export interface CustomSocket extends Socket {
   channelID: string,
   deviceId?: string,
   accountIdentityReference?: string
+  deviceTrustEpoch?: number
 }
 
 /** Opaque, versioned envelope — the server never inspects its contents. */

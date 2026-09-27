@@ -1,5 +1,7 @@
 const mockSocket = {
+    connected: true,
     on: jest.fn(),
+    off: jest.fn(),
     emit: jest.fn(),
     disconnect: jest.fn(),
 };
@@ -17,6 +19,14 @@ jest.mock('../configContext', () => ({
 
 import { SocketIoRelayTransport, SubscriptionType } from './socket';
 
+beforeAll(() => {
+    (globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean }).__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ = true;
+});
+
+afterAll(() => {
+    delete (globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean }).__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__;
+});
+
 const createLogger = (): any => {
     const logger: any = {
         log: jest.fn(),
@@ -27,11 +37,13 @@ const createLogger = (): any => {
 };
 
 const handlerFor = (event: string): ((...args: unknown[]) => void) => {
-    const registration = mockSocket.on.mock.calls.find(([name]) => name === event);
-    if (!registration) {
+    const registrations = mockSocket.on.mock.calls.filter(([name]) => name === event);
+    if (!registrations.length) {
         throw new Error(`No handler registered for "${event}"`);
     }
-    return registration[1] as (...args: unknown[]) => void;
+    return (...args: unknown[]) => {
+        for (const registration of registrations) (registration[1] as (...args: unknown[]) => void)(...args);
+    };
 };
 
 describe('SocketInstance', () => {
@@ -43,6 +55,7 @@ describe('SocketInstance', () => {
 
     beforeEach(() => {
         jest.clearAllMocks();
+        mockSocket.connected = true;
         logger = createLogger();
         subscription = new Map();
         onEnvelope = jest.fn().mockResolvedValue(true);
@@ -54,7 +67,7 @@ describe('SocketInstance', () => {
             expect(socketIOClient).toHaveBeenCalledWith('http://localhost:3000/');
         });
 
-        it('registers a listener for each of the six wire events', () => {
+        it('registers wire events and the authenticated reconnect handler', () => {
             createInstance();
             const registeredEvents = mockSocket.on.mock.calls.map(([name]) => name);
             expect(registeredEvents).toEqual(
@@ -65,9 +78,77 @@ describe('SocketInstance', () => {
                     'on-alice-disconnect',
                     'chat-message',
                     'webrtc-session-description',
+                    'connect',
                 ]),
             );
-            expect(mockSocket.on).toHaveBeenCalledTimes(6);
+            expect(mockSocket.on).toHaveBeenCalledTimes(8);
+        });
+
+        it('rejoins with a fresh proof before requesting mailbox replay after reconnect', async () => {
+            const instance = createInstance();
+            const acquire = jest.fn().mockResolvedValue({ deviceAuthorizationProof: {}, proofNonce: 'test-nonce' });
+            instance.setDeviceProofProvider({ acquire });
+            mockSocket.emit.mockImplementation((event: string, _payload: unknown, ack?: (result: unknown) => void) => {
+                if (event === 'chat-join' || event === 'mailbox-replay') ack?.({ status: 'accepted' });
+            });
+            await instance.join('room', 'route', 'capability');
+            mockSocket.emit.mockClear();
+
+            mockSocket.connected = false;
+            handlerFor('disconnect')();
+            expect(await instance.testOnlyRelayRegistration()).toMatchObject({ connected: false, joinAcknowledged: false });
+            mockSocket.connected = true;
+            handlerFor('connect')();
+            await new Promise<void>((resolve) => setImmediate(resolve));
+
+            expect(acquire).toHaveBeenCalledTimes(2);
+            expect(mockSocket.emit.mock.calls.map(([event]) => event)).toEqual(['chat-join', 'mailbox-replay']);
+            expect(await instance.testOnlyRelayRegistration()).toMatchObject({ connected: true, joinAcknowledged: true });
+        });
+
+        it('restores a persisted conversation through a fresh transport after browser reload', async () => {
+            const instance = createInstance();
+            const acquire = jest.fn().mockResolvedValue({ deviceAuthorizationProof: {}, proofNonce: 'fresh-nonce' });
+            instance.setDeviceProofProvider({ acquire });
+            mockSocket.emit.mockImplementation((event: string, _payload: unknown, ack?: (result: unknown) => void) => {
+                if (event === 'chat-join') ack?.({ status: 'accepted' });
+            });
+
+            // A page reload creates a new transport with no in-memory join
+            // descriptor. Restoring the encrypted conversation calls join()
+            // with its persisted descriptor and reacquires authorization.
+            await instance.join('persisted-room', 'persisted-route', 'capability', 'routing-proof');
+
+            expect(acquire).toHaveBeenCalledWith('relay:message', { conversationId: 'persisted-room' });
+            expect(mockSocket.emit).toHaveBeenCalledWith('chat-join', expect.objectContaining({
+                channelID: 'persisted-room',
+                userID: 'persisted-route',
+                controlCapability: 'capability',
+                routingProof: 'routing-proof',
+            }), expect.any(Function));
+            expect(await instance.testOnlyRelayRegistration()).toMatchObject({ connected: true, joinAcknowledged: true });
+        });
+
+        it('waits for a socket connection before obtaining and sending the join proof', async () => {
+            const instance = createInstance();
+            const acquire = jest.fn().mockResolvedValue({ deviceAuthorizationProof: {}, proofNonce: 'fresh-nonce' });
+            instance.setDeviceProofProvider({ acquire });
+            mockSocket.connected = false;
+            mockSocket.emit.mockImplementation((event: string, _payload: unknown, ack?: (result: unknown) => void) => {
+                if (event === 'chat-join') ack?.({ status: 'accepted' });
+            });
+
+            const joining = instance.join('room', 'route', 'capability');
+            await Promise.resolve();
+            expect(acquire).not.toHaveBeenCalled();
+            expect(mockSocket.emit).not.toHaveBeenCalledWith('chat-join', expect.anything(), expect.any(Function));
+
+            mockSocket.connected = true;
+            handlerFor('connect')();
+            await joining;
+
+            expect(acquire).toHaveBeenCalledTimes(1);
+            expect(mockSocket.emit).toHaveBeenCalledWith('chat-join', expect.anything(), expect.any(Function));
         });
     });
 
@@ -156,10 +237,32 @@ describe('SocketInstance', () => {
     });
 
     describe('joinChat()', () => {
-        it('emits "chat-join" with the room control capability but no message key', () => {
+        it('emits "chat-join" with the room control capability but no message key', async () => {
             const payload = { channelID: 'chan-1', userID: 'alice', controlCapability: 'control-capability' };
-            createInstance().join(payload.channelID, payload.userID, payload.controlCapability);
+            await createInstance().join(payload.channelID, payload.userID, payload.controlCapability);
             expect(mockSocket.emit).toHaveBeenCalledWith('chat-join', payload, expect.any(Function));
+        });
+
+        it('requires a fresh acknowledged join when switching conversations on one socket', async () => {
+            const instance = createInstance();
+            mockSocket.emit.mockImplementation((event: string, _payload: unknown, ack?: (result: unknown) => void) => {
+                if (event === 'chat-join' || event === 'mailbox-replay') ack?.({ status: 'accepted' });
+            });
+            await instance.join('room-a', 'route-a', 'capability');
+            await instance.join('room-b', 'route-b', 'capability');
+            await instance.requestMailboxReplay();
+            expect(mockSocket.emit.mock.calls.filter(([event]) => event === 'chat-join').map(([, payload]) => (payload as { channelID: string }).channelID)).toEqual(['room-a', 'room-b']);
+            expect(await instance.testOnlyRelayRegistration()).toMatchObject({ joinAcknowledged: true });
+        });
+
+        it('rejects replay when a switched conversation join is not acknowledged', async () => {
+            const instance = createInstance();
+            mockSocket.emit.mockImplementation((event: string, _payload: unknown, ack?: (result: unknown) => void) => {
+                if (event === 'chat-join') ack?.(mockSocket.emit.mock.calls.filter(([name]) => name === 'chat-join').length === 1 ? { status: 'accepted' } : { error: 'join rejected' });
+            });
+            await instance.join('room-a', 'route-a', 'capability');
+            await expect(instance.join('room-b', 'route-b', 'capability')).rejects.toThrow();
+            await expect(instance.requestMailboxReplay()).rejects.toThrow('Authenticated relay channel join');
         });
     });
 
@@ -170,16 +273,18 @@ describe('SocketInstance', () => {
             const carrier = { deviceAuthorizationProof: { version: 1 as const, proofId: 'proof', accountIdentityReference: 'account', deviceId: 'device', deviceIdentityReference: 'identity', operation: 'relay:message', trustEpoch: 1, nonce: 'nonce', issuedAt: 1, expiresAt: Date.now() + 30_000, signature: 'signature' }, proofNonce: 'nonce' };
             const acquire = jest.fn().mockResolvedValue(carrier);
             instance.setDeviceProofProvider({ acquire });
+            await instance.join('room', 'route', 'capability');
 
             await instance.sendEnvelope('message', { version: 1, strategy: 'test-strategy', data: {} });
 
-            expect(acquire).toHaveBeenCalledWith('relay:message', undefined);
+            expect(acquire).toHaveBeenNthCalledWith(2, 'relay:message', { conversationId: 'room' });
             expect(mockSocket.emit).toHaveBeenCalledWith('chat-message', { envelope: { version: 1, strategy: 'test-strategy', data: {} }, ...carrier, proofOperation: 'relay:message' }, expect.any(Function));
         });
 
         it('emits "chat-message" with the envelope and resolves with the ack payload', async () => {
             mockSocket.emit.mockImplementation((_event, _payload, ack) => ack({ id: 5, timestamp: 999 }));
             const instance = createInstance();
+            await instance.join('room', 'route', 'capability');
 
             const result = await instance.sendEnvelope('message', { version: 1, strategy: 'test-strategy', data: { iv: 'i', ct: 'c' } });
 
@@ -188,8 +293,9 @@ describe('SocketInstance', () => {
         });
 
         it('rejects when the server ack carries an error', async () => {
-            mockSocket.emit.mockImplementation((_event, _payload, ack) => ack({ error: 'Rate limit exceeded' }));
+            mockSocket.emit.mockImplementation((event, _payload, ack) => ack(event === 'chat-join' ? { status: 'accepted' } : { error: 'Rate limit exceeded' }));
             const instance = createInstance();
+            await instance.join('room', 'route', 'capability');
 
             await expect(instance.sendEnvelope('message', { version: 1, strategy: 'test-strategy', data: { iv: 'i', ct: 'c' } })).rejects.toThrow('Rate limit exceeded');
         });
@@ -199,6 +305,7 @@ describe('SocketInstance', () => {
         it('emits "webrtc-signal" with the envelope', async () => {
             mockSocket.emit.mockImplementation((_event, _payload, ack) => ack({ status: 'ok' }));
             const instance = createInstance();
+            await instance.join('room', 'route', 'capability');
 
             await instance.sendEnvelope('signaling', { version: 1, strategy: 'test-strategy', data: { iv: 'i', ct: 'c' } });
 
@@ -206,8 +313,9 @@ describe('SocketInstance', () => {
         });
 
         it('rejects when the server ack carries an error', async () => {
-            mockSocket.emit.mockImplementation((_event, _payload, ack) => ack({ error: 'No receiver is in the channel' }));
+            mockSocket.emit.mockImplementation((event, _payload, ack) => ack(event === 'chat-join' ? { status: 'accepted' } : { error: 'No receiver is in the channel' }));
             const instance = createInstance();
+            await instance.join('room', 'route', 'capability');
 
             await expect(instance.sendEnvelope('signaling', { version: 1, strategy: 'test-strategy', data: { iv: 'i', ct: 'c' } })).rejects.toThrow('No receiver is in the channel');
         });

@@ -11,8 +11,11 @@ jest.mock('../security/controlCapability', () => ({ ...jest.requireActual('../se
 jest.mock('../api/chatHash/utils/validateChannel', () => ({ __esModule: true, default: async () => ({ valid: true }) }));
 const routingProof = 'b'.repeat(43);
 const routingProofHash = createHash('sha256').update(`k3ncrypt-prekey-renewal-v1\0${routingProof}`).digest('hex');
-jest.mock('../db', () => ({ __esModule: true, default: { getDatabase: () => undefined, cleanupExpiredOfflineMessages: jest.fn(), claimOfflineMessage: async () => undefined, storeOfflineMessage: jest.fn(async (record) => record), countOfflineMessages: jest.fn(async () => 0), ackOfflineMessage: jest.fn(async () => true), persistentStorageReady: () => true, findOneFromDB: async () => ({ renewalProofHash: routingProofHash, expiresAt: new Date(Date.now() + 60_000) }) } }));
-jest.mock('../security/durableDeviceTrust', () => ({ durableDeviceTrustAuthority: jest.fn(() => ({ verify: jest.fn(async () => ({ deviceId: 'test-device', accountIdentityReference: 'test-account' })) })) }));
+jest.mock('../db', () => ({ __esModule: true, default: { getDatabase: () => ({}), cleanupExpiredOfflineMessages: jest.fn(), claimOfflineMessage: async () => undefined, storeOfflineMessage: jest.fn(async (record) => record), countOfflineMessages: jest.fn(async () => 0), ackOfflineMessage: jest.fn(async () => true), persistentStorageReady: () => true, findOneFromDB: async () => ({ renewalProofHash: routingProofHash, expiresAt: new Date(Date.now() + 60_000) }) } }));
+jest.mock('../security/durableDeviceTrust', () => ({
+    durableDeviceTrustAuthority: jest.fn(() => ({ verify: jest.fn(async () => ({ deviceId: 'test-device', accountIdentityReference: 'test-account', trustEpoch: 1, state: 'active' })) })),
+    MongoDeviceTrustStore: class { async read() { return { deviceId: 'test-device', accountIdentityReference: 'test-account', trustEpoch: 1, state: 'active' }; } },
+}));
 const room = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const alice = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const bob = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';

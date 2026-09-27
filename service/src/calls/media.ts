@@ -1,6 +1,8 @@
+import { testDiagnosticsEnabled } from '../utils/testDiagnostics';
 import type { CallMediaConnection, IceServer } from './webrtc';
 import type { CallSession } from './contracts';
 import { BrowserCaptureController } from '../privacy/capture';
+import { beginIceTimingTrace, traceIceHealthSnapshot, traceIceTiming } from './iceTiming';
 
 export type CaptureKind = 'microphone' | 'camera';
 export interface MediaCapture { getUserMedia(constraints: MediaStreamConstraints): Promise<MediaStream>; }
@@ -33,32 +35,180 @@ export class CallMediaController {
 
 type PeerFactory = (configuration: RTCConfiguration) => RTCPeerConnection;
 const browserPeerFactory: PeerFactory = (configuration) => new RTCPeerConnection(configuration);
+const remoteAudioDiagnostic = (stage: 'remote-audio-track-received' | 'remote-audio-ontrack-fired' | 'remote-audio-stream-stored', trackCount: number): void => {
+  if (!testDiagnosticsEnabled() || typeof document === 'undefined') return;
+  const root = document.documentElement;
+  const prior = root.dataset.k3ncryptAudioTrace?.split(',').filter(Boolean) ?? [];
+  if (prior.length < 30) prior.push(stage);
+  root.dataset.k3ncryptAudioTrace = prior.join(',');
+  console.info(`k3ncrypt-call-audio:${stage}`, { trackCount });
+};
+
+const callStateDiagnostic = (stage: 'peer-connection-state' | 'ice-connection-state' | 'signaling-state', state: string): void => {
+  if (!testDiagnosticsEnabled()) return;
+  if (typeof document !== 'undefined') {
+    const root = document.documentElement;
+    const prior = root.dataset.k3ncryptCallStabilityTrace?.split(',').filter(Boolean) ?? [];
+    if (prior.length < 80) prior.push(`${stage}:${state}`);
+    root.dataset.k3ncryptCallStabilityTrace = prior.join(',');
+  }
+  console.info(`k3ncrypt-call-stability:${stage}`, { state });
+};
+
+const iceDiagnostic = (stage: string): void => {
+  if (!testDiagnosticsEnabled() || typeof document === 'undefined') return;
+  const allowed = /^(ice-(local-candidate|remote-candidate|selected-local|selected-remote)-(host|srflx|relay|prflx|unknown)(-(received|added|rejected|relay-acknowledged|relay-failed))?|ice-(gathering-complete|candidate-pair-selected|candidate-pair-not-selected|failure-no-selected-pair|failure-selected-pair-not-connected|candidate-add-failed|state-(new|checking|connected|completed|disconnected|failed|closed)))$/;
+  if (!allowed.test(stage)) return;
+  const root = document.documentElement;
+  const prior = root.dataset.k3ncryptIceTrace?.split(',').filter(Boolean) ?? [];
+  if (prior.length < 160) prior.push(stage);
+  root.dataset.k3ncryptIceTrace = prior.join(',');
+  console.info(`k3ncrypt-call-ice:${stage}`);
+};
+
+const candidateType = (value: string | null | undefined): 'host' | 'srflx' | 'relay' | 'prflx' | 'unknown' =>
+  value === 'host' || value === 'srflx' || value === 'relay' || value === 'prflx' ? value : 'unknown';
 
 /** Browser WebRTC lifecycle adapter. It has no signaling or storage authority. */
 export class BrowserCallMediaConnection implements CallMediaConnection {
   private readonly peer: RTCPeerConnection;
+  private firstLocalCandidateTimed = false;
+  private selectedPairTimed = false;
+  private healthPoll?: ReturnType<typeof setInterval>;
   private readonly listeners = new Set<(state: import('./webrtc').CallMediaState) => void>();
   private readonly candidateListeners = new Set<(candidate: unknown) => void>();
   private remoteStream?: MediaStream;
   private readonly remoteListeners = new Set<(stream: MediaStream) => void>();
   constructor(iceServers: readonly IceServer[], factory: PeerFactory = browserPeerFactory, iceTransportPolicy: RTCIceTransportPolicy = 'all') {
+    beginIceTimingTrace();
+    traceIceTiming('peer-connection-create-start');
     this.peer = factory({ iceServers: iceServers as RTCIceServer[], iceTransportPolicy });
-    this.peer.onconnectionstatechange = () => { const state = this.peer.connectionState; this.listeners.forEach((listener) => listener(state === 'connected' ? 'connected' : state === 'disconnected' ? 'reconnecting' : state === 'closed' ? 'closed' : state === 'failed' ? 'failed' : 'connecting')); };
-    this.peer.onicecandidate = (event) => { const candidate = event.candidate; if (candidate) this.candidateListeners.forEach((listener) => listener(candidate.toJSON())); };
+    traceIceTiming('peer-connection-created');
+    this.peer.onconnectionstatechange = () => { const state = this.peer.connectionState; callStateDiagnostic('peer-connection-state', state); this.listeners.forEach((listener) => listener(state === 'connected' ? 'connected' : state === 'disconnected' ? 'reconnecting' : state === 'closed' ? 'closed' : state === 'failed' ? 'failed' : 'connecting')); };
+    this.peer.oniceconnectionstatechange = () => {
+      const state = this.peer.iceConnectionState;
+      callStateDiagnostic('ice-connection-state', state);
+      iceDiagnostic(`ice-state-${state}`);
+      if (state === 'checking') traceIceTiming('ice-checking-start');
+      if (state === 'connected' || state === 'completed') traceIceTiming('ice-connected');
+      if (state === 'disconnected') traceIceTiming('ice-disconnected');
+      if (state === 'failed') traceIceTiming('ice-failure');
+      if (state === 'connected' || state === 'completed' || state === 'disconnected' || state === 'failed') void this.collectSelectedCandidatePair(state === 'failed');
+      if (state === 'connected' || state === 'completed') this.startHealthPolling();
+      if (state === 'disconnected' || state === 'failed' || state === 'closed') this.sampleHealth();
+    };
+    this.peer.onsignalingstatechange = () => callStateDiagnostic('signaling-state', this.peer.signalingState);
+    this.peer.onicegatheringstatechange = () => {
+      if (this.peer.iceGatheringState === 'gathering') traceIceTiming('ice-gathering-start');
+      if (this.peer.iceGatheringState === 'complete') { traceIceTiming('ice-gathering-complete'); iceDiagnostic('ice-gathering-complete'); }
+    };
+    this.peer.onicecandidate = (event) => {
+      const candidate = event.candidate;
+      if (!candidate) { traceIceTiming('ice-gathering-complete'); iceDiagnostic('ice-gathering-complete'); return; }
+      if (!this.firstLocalCandidateTimed) { this.firstLocalCandidateTimed = true; traceIceTiming('first-local-candidate'); }
+      iceDiagnostic(`ice-local-candidate-${candidateType(candidate.type)}`);
+      this.candidateListeners.forEach((listener) => listener(candidate.toJSON()));
+    };
     this.peer.ontrack = (event) => {
+      if (event.track.kind === 'audio') remoteAudioDiagnostic('remote-audio-track-received', 1);
+      remoteAudioDiagnostic('remote-audio-ontrack-fired', event.track.kind === 'audio' ? 1 : 0);
       this.remoteStream ??= new MediaStream();
       for (const track of event.streams[0]?.getTracks() ?? [event.track]) {
         if (!this.remoteStream.getTracks().some((existing) => existing.id === track.id)) this.remoteStream.addTrack(track);
       }
+      if (event.track.kind === 'audio') remoteAudioDiagnostic('remote-audio-stream-stored', this.remoteStream.getAudioTracks().length);
       this.remoteListeners.forEach((listener) => listener(this.remoteStream!));
     };
   }
-  async createOffer(restart = false): Promise<RTCSessionDescriptionInit> { const offer = await this.peer.createOffer(restart ? { iceRestart: true } : undefined); await this.peer.setLocalDescription(offer); return offer; }
-  async acceptOffer(offer: RTCSessionDescriptionInit): Promise<RTCSessionDescriptionInit> { await this.peer.setRemoteDescription(offer); const answer = await this.peer.createAnswer(); await this.peer.setLocalDescription(answer); return answer; }
-  async acceptAnswer(answer: RTCSessionDescriptionInit): Promise<void> { await this.peer.setRemoteDescription(answer); }
-  async addIceCandidate(candidate: RTCIceCandidateInit): Promise<void> { await this.peer.addIceCandidate(candidate); }
+  async createOffer(restart = false): Promise<RTCSessionDescriptionInit> {
+    const offer = await this.peer.createOffer(restart ? { iceRestart: true } : undefined);
+    traceIceTiming('set-local-description-start');
+    try { await this.peer.setLocalDescription(offer); traceIceTiming('set-local-description-complete'); }
+    catch (error) { traceIceTiming('set-local-description-failed'); throw error; }
+    return offer;
+  }
+  async acceptOffer(offer: RTCSessionDescriptionInit): Promise<RTCSessionDescriptionInit> {
+    traceIceTiming('set-remote-description-start');
+    try { await this.peer.setRemoteDescription(offer); traceIceTiming('set-remote-description-complete'); }
+    catch (error) { traceIceTiming('set-remote-description-failed'); throw error; }
+    const answer = await this.peer.createAnswer();
+    traceIceTiming('set-local-description-start');
+    try { await this.peer.setLocalDescription(answer); traceIceTiming('set-local-description-complete'); }
+    catch (error) { traceIceTiming('set-local-description-failed'); throw error; }
+    return answer;
+  }
+  async acceptAnswer(answer: RTCSessionDescriptionInit): Promise<void> {
+    traceIceTiming('set-remote-description-start');
+    try { await this.peer.setRemoteDescription(answer); traceIceTiming('set-remote-description-complete'); }
+    catch (error) { traceIceTiming('set-remote-description-failed'); throw error; }
+  }
+  async addIceCandidate(candidate: RTCIceCandidateInit): Promise<void> {
+    try { await this.peer.addIceCandidate(candidate); traceIceTiming('add-ice-candidate-succeeded'); iceDiagnostic(`ice-remote-candidate-${candidateType(candidate.candidate?.match(/\btyp\s+(host|srflx|relay|prflx)\b/)?.[1])}-added`); }
+    catch { traceIceTiming('add-ice-candidate-failed'); iceDiagnostic('ice-candidate-add-failed'); throw new Error('WebRTC candidate rejected.'); }
+  }
+
+  private async collectSelectedCandidatePair(failure: boolean): Promise<void> {
+    try {
+      const report = await this.peer.getStats();
+      const stats: RTCStats[] = [];
+      report.forEach((item) => stats.push(item));
+      const selectedIds = new Set(stats.filter((item) => item.type === 'transport').map((item) => (item as RTCStats & { selectedCandidatePairId?: string }).selectedCandidatePairId).filter((id): id is string => !!id));
+      const pairs = stats.filter((item) => item.type === 'candidate-pair') as Array<RTCIceCandidatePairStats & { selected?: boolean }>;
+      const selected = pairs.find((item) => selectedIds.has(item.id)) ?? pairs.find((item) => item.selected === true) ?? pairs.find((item) => item.state === 'succeeded' && item.nominated);
+      if (!selected) {
+        if (failure) traceIceTiming('candidate-pair-not-selected');
+        iceDiagnostic('ice-candidate-pair-not-selected');
+        if (failure) iceDiagnostic('ice-failure-no-selected-pair');
+        return;
+      }
+      if (!this.selectedPairTimed) { this.selectedPairTimed = true; traceIceTiming('candidate-pair-selected'); }
+      iceDiagnostic('ice-candidate-pair-selected');
+      const localCandidate = stats.find((item) => item.id === selected.localCandidateId && item.type === 'local-candidate') as (RTCStats & { candidateType?: string }) | undefined;
+      const remoteCandidate = stats.find((item) => item.id === selected.remoteCandidateId && item.type === 'remote-candidate') as (RTCStats & { candidateType?: string }) | undefined;
+      const localType = candidateType(localCandidate?.candidateType);
+      const remoteType = candidateType(remoteCandidate?.candidateType);
+      iceDiagnostic(`ice-selected-local-${localType}`);
+      iceDiagnostic(`ice-selected-remote-${remoteType}`);
+      if (failure) iceDiagnostic('ice-failure-selected-pair-not-connected');
+    } catch { if (failure) iceDiagnostic('ice-failure-no-selected-pair'); }
+  }
+  private startHealthPolling(): void {
+    if (!testDiagnosticsEnabled()) return;
+    if (this.healthPoll) return;
+    this.sampleHealth();
+    this.healthPoll = setInterval(() => this.sampleHealth(), 10_000);
+  }
+  private sampleHealth(): void {
+    if (!testDiagnosticsEnabled()) return;
+    void this.peer.getStats().then((report) => {
+      const stats: RTCStats[] = [];
+      report.forEach((item) => stats.push(item));
+      const transport = stats.find((item) => item.type === 'transport') as (RTCStats & { selectedCandidatePairId?: string }) | undefined;
+      const pairs = stats.filter((item) => item.type === 'candidate-pair') as Array<RTCIceCandidatePairStats & { selected?: boolean; consentRequestsSent?: number; responsesReceived?: number }>;
+      const selected = pairs.find((item) => item.id === transport?.selectedCandidatePairId) ?? pairs.find((item) => item.selected === true);
+      const selectedPair = selected ? (selected.state === 'succeeded' && selected.nominated ? 'active' : 'inactive') : 'unknown';
+      const consentSent = Number.isSafeInteger(selected?.consentRequestsSent) ? selected!.consentRequestsSent! : null;
+      const consentReplies = Number.isSafeInteger(selected?.responsesReceived) ? selected!.responsesReceived! : null;
+      const rtp = stats.filter((item) => item.type === 'inbound-rtp' || item.type === 'outbound-rtp') as Array<RTCStats & { kind?: string; mediaType?: string; packetsReceived?: number; packetsSent?: number; bytesReceived?: number; bytesSent?: number }>;
+      const audio = rtp.filter((item) => item.kind === 'audio' || item.mediaType === 'audio');
+      const total = (items: typeof audio, key: 'packetsReceived' | 'packetsSent' | 'bytesReceived' | 'bytesSent'): number => items.reduce((sum, item) => sum + (Number.isSafeInteger(item[key]) ? item[key]! : 0), 0);
+      traceIceHealthSnapshot({
+        peerState: this.peer.connectionState,
+        iceState: this.peer.iceConnectionState,
+        signalingState: this.peer.signalingState,
+        pageVisibility: document.visibilityState === 'hidden' ? 'hidden' : 'visible',
+        selectedPair,
+        consentRequestsSent: consentSent,
+        consentResponsesReceived: consentReplies,
+        audioInboundPackets: total(audio.filter((item) => item.type === 'inbound-rtp'), 'packetsReceived'),
+        audioInboundBytes: total(audio.filter((item) => item.type === 'inbound-rtp'), 'bytesReceived'),
+        audioOutboundPackets: total(audio.filter((item) => item.type === 'outbound-rtp'), 'packetsSent'),
+        audioOutboundBytes: total(audio.filter((item) => item.type === 'outbound-rtp'), 'bytesSent'),
+      });
+    }).catch(() => undefined);
+  }
   addStream(stream: MediaStream): void { stream.getTracks().forEach((track) => this.peer.addTrack(track, stream)); }
-  async close(): Promise<void> { this.peer.close(); this.listeners.forEach((listener) => listener('closed')); this.listeners.clear(); this.candidateListeners.clear(); }
+  async close(): Promise<void> { if (this.healthPoll) clearInterval(this.healthPoll); this.healthPoll = undefined; traceIceTiming('peer-connection-closed'); this.peer.close(); this.listeners.forEach((listener) => listener('closed')); this.listeners.clear(); this.candidateListeners.clear(); }
   onIceCandidate(listener: (candidate: unknown) => void): () => void { this.candidateListeners.add(listener); return () => this.candidateListeners.delete(listener); }
   onStateChange(listener: (state: 'connecting' | 'connected' | 'reconnecting' | 'failed' | 'closed') => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
   onRemoteStream(listener: (stream: MediaStream) => void): () => void { this.remoteListeners.add(listener); if (this.remoteStream?.getTracks().length) listener(this.remoteStream); return () => this.remoteListeners.delete(listener); }

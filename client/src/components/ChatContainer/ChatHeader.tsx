@@ -18,7 +18,7 @@ interface ChatHeaderProps {
 }
 
 export const ChatHeader: React.FC<ChatHeaderProps> = ({ onStartCall, onStartVideoCall, disableStartCall = false }) => {
-  const { isConnected, channelHash, deleteChannel, protocolMode } = useChat();
+  const { isConnected, channelHash, deleteChannel, protocolMode, sessionHealth } = useChat();
   const [hashCopied, setHashCopied] = useState(false);
 
   const handleCopyHash = () => {
@@ -49,7 +49,7 @@ const handleDelete = async () => {
     window.location.hash = ''; // Clear URL hash
   } catch (err) {
     debugError('Conversation deletion failed', err);
-    alert((err as any).message || 'Failed to delete channel');
+    alert('Could not delete this conversation. Please retry.');
   }
 };
 
@@ -61,14 +61,15 @@ const handleDelete = async () => {
           <h2 className="channel-title">Private conversation</h2>
           <StatusPill tone="neutral">{protocolMode === 'modern' ? 'Modern private' : 'Private'}</StatusPill>
         </div>
-        {channelHash && (
+        {channelHash && protocolMode === 'legacy' && (
           <div className="hash-badge-container">
-            <span className="hash-text">{channelHash}</span>
+            <StatusPill tone="quiet">Private conversation</StatusPill>
             <Button
               className="btn--icon btn--tiny"
               variant="secondary"
               onClick={handleCopyHash}
-              title="Copy Link"
+              title="Copy conversation link"
+              aria-label="Copy conversation link"
             >
               <CopyIcon size={14} />
             </Button>
@@ -76,7 +77,7 @@ const handleDelete = async () => {
           </div>
         )}
         <p id="participant-info" className="participant-info">
-          {isConnected ? 'Peer joined. Communication is encrypted.' : 'Waiting for someone you trust'}
+          {sessionHealth === 'unhealthy' ? 'Encrypted session needs verified renewal. Saved history and identity are preserved.' : sessionHealth === 'renewal-pending' ? 'Verified renewal pending. Send one message after your contact prepares to receive it.' : isConnected ? 'Peer joined. Communication is encrypted.' : 'Waiting for someone you trust'}
         </p>
       </div>
       <div className="header-actions">
@@ -95,7 +96,7 @@ const handleDelete = async () => {
           variant="secondary"
           onClick={onStartCall}
           title="Start Audio Call"
-          disabled={disableStartCall || !isConnected}
+          disabled={disableStartCall || !isConnected || sessionHealth !== 'healthy'}
         >
           <PhoneIcon size={20} />
         </Button>

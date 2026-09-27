@@ -5,7 +5,9 @@ let chate2eeConfig: configType = {
     settings: {
         disableLog: true
     },
-    baseUrl: 'http://localhost:3001',
+    // Keep the local convenience only outside production. Production clients
+    // must provide their own endpoint or use same-origin relative requests.
+    baseUrl: process.env.NODE_ENV === 'production' ? '' : 'http://localhost:3001',
     webrtc: {
         iceServers: [],
         iceTransportPolicy: 'all',

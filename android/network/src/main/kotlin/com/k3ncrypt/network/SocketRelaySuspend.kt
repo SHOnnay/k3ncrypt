@@ -4,6 +4,7 @@ import com.k3ncrypt.security.ProofCarrier
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.TimeoutCancellationException
 import org.json.JSONObject
 import kotlin.coroutines.resume
 
@@ -27,7 +28,14 @@ suspend fun SocketRelay.sendEnvelopeAwait(envelope: String, recipientRoutingId: 
     }
 }
 
-suspend fun SocketRelay.sendCallSignalAwait(envelope: String, proof: ProofCarrier, timeoutMillis: Long = 20_000, onSent: () -> Unit = {}) = withTimeout(timeoutMillis) {
-    suspendCancellableCoroutine { continuation -> sendCallSignal(envelope, proof, onSent) { accepted -> if (continuation.isActive) continuation.resume(accepted) } }
-        .also { check(it) { "Call signaling authorization was rejected" } }
+suspend fun SocketRelay.sendCallSignalAwait(envelope: String, proof: ProofCarrier, timeoutMillis: Long = 20_000, onSent: () -> Unit = {}) {
+    try {
+        withTimeout(timeoutMillis) {
+            suspendCancellableCoroutine { continuation -> sendCallSignal(envelope, proof, onSent) { accepted -> if (continuation.isActive) continuation.resume(accepted) } }
+                .also { check(it) { "Call signaling authorization was rejected" } }
+        }
+    } catch (error: TimeoutCancellationException) {
+        markCallSignalAckTimeout()
+        throw error
+    }
 }

@@ -15,12 +15,15 @@ import { debugError } from './utils/debug';
 import { MediaProvider } from './context/MediaContext';
 import { HttpAttachmentGateway } from './media/HttpAttachmentGateway';
 import { getRuntimeConfig } from './config/runtimeConfig';
+import { WorkspaceSection } from './components/AppShell/WorkspaceSection';
+import { CallOverlay } from './components/CallOverlay/CallOverlay';
 
 const AppContent: React.FC = () => {
   const { initializeChat, joinChannel, openConversation, attachmentRequestHeaders, privacyPreferences } = useChat();
   const [showSetup, setShowSetup] = useState(true);
   const [error, setError] = useState<string>('');
   const [showSettings, setShowSettings] = useState(false);
+  const [activeSection, setActiveSection] = useState<'chats' | 'contacts' | 'calls'>('chats');
   const [backgrounded, setBackgrounded] = useState(false);
   const mediaWorkflow = useMemo(() => new MediaMessageWorkflow(new HttpAttachmentGateway(getRuntimeConfig().baseUrl ?? '', attachmentRequestHeaders)), [attachmentRequestHeaders]);
 
@@ -45,7 +48,7 @@ const AppContent: React.FC = () => {
       updateUrlInvite(roomId, secret, controlCapability);
       setShowSetup(false);
     } catch (err) {
-      setError((err as any).message || 'Failed to connect. Please try again.');
+      setError('Could not open this conversation. Check the invitation and connection, then retry.');
       debugError('Setup failed', err);
     }
   };
@@ -54,23 +57,32 @@ const AppContent: React.FC = () => {
     <div className={`app-shell ${privacyPreferences.blurSensitiveContent && backgrounded ? 'app-shell--privacy-blur' : ''}`}>
       <Sidebar
         isWelcomeActive={showSetup}
-        onNewConversation={() => setShowSetup(true)}
+        activeSection={activeSection}
+        onNavigate={(section) => { setActiveSection(section); setShowSetup(false); }}
+        onNewConversation={() => { setActiveSection('chats'); setShowSetup(true); }}
         onOpenConversation={(roomId) => {
+          setActiveSection('chats');
           setShowSetup(false);
-          if (roomId) openConversation(roomId).catch((err) => setError((err as Error).message));
+          if (roomId) openConversation(roomId).catch(() => setError('Could not open this saved conversation. Your stored data was not changed.'));
         }}
         onOpenSettings={() => setShowSettings(true)}
       />
       <section className="conversation-workspace" aria-label="Conversation workspace">
-        <SetupOverlay onSetupComplete={handleSetupComplete} onModernSetupComplete={(inviteLink) => {
-          window.history.replaceState(null, '', inviteLink);
+        <SetupOverlay onSetupComplete={handleSetupComplete} onModernSetupComplete={() => {
+          // Invitation fragments contain bearer authorization material. Once
+          // setup or restore succeeds, keep them out of the active app URL.
+          window.history.replaceState(null, '', window.location.pathname);
           setShowSetup(false);
         }} isHidden={!showSetup} />
-        <MediaProvider workflow={mediaWorkflow}>
+        {activeSection === 'chats' ? <MediaProvider workflow={mediaWorkflow}>
           <ChatContainer isHidden={showSetup} />
-        </MediaProvider>
+        </MediaProvider> : !showSetup && <WorkspaceSection section={activeSection} onNewConversation={() => { setActiveSection('chats'); setShowSetup(true); }} onOpenConversation={(roomId) => {
+          setActiveSection('chats');
+          openConversation(roomId).catch(() => setError('Could not open this saved conversation. Your stored data was not changed.'));
+        }} />}
       </section>
       <SettingsPanel isOpen={showSettings} onClose={() => setShowSettings(false)} />
+      <CallOverlay />
       {error && (
         <div className="app-error" role="alert">
           {error}

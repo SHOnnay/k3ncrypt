@@ -52,10 +52,11 @@ let encryptions = 0;
 let outboundSessionCreations = 0;
 let inboundSessionCreations = 0;
 let sessionDecryptions = 0;
+let decryptedBytes: Uint8Array | undefined;
 const session = (): VodozemacSessionHandle => ({
     sessionId: () => 'session-test',
     encrypt: () => { encryptions++; return JSON.stringify({ version: 1, message_type: 0, ciphertext: 'opaque' }); },
-    decrypt: () => { sessionDecryptions++; return new Uint8Array([1, 1, ...new TextEncoder().encode('restored established message')]); }, saveSession: () => new Uint8Array([1, 2]),
+    decrypt: () => { sessionDecryptions++; return decryptedBytes ?? new Uint8Array([1, 1, ...new TextEncoder().encode('restored established message')]); }, saveSession: () => new Uint8Array([1, 2]),
 });
 const account = (): VodozemacAccountHandle => ({
     identityKeys: () => JSON.stringify({ curve25519: key(1), ed25519: key(2) }),
@@ -83,7 +84,46 @@ const fakeTransport = () => {
     return { transport, sent };
 };
 
-beforeEach(() => { jest.clearAllMocks(); outboundSessionCreations = 0; inboundSessionCreations = 0; sessionDecryptions = 0; });
+beforeEach(() => { jest.clearAllMocks(); outboundSessionCreations = 0; inboundSessionCreations = 0; sessionDecryptions = 0; decryptedBytes = undefined; });
+
+it('rejects malformed UTF-8 without recording a replay marker', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
+    const storage = new Storage();
+    const conversation = new ModernConversation(storage, loader, fakeTransport().transport);
+    const delivered = jest.fn();
+    await conversation.connect(room, key(9), remoteAddress, await remoteCommitment(), delivered);
+    await conversation.send('establish session');
+    decryptedBytes = new Uint8Array([0xc3, 0x28]);
+    const envelope: EncryptedEnvelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1, olmMessage: JSON.stringify({ version: 1, message_type: 1, ciphertext: 'opaque' }) } };
+    await expect((conversation as unknown as { receive: (value: EncryptedEnvelope, sender: string) => Promise<boolean> }).receive(envelope, remoteAddress)).rejects.toThrow();
+    expect(delivered).not.toHaveBeenCalled();
+    expect(await storage.read('modern-seen', room)).toBeUndefined();
+    await conversation.close();
+});
+
+it('does not mark a message seen until durable consumer acceptance succeeds', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
+    const storage = new Storage();
+    const conversation = new ModernConversation(storage, loader, fakeTransport().transport);
+    let fail = true;
+    const delivered = jest.fn(async () => { if (fail) throw new Error('persistence unavailable'); });
+    await conversation.connect(room, key(9), remoteAddress, await remoteCommitment(), delivered);
+    await conversation.send('establish session');
+    const envelope: EncryptedEnvelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1, olmMessage: JSON.stringify({ version: 1, message_type: 1, ciphertext: 'opaque' }) } };
+    const receive = (conversation as unknown as { receive: (value: EncryptedEnvelope, sender: string) => Promise<boolean> }).receive.bind(conversation);
+    await expect(receive(envelope, remoteAddress)).rejects.toThrow('persistence unavailable');
+    expect(await storage.read('modern-seen', room)).toBeUndefined();
+    fail = false;
+    await expect(receive(envelope, remoteAddress)).resolves.toBe(true);
+    expect(delivered).toHaveBeenCalledTimes(2);
+    await expect(receive(envelope, remoteAddress)).resolves.toBe(true);
+    expect(delivered).toHaveBeenCalledTimes(2);
+    await conversation.close();
+});
 
 it('retries the identical persisted envelope after a lost ACK and after restart', async () => {
     encryptions = 0;
@@ -205,11 +245,48 @@ it('keeps an unclassified legacy session when history evidence is absent', async
         version: 1, mode: 'modern', sessionId: 'session-test', localAddress, remoteAddress, routingProof: 'r'.repeat(43),
     })).buffer as ArrayBuffer);
     await storage.write('vodozemac-session', room, new Uint8Array([9]).buffer);
-    const conversation = new ModernConversation(storage, loader, fakeTransport().transport);
+    const transport = fakeTransport();
+    const conversation = new ModernConversation(storage, loader, transport.transport);
     await conversation.connect(room, key(9), remoteAddress, await remoteCommitment());
     expect(await storage.read('vodozemac-session', room)).toBeDefined();
     expect(JSON.parse(new TextDecoder().decode((await storage.read('conversation-session-audit', room))!)))
         .toMatchObject({ classification: 'legacy-unclassified' });
+    await conversation.close();
+});
+
+it('opens an orphaned conversation read-only without deleting trust or history', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    const storage = new Storage();
+    const mode = { version: 1, mode: 'modern', sessionId: 'session-test', localAddress, remoteAddress, routingProof: 'r'.repeat(43) };
+    const history = [{ id: 'prior', text: 'saved locally' }];
+    await storage.write('conversation-protocol', room, new TextEncoder().encode(JSON.stringify(mode)).buffer as ArrayBuffer);
+    await storage.write('product-messages', room, new TextEncoder().encode(JSON.stringify(history)).buffer as ArrayBuffer);
+    const transport = fakeTransport();
+    const conversation = new ModernConversation(storage, loader, transport.transport);
+    await conversation.connect(room, key(9), remoteAddress, await remoteCommitment());
+    expect(conversation.getSessionHealth()).toBe('unhealthy');
+    expect(conversation.hasEstablishedSession()).toBe(false);
+    await expect(conversation.prepareVerifiedSessionRenewal(true)).rejects.toThrow('not verified');
+    await expect(conversation.send('blocked')).rejects.toThrow('verified renewal');
+    await expect(conversation.createAuthenticatedCallComposition()).rejects.toThrow('verified renewal');
+    expect(await storage.read('conversation-protocol', room)).toEqual(new TextEncoder().encode(JSON.stringify(mode)).buffer);
+    expect(await storage.read('product-messages', room)).toEqual(new TextEncoder().encode(JSON.stringify(history)).buffer);
+    expect(outboundSessionCreations).toBe(0);
+    await conversation.verifyContact(true);
+    await expect(conversation.prepareVerifiedSessionRenewal(false)).rejects.toThrow('explicit');
+    await conversation.prepareVerifiedSessionRenewal(true);
+    expect(conversation.getSessionHealth()).toBe('renewal-pending');
+    expect(JSON.parse(new TextDecoder().decode((await storage.read('conversation-protocol', room))!)).sessionId).toBeUndefined();
+    expect(await storage.read('product-messages', room)).toEqual(new TextEncoder().encode(JSON.stringify(history)).buffer);
+    expect(outboundSessionCreations).toBe(0);
+    const receipt = await conversation.sendWithReceipt('verified renewal message');
+    expect(receipt).toBeTruthy();
+    expect(transport.sent).toHaveLength(1);
+    expect(conversation.getSessionHealth()).toBe('renewal-pending');
+    await conversation.acceptDelivery('relay-1');
+    expect(conversation.getSessionHealth()).toBe('healthy');
+    expect(await storage.read('product-messages', room)).toEqual(new TextEncoder().encode(JSON.stringify(history)).buffer);
     await conversation.close();
 });
 
@@ -296,6 +373,17 @@ it('keeps a fallback tab lease for the conversation lifetime and releases it on 
     } finally {
         Object.assign(globalThis, { window: previousWindow, localStorage: previousStorage });
     }
+});
+
+it('does not lock a shared vault when switching saved conversations', async () => {
+    const storage = new Storage();
+    const lock = jest.spyOn(storage, 'lock');
+    const first = new ModernConversation(storage, loader, fakeTransport().transport);
+    await first.close(false);
+    expect(lock).not.toHaveBeenCalled();
+    const second = new ModernConversation(storage, loader, fakeTransport().transport);
+    await second.close();
+    expect(lock).toHaveBeenCalledTimes(1);
 });
 
 it('exposes authenticated call composition only after modern identity verification', async () => {

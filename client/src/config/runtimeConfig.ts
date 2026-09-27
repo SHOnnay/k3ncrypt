@@ -28,15 +28,19 @@ const parseIcePolicy = (raw: string | undefined): RTCIceTransportPolicy =>
   raw === 'relay' ? 'relay' : 'all';
 
 export const getRuntimeConfig = (): ClientRuntimeConfig => {
+  const developmentBuild = process.env.NODE_ENV !== 'production';
   const webrtc: ClientRuntimeConfig['webrtc'] = {
     iceServers: parseIceServers(process.env.CHATE2EE_ICE_SERVERS),
     iceTransportPolicy: parseIcePolicy(process.env.CHATE2EE_ICE_TRANSPORT_POLICY),
   };
 
+  const configuredApiUrl = process.env.CHATE2EE_API_URL?.trim();
+  const defaultApiUrl = developmentBuild ? 'http://localhost:3001' : (typeof window === 'undefined' ? '' : window.location.origin);
+
   return {
-    baseUrl: process.env.CHATE2EE_API_URL || 'http://localhost:3001',
+    baseUrl: configuredApiUrl || defaultApiUrl,
     settings: {
-      disableLog: process.env.CHATE2EE_ENABLE_DEBUG_LOGS !== 'true',
+      disableLog: !developmentBuild || process.env.CHATE2EE_ENABLE_DEBUG_LOGS !== 'true',
     },
     webrtc,
   };

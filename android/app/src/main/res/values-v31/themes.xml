@@ -1,0 +1,8 @@
+<resources>
+    <style name="Theme.K3ncrypt" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:allowTaskReparenting">false</item>
+        <item name="android:windowBackground">@drawable/k3ncrypt_splash</item>
+        <item name="android:windowSplashScreenBackground">@color/k3ncrypt_splash_background</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/k3ncrypt_app_icon</item>
+    </style>
+</resources>

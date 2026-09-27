@@ -130,6 +130,18 @@ describe('VodozemacRuntime', () => {
         await expect(storage.read('vodozemac-session', 'conversation-1')).resolves.toBeUndefined();
     });
 
+    it('reports a missing saved session without changing the conversation reference', async () => {
+        const storage = new MemoryStorage();
+        storage.seed('conversation-protocol', 'conversation-1', { version: 1, mode: 'modern', sessionId: 'session-1' });
+        const runtime = new VodozemacRuntime(storage, async () => bindings);
+        await runtime.initialize();
+        await runtime.restoreOrCreateIdentity();
+        await expect(runtime.restoreSession('conversation-1', 'session-1')).rejects.toMatchObject({
+            code: 'CORRUPTED_SESSION', restoreFailureCategory: 'session-record-missing',
+        });
+        expect(storage.has('conversation-protocol', 'conversation-1')).toBe(true);
+    });
+
     it('fails closed when ratchet persistence fails after encryption mutation', async () => {
         class FailingStorage extends MemoryStorage {
             public async write(type: string, id: string, value: ArrayBuffer): Promise<void> {

@@ -25,10 +25,15 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
     if (!media?.reference || isOpening) return;
     setIsOpening(true);
     setMediaError(false);
-    const result = await receive(media.reference);
-    if (result) setMediaUrl((previous) => { if (previous) URL.revokeObjectURL(previous); return URL.createObjectURL(new Blob([result.bytes], { type: result.mimeType })); });
-    else setMediaError(true);
-    setIsOpening(false);
+    try {
+      const result = await receive(media.reference);
+      if (result) setMediaUrl((previous) => { if (previous) URL.revokeObjectURL(previous); return URL.createObjectURL(new Blob([result.bytes], { type: result.mimeType })); });
+      else setMediaError(true);
+    } catch {
+      setMediaError(true);
+    } finally {
+      setIsOpening(false);
+    }
   };
   return (
     <div className={`message ${message.type}`}>

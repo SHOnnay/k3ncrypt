@@ -15,6 +15,7 @@ async function build() {
         outfile: OUTFILE,
         format: 'esm',
         platform: 'browser', // Adjust if this is for the browser
+        define: { 'process.env.NODE_ENV': JSON.stringify(isProduction ? 'production' : 'development') },
         sourcemap: true,
         minify: isProduction,
         logLevel: 'info',

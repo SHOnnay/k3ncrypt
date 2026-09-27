@@ -41,7 +41,7 @@ const viewTitles: Record<SettingsView, string> = {
 
 export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose }) => {
   const [view, setView] = useState<SettingsView>('settings');
-  const { channelHash, isConnected, protocolMode, userId, ownFingerprint, contactIdentity, verifyContact, acceptChangedIdentity, deleteChannel, deviceLifecycleState, pendingDeviceEnrollment, pendingDeviceApproval, requestDeviceEnrollment, approveDeviceEnrollment, rejectDeviceEnrollment, confirmDeviceEnrollment, revokeDevice, privacyPreferences, updatePrivacyPreferences, permissionStatus, refreshPermissionStatus, syncStatus } = useChat();
+  const { channelHash, isConnected, protocolMode, userId, ownFingerprint, contactIdentity, verifyContact, acceptChangedIdentity, prepareVerifiedSessionRenewal, sessionHealth, deleteChannel, deviceLifecycleState, pendingDeviceEnrollment, pendingDeviceApproval, requestDeviceEnrollment, approveDeviceEnrollment, rejectDeviceEnrollment, confirmDeviceEnrollment, revokeDevice, privacyPreferences, updatePrivacyPreferences, permissionStatus, refreshPermissionStatus, syncStatus } = useChat();
   const [comparisonConfirmed, setComparisonConfirmed] = useState(false);
   const [verificationError, setVerificationError] = useState('');
   const [qrInput, setQrInput] = useState('');
@@ -202,7 +202,17 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
                       verifyContact().then(() => { setComparisonConfirmed(false); setVerificationError(''); }).catch(() => setVerificationError('Could not save verification. Try again.'));
                     }}>Mark as verified</button>
                     {qrMatch && <p role="status">The code matches this contact&apos;s fingerprint. Continue only after confirming it with them.</p>}
-                  </> : <p>You marked this contact as verified on this device.</p>}
+                  </> : <>
+                    <p>You marked this contact as verified on this device.</p>
+                    {sessionHealth === 'unhealthy' && <>
+                      <p role="alert">The old encrypted session is missing. Compare this contact fingerprint through another trusted channel before renewing. Your saved identity, trust, and history will remain.</p>
+                      <label><input type="checkbox" checked={comparisonConfirmed} onChange={(event) => setComparisonConfirmed(event.target.checked)} /> I compared this fingerprint with my contact again</label>
+                      <button className="btn btn--secondary" type="button" disabled={!comparisonConfirmed} onClick={() => {
+                        prepareVerifiedSessionRenewal().then(() => { setComparisonConfirmed(false); setVerificationError(''); }).catch(() => setVerificationError('Session renewal was not prepared. Recheck the contact identity and device trust.'));
+                      }}>Prepare verified session renewal</button>
+                    </>}
+                    {sessionHealth === 'renewal-pending' && <p role="status">Ask your contact to prepare verified session renewal on their device, then send one text message. Calls remain paused until that message is accepted.</p>}
+                  </>}
                 </> : <p>Your contact will appear here after the first message.</p>}
                 {protocolMode === 'modern' && <div className="device-management" aria-label="Device management">
                   <strong>Your devices</strong>

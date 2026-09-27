@@ -13,6 +13,8 @@ Copy `.env.sample` for local development. Production deployments should start fr
 
 The client uses `CHATE2EE_API_URL`, `CHATE2EE_ICE_SERVERS`, `CHATE2EE_ICE_TRANSPORT_POLICY`, and `CHATE2EE_ENABLE_DEBUG_LOGS`. The backend uses `PORT` and the Mongo/configuration variables above.
 
+The browser vault always requires the normal local passphrase unlock. There is no development auto-unlock or passphrase-resume shortcut. Keep local account data in a dedicated development browser profile and do not store passphrases in environment files or browser storage.
+
 ## Commands
 
 ```sh

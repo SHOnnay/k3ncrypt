@@ -5,7 +5,8 @@ const transitions: Record<CallState, Partial<Record<CallEvent, CallState>>> = {
 };
 export const transitionCall = (session: CallSession, event: CallEvent, now = Date.now(), policy: CallSecurityPolicy = DEFAULT_CALL_SECURITY_POLICY): CallSession => {
   if (event === 'heartbeat') return session.state === 'connected' && now - session.updatedAt <= policy.heartbeatTimeoutMs ? { ...session, updatedAt: now } : session;
-  if (now > session.expiresAt && !['ended', 'rejected', 'cancelled', 'expired', 'failed'].includes(session.state)) throw new Error('Call has expired.');
+  if (event === 'expire' && now < session.expiresAt) throw new Error('Call has not expired.');
+  if (event !== 'expire' && now > session.expiresAt && !['ended', 'rejected', 'cancelled', 'expired', 'failed'].includes(session.state)) throw new Error('Call has expired.');
   const next = transitions[session.state][event];
   if (!next) throw new Error(`Invalid call transition: ${session.state} -> ${event}.`);
   return { ...session, state: next, updatedAt: now };

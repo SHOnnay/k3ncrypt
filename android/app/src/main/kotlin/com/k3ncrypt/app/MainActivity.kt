@@ -7,7 +7,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
+import androidx.lifecycle.lifecycleScope
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -15,16 +17,29 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.background
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
+import kotlinx.coroutines.delay
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -33,10 +48,22 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.ChatBubbleOutline
+import androidx.compose.material.icons.filled.Contacts
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.WindowCompat
 import androidx.compose.runtime.DisposableEffect
 import org.webrtc.SurfaceViewRenderer
 import org.webrtc.VideoTrack
@@ -58,12 +85,38 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var relay: SocketRelay
     @Inject lateinit var calls: AndroidCallController
 
+    override fun onResume() {
+        super.onResume()
+        if (this::calls.isInitialized) calls.recordApplicationLifecycle(backgrounded = false)
+        lifecycleScope.launch {
+            runCatching { messaging.ensureActiveRelayRegistration() }
+                .onFailure { if (BuildConfig.DEBUG) DebugInspectionStore.setConnectionStage("resume_rejoin_failed") }
+        }
+    }
+
+    override fun onPause() {
+        if (this::calls.isInitialized) calls.recordApplicationLifecycle(backgrounded = true)
+        super.onPause()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {
-                    IdentityAndConversationScreen(this, identities, messaging, api, relay, calls)
+            val appearance = remember { getSharedPreferences("k3ncrypt-runtime", Context.MODE_PRIVATE) }
+            var themeMode by remember { mutableStateOf(appearance.getString("theme-mode", "system") ?: "system") }
+            val dark = when (themeMode) { "dark" -> true; "light" -> false; else -> isSystemInDarkTheme() }
+            SideEffect {
+                WindowCompat.getInsetsController(window, window.decorView).apply {
+                    isAppearanceLightStatusBars = !dark
+                    isAppearanceLightNavigationBars = !dark
+                }
+            }
+            K3ncryptTheme(darkTheme = dark) {
+                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                    IdentityAndConversationScreen(this, identities, messaging, api, relay, calls, themeMode) { mode ->
+                        themeMode = mode
+                        appearance.edit().putString("theme-mode", mode).apply()
+                    }
                 }
             }
         }
@@ -136,9 +189,12 @@ private fun IdentityAndConversationScreen(
     api: K3ncryptApi,
     relay: SocketRelay,
     calls: AndroidCallController,
+    themeMode: String,
+    onThemeModeChange: (String) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
     val preferences = remember { context.getSharedPreferences("k3ncrypt-runtime", Context.MODE_PRIVATE) }
     var state by remember { mutableStateOf<AndroidIdentityState?>(null) }
     var target by remember { mutableStateOf<NewDeviceEnrollmentIdentity?>(null) }
@@ -162,9 +218,12 @@ private fun IdentityAndConversationScreen(
     var messageStatus by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("Configure the backend, then create or join a private conversation.") }
     var busy by remember { mutableStateOf(false) }
-    var showSettings by remember { mutableStateOf(false) }
     var showAdvancedVerification by remember { mutableStateOf(false) }
+    var showNewConversation by remember { mutableStateOf(false) }
+    var identityChecked by remember { mutableStateOf(false) }
+    var selectedTab by remember { mutableStateOf("chats") }
     val callState by calls.state.collectAsState()
+    var callElapsedSeconds by remember(callState.callId) { mutableStateOf(0) }
     var pendingCallAction by remember { mutableStateOf<String?>(null) }
     val callPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
         val action = pendingCallAction
@@ -179,7 +238,7 @@ private fun IdentityAndConversationScreen(
                         "video" -> calls.startVideo()
                         "accept-audio", "accept-video" -> calls.accept()
                     }
-                }.onFailure { status = "Call could not start: ${it.message?.take(100) ?: it.javaClass.simpleName}" }
+                }.onFailure { status = "Call could not start. Check permissions and connection, then retry." }
             }
         } else status = denial
     }
@@ -190,21 +249,25 @@ private fun IdentityAndConversationScreen(
         callPermissionLauncher.launch(permissions.toTypedArray())
     }
 
-    // Debug inspection is strictly observational. It does not participate in
-    // conversation setup, first-contact confirmation, encryption, or relay ACKs.
+    LaunchedEffect(callState.callId, callState.incoming) {
+        if (BuildConfig.DEBUG && callState.callId != null && callState.incoming) {
+            DebugInspectionStore.setCallSignalStage("incoming-ui-triggered")
+        }
+    }
+
+    LaunchedEffect(callState.callId, callState.status) {
+        if (callState.callId != null && callState.status == "connected") {
+            callElapsedSeconds = 0
+            while (true) {
+                delay(1_000)
+                callElapsedSeconds += 1
+            }
+        } else {
+            callElapsedSeconds = 0
+        }
+    }
+
     LaunchedEffect(conversation?.conversationId, conversation?.peerIdentityReference, conversation?.peerRoutingId, pendingPeer?.second, status, messageStatus, chatMessages.size) {
-        DebugInspectionStore.update(
-            conversationId = conversation?.conversationId,
-            trustState = when {
-                pendingPeer != null -> "pending-confirmation"
-                conversation?.let(SavedConversationIndex::isTrusted) == true -> "verified"
-                conversation != null -> "unverified"
-                else -> "none"
-            },
-            connectionState = status,
-            deliveryState = messageStatus.ifBlank { "idle" },
-            lastActivityTimestamp = chatMessages.maxOfOrNull { it.timestamp } ?: 0L,
-        )
         savedTrustedConversations = runCatching { messaging.savedTrustedConversations() }.getOrDefault(emptyList())
     }
 
@@ -231,25 +294,24 @@ private fun IdentityAndConversationScreen(
     }
 
     LaunchedEffect(Unit) {
-        // Debug validation may open the ordinary invitation form without
-        // auto-selecting a previously saved conversation. It never changes
-        // trust state and leaves fingerprint confirmation to the user.
-        val seededInvitation = DebugJoinSeed.consume(context)
-        seededInvitation?.let { invitationInput = it }
+        // Remove invitations left by older debug builds. They contained
+        // bearer capabilities and are no longer accepted through a test hook.
+        context.getSharedPreferences("debug-join-seed", Context.MODE_PRIVATE).edit().clear().apply()
         if (endpoint.isNotBlank()) {
             runCatching {
-                val backend = NetworkEndpoint.validate(endpoint)
-                val socketUrl = NetworkEndpoint.validate(socketEndpoint.ifBlank { backend })
-                api.configureBaseUrl(backend)
-                relay.configureUrl(socketUrl)
+                val backend = NetworkEndpoint.validate(endpoint, allowEmulatorHttp = BuildConfig.DEBUG)
+                val socketUrl = NetworkEndpoint.validate(socketEndpoint.ifBlank { backend }, allowEmulatorHttp = BuildConfig.DEBUG)
+                api.configureBaseUrl(backend, allowEmulatorHttp = BuildConfig.DEBUG)
+                relay.configureUrl(socketUrl, allowEmulatorHttp = BuildConfig.DEBUG)
                 socketEndpoint = socketUrl
-            }.onFailure { status = it.message ?: "Backend endpoint configuration is invalid." }
+            }.onFailure { status = "Backend endpoint configuration is invalid. Use a valid HTTPS service address." }
         }
         runCatching { identities.restore() }.onSuccess { restored ->
             state = restored
+            identityChecked = true
             if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("identity-restored")
             status = "Saved identity restored. Protected actions still require current server authorization."
-            if (restored.lifecycleState == "active" && endpoint.isNotBlank() && seededInvitation == null) {
+            if (restored.lifecycleState == "active" && endpoint.isNotBlank()) {
                 messaging.restoreConversation()?.let { saved ->
                     runCatching {
                         conversation = saved
@@ -259,33 +321,64 @@ private fun IdentityAndConversationScreen(
                         if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("conversation-restored")
                         status = "Conversation restored and authenticated relay join completed."
                     }
-                        .onFailure { error -> status = if (BuildConfig.DEBUG && relay.lastJoinFailureCategory() != null) "Relay join rejected: ${relay.lastJoinFailureCategory()}" else "Conversation reconnect failed closed: ${error.message?.take(110) ?: error.javaClass.simpleName}" }
+                        .onFailure { status = "Conversation reconnect failed closed. Check the connection and retry." }
                 }
             }
+        }.onFailure {
+            identityChecked = true
+            status = "Your saved device could not be restored. Check this device and try again."
         }
     }
 
-    Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Text("K3NCRYPT", style = MaterialTheme.typography.headlineMedium)
-        Text("Android identity and encrypted messaging", style = MaterialTheme.typography.titleMedium)
-        Button(onClick = { showSettings = !showSettings; if (!showSettings) showAdvancedVerification = false }) {
-            Text(if (showSettings) "Close settings" else "Settings")
-        }
-        if (showSettings) {
-            Text("Security", style = MaterialTheme.typography.titleMedium)
-            Button(onClick = { showAdvancedVerification = !showAdvancedVerification }) {
-                Text(if (showAdvancedVerification) "Hide advanced verification" else "Advanced verification")
+    Box(modifier = Modifier.fillMaxSize()) {
+      Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
+       K3ncryptTopBar(
+           title = when (selectedTab) { "contacts" -> "Contacts"; "calls" -> "Calls"; "settings" -> "Settings"; else -> "K3NCRYPT" },
+           subtitle = when (selectedTab) {
+               "contacts" -> "Trusted conversations on this device"
+               "calls" -> "Private voice and video calls"
+               "settings" -> "Your device and privacy preferences"
+               else -> if (conversation != null && SavedConversationIndex.isTrusted(conversation!!)) "Trusted contact · secure connection" else "Private communication you control"
+           },
+           action = if (selectedTab == "chats") ({
+               Row {
+                   if (conversation != null && !showNewConversation) {
+                       IconButton(onClick = { showNewConversation = true }) {
+                           Icon(Icons.Filled.Add, contentDescription = "New conversation", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                       }
+                   }
+                   IconButton(onClick = { selectedTab = "settings" }) {
+                       Icon(Icons.Filled.Settings, contentDescription = "Open settings", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                   }
+               }
+           }) else null,
+       )
+       if (!identityChecked) {
+        Column(Modifier.weight(1f).fillMaxWidth().padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+            K3ncryptCard {
+                Column(Modifier.fillMaxWidth().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    K3ncryptBrandMark()
+                    Text("Opening your private space", style = MaterialTheme.typography.titleLarge)
+                    Text("Restoring this device securely…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
-            if (showAdvancedVerification) {
-                Text("Compare identity details through a separate trusted channel. Verification remains required before accepting a new contact.")
-            }
         }
-        Text(status)
+       } else if (selectedTab == "chats") {
+        val focusedChat = conversation != null && !showNewConversation
+        Column(
+          modifier = if (focusedChat) Modifier.weight(1f).padding(horizontal = 16.dp, vertical = 8.dp)
+                     else Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(20.dp),
+          verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+        if (!focusedChat) {
+            K3ncryptSectionTitle("Private messaging", if (showNewConversation) "New conversation" else "Chats", "Your conversations stay protected on this device.")
+            if (showNewConversation && conversation != null) {
+                OutlinedButton(onClick = { showNewConversation = false }) { Text("Back to conversation") }
+            }
+            Text(status)
+        }
 
-        conversation?.let { active ->
+        if (!showNewConversation) conversation?.let { active ->
             pendingPeer?.let { (route, fingerprint) ->
                 Text("New contact request")
                 Text("Compare this peer’s identity with a trusted channel before pinning. Messages remain unaccepted until verification.")
@@ -314,26 +407,31 @@ private fun IdentityAndConversationScreen(
             }
         }
 
-        Text("Backend connection", style = MaterialTheme.typography.titleMedium)
-        OutlinedTextField(endpoint, { endpoint = it }, label = { Text("Backend HTTPS origin (emulator: http://10.0.2.2:3001)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(socketEndpoint, { socketEndpoint = it }, label = { Text("Socket.IO origin (blank uses backend)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        if (!focusedChat && (state == null || showAdvancedVerification)) K3ncryptCard {
+          Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text("Connection setup", style = MaterialTheme.typography.titleMedium)
+        Text("Choose the service endpoint for this device. Use HTTPS for hosted deployments.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        OutlinedTextField(endpoint, { endpoint = it }, label = { Text("Backend service address") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(socketEndpoint, { socketEndpoint = it }, label = { Text("Realtime service address") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         Button(enabled = !busy && endpoint.isNotBlank(), onClick = {
             scope.launch {
                 busy = true
                 runCatching {
-                    val backend = NetworkEndpoint.validate(endpoint)
-                    val socketUrl = NetworkEndpoint.validate(socketEndpoint.ifBlank { backend })
-                    api.configureBaseUrl(backend)
-                    relay.configureUrl(socketUrl)
+                    val backend = NetworkEndpoint.validate(endpoint, allowEmulatorHttp = BuildConfig.DEBUG)
+                    val socketUrl = NetworkEndpoint.validate(socketEndpoint.ifBlank { backend }, allowEmulatorHttp = BuildConfig.DEBUG)
+                    api.configureBaseUrl(backend, allowEmulatorHttp = BuildConfig.DEBUG)
+                    relay.configureUrl(socketUrl, allowEmulatorHttp = BuildConfig.DEBUG)
                     preferences.edit().putString("backend", backend).putString("socket", socketUrl).apply()
                     socketEndpoint = socketUrl
                     status = "Backend endpoint configured."
-                }.onFailure { status = it.message ?: "Backend endpoint configuration failed." }
+                }.onFailure { status = "Backend endpoint configuration failed. Use a valid HTTPS service address." }
                 busy = false
             }
-        }) { Text("Save backend endpoint") }
+        }) { Text("Save connection") }
+          }
+        }
 
-        state?.let { identity ->
+        if (!focusedChat) state?.let { identity ->
             Text(if (identity.lifecycleState == "active") "Verified device" else "Device setup: ${identity.lifecycleState}")
             if (showAdvancedVerification) {
                 Text("Device identity fingerprint: ${identity.deviceIdentityReference}")
@@ -357,10 +455,11 @@ private fun IdentityAndConversationScreen(
                         runCatching {
                             val created = messaging.createNewConversation(::onMessage, ::onPeerPending)
                             conversation = created
+                            showNewConversation = false
                             outgoingInvite = "#modern=${Uri.encode(created.conversationId)}&control=${Uri.encode(created.controlCapability)}&address=${Uri.encode(created.localRoutingId)}&identity=${Uri.encode(identity.deviceIdentityReference)}"
                             chatMessages.clear()
                             status = "Private conversation created. Share the invitation securely; first peer messages remain held until you confirm their identity fingerprint."
-                        }.onFailure { error -> status = "Conversation could not be created: ${error.message?.take(140) ?: error.javaClass.simpleName}" }
+                        }.onFailure { status = "Conversation could not be created. Check the connection and retry." }
                         busy = false
                     }
                 }) { Text("Create private conversation") }
@@ -385,7 +484,7 @@ private fun IdentityAndConversationScreen(
                                 busy = false
                             }
                         }) {
-                            Text("Open trusted contact · ${saved.lastActivityTimestamp}")
+                            Text("Open trusted conversation")
                         }
                     }
                 }
@@ -404,10 +503,11 @@ private fun IdentityAndConversationScreen(
                             val joined = ConversationInvitation(parsed.conversationId, local.getString("address"), parsed.peerRoutingId, parsed.peerFingerprint, parsed.controlCapability, local.getString("renewalProof"))
                             messaging.connect(joined, fingerprintConfirmation.trim(), ::onMessage, ::onPeerPending)
                             conversation = joined
+                            showNewConversation = false
                             chatMessages.clear()
                             appendUniqueChatMessages(chatMessages, messaging.messages().filter { it.conversationId == joined.conversationId })
                             status = "Secure connection established."
-                        }.onFailure { error -> status = if (BuildConfig.DEBUG && relay.lastJoinFailureCategory() != null) "Relay join rejected: ${relay.lastJoinFailureCategory()}" else error.message?.takeIf { message -> message.length < 180 } ?: "Invitation could not be joined. Verify it and check connectivity." }
+                        }.onFailure { status = "Invitation could not be joined. Verify it and check connectivity." }
                         busy = false
                     }
                 }) { Text("Join conversation") }
@@ -434,7 +534,7 @@ private fun IdentityAndConversationScreen(
             }) { Text("Prepare device enrollment") }
         }
 
-        target?.let { newDevice ->
+        if (!focusedChat) target?.let { newDevice ->
             Text("A separate device identity is ready for trusted approval.")
             if (showAdvancedVerification) {
                 Text("Target device: ${newDevice.deviceId}")
@@ -443,7 +543,7 @@ private fun IdentityAndConversationScreen(
             }
         }
 
-        state?.takeIf { it.lifecycleState == "active" && showAdvancedVerification }?.let { identity ->
+        if (!focusedChat) state?.takeIf { it.lifecycleState == "active" && showAdvancedVerification }?.let { identity ->
             Text("Approve another device")
             OutlinedTextField(targetDeviceId, { targetDeviceId = it }, label = { Text("Target device ID") }, singleLine = true)
             OutlinedTextField(targetIdentityReference, { targetIdentityReference = it }, label = { Text("Target identity fingerprint") }, singleLine = true)
@@ -475,23 +575,65 @@ private fun IdentityAndConversationScreen(
             }
         }
 
-        conversation?.let { active ->
-            Spacer(Modifier.height(8.dp))
-            Text(if (SavedConversationIndex.isTrusted(active)) "Trusted contact" else "New contact", style = MaterialTheme.typography.titleMedium)
+        if (!showNewConversation) conversation?.let { active ->
+            if (focusedChat) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(if (SavedConversationIndex.isTrusted(active)) "Trusted contact" else "New contact", style = MaterialTheme.typography.titleMedium)
+                        Text(if (SavedConversationIndex.isTrusted(active)) "Secure connection established" else "Identity confirmation required", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    K3ncryptStatus(if (SavedConversationIndex.isTrusted(active)) "Verified" else "Review", positive = SavedConversationIndex.isTrusted(active))
+                }
+            } else {
+                Spacer(Modifier.height(8.dp))
+                Text(if (SavedConversationIndex.isTrusted(active)) "Trusted contact" else "New contact", style = MaterialTheme.typography.titleMedium)
+            }
             if (outgoingInvite.isNotBlank()) {
                 Text("Share this invitation securely with a trusted contact.")
                 Button(onClick = { clipboard.setText(AnnotatedString(outgoingInvite)); status = "Invitation copied." }) { Text("Copy invitation") }
-                if (showAdvancedVerification) Text("Advanced invitation details: $outgoingInvite")
             }
-            LazyColumn(modifier = Modifier.fillMaxWidth().height(240.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                items(chatMessages.filter { it.conversationId == active.conversationId }, key = { it.id }) { message ->
-                    Column {
-                        Text(message.text)
-                        Text(if (message.senderRoutingId == active.localRoutingId) "Sent · relay accepted" else "Received · persisted before acceptance", style = MaterialTheme.typography.labelSmall)
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().then(if (focusedChat) Modifier.weight(1f) else Modifier.height(320.dp)).padding(vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                val visibleMessages = chatMessages.filter { it.conversationId == active.conversationId }
+                if (visibleMessages.isEmpty()) {
+                    item {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 28.dp, horizontal = 12.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            K3ncryptBrandMark()
+                            Text("Your conversation starts here", style = MaterialTheme.typography.titleMedium)
+                            Text("Messages are protected and saved on this device.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                } else items(visibleMessages, key = { it.id }) { message ->
+                    val sentByThisDevice = message.senderRoutingId == active.localRoutingId
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = if (sentByThisDevice) Arrangement.End else Arrangement.Start,
+                    ) {
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(0.84f),
+                            shape = MaterialTheme.shapes.large,
+                            color = if (sentByThisDevice) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
+                            tonalElevation = if (sentByThisDevice) 0.dp else 1.dp,
+                        ) {
+                            Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                                Text(message.text, color = if (sentByThisDevice) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    if (sentByThisDevice) "Sent · delivered" else "Received securely",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (sentByThisDevice) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.78f) else MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
                     }
                 }
             }
-            OutlinedTextField(draft, { draft = it }, label = { Text("Message") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(draft, { draft = it }, label = { Text("Message") }, modifier = Modifier.fillMaxWidth(), maxLines = 4)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(enabled = !busy && draft.isNotBlank() && active.peerRoutingId.isNotBlank(), onClick = {
                     val text = draft
@@ -516,16 +658,21 @@ private fun IdentityAndConversationScreen(
             }
             Text(messageStatus)
             if (SavedConversationIndex.isTrusted(active)) {
-                if (BuildConfig.DEBUG) {
-                    Button(enabled = !busy && callState.callId == null, onClick = {
+                if (showAdvancedVerification) {
+                    Text("If your contact lost only their encrypted conversation session, compare their fingerprint through another trusted channel before approving one replacement pre-key message. Your saved conversation and prior session remain encrypted on this device.")
+                    Text("Trusted contact fingerprint: ${active.peerIdentityReference}")
+                    OutlinedTextField(fingerprintConfirmation, { fingerprintConfirmation = it }, label = { Text("Confirm trusted contact fingerprint") }, modifier = Modifier.fillMaxWidth(),
+                        singleLine = true, keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { keyboardController?.hide() }))
+                    Button(enabled = !busy && fingerprintConfirmation.trim() == active.peerIdentityReference, onClick = {
                         scope.launch {
                             busy = true
-                            runCatching { calls.sendSignalingValidationInvite() }
-                                .onSuccess { status = "Authenticated call signal accepted by relay; no media session was started." }
-                                .onFailure { status = "Call signal authorization failed. Verify the trusted conversation and reconnect." }
+                            runCatching { messaging.armVerifiedSessionRenewal(fingerprintConfirmation.trim()) }
+                                .onSuccess { fingerprintConfirmation = ""; status = "Verified session renewal prepared for ten minutes. Waiting for one authenticated pre-key message." }
+                                .onFailure { status = "Session renewal approval failed; no session state was changed." }
                             busy = false
                         }
-                    }) { Text("Validate relay:signal (debug)") }
+                    }) { Text("Prepare verified session renewal") }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(enabled = callState.callId == null, onClick = { requestCallPermissions("audio") }) { Text("Voice call") }
@@ -533,26 +680,212 @@ private fun IdentityAndConversationScreen(
                 }
             }
         }
-        if (callState.callId != null) {
-            Text(if (callState.incoming) "Incoming ${callState.mediaMode} call" else "${callState.mediaMode.replaceFirstChar { it.uppercase() }} call · ${callState.status}", style = MaterialTheme.typography.titleMedium)
-            callState.errorCategory?.let { Text("Call error: $it") }
-            if (callState.mediaMode == "video") {
-                callState.remoteVideo?.let { CallVideoSurface(it, calls, mirror = false, height = 260) }
-                callState.localVideo?.let { CallVideoSurface(it, calls, mirror = true, height = 140) }
-            }
-            if (callState.incoming) {
-                Button(onClick = { requestCallPermissions(if (callState.mediaMode == "video") "accept-video" else "accept-audio") }) { Text("Accept") }
-                Button(onClick = { scope.launch { runCatching { calls.reject() }.onFailure { status = "Call could not be declined." } } }) { Text("Decline") }
-            } else {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { calls.setMicrophoneEnabled(!callState.microphoneEnabled) }) { Text(if (callState.microphoneEnabled) "Mute" else "Unmute") }
-                    if (callState.mediaMode == "video") {
-                        Button(onClick = { calls.setCameraEnabled(!callState.cameraEnabled) }) { Text(if (callState.cameraEnabled) "Camera off" else "Camera on") }
-                        Button(onClick = calls::switchCamera) { Text("Switch camera") }
+        }
+       } else if (selectedTab == "contacts") {
+        Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Contacts", style = MaterialTheme.typography.headlineMedium)
+            Text("Trusted conversations saved on this device.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (savedTrustedConversations.isEmpty()) {
+                Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
+                    Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Your contacts will appear here", style = MaterialTheme.typography.titleMedium)
+                        Text("Create or join a private conversation to connect with someone you trust.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    Button(onClick = { scope.launch { calls.hangup() } }) { Text("Hang up") }
+                }
+            } else savedTrustedConversations.forEach { saved ->
+                Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface, tonalElevation = 1.dp) {
+                    Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Trusted contact", style = MaterialTheme.typography.titleMedium)
+                        Text("Saved privately on this device", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Button(enabled = !busy, onClick = {
+                            scope.launch {
+                                busy = true
+                                runCatching {
+                                    val selected = messaging.selectSavedTrustedConversation(saved.conversationHash, ::onMessage, ::onPeerPending)
+                                    conversation = selected
+                                    pendingPeer = null
+                                    showPeerComparison = false
+                                    outgoingInvite = ""
+                                    chatMessages.clear()
+                                    appendUniqueChatMessages(chatMessages, messaging.messages().filter { it.conversationId == selected.conversationId })
+                                    status = "Secure connection established."
+                                    selectedTab = "chats"
+                                }.onFailure { status = "Saved trusted conversation could not be restored." }
+                                busy = false
+                            }
+                        }) { Text("Open conversation") }
+                    }
                 }
             }
         }
+       } else if (selectedTab == "calls") {
+        Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Text("Calls", style = MaterialTheme.typography.headlineMedium)
+            Text("Start a call from a trusted, connected conversation.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            val active = conversation
+            if (active == null) {
+                Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
+                    Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("No active conversation", style = MaterialTheme.typography.titleMedium)
+                        Text("Open a saved contact before calling. Call authorization remains bound to that conversation.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            } else {
+                Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
+                    Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("Trusted contact", style = MaterialTheme.typography.titleMedium)
+                        Text(if (SavedConversationIndex.isTrusted(active) && callState.callId == null) "Secure connection established" else "Finish contact verification before calling.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Button(enabled = !busy && callState.callId == null && SavedConversationIndex.isTrusted(active), onClick = { requestCallPermissions("audio") }) { Text("Voice call") }
+                            Button(enabled = !busy && callState.callId == null && SavedConversationIndex.isTrusted(active), onClick = { requestCallPermissions("video") }) { Text("Video call") }
+                        }
+                        if (callState.callId != null) Text("${callState.mediaMode.replaceFirstChar { it.uppercase() }} call · ${callState.status}")
+                    }
+                }
+            }
+        }
+       } else {
+        Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            K3ncryptSectionTitle("Your device", "Settings", "Choose how K3NCRYPT looks and review this device’s security.")
+            K3ncryptCard {
+                Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Appearance", style = MaterialTheme.typography.titleMedium)
+                    Text("This preference stays on this device.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("system" to "System", "light" to "Light", "dark" to "Dark").forEach { (mode, label) ->
+                            if (themeMode == mode) Button(onClick = { onThemeModeChange(mode) }) { Text(label) }
+                            else OutlinedButton(onClick = { onThemeModeChange(mode) }) { Text(label) }
+                        }
+                    }
+                }
+            }
+            K3ncryptCard {
+                Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Connection", style = MaterialTheme.typography.titleMedium)
+                    Text("Configure the service this device connects to. Hosted services should use HTTPS.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                    OutlinedTextField(endpoint, { endpoint = it }, label = { Text("Backend HTTPS origin") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(socketEndpoint, { socketEndpoint = it }, label = { Text("Socket.IO origin") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    Button(enabled = !busy && endpoint.isNotBlank(), onClick = {
+                        scope.launch {
+                            busy = true
+                            runCatching {
+                                val backend = NetworkEndpoint.validate(endpoint, allowEmulatorHttp = BuildConfig.DEBUG)
+                                val socketUrl = NetworkEndpoint.validate(socketEndpoint.ifBlank { backend }, allowEmulatorHttp = BuildConfig.DEBUG)
+                                api.configureBaseUrl(backend, allowEmulatorHttp = BuildConfig.DEBUG)
+                                relay.configureUrl(socketUrl, allowEmulatorHttp = BuildConfig.DEBUG)
+                                preferences.edit().putString("backend", backend).putString("socket", socketUrl).apply()
+                                socketEndpoint = socketUrl
+                                status = "Backend endpoint configured."
+                            }.onFailure { status = "Backend endpoint configuration failed. Use a valid HTTPS service address." }
+                            busy = false
+                        }
+                    }) { Text("Save connection") }
+                }
+            }
+            K3ncryptCard {
+                Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Security", style = MaterialTheme.typography.titleMedium)
+                    K3ncryptStatus(if (state?.lifecycleState == "active") "Verified device" else "Device setup required", positive = state?.lifecycleState == "active")
+                    Text("Identity comparison and device lifecycle controls stay explicit. Fingerprints are available only in advanced verification.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Button(onClick = { showAdvancedVerification = !showAdvancedVerification }) { Text(if (showAdvancedVerification) "Close advanced verification" else "Advanced verification") }
+                    if (showAdvancedVerification) state?.let { identity ->
+                        Text("Device identity fingerprint", style = MaterialTheme.typography.labelLarge)
+                        Text(identity.deviceIdentityReference, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+            K3ncryptCard {
+                Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                    Text("Privacy", style = MaterialTheme.typography.titleMedium)
+                    Text("Messages are shown from this device’s saved conversation data. No analytics controls are needed here.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                    Text("Message previews stay inside the app. Passphrases and private keys are not shown in settings.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+       }
+       NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
+        listOf("chats" to "Chats", "contacts" to "Contacts", "calls" to "Calls", "settings" to "Settings").forEach { (route, label) ->
+            NavigationBarItem(
+                selected = selectedTab == route,
+                onClick = { selectedTab = route },
+                icon = { Icon(imageVector = when (route) { "chats" -> Icons.Filled.ChatBubbleOutline; "contacts" -> Icons.Filled.Contacts; "calls" -> Icons.Filled.Call; else -> Icons.Filled.Settings }, contentDescription = null) },
+                label = { Text(label) },
+                alwaysShowLabel = true,
+                colors = NavigationBarItemDefaults.colors(selectedIconColor = MaterialTheme.colorScheme.primary, selectedTextColor = MaterialTheme.colorScheme.primary, indicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
+            )
+        }
+       }
+      }
+      if (callState.callId != null) {
+          val callLabel = when (callState.status.lowercase()) {
+              "ringing" -> if (callState.incoming) "Incoming call" else "Calling…"
+              "connecting" -> "Connecting securely…"
+              "connected", "completed" -> "Secure call connected"
+              "reconnecting" -> "Reconnecting…"
+              "failed", "timeout" -> "The call could not connect."
+              else -> "Call in progress"
+          }
+          Box(
+              modifier = Modifier.fillMaxSize().background(Color(0xB80E1216)).padding(16.dp),
+              contentAlignment = Alignment.Center,
+          ) {
+              Surface(
+                  modifier = Modifier.fillMaxWidth(),
+                  shape = MaterialTheme.shapes.extraLarge,
+                  color = MaterialTheme.colorScheme.surface,
+                  tonalElevation = 4.dp,
+                  shadowElevation = 18.dp,
+              ) {
+                  Column(
+                      modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(24.dp),
+                      horizontalAlignment = Alignment.CenterHorizontally,
+                      verticalArrangement = Arrangement.spacedBy(14.dp),
+                  ) {
+                      K3ncryptBrandMark()
+                      Text(if (callState.incoming) "Incoming ${callState.mediaMode} call" else "${callState.mediaMode.replaceFirstChar { it.uppercase() }} call", style = MaterialTheme.typography.titleLarge)
+                      Text("Trusted contact", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                      K3ncryptStatus(callLabel, positive = callState.status in setOf("connected", "completed"))
+                      if (callState.status == "connected") {
+                          Text("${callElapsedSeconds / 60}:${(callElapsedSeconds % 60).toString().padStart(2, '0')}", style = MaterialTheme.typography.titleMedium)
+                      }
+                      if (callState.status == "failed" || callState.errorCategory != null) {
+                          Text("Check your connection and try again.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+                      }
+                      if (callState.mediaMode == "video" && !callState.incoming) {
+                          callState.remoteVideo?.let { CallVideoSurface(it, calls, mirror = false, height = 210) }
+                          callState.localVideo?.let { CallVideoSurface(it, calls, mirror = true, height = 100) }
+                      }
+                      if (callState.incoming) {
+                          Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                              Button(onClick = {
+                                  if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("accept-action")
+                                  requestCallPermissions(if (callState.mediaMode == "video") "accept-video" else "accept-audio")
+                              }) { Text("Accept") }
+                              OutlinedButton(onClick = {
+                                  if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("decline-action")
+                                  scope.launch { runCatching { calls.reject() }.onFailure { status = "Call could not be declined." } }
+                              }) { Text("Decline") }
+                          }
+                      } else {
+                          Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                              OutlinedButton(onClick = { calls.setMicrophoneEnabled(!callState.microphoneEnabled) }) {
+                                  Text(if (callState.microphoneEnabled) "Mute" else "Unmute")
+                              }
+                              if (callState.mediaMode == "video") {
+                                  OutlinedButton(onClick = { calls.setCameraEnabled(!callState.cameraEnabled) }) {
+                                      Text(if (callState.cameraEnabled) "Camera off" else "Camera on")
+                                  }
+                                  OutlinedButton(onClick = calls::switchCamera) { Text("Switch") }
+                              }
+                              Button(
+                                  colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                                  onClick = { scope.launch { runCatching { calls.hangup() }.onFailure { status = "Call could not end." } } },
+                              ) { Text("End call") }
+                          }
+                      }
+                  }
+              }
+          }
+      }
     }
 }

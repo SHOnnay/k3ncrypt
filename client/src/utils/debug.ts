@@ -1,4 +1,5 @@
-const enabled = process.env.CHATE2EE_ENABLE_DEBUG_LOGS === 'true';
+const enabled = process.env.NODE_ENV !== 'production'
+  && process.env.CHATE2EE_ENABLE_DEBUG_LOGS === 'true';
 
 /** Debug output is opt-in so production builds do not leak runtime context. */
 export const debugError = (message: string, error?: unknown): void => {

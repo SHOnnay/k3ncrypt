@@ -6,7 +6,7 @@ import { RateLimiter } from "./rateLimiter";
 import { authorizeRoomControl, isValidControlCapability, isValidRoomId } from '../security/controlCapability';
 import db from '../db';
 import { PREKEY_COLLECTION } from '../db/const';
-import { durableDeviceTrustAuthority } from '../security/durableDeviceTrust';
+import { durableDeviceTrustAuthority, MongoDeviceTrustStore } from '../security/durableDeviceTrust';
 import type { DeviceAuthorizationProof, DeviceOperation } from '../security/deviceTrust';
 
 const clients = getClientInstance();
@@ -25,6 +25,9 @@ type Ack = (response: Record<string, unknown>) => void;
 const noop: Ack = () => undefined;
 const traceDelivery = (stage: string, reached: boolean): void => {
   if (process.env.NODE_ENV !== 'production' && process.env.K3NCRYPT_TEST_ONLY_DIAGNOSTICS === 'true') console.info(`delivery-stage ${stage}=${reached}`);
+};
+const traceCallRelay = (stage: 'signal-received' | 'signal-authorized' | 'recipient-found' | 'forward-attempted' | 'forward-socket-present', reached: boolean): void => {
+  if (process.env.NODE_ENV !== 'production' && process.env.K3NCRYPT_TEST_ONLY_DIAGNOSTICS === 'true') console.info(`call-relay-stage ${stage}=${reached}`);
 };
 const routingProofHash = (proof: string): Buffer => createHash('sha256').update(`k3ncrypt-prekey-renewal-v1\0${proof}`).digest();
 
@@ -75,8 +78,18 @@ const verifyCarrier = async (socket: CustomSocket, carrier: ProofCarrier, operat
     if (record.deviceId !== carrier.deviceAuthorizationProof.deviceId ||
         (socket.deviceId && socket.deviceId !== record.deviceId) ||
         (socket.accountIdentityReference && socket.accountIdentityReference !== record.accountIdentityReference)) return false;
-    if (bind) { socket.deviceId = record.deviceId; socket.accountIdentityReference = record.accountIdentityReference; }
+    if (bind) { socket.deviceId = record.deviceId; socket.accountIdentityReference = record.accountIdentityReference; socket.deviceTrustEpoch = record.trustEpoch; }
     return true;
+  } catch { return false; }
+};
+
+const activeBoundDevice = async (socket: CustomSocket): Promise<boolean> => {
+  if (!socket.deviceId || !socket.accountIdentityReference || !Number.isInteger(socket.deviceTrustEpoch)) return false;
+  try {
+    const database = db.getDatabase();
+    if (!database) return false;
+    const record = await new MongoDeviceTrustStore(database).read(socket.accountIdentityReference, socket.deviceId);
+    return record?.state === 'active' && record.trustEpoch === socket.deviceTrustEpoch;
   } catch { return false; }
 };
 
@@ -114,6 +127,7 @@ const deliverOffline = async (socket: CustomSocket): Promise<void> => {
   if (!socket.userID || !socket.channelID) return;
   db.cleanupExpiredOfflineMessages();
   for (let count = 0; count < MAX_OFFLINE_PER_MAILBOX; count += 1) {
+    if (!await activeBoundDevice(socket)) return;
     const message = await db.claimOfflineMessage<{ id: string; timestamp: number; sender: string; envelope: WireEnvelope; mailbox: string; channel: string }>(
       socket.userID, socket.channelID, new Date(Date.now() + OFFLINE_LEASE_MS));
     if (!message) return;
@@ -125,7 +139,7 @@ const deliverOffline = async (socket: CustomSocket): Promise<void> => {
       });
     });
     traceDelivery('mailbox-replay-accepted', accepted);
-    if (!accepted) return;
+    if (!accepted || !await activeBoundDevice(socket)) return;
     await db.ackOfflineMessage(message.id, socket.userID, socket.channelID);
     traceDelivery('mailbox-deleted-after-ack', true);
   }
@@ -182,10 +196,8 @@ const connectionListener = (socket: CustomSocket, io) => {
       rejectJoin('Channel join rejected.', 'invalid-channel');
       return;
     }
-    const usersInChannel = clients.getClientsByChannel(channelID) || {};
-    const userCount = Object.keys(usersInChannel).length;
-
-    if (userCount === 2) {
+    const previousConnection = clients.getSIDByIDs(userID, channelID)?.sid;
+    if (clients.wouldExceedChannelCapacity(userID, channelID, 2)) {
       socketEmit<SOCKET_TOPIC.LIMIT_REACHED>(SOCKET_TOPIC.LIMIT_REACHED, socket.id, null);
       rejectJoin('Channel is full.', 'channel-full');
       socket.disconnect();
@@ -195,6 +207,12 @@ const connectionListener = (socket: CustomSocket, io) => {
     clients.setClientToChannel(userID, channelID, socket.id);
     socket.channelID = channelID;
     socket.userID = userID;
+    // Reconnection by the same device replaces its previous live registration.
+    // Install the new SID first so the old socket's delayed disconnect cannot
+    // remove the replacement mapping or emit a false peer-disconnect event.
+    if (previousConnection && previousConnection !== socket.id) {
+      io.sockets.sockets.get(previousConnection)?.disconnect(true);
+    }
     traceDelivery('relay-join-ready', true);
 
     // Notify the other participant. The independent room-control capability
@@ -209,7 +227,7 @@ const connectionListener = (socket: CustomSocket, io) => {
   });
 
   socket.on('mailbox-replay', async (_payload: unknown, ack: Ack = noop) => {
-    if (!socket.userID || !socket.channelID || !socket.deviceId || !socket.accountIdentityReference) {
+    if (!socket.userID || !socket.channelID || !await activeBoundDevice(socket)) {
       ack({ error: 'Mailbox replay rejected.' });
       return;
     }
@@ -256,6 +274,7 @@ const connectionListener = (socket: CustomSocket, io) => {
       ack({ error: 'Receiver is unavailable.' });
       return;
     }
+    if (!await activeBoundDevice(receiverSocket as CustomSocket)) { ack({ error: 'Receiver is unavailable.' }); return; }
     const delivered = await new Promise<boolean>((resolve) => {
       const timeout = setTimeout(() => resolve(false), LIVE_DELIVERY_ACK_MS);
       receiverSocket.emit(SOCKET_TOPIC.CHAT_MESSAGE, {
@@ -288,6 +307,7 @@ const connectionListener = (socket: CustomSocket, io) => {
   });
 
   socket.on("webrtc-signal", async (payload: { envelope: WireEnvelope } & ProofCarrier, ack: Ack = noop) => {
+    traceCallRelay('signal-received', true);
     if (!socket.userID || !socket.channelID) {
       ack({ error: "Join a channel before signaling." });
       return;
@@ -303,12 +323,19 @@ const connectionListener = (socket: CustomSocket, io) => {
     if (payload.proofOperation !== 'relay:signal' && payload.proofOperation !== 'device-control') { ack({ error: 'Device authorization rejected.' }); return; }
     if (payload.deviceAuthorizationProof.resource?.conversationId !== socket.channelID) { ack({ error: 'Device authorization rejected.' }); return; }
     if (!await verifyCarrier(socket, payload, payload.proofOperation)) { ack({ error: 'Device authorization rejected.' }); return; }
+    traceCallRelay('signal-authorized', true);
     const receiverSid = findPeerSid(socket);
+    traceCallRelay('recipient-found', !!receiverSid);
     if (!receiverSid) {
       ack({ error: "No receiver is in the channel." });
       return;
     }
 
+    traceCallRelay('forward-attempted', true);
+    const receiverSocket = io.sockets.sockets.get(receiverSid) as CustomSocket | undefined;
+    const receiverSocketPresent = !!receiverSocket && await activeBoundDevice(receiverSocket);
+    traceCallRelay('forward-socket-present', receiverSocketPresent);
+    if (!receiverSocketPresent) { ack({ error: 'Receiver is unavailable.' }); return; }
     socketEmit<SOCKET_TOPIC.WEBRTC_SESSION_DESCRIPTION>(SOCKET_TOPIC.WEBRTC_SESSION_DESCRIPTION, receiverSid, {
       envelope: payload?.envelope,
     });
@@ -321,6 +348,7 @@ const connectionListener = (socket: CustomSocket, io) => {
       return;
     }
     const { id } = payload as { id: string };
+    if (!socket.userID || !socket.channelID || !await activeBoundDevice(socket)) return;
     await db.ackOfflineMessage(id, socket.userID, socket.channelID);
     const receiverSid = findPeerSid(socket);
     if (receiverSid) {
@@ -336,8 +364,8 @@ const connectionListener = (socket: CustomSocket, io) => {
     }
     try {
       const receiver = findPeerSid(socket);
-      clients.deleteClient(userID, channelID);
-      if (receiver) {
+      const removedCurrentConnection = clients.deleteClient(userID, channelID, socket.id);
+      if (receiver && removedCurrentConnection) {
         socketEmit<SOCKET_TOPIC.ON_ALICE_DISCONNECTED>(SOCKET_TOPIC.ON_ALICE_DISCONNECTED, receiver, null);
       }
     } catch {

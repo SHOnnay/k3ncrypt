@@ -15,8 +15,22 @@ import './CallOverlay.css';
 export const CallOverlay: React.FC = () => {
   const { callActive, callStatus, isIncomingCall, callLifecycleState, callMediaMode, localCallStream, remoteCallStream, microphoneMuted, cameraEnabled, callError, endCall, acceptCall, rejectCall, cancelCall, setMicrophoneMuted, setCameraEnabled, privacyPreferences } = useChat();
   const { duration, formatDuration, startTimer, stopTimer } = useCallTimer();
+  const remoteAudio = useRef<HTMLAudioElement>(null);
   const localVideo = useRef<HTMLVideoElement>(null);
   const remoteVideo = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    const audio = remoteAudio.current;
+    attachMediaStream(audio, remoteCallStream);
+    if (remoteCallStream && audio) {
+      void audio.play().catch(() => undefined);
+    }
+    return () => {
+      if (audio?.srcObject === remoteCallStream) attachMediaStream(audio, undefined);
+    };
+  // The audio node is conditionally rendered with callActive. Reattach after
+  // that node is mounted again even when the MediaStream object is unchanged.
+  }, [callActive, remoteCallStream]);
 
   useEffect(() => {
     attachMediaStream(localVideo.current, localCallStream);
@@ -65,6 +79,7 @@ export const CallOverlay: React.FC = () => {
   return (
     <div className="blur-overlay">
       <div className={`call-info ${isVideo ? 'call-info--video' : ''}`}>
+        <audio ref={remoteAudio} autoPlay playsInline aria-label="Remote call audio" />
         {isVideo && !isIncomingCall && <div className="call-video-stage">
           {remoteCallStream ? <video ref={remoteVideo} className="call-video-remote" autoPlay playsInline aria-label="Remote video" /> : <div className="call-video-placeholder">Waiting for remote video</div>}
           <div className="call-video-preview">
@@ -80,7 +95,7 @@ export const CallOverlay: React.FC = () => {
         <p id="call-duration" className="call-duration">
           {formatDuration(duration)}
         </p>
-        {callError && <p className="call-error" role="alert">{callError}</p>}
+        {callError && <p className="call-error" role="alert">The call could not continue. End the call and try again.</p>}
         {isIncomingCall ? (
           <div className="incoming-call-actions">
             <Button variant="secondary" size="medium" onClick={handleAcceptCall} title="Accept Call">

@@ -47,7 +47,7 @@ describe('clients store', () => {
     it('delete client from channel', () => {
         clients.setClientToChannel('user-id-3', 'channel-id-3', 'sid-3');
         clients.setClientToChannel('user-id-4', 'channel-id-4', 'sid-4');
-        clients.deleteClient('user-id-4', 'channel-id-4');
+        clients.deleteClient('user-id-4', 'channel-id-4', 'sid-4');
         expect(clients.getClients()).toMatchObject({
             "channel-id-3": {
                 "user-id-3": {
@@ -55,6 +55,24 @@ describe('clients store', () => {
                 },
             }
         });
+    });
+
+    it('does not let an old socket disconnect remove its replacement', () => {
+        clients.setClientToChannel('replacement-user', 'replacement-channel', 'old-sid');
+        clients.setClientToChannel('replacement-user', 'replacement-channel', 'new-sid');
+
+        expect(clients.deleteClient('replacement-user', 'replacement-channel', 'old-sid')).toBe(false);
+        expect(clients.getSIDByIDs('replacement-user', 'replacement-channel')).toEqual({ sid: 'new-sid' });
+        expect(clients.deleteClient('replacement-user', 'replacement-channel', 'new-sid')).toBe(true);
+        expect(clients.getClientsByChannel('replacement-channel')).toEqual({});
+    });
+
+    it('allows an existing participant to replace its socket at channel capacity', () => {
+        clients.setClientToChannel('same-device', 'full-channel', 'old-sid');
+        clients.setClientToChannel('peer-device', 'full-channel', 'peer-sid');
+
+        expect(clients.wouldExceedChannelCapacity('same-device', 'full-channel', 2)).toBe(false);
+        expect(clients.wouldExceedChannelCapacity('third-device', 'full-channel', 2)).toBe(true);
     });
 
     it('get sid by channel id and user id', () => {

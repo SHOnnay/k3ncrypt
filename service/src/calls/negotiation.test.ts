@@ -25,6 +25,36 @@ describe('production WebRTC negotiation boundary', () => {
     expect(test.connection.acceptOffer).not.toHaveBeenCalled();
   });
 
+  it('buffers ICE candidates until the remote offer is applied', async () => {
+    const test = setup(); await test.negotiator.acceptIncoming(test.current());
+    const ice = { candidate: 'candidate:1 1 udp 2122260223 192.0.2.1 5000 typ host', sdpMid: '0', sdpMLineIndex: 0 };
+    await test.receiver()(test.current(), signal('ice-candidate', ice));
+    expect(test.connection.addIceCandidate).not.toHaveBeenCalled();
+    await test.receiver()(test.current(), signal('offer', { type: 'offer', sdp: 'v=0' }));
+    expect(test.connection.acceptOffer).toHaveBeenCalled();
+    expect(test.connection.addIceCandidate).toHaveBeenCalledWith(ice);
+  });
+
+  it('does not flush pre-peer ICE candidates until the remote description is applied', async () => {
+    const test = setup();
+    const ice = { candidate: 'candidate:1 1 udp 2122260223 192.0.2.1 5000 typ host', sdpMid: '0', sdpMLineIndex: 0 };
+    await test.receiver()(test.current(), signal('ice-candidate', ice));
+    await test.negotiator.acceptIncoming(test.current());
+    expect(test.connection.addIceCandidate).not.toHaveBeenCalled();
+    await test.receiver()(test.current(), signal('offer', { type: 'offer', sdp: 'v=0' }));
+    expect(test.connection.addIceCandidate).toHaveBeenCalledWith(ice);
+  });
+
+  it('buffers ICE candidates until the remote answer is applied', async () => {
+    const test = setup(); await test.negotiator.prepareOutgoing(test.current());
+    const ice = { candidate: 'candidate:2 1 udp 2122260223 192.0.2.2 5001 typ host', sdpMid: '0', sdpMLineIndex: 0 };
+    await test.receiver()(test.current(), signal('ice-candidate', ice));
+    expect(test.connection.addIceCandidate).not.toHaveBeenCalled();
+    await test.receiver()(test.current(), signal('answer', { type: 'answer', sdp: 'v=0' }));
+    expect(test.connection.acceptAnswer).toHaveBeenCalled();
+    expect(test.connection.addIceCandidate).toHaveBeenCalledWith(ice);
+  });
+
   it('offers only after explicit media preparation and sends authenticated SDP', async () => {
     const test = setup(); await test.negotiator.prepareOutgoing(test.current()); await test.negotiator.beginOffer('call-1');
     expect(test.connection.addStream).toHaveBeenCalledWith(stream);
@@ -35,6 +65,20 @@ describe('production WebRTC negotiation boundary', () => {
     const test = setup(); await test.negotiator.prepareOutgoing(test.current()); test.connection.state('failed'); await new Promise<void>((resolve) => setTimeout(resolve, 0));
     expect(test.service.event).toHaveBeenCalledWith('call-1', 'fail');
     expect(track.stop as jest.Mock).toHaveBeenCalled();
+  });
+
+  it('closes the peer and stops capture even when the local end transition fails', async () => {
+    const test = setup();
+    await test.negotiator.prepareOutgoing(test.current());
+    await test.negotiator.beginOffer('call-1');
+    test.connection.state('connected');
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    test.service.event.mockRejectedValueOnce(new Error('local transition failed'));
+
+    await expect(test.negotiator.end('call-1')).rejects.toThrow('local transition failed');
+    expect(test.connection.close).toHaveBeenCalledTimes(1);
+    expect(track.stop as jest.Mock).toHaveBeenCalled();
+    expect(test.negotiator.getStreams('call-1')).toEqual({ local: undefined, remote: undefined });
   });
 
   it('does not begin media when permission is denied', async () => {

@@ -24,6 +24,13 @@ data class CallSignalValue(
 
 /** Mirrors service/src/calls/signalBinding.ts. Olm encryption authenticates the wire; digest binds the decoded call fields. */
 object CallSignalCodec {
+    data class DigestInputDiagnostic(val kind: String, val byteLength: Int, val payloadJsonLength: Int, val sdpValueLength: Int, val metadataLength: Int, val escapingCategory: String)
+    @Volatile private var digestDiagnosticSink: ((DigestInputDiagnostic) -> Unit)? = null
+
+    fun installDebugDigestDiagnosticSink(sink: (DigestInputDiagnostic) -> Unit) {
+        digestDiagnosticSink = if (BuildConfig.DEBUG) sink else null
+    }
+
     fun binding(conversationId: String, leftParticipant: String, leftIdentity: String, rightParticipant: String, rightIdentity: String): String {
         val parties = listOf(leftParticipant to leftIdentity, rightParticipant to rightIdentity).sortedBy { it.second }
         return sha256("k3ncrypt:call-binding:v1\u0000$conversationId\u0000" + parties.joinToString("|") { "${it.first}:${it.second}" })
@@ -36,7 +43,14 @@ object CallSignalCodec {
         nonce: String = UUID.randomUUID().toString(),
     ): CallSignalValue {
         val unsigned = CallSignalValue(callId, conversationId, senderParticipantId, senderIdentityId, receiverIdentityId, mediaMode, nonce, event, kind, payload, sequence, timestamp, expiresAt, identityBinding, "")
-        return unsigned.copy(payloadDigest = sha256(canonical(unsigned)))
+        val canonicalInput = canonical(unsigned)
+        val digestInput = canonicalInput.toByteArray(Charsets.UTF_8)
+        if (BuildConfig.DEBUG) {
+            val payloadJsonLength = (payload?.let(::stableJson) ?: "null").toByteArray(Charsets.UTF_8).size
+            val sdpValueLength = payload?.optString("sdp")?.toByteArray(Charsets.UTF_8)?.size ?: 0
+            digestDiagnosticSink?.invoke(DigestInputDiagnostic(kind, digestInput.size, payloadJsonLength, sdpValueLength, digestInput.size - payloadJsonLength, escapingCategory(unsigned)))
+        }
+        return unsigned.copy(payloadDigest = sha256(canonicalInput))
     }
 
     fun encode(signal: CallSignalValue): String {
@@ -57,12 +71,23 @@ object CallSignalCodec {
         require(json.length in 1..65_536)
         val value = JSONObject(json)
         val sender = value.getJSONObject("sender")
-        require(sender.optString("verification") == "verified")
+        fun requiredString(source: JSONObject, key: String): String = (source.get(key) as? String)
+            ?.takeIf { it.isNotBlank() } ?: throw IllegalArgumentException("Invalid call signal field: $key")
+        fun requiredLong(key: String): Long = when (val raw = value.get(key)) {
+            is Int -> raw.toLong()
+            is Long -> raw
+            else -> throw IllegalArgumentException("Invalid call signal field: $key")
+        }
+        require(requiredString(sender, "verification") == "verified")
+        val kind = if (value.has("kind")) requiredString(value, "kind") else "control"
+        val payload = if (value.has("payload")) value.get("payload") as? JSONObject
+            ?: throw IllegalArgumentException("Invalid call signal payload") else null
+        require(kind == "control" || payload != null) { "Missing call signal payload" }
         return CallSignalValue(
-            value.getString("callId"), value.getString("conversationId"), sender.getString("participantId"), sender.getString("identityId"),
-            value.getString("receiverIdentityId"), value.getString("mediaMode"), value.getString("nonce"), value.getString("event"),
-            value.optString("kind", "control"), value.optJSONObject("payload"), value.getLong("sequence"), value.getLong("timestamp"),
-            value.getLong("expiresAt"), value.getString("identityBinding"), value.getString("payloadDigest"),
+            requiredString(value, "callId"), requiredString(value, "conversationId"), requiredString(sender, "participantId"), requiredString(sender, "identityId"),
+            requiredString(value, "receiverIdentityId"), requiredString(value, "mediaMode"), requiredString(value, "nonce"), requiredString(value, "event"),
+            kind, payload, requiredLong("sequence"), requiredLong("timestamp"),
+            requiredLong("expiresAt"), requiredString(value, "identityBinding"), requiredString(value, "payloadDigest"),
         )
     }
 
@@ -76,21 +101,57 @@ object CallSignalCodec {
     }
 
     private fun canonical(value: CallSignalValue): String {
-        val sender = "{\"participantId\":${JSONObject.quote(value.senderParticipantId)},\"identityId\":${JSONObject.quote(value.senderIdentityId)},\"verification\":\"verified\"}"
+        val sender = "{\"participantId\":${canonicalQuote(value.senderParticipantId)},\"identityId\":${canonicalQuote(value.senderIdentityId)},\"verification\":\"verified\"}"
         val payload = value.payload?.let(::stableJson) ?: "null"
-        return "{\"callId\":${JSONObject.quote(value.callId)},\"conversationId\":${JSONObject.quote(value.conversationId)},\"sender\":$sender," +
-            "\"receiverIdentityId\":${JSONObject.quote(value.receiverIdentityId)},\"mediaMode\":${JSONObject.quote(value.mediaMode)},\"nonce\":${JSONObject.quote(value.nonce)}," +
-            "\"event\":${JSONObject.quote(value.event)},\"kind\":${JSONObject.quote(value.kind)},\"payload\":$payload," +
-            "\"sequence\":${value.sequence},\"timestamp\":${value.timestamp},\"expiresAt\":${value.expiresAt},\"identityBinding\":${JSONObject.quote(value.identityBinding)}}"
+        return "{\"callId\":${canonicalQuote(value.callId)},\"conversationId\":${canonicalQuote(value.conversationId)},\"sender\":$sender," +
+            "\"receiverIdentityId\":${canonicalQuote(value.receiverIdentityId)},\"mediaMode\":${canonicalQuote(value.mediaMode)},\"nonce\":${canonicalQuote(value.nonce)}," +
+            "\"event\":${canonicalQuote(value.event)},\"kind\":${canonicalQuote(value.kind)},\"payload\":$payload," +
+            "\"sequence\":${value.sequence},\"timestamp\":${value.timestamp},\"expiresAt\":${value.expiresAt},\"identityBinding\":${canonicalQuote(value.identityBinding)}}"
     }
 
     private fun stableJson(value: Any): String = when (value) {
         JSONObject.NULL -> "null"
-        is JSONObject -> value.keys().asSequence().toList().sorted().joinToString(prefix = "{", postfix = "}") { key -> "${JSONObject.quote(key)}:${stableJson(value.get(key))}" }
-        is org.json.JSONArray -> (0 until value.length()).joinToString(prefix = "[", postfix = "]") { index -> stableJson(value.get(index)) }
-        is String -> JSONObject.quote(value)
+        is JSONObject -> value.keys().asSequence().toList().sorted().joinToString(separator = ",", prefix = "{", postfix = "}") { key -> "${canonicalQuote(key)}:${stableJson(value.get(key))}" }
+        is org.json.JSONArray -> (0 until value.length()).joinToString(separator = ",", prefix = "[", postfix = "]") { index -> stableJson(value.get(index)) }
+        is String -> canonicalQuote(value)
         is Number, is Boolean -> value.toString()
         else -> error("call_signal_payload_invalid")
+    }
+
+    /** Mirrors JavaScript JSON.stringify string escaping for the cross-platform digest contract. */
+    private fun canonicalQuote(value: String): String = buildString(value.length + 2) {
+        append('"')
+        value.forEach { character ->
+            when (character) {
+                '"' -> append("\\\"")
+                '\\' -> append("\\\\")
+                '\b' -> append("\\b")
+                '\t' -> append("\\t")
+                '\n' -> append("\\n")
+                '\u000c' -> append("\\f")
+                '\r' -> append("\\r")
+                else -> if (character.code < 0x20) append("\\u%04x".format(character.code)) else append(character)
+            }
+        }
+        append('"')
+    }
+
+    private fun escapingCategory(signal: CallSignalValue): String {
+        val strings = buildList {
+            signal.payload?.keys()?.forEach { key ->
+                val value = signal.payload.opt(key)
+                if (value is String) add(key to value)
+            }
+        }
+        val sdp = strings.firstOrNull { it.first == "sdp" }?.second
+        if (sdp != null) {
+            if (sdp.contains("\r\n")) return "CRLF-vs-LF"
+            if (sdp.contains('\n') || sdp.contains('\r')) return "line-ending-variant"
+        }
+        if (strings.any { (_, value) -> value.any { it.code in 0x80..0x20ff } }) return "unicode-escape"
+        if (strings.any { (_, value) -> '/' in value }) return "slash-escape-case"
+        if (strings.any { (_, value) -> value.any { it == '\\' || it == '"' || it.code < 0x20 } }) return "escape-mismatch-candidate"
+        return "plain-ascii"
     }
 
     private fun sha256(value: String): String = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }

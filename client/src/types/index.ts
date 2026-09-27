@@ -71,6 +71,7 @@ export interface ChatContextType {
   conversations: ConversationDescriptor[];
   accountState: 'checking' | 'new' | 'locked' | 'ready';
   sessionError?: string;
+  sessionHealth: 'healthy' | 'unhealthy' | 'renewal-pending';
   syncStatus: 'unavailable' | 'recovering' | 'ready' | 'blocked';
   privacyPreferences: PrivacyPreferences;
   permissionStatus: { microphone: PermissionState | 'unknown'; camera: PermissionState | 'unknown' };
@@ -84,6 +85,7 @@ export interface ChatContextType {
   joinModernChannel: (roomId: string, controlCapability: string, address: string, identityCommitment: string, passphrase: string) => Promise<void>;
   verifyContact: () => Promise<void>;
   acceptChangedIdentity: () => Promise<void>;
+  prepareVerifiedSessionRenewal: () => Promise<void>;
   requestDeviceEnrollment: (deviceId: string, publicIdentityReference: string, algorithm: string) => Promise<void>;
   approveDeviceEnrollment: () => Promise<void>;
   rejectDeviceEnrollment: () => Promise<void>;

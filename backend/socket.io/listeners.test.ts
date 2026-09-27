@@ -1,5 +1,9 @@
 import { createHash, randomBytes, randomUUID } from 'crypto';
 import { authorizeRoutingAddress, isValidWireEnvelope } from './listeners';
+import connectionListener from './listeners';
+import getClientInstance from './clients';
+import * as durableTrust from '../security/durableDeviceTrust';
+import type { CustomSocket } from './index';
 import db from '../db';
 import { PREKEY_COLLECTION } from '../db/const';
 
@@ -28,4 +32,45 @@ it('requires the address-specific proof before a modern routing identity can joi
   await db.insertInDb({ channel, address, renewalProofHash, expiresAt: new Date(Date.now() + 60_000) }, PREKEY_COLLECTION);
   await expect(authorizeRoutingAddress(channel, address, randomBytes(32).toString('base64url'))).resolves.toBe(false);
   await expect(authorizeRoutingAddress(channel, address, proof)).resolves.toBe(true);
+});
+
+it('does not acknowledge a call signal as delivered when the registered recipient socket is absent', async () => {
+  const channel = randomUUID(); const sender = randomUUID(); const recipient = randomUUID();
+  const deviceId = randomUUID(); const accountIdentityReference = 'account-test';
+  const handlers = new Map<string, (...args: unknown[]) => void>();
+  const socket = { id: randomUUID(), userID: sender, channelID: channel, deviceId, accountIdentityReference, deviceTrustEpoch: 1,
+    on: jest.fn((event: string, handler: (...args: unknown[]) => void) => { handlers.set(event, handler); }), emit: jest.fn(), disconnect: jest.fn() } as unknown as CustomSocket;
+  const database = { collection: () => ({ findOne: async () => ({ deviceId, accountIdentityReference, trustEpoch: 1, state: 'active' }) }) };
+  const dbSpy = jest.spyOn(db, 'getDatabase').mockReturnValue(database as never);
+  const authoritySpy = jest.spyOn(durableTrust, 'durableDeviceTrustAuthority').mockReturnValue({ verify: async () => ({ deviceId, accountIdentityReference, trustEpoch: 1, state: 'active' }) } as never);
+  getClientInstance().setClientToChannel(sender, channel, socket.id);
+  getClientInstance().setClientToChannel(recipient, channel, 'absent-socket');
+  try {
+    connectionListener(socket, { sockets: { sockets: new Map() } });
+    const proof = { deviceId, accountIdentityReference, nonce: 'nonce', resource: { conversationId: channel } };
+    const ack = jest.fn();
+    await handlers.get('webrtc-signal')?.({ envelope: { version: 1, strategy: 'opaque', data: {} }, deviceAuthorizationProof: proof, proofNonce: 'nonce', proofOperation: 'relay:signal' }, ack);
+    expect(ack).toHaveBeenCalledWith({ error: 'Receiver is unavailable.' });
+  } finally {
+    getClientInstance().deleteClient(sender, channel, socket.id);
+    getClientInstance().deleteClient(recipient, channel, 'absent-socket');
+    dbSpy.mockRestore(); authoritySpy.mockRestore();
+  }
+});
+
+it('rejects mailbox replay on an existing socket after durable revocation', async () => {
+  const handlers = new Map<string, (...args: unknown[]) => void>();
+  const socket = { id: randomUUID(), userID: randomUUID(), channelID: randomUUID(), deviceId: randomUUID(), accountIdentityReference: 'account-test', deviceTrustEpoch: 1,
+    on: jest.fn((event: string, handler: (...args: unknown[]) => void) => { handlers.set(event, handler); }), emit: jest.fn(), disconnect: jest.fn() } as unknown as CustomSocket;
+  const database = { collection: () => ({ findOne: async () => ({ trustEpoch: 2, state: 'revoked' }) }) };
+  const dbSpy = jest.spyOn(db, 'getDatabase').mockReturnValue(database as never);
+  const deleteSpy = jest.spyOn(db, 'ackOfflineMessage');
+  try {
+    connectionListener(socket, { sockets: { sockets: new Map() } });
+    const ack = jest.fn();
+    await handlers.get('mailbox-replay')?.({}, ack);
+    expect(ack).toHaveBeenCalledWith({ error: 'Mailbox replay rejected.' });
+    await handlers.get('received')?.({ id: randomUUID() });
+    expect(deleteSpy).not.toHaveBeenCalled();
+  } finally { dbSpy.mockRestore(); deleteSpy.mockRestore(); }
 });

@@ -32,6 +32,7 @@ import com.k3ncrypt.storage.StoredOutboundMessage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -85,6 +86,8 @@ class AndroidMessagingRepository(
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mutex = Mutex()
+    private val callRelayAdmissionMutex = Mutex()
+    private val relayReconnectTracker = RelayPresenceReconnectTracker()
     private val sessions = NativeSessionRegistry(crypto, stateStore)
     @Volatile private var conversation: ConversationInvitation? = null
     private var observer: ((AndroidChatMessage) -> Unit)? = null
@@ -93,12 +96,37 @@ class AndroidMessagingRepository(
     private val firstContactCandidates = ConcurrentHashMap<String, String>()
 
     init {
-        relay.onCallSignal { signal -> scope.launch { receiveCallSignal(signal) } }
+        scope.launch {
+            relay.connected.collect { connected ->
+                if (!connected) {
+                    if (BuildConfig.DEBUG) DebugInspectionStore.setConnectionStage("relay_socket_disconnected")
+                    relayReconnectTracker.onConnectionChanged(false)
+                    return@collect
+                }
+                if (!relayReconnectTracker.onConnectionChanged(true)) {
+                    if (BuildConfig.DEBUG) DebugInspectionStore.setConnectionStage("relay_socket_connected")
+                    return@collect
+                }
+                val binding = conversation?.takeIf(SavedConversationIndex::isTrusted) ?: return@collect
+                if (BuildConfig.DEBUG) DebugInspectionStore.setConnectionStage("relay_rejoin_started")
+                runCatching { ensureCallRelayJoined(binding) }
+                    .onSuccess { if (BuildConfig.DEBUG) DebugInspectionStore.setConnectionStage("relay_rejoined") }
+                    .onFailure { if (BuildConfig.DEBUG) DebugInspectionStore.setConnectionStage("relay_rejoin_failed") }
+            }
+        }
+        relay.onCallSignal { signal ->
+            if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("relay-call-signal-arrived")
+            scope.launch { receiveCallSignal(signal) }
+        }
         relay.onDelivery { delivery, acknowledge ->
             scope.launch {
                 if (BuildConfig.DEBUG) DebugInspectionStore.setDeliveryStage("mailbox-received")
                 val binding = conversation
-                if (binding == null || binding.conversationId != delivery.conversationId) { acknowledge(false); return@launch }
+                if (binding == null || binding.conversationId != delivery.conversationId) {
+                    if (BuildConfig.DEBUG) DebugInspectionStore.setInboundMessageResultCategory("conversation-mismatch")
+                    acknowledge(false)
+                    return@launch
+                }
                 val accepted = receive(binding, delivery)
                 acknowledge(accepted)
                 if (BuildConfig.DEBUG && accepted) DebugInspectionStore.setDeliveryStage("acknowledgement")
@@ -109,15 +137,53 @@ class AndroidMessagingRepository(
     fun observeCallSignals(observer: (String) -> Unit) { callSignalObserver = observer }
     suspend fun activeConversation(): ConversationInvitation = mutex.withLock { conversation?.takeIf(SavedConversationIndex::isTrusted) ?: error("A verified conversation is required for calls") }
 
+    /** Explicitly arms one replacement pre-key message after out-of-band comparison with the pinned peer. */
+    suspend fun armVerifiedSessionRenewal(confirmedPeerFingerprint: String) = mutex.withLock {
+        val binding = conversation?.takeIf(SavedConversationIndex::isTrusted) ?: error("A verified conversation is required")
+        require(confirmedPeerFingerprint == binding.peerIdentityReference) { "Peer identity confirmation did not match" }
+        require(sessions.existing(binding.peerRoutingId) != null) { "There is no established session to renew" }
+        VodozemacBundleCodec.parse(api.fetchPrekeys(binding.conversationId, binding.controlCapability, binding.peerRoutingId), confirmedPeerFingerprint)
+        stateStore.armSessionRenewal(binding.peerRoutingId, System.currentTimeMillis() + 10 * 60_000)
+    }
+
+    /** A Socket.IO reconnect loses the backend's channel registration; rejoin with a fresh existing proof. */
+    private suspend fun ensureCallRelayJoined(binding: ConversationInvitation) = callRelayAdmissionMutex.withLock {
+        if (!relay.connected.value) relay.connect()
+        relay.awaitConnected()
+        if (relay.isJoinedTo(binding.conversationId)) return@withLock
+        val local = identity.activeState()
+        val proof = proofs.acquire(identity.activeAccount(), local.toProofIdentity(), "relay:message", ProofResource(conversationId = binding.conversationId))
+        relay.joinAndReplay(RelayJoin(binding.localRoutingId, binding.conversationId, binding.controlCapability, binding.routingProof, proof))
+    }
+
+    /** Reasserts the existing proof-backed channel registration when the app resumes. */
+    suspend fun ensureActiveRelayRegistration() {
+        val binding = conversation?.takeIf(SavedConversationIndex::isTrusted) ?: return
+        ensureCallRelayJoined(binding)
+    }
+
+    suspend fun sendCallSignal(plaintext: String) {
+        val binding = activeConversation()
+        ensureCallRelayJoined(binding)
+        try {
+            sendCallSignalOnce(plaintext, binding.conversationId)
+        } catch (error: Throwable) {
+            if (relay.lastCallSignalResultCategory() != "sender_not_joined") throw error
+            ensureCallRelayJoined(binding)
+            sendCallSignalOnce(plaintext, binding.conversationId)
+        }
+    }
+
     /** Encrypts through the existing Olm/Vodozemac session, commits the mutated session, then signals through the proof-checked relay. */
-    suspend fun sendCallSignal(plaintext: String) = mutex.withLock {
+    private suspend fun sendCallSignalOnce(plaintext: String, expectedConversationId: String) = mutex.withLock {
         val binding = conversation ?: error("Call conversation is unavailable")
+        require(binding.conversationId == expectedConversationId) { "Call conversation changed while reconnecting" }
         require(binding.peerRoutingId.isNotEmpty() && binding.peerIdentityReference.startsWith("K3 ")) { "Verified contact is required for calls" }
         require(plaintext.toByteArray(Charsets.UTF_8).size in 1..65_536) { "Call signal is malformed" }
         val local = identity.activeState()
         val account = identity.activeAccount()
         val session = sessions.existing(binding.peerRoutingId) ?: error("An established encrypted conversation session is required before calling")
-        val bytes = plaintext.toByteArray(Charsets.UTF_8)
+        val bytes = MessageFrame.encodeSignaling(plaintext)
         var mutated = false
         try {
             val encrypted = crypto.encrypt(session, bytes)
@@ -159,6 +225,7 @@ class AndroidMessagingRepository(
             session = sessions.existing(binding.peerRoutingId)
             require(session != null) { "Established encrypted conversation session is required for calls" }
             plaintext = crypto.decrypt(session, wire.olmMessage)
+            val signalText = MessageFrame.decodeSignaling(plaintext!!)
             mutated = true
             val pickleKey = pickleKeys.load(current.deviceIdentityReference)
             try {
@@ -169,7 +236,7 @@ class AndroidMessagingRepository(
             } finally { pickleKey.fill(0) }
             sessions.remember(binding.peerRoutingId, session!!)
             mutated = false
-            callSignalObserver?.invoke(plaintext!!.decodeToString())
+            callSignalObserver?.invoke(signalText)
             if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("signal-received")
         } catch (_: Throwable) {
             if (mutated) { session?.let { runCatching { crypto.closeSession(it) } }; runCatching { invalidateAfterMutation() } }
@@ -212,16 +279,14 @@ class AndroidMessagingRepository(
             require(localPublication.getString("address") == invitation.localRoutingId) { "Local routing identity does not match this device's published pre-key bundle" }
             stage = "conversation_validation"; DebugInspectionStore.setConnectionStage(stage)
             val binding = createConversation(invitation, userConfirmedPeerFingerprint)
-            val local = identity.activeState()
             mutex.withLock { conversation = binding; observer = onMessage; peerIdentityObserver = onPeerIdentityPending }
             stage = "relay_connect"; DebugInspectionStore.setConnectionStage(stage)
             if (!relay.connected.value) relay.connect()
             relay.awaitConnected()
             stage = "proof_request"; DebugInspectionStore.setConnectionStage(stage)
-            val proof = proofs.acquire(identity.activeAccount(), local.toProofIdentity(), "relay:message", ProofResource(conversationId = binding.conversationId))
             stage = "relay_join"; DebugInspectionStore.setConnectionStage(stage)
             // Do not hold the crypto/session lock while replay waits for client acceptance.
-            relay.joinAndReplay(RelayJoin(binding.localRoutingId, binding.conversationId, binding.controlCapability, binding.routingProof, proof))
+            ensureCallRelayJoined(binding)
             stage = "joined"; DebugInspectionStore.setConnectionStage(stage)
             mutex.withLock { retryPending(binding) }
         } catch (error: Throwable) {
@@ -230,7 +295,8 @@ class AndroidMessagingRepository(
                 error.message == "request-failed" -> "http_unavailable"
                 else -> "failed"
             }
-            DebugInspectionStore.setConnectionStage("${stage}_$category")
+            val safeJoinCategory = if (BuildConfig.DEBUG && stage == "relay_join") relay.lastJoinFailureCategory() else null
+            DebugInspectionStore.setConnectionStage("${stage}_${safeJoinCategory ?: category}")
             throw error
         }
     }
@@ -415,13 +481,14 @@ class AndroidMessagingRepository(
             )
             when (val result = processor.receive(MailboxDelivery(item.id, item.sender, item.envelope, item.conversationId))) {
                 DeliveryAcceptance.Accepted -> {
+                    if (BuildConfig.DEBUG) DebugInspectionStore.setInboundMessageResultCategory("accepted")
                     stateStore.messages().lastOrNull { it.deliveryId == item.id }?.let { observer?.invoke(AndroidChatMessage(it.deliveryId, it.conversationId, it.senderRoutingId, it.text, it.receivedAt)) }
                     true
                 }
-                DeliveryAcceptance.Duplicate -> true
-                is DeliveryAcceptance.Rejected -> false
+                DeliveryAcceptance.Duplicate -> { if (BuildConfig.DEBUG) DebugInspectionStore.setInboundMessageResultCategory("duplicate"); true }
+                is DeliveryAcceptance.Rejected -> { if (BuildConfig.DEBUG) DebugInspectionStore.setInboundMessageResultCategory(result.category); false }
             }
-        } catch (_: Exception) { false }
+        } catch (_: Exception) { if (BuildConfig.DEBUG) DebugInspectionStore.setInboundMessageResultCategory("receive-failed"); false }
     }
 
     private suspend fun newOutboundSession(binding: ConversationInvitation, setStage: (String) -> Unit = {}): SessionHandle {

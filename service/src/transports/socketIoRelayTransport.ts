@@ -12,6 +12,7 @@ import type { chatJoinPayloadType } from '../public/types';
 import type { DeviceProofCarrier, DeviceResourceContext } from '../devices/trustProtocol';
 import type { DeviceProofOperation } from '../devices/deviceProofClient';
 import { Logger } from '../utils/logger';
+import { testDiagnosticsEnabled } from '../utils/testDiagnostics';
 
 export type SocketListenerType = 'limit-reached' | 'delivered' | 'on-alice-join' | 'on-alice-disconnect' | 'chat-message';
 export type SubscriptionType = Map<string, Set<Function>>;
@@ -42,6 +43,12 @@ export class SocketIoRelayTransport implements Transport {
     private readonly eventHandlerLogger: Logger;
     private proofProvider?: DeviceProofProvider;
     private activeConversationId?: string;
+    private desiredConversation?: { conversationId: string; peerRoutingId: string; controlCapability: string; routingProof?: string };
+    private hasJoinedOnce = false;
+    private connectionGeneration = 0;
+    private joinedGeneration = -1;
+    private joinedConversationId?: string;
+    private joinInFlight?: { generation: number; conversationId: string; promise: Promise<void> };
 
     constructor(
         private readonly subscriptionContext: () => SubscriptionType,
@@ -50,6 +57,13 @@ export class SocketIoRelayTransport implements Transport {
     ) {
         this.eventHandlerLogger = this.logger.createChild('eventHandler');
         this.socket = socketIOClient(`${configContext().baseUrl}/`);
+        this.socket.on('connect', () => {
+            this.connectionGeneration += 1;
+            this.joinedGeneration = -1;
+            this.joinedConversationId = undefined;
+            void this.restoreChannelPresence();
+        });
+        this.socket.on('disconnect', () => { this.joinedGeneration = -1; this.joinedConversationId = undefined; });
         this.socket.on(WIRE_EVENTS.LIMIT_REACHED, (...args) => this.handleEvent('limit-reached', args));
         this.socket.on(WIRE_EVENTS.DELIVERED, (...args) => this.handleEvent('delivered', args));
         this.socket.on(WIRE_EVENTS.ON_ALICE_JOIN, (...args) => this.handleEvent('on-alice-join', args));
@@ -67,6 +81,11 @@ export class SocketIoRelayTransport implements Transport {
     }
 
     public async stop(): Promise<void> {
+        this.desiredConversation = undefined;
+        this.hasJoinedOnce = false;
+        this.joinedGeneration = -1;
+        this.joinedConversationId = undefined;
+        this.activeConversationId = undefined;
         this.socket.disconnect();
     }
 
@@ -74,13 +93,14 @@ export class SocketIoRelayTransport implements Transport {
 
     public async join(conversationId: string, peerRoutingId: string, controlCapability: string, routingProof?: string): Promise<void> {
         this.activeConversationId = conversationId;
-        const carrier = this.proofProvider ? await this.proofProvider.acquire('relay:message', { conversationId }) : undefined;
-        const payload: chatJoinPayloadType = { channelID: conversationId, userID: peerRoutingId, controlCapability, ...(routingProof ? { routingProof } : {}), ...(carrier ? carrier : {}) };
-        await this.emitWithAck<{ status: 'accepted' }>('chat-join', payload);
+        const desired = { conversationId, peerRoutingId, controlCapability, routingProof };
+        this.desiredConversation = desired;
+        await this.ensureChannelPresence(desired);
     }
 
     /** Called only after the conversation transition has released its local lock. */
     public async requestMailboxReplay(): Promise<void> {
+        if (!this.isCurrentChannelJoined()) throw new Error('Authenticated relay channel join is required before mailbox replay.');
         await this.emitWithAck<{ status: 'accepted' }>('mailbox-replay', {});
     }
 
@@ -90,6 +110,9 @@ export class SocketIoRelayTransport implements Transport {
         recipientRoutingId?: string,
         proofOperation?: DeviceProofOperation,
     ): Promise<{ id?: string; timestamp?: number }> {
+        const desired = this.desiredConversation;
+        if (!desired) throw new Error('Join a conversation before sending relay operations.');
+        await this.ensureChannelPresence(desired);
         if (channel === 'message') {
             const operation = proofOperation ?? 'relay:message';
             const carrier = this.proofProvider ? await this.proofProvider.acquire(operation, this.activeConversationId ? { conversationId: this.activeConversationId } : undefined) : undefined;
@@ -106,6 +129,114 @@ export class SocketIoRelayTransport implements Transport {
             return 'connected';
         }
         return this.socket.disconnected ? 'stopped' : 'connecting';
+    }
+
+    /** Safe local diagnostics for development call-routing checks. */
+    public async testOnlyRelayRegistration(): Promise<{ connected: boolean; joinAcknowledged: boolean; channelHash?: string }> {
+        if (!testDiagnosticsEnabled()) throw new Error('Test-only diagnostics are disabled.');
+        const conversationId = this.desiredConversation?.conversationId;
+        let channelHash: string | undefined;
+        if (conversationId && globalThis.crypto?.subtle) {
+            const digest = new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(conversationId)));
+            channelHash = Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('');
+        }
+        return {
+            connected: this.connectionState() === 'connected',
+            joinAcknowledged: Boolean(conversationId && this.activeConversationId === conversationId && this.isCurrentChannelJoined()),
+            ...(channelHash ? { channelHash } : {}),
+        };
+    }
+
+    private isCurrentChannelJoined(): boolean {
+        return this.socket.connected !== false && !!this.desiredConversation &&
+            this.joinedGeneration === this.connectionGeneration &&
+            this.joinedConversationId === this.desiredConversation.conversationId;
+    }
+
+    /**
+     * Socket.IO presence is scoped to one connection. Re-authenticate every
+     * new connection generation with a fresh device proof before replay or
+     * protected transport operations can proceed.
+     */
+    private async restoreChannelPresence(): Promise<void> {
+        const desired = this.desiredConversation;
+        // On first boot, the explicit join below owns registration. This
+        // handler is for restoring presence after an already-joined socket
+        // loses its connection; persisted conversations call join() again
+        // after page reload through the normal vault restore path.
+        if (!desired || !this.hasJoinedOnce) return;
+        try {
+            await this.ensureChannelPresence(desired);
+            await this.requestMailboxReplay();
+        } catch {
+            // Keep the desired channel so a subsequent Socket.IO reconnect can
+            // retry with a fresh proof. Protected sends also retry the join.
+        }
+    }
+
+    private async ensureChannelPresence(desired: { conversationId: string; peerRoutingId: string; controlCapability: string; routingProof?: string }): Promise<void> {
+        if (this.desiredConversation !== desired && this.desiredConversation?.conversationId !== desired.conversationId) {
+            throw new Error('Conversation changed before relay registration.');
+        }
+        const generation = this.connectionGeneration;
+        if (this.isCurrentChannelJoined()) return;
+        const existing = this.joinInFlight;
+        if (existing?.generation === generation && existing.conversationId === desired.conversationId) {
+            await existing.promise;
+            return;
+        }
+        const promise = (async () => {
+            await this.waitForSocketConnection();
+            if (generation !== this.connectionGeneration) {
+                await this.ensureChannelPresence(this.desiredConversation ?? desired);
+                return;
+            }
+            const carrier = this.proofProvider ? await this.proofProvider.acquire('relay:message', { conversationId: desired.conversationId }) : undefined;
+            const payload: chatJoinPayloadType = {
+                channelID: desired.conversationId,
+                userID: desired.peerRoutingId,
+                controlCapability: desired.controlCapability,
+                ...(desired.routingProof ? { routingProof: desired.routingProof } : {}),
+                ...(carrier ? carrier : {}),
+            };
+            await this.emitWithAck<{ status: 'accepted' }>('chat-join', payload);
+            if (this.desiredConversation?.conversationId !== desired.conversationId) {
+                throw new Error('Conversation changed before relay registration completed.');
+            }
+            if (generation === this.connectionGeneration) {
+                this.joinedGeneration = generation;
+                this.joinedConversationId = desired.conversationId;
+                this.hasJoinedOnce = true;
+            }
+            else await this.ensureChannelPresence(this.desiredConversation);
+        })();
+        this.joinInFlight = { generation, conversationId: desired.conversationId, promise };
+        try {
+            await promise;
+        } finally {
+            if (this.joinInFlight?.promise === promise) this.joinInFlight = undefined;
+        }
+    }
+
+    private async waitForSocketConnection(): Promise<void> {
+        // Socket.IO buffers emits while disconnected, but an authorization
+        // proof could expire before that buffered join is sent. Wait for the
+        // actual transport connection before acquiring and emitting the proof.
+        if (this.socket.connected !== false) return;
+        await new Promise<void>((resolve, reject) => {
+            const timeout = setTimeout(() => finish(new Error('Relay connection timed out.')), 15_000);
+            const onConnect = (): void => finish();
+            const onConnectError = (): void => finish(new Error('Relay connection failed.'));
+            const finish = (error?: Error): void => {
+                clearTimeout(timeout);
+                this.socket.off('connect', onConnect);
+                this.socket.off('connect_error', onConnectError);
+                if (error) reject(error); else resolve();
+            };
+            this.socket.on('connect', onConnect);
+            this.socket.on('connect_error', onConnectError);
+            if (this.socket.connected) finish();
+        });
     }
 
     public capabilities(): TransportCapabilities {

@@ -12,10 +12,12 @@ import { useMedia } from '../../context/MediaContext';
 import { BrowserCaptureController } from '../../../../service/src/privacy/capture';
 
 export const ChatFooter: React.FC = () => {
-  const { sendMessage } = useChat();
+  const { sendMessage, sessionHealth } = useChat();
   const { sendFile, sendVoice, transfer, cancelTransfer } = useMedia();
   const [message, setMessage] = useState<string>('');
   const [isSending, setIsSending] = useState<boolean>(false);
+  const [actionMessage, setActionMessage] = useState('');
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -35,16 +37,24 @@ export const ChatFooter: React.FC = () => {
   }, []);
   const [lastAttachment, setLastAttachment] = useState<{ kind: 'image' | 'video' | 'file'; file: File }>();
 
+  useEffect(() => {
+    if (!isRecording) { setRecordingSeconds(0); return; }
+    const timer = window.setInterval(() => setRecordingSeconds(Math.floor((Date.now() - recordingStartedAt.current) / 1000)), 250);
+    return () => window.clearInterval(timer);
+  }, [isRecording]);
+
   const handleSend = async () => {
     if (!message.trim()) return;
 
     try {
+      setActionMessage('');
       setIsSending(true);
       await sendMessage(message);
       setMessage('');
       inputRef.current?.focus();
     } catch (err) {
       debugError('Message send failed', err);
+      setActionMessage('Message could not be sent. Please try again.');
     } finally {
       setIsSending(false);
     }
@@ -56,7 +66,9 @@ export const ChatFooter: React.FC = () => {
     if (!file) return;
     const kind = file.type.startsWith('image/') ? 'image' : file.type.startsWith('video/') ? 'video' : 'file';
     setLastAttachment({ kind, file });
-    await sendFile(kind, file);
+    setActionMessage('');
+    try { await sendFile(kind, file); }
+    catch { setActionMessage('The protected file could not be sent. Please try again.'); }
   };
 
   const retryAttachment = async () => { if (lastAttachment) await sendFile(lastAttachment.kind, lastAttachment.file); };
@@ -80,16 +92,26 @@ export const ChatFooter: React.FC = () => {
         recorderRef.current = null;
         if (discardRecording.current) { discardRecording.current = false; return; }
         const bytes = new Uint8Array(await new Blob(chunks, { type: recorder.mimeType }).arrayBuffer());
-        await sendVoice(bytes, Date.now() - recordingStartedAt.current);
+        try { await sendVoice(bytes, Date.now() - recordingStartedAt.current); setActionMessage('Voice message sent securely.'); }
+        catch { setActionMessage('The voice message could not be sent. Please try again.'); }
       };
       recorder.start();
       recorderRef.current = recorder;
       recordingStartedAt.current = Date.now();
       setIsRecording(true);
+      setActionMessage('');
     } catch {
       capture.current.release();
       setIsRecording(false);
+      setActionMessage('Microphone access is required to record a voice message.');
     }
+  };
+
+  const cancelRecording = () => {
+    discardRecording.current = true;
+    capture.current.release();
+    if (recorderRef.current?.state === 'recording') recorderRef.current.stop();
+    setActionMessage('Recording discarded.');
   };
 
   useEffect(() => {
@@ -109,7 +131,7 @@ export const ChatFooter: React.FC = () => {
     <footer className="chat-footer glass">
       <div className="input-container">
         <input ref={attachmentInputRef} type="file" hidden accept="image/png,image/jpeg,image/webp,image/gif,video/webm,video/mp4,video/ogg,.pdf,.txt,.zip,.doc,.docx" onChange={handleAttachment} />
-        <button className="composer-tool" type="button" onClick={() => attachmentInputRef.current?.click()} disabled={isSending || transfer.state === 'uploading'} title="Send a protected file" aria-label="Attach a protected file"><PaperclipIcon size={19} /></button>
+        <button className="composer-tool" type="button" onClick={() => attachmentInputRef.current?.click()} disabled={sessionHealth !== 'healthy' || isSending || transfer.state === 'uploading'} title="Send a protected file" aria-label="Attach a protected file"><PaperclipIcon size={19} /></button>
         <input
           ref={inputRef}
           type="text"
@@ -119,20 +141,23 @@ export const ChatFooter: React.FC = () => {
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           onKeyDown={handleKeyPress}
-          disabled={isSending}
+          disabled={sessionHealth === 'unhealthy' || isSending}
         />
-        <button className={`composer-tool${isRecording ? ' is-recording' : ''}`} type="button" onClick={toggleRecording} disabled={transfer.state === 'uploading'} title={isRecording ? 'Stop recording' : 'Record a protected voice message'} aria-label={isRecording ? 'Stop recording' : 'Record a protected voice message'}><MicIcon size={19} /></button>
+        {isRecording && <span className="recording-indicator" role="status"><span />{Math.floor(recordingSeconds / 60)}:{String(recordingSeconds % 60).padStart(2, '0')}</span>}
+        {isRecording && <button className="recording-cancel" type="button" onClick={cancelRecording} aria-label="Discard voice recording">Discard</button>}
+        <button className={`composer-tool${isRecording ? ' is-recording' : ''}`} type="button" onClick={toggleRecording} disabled={sessionHealth !== 'healthy' || transfer.state === 'uploading'} title={isRecording ? 'Stop and send recording' : 'Record a protected voice message'} aria-label={isRecording ? 'Stop and send recording' : 'Record a protected voice message'}><MicIcon size={19} /></button>
         <Button
           id="send-btn"
           variant="primary"
           circle
           onClick={handleSend}
-          disabled={!message.trim() || isSending}
+          disabled={sessionHealth === 'unhealthy' || !message.trim() || isSending}
         >
           <SendIcon size={20} />
         </Button>
       </div>
-      {transfer.state !== 'idle' && <div className="media-transfer-status" role="status"><span>{transfer.error ?? ({ uploading: 'Uploading protected data…', downloading: 'Opening protected media…', ready: 'Protected media ready.', failed: 'Unable to send protected media.', idle: '' } as Record<string, string>)[transfer.state]}</span>{transfer.state === 'uploading' && <button type="button" onClick={cancelTransfer}>Cancel</button>}{transfer.state === 'failed' && lastAttachment && <button type="button" onClick={retryAttachment}>Try again</button>}</div>}
+      {transfer.state !== 'idle' && <div className="media-transfer-status" role="status"><span>{({ uploading: 'Sending protected file…', downloading: 'Opening protected media…', ready: 'Protected media ready.', failed: 'The protected file could not be sent.', idle: '' } as Record<string, string>)[transfer.state]}</span>{transfer.state === 'uploading' && <button type="button" onClick={cancelTransfer}>Cancel</button>}{transfer.state === 'failed' && lastAttachment && <button type="button" onClick={retryAttachment}>Try again</button>}</div>}
+      {actionMessage && <div className="composer-feedback" role="status">{actionMessage}</div>}
     </footer>
   );
 };

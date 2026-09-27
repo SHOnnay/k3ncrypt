@@ -12,10 +12,10 @@ import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
 /** TLS REST boundary for signed lifecycle changes and short-lived authorization proofs. */
-class K3ncryptApi(baseUrl: String, private val client: OkHttpClient = OkHttpClient.Builder().callTimeout(20, TimeUnit.SECONDS).build()) {
-    @Volatile private var configuredBaseUrl: String? = baseUrl.takeIf(String::isNotBlank)?.let(NetworkEndpoint::validate)
+class K3ncryptApi(baseUrl: String, private val client: OkHttpClient = OkHttpClient.Builder().callTimeout(20, TimeUnit.SECONDS).build(), private val allowEmulatorHttp: Boolean = false) {
+    @Volatile private var configuredBaseUrl: String? = baseUrl.takeIf(String::isNotBlank)?.let { NetworkEndpoint.validate(it, allowEmulatorHttp) }
 
-    fun configureBaseUrl(value: String) { configuredBaseUrl = NetworkEndpoint.validate(value) }
+    fun configureBaseUrl(value: String, allowEmulatorHttp: Boolean = this.allowEmulatorHttp) { configuredBaseUrl = NetworkEndpoint.validate(value, allowEmulatorHttp) }
 
     suspend fun bootstrap(signed: SignedControlEvent): JSONObject = postRaw("device-trust/bootstrap", signed.toWireJson())
 

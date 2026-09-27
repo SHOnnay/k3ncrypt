@@ -1,3 +1,4 @@
+import { testDiagnosticsEnabled } from '../utils/testDiagnostics';
 import type { CryptoSession, TransportManager } from '../core/contracts';
 import { CallAuthorization } from './authorization';
 import type { CallEvent, CallIdentityVerifier, CallParticipant, CallSession, CallSignal, CallSignalKind } from './contracts';
@@ -8,6 +9,10 @@ import type { ReplayProtectionStore } from './replayProtection';
 import { SecureCallSignaling } from './signaling';
 import { signalDigest } from './signalBinding';
 import { generateUUID } from '../utils/uuid';
+
+const callSignalDiagnostic = (category: 'device-trust-rejected' | 'invite-binding-rejected' | 'session-binding-rejected' | 'media-listener-missing' | 'media-handler-rejected' | 'call-state-transition-rejected'): void => {
+  if (testDiagnosticsEnabled()) console.info(`k3ncrypt-call-failure:${category}`);
+};
 
 export interface AuthenticatedCallCompositionInput {
   session: CryptoSession;
@@ -47,6 +52,7 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
   const listeners = new Set<(session: CallSession) => void>();
   const mediaListeners = new Set<(session: CallSession, signal: CallSignal) => Promise<void>>();
   const sequences = new Map<string, number>();
+  const expiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const localParticipant: CallParticipant = {
     participantId: input.localParticipantId ?? input.localIdentityId,
     identityId: input.localIdentityId,
@@ -74,12 +80,41 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
     };
     await signaling.send(session, { ...unsigned, payloadDigest: await signalDigest(unsigned) });
   };
-  const notify = (session: CallSession): void => { listeners.forEach((listener) => listener(session)); };
+  const clearExpiry = (callId: string): void => {
+    const timer = expiryTimers.get(callId);
+    if (timer) clearTimeout(timer);
+    expiryTimers.delete(callId);
+  };
+  const notify = (session: CallSession): void => {
+    if (!['inviting', 'ringing'].includes(session.state)) clearExpiry(session.callId);
+    listeners.forEach((listener) => listener(session));
+  };
+  const scheduleExpiry = (session: CallSession): void => {
+    clearExpiry(session.callId);
+    const timer = setTimeout(() => {
+      void (async () => {
+        const current = await service.get(session.callId);
+        if (!current || !['inviting', 'ringing'].includes(current.state)) return;
+        try {
+          const expired = await service.event(session.callId, 'expire');
+          notify(expired);
+        } catch {
+          // A concurrent accept/cancel may win the terminal transition.
+        } finally {
+          clearExpiry(session.callId);
+        }
+      })();
+    }, Math.max(0, session.expiresAt - Date.now() + 1));
+    // Browser timers return a number; Node timers expose unref(). Avoid keeping
+    // test runners or short-lived service processes alive for an unanswered call.
+    (timer as unknown as { unref?: () => void }).unref?.();
+    expiryTimers.set(session.callId, timer);
+  };
   const unsubscribeSignals = signaling.onSignal(async (signal) => {
-    await input.deviceTrust.assertTrusted();
+    try { await input.deviceTrust.assertTrusted(); } catch { callSignalDiagnostic('device-trust-rejected'); throw new Error('Call device trust rejected.'); }
     const existing = await repository.get(signal.callId);
     if (!existing) {
-      if (signal.event !== 'invite' || signal.receiverIdentityId !== localParticipant.identityId || signal.mediaMode !== 'audio' && signal.mediaMode !== 'video' || signal.identityBinding !== await input.identity.identityBinding(input.conversationId, [localParticipant, input.remoteParticipant])) throw new Error('Unknown call.');
+      if (signal.event !== 'invite' || signal.receiverIdentityId !== localParticipant.identityId || signal.mediaMode !== 'audio' && signal.mediaMode !== 'video' || signal.identityBinding !== await input.identity.identityBinding(input.conversationId, [localParticipant, input.remoteParticipant])) { callSignalDiagnostic('invite-binding-rejected'); throw new Error('Unknown call.'); }
       const incoming: CallSession = {
         callId: signal.callId,
         conversationId: signal.conversationId,
@@ -92,12 +127,18 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
         expiresAt: signal.expiresAt,
       };
       const received = await service.receiveInvite(incoming);
+      scheduleExpiry(received);
       notify(received);
       return;
     }
-    if (signal.conversationId !== existing.conversationId || signal.identityBinding !== existing.identityBinding || signal.receiverIdentityId !== localParticipant.identityId || signal.mediaMode !== existing.mediaMode) throw new Error('Call signal binding rejected.');
-    if (signal.kind && signal.kind !== 'control') { for (const listener of mediaListeners) await listener(existing, signal); return; }
-    const updated = await service.event(signal.callId, signal.event);
+    if (signal.conversationId !== existing.conversationId || signal.identityBinding !== existing.identityBinding || signal.receiverIdentityId !== localParticipant.identityId || signal.mediaMode !== existing.mediaMode) { callSignalDiagnostic('session-binding-rejected'); throw new Error('Call signal binding rejected.'); }
+    if (signal.kind && signal.kind !== 'control') {
+      if (mediaListeners.size === 0) { callSignalDiagnostic('media-listener-missing'); throw new Error('Call media handler unavailable.'); }
+      try { for (const listener of mediaListeners) await listener(existing, signal); } catch { callSignalDiagnostic('media-handler-rejected'); throw new Error('Call media handler rejected.'); }
+      return;
+    }
+    let updated: CallSession;
+    try { updated = await service.event(signal.callId, signal.event); } catch { callSignalDiagnostic('call-state-transition-rejected'); throw new Error('Call state transition rejected.'); }
     notify(updated);
   });
   const invite = async (mediaMode: 'audio' | 'video' = 'audio'): Promise<CallSession> => {
@@ -110,16 +151,20 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
     const session = await service.invite(input.conversationId, participants, binding, mediaMode);
     await sendEvent(session, 'invite', 1);
     sequences.set(session.callId, 1);
+    scheduleExpiry(session);
     notify(session);
     return session;
   };
   const respond = async (callId: string, event: 'accept' | 'reject' | 'cancel'): Promise<CallSession> => {
     await input.deviceTrust?.assertTrusted();
     const session = await service.event(callId, event);
-    const sequence = session.updatedAt === session.createdAt ? 1 : 2;
-    await sendEvent(session, event, sequence);
+    const sequence = (sequences.get(callId) ?? 0) + 1;
     sequences.set(callId, sequence);
-    notify(session);
+    // Commit the local terminal state before waiting for a best-effort remote
+    // cancellation delivery. A stalled relay must not leave the UI ringing.
+    if (event === 'cancel') notify(session);
+    await sendEvent(session, event, sequence);
+    if (event !== 'cancel') notify(session);
     return session;
   };
   const onCallUpdate = (listener: (session: CallSession) => void): (() => void) => { listeners.add(listener); return () => listeners.delete(listener); };

@@ -1,3 +1,4 @@
+import { testDiagnosticsEnabled } from '../utils/testDiagnostics';
 import type { EncryptedEnvelope, SecureStorage, TransportManager } from '../core/contracts';
 import { VODOZEMAC_ENVELOPE_VERSION, VODOZEMAC_STRATEGY_ID } from '../core/vodozemacCryptoSession';
 import { claimVodozemacOneTimeKey, fetchVodozemacBundle, publishVodozemacBundle, renewVodozemacBundle } from '../api/prekeys';
@@ -42,6 +43,7 @@ const OUTBOX_RECORD = 'modern-outbox';
 const SEEN_RECORD = 'modern-seen';
 const PUBLICATION_RECORD = 'modern-publication';
 const SESSION_AUDIT_RECORD = 'conversation-session-audit';
+const SESSION_RENEWAL_RECORD = 'conversation-session-renewal';
 const MAX_PENDING = 32;
 const MAX_SEEN = 1024;
 
@@ -50,6 +52,16 @@ type SessionAudit = {
     classification: 'unused-outbound' | 'retired-unused-outbound' | 'session-with-message-history' | 'active-established' | 'legacy-unclassified';
     direction?: 'outbound' | 'inbound';
     origin?: 'join' | 'first-message';
+};
+type SessionRenewal = { version: 1; previousSessionId: string; clientId?: string };
+const parseSessionRenewal = (bytes: ArrayBuffer | undefined): SessionRenewal | undefined => {
+    if (!bytes) return undefined;
+    const value: unknown = JSON.parse(decoder.decode(bytes));
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Session renewal state is invalid.');
+    const item = value as Record<string, unknown>;
+    if (item.version !== 1 || typeof item.previousSessionId !== 'string' || !item.previousSessionId ||
+        (item.clientId !== undefined && (typeof item.clientId !== 'string' || !item.clientId))) throw new Error('Session renewal state is invalid.');
+    return item as SessionRenewal;
 };
 
 const parseSessionAudit = (bytes: ArrayBuffer | undefined): SessionAudit | undefined => {
@@ -66,6 +78,7 @@ const parseSessionAudit = (bytes: ArrayBuffer | undefined): SessionAudit | undef
 const TAB_LEASE_MS = 15_000;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
+const strictMessageDecoder = new TextDecoder('utf-8', { fatal: true });
 
 interface PendingEnvelope { envelope: EncryptedEnvelope; relayId?: string; sentAt?: number; clientId?: string; }
 interface PublicationMarker { version: 1; roomId: string; address?: string; routingProof?: string; }
@@ -90,21 +103,22 @@ const testOnlyDeliveryStage = (stage: string): void => {
         __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean;
         __k3ncryptDeliveryStages?: Array<{ stage: string; reached: boolean }>;
     };
-    if (diagnostic.__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ !== true) return;
+    if (!testDiagnosticsEnabled()) return;
     const events = diagnostic.__k3ncryptDeliveryStages ??= [];
     events.push({ stage, reached: true });
     if (events.length > 100) events.shift();
 };
 
-const testOnlyCallSignalStage = (stage: 'signal-received'): void => {
+const testOnlyCallSignalStage = (stage: 'signal-received' | 'trust-check-passed' | 'signal-decrypt-started' | 'signal-decrypted' | 'call-signal-accepted' | 'call-listener-unavailable' | 'signal-handler-rejected'): void => {
     const diagnostic = globalThis as typeof globalThis & {
         __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean;
         __k3ncryptCallSignalStages?: string[];
     };
-    if (diagnostic.__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ !== true) return;
+    if (!testDiagnosticsEnabled()) return;
     const stages = diagnostic.__k3ncryptCallSignalStages ??= [];
     stages.push(stage);
     if (stages.length > 32) stages.shift();
+    console.info(`k3ncrypt-call-stage:${stage}`);
 };
 
 const asBytes = (value: unknown): ArrayBuffer => encoder.encode(JSON.stringify(value)).buffer as ArrayBuffer;
@@ -132,7 +146,7 @@ const unframeFirstMessage = (bytes: ArrayBuffer): string => {
     const value = new Uint8Array(bytes);
     try {
         if (value.length < 2 || value[0] !== 1 || value[1] !== 1) throw new Error('Modern message binding is invalid.');
-        return decoder.decode(value.slice(2));
+        return strictMessageDecoder.decode(value.slice(2));
     } finally { value.fill(0); }
 };
 
@@ -151,6 +165,8 @@ export class ModernConversation {
     private remoteIdentityCommitment?: string;
     private lastInboundFailureCategory?: string;
     private lastConnectionFailureCategory?: string;
+    private sessionHealth: 'healthy' | 'unhealthy' | 'renewal-pending' = 'healthy';
+    private sessionHealthObserver?: (health: 'healthy' | 'unhealthy' | 'renewal-pending') => void;
     private inboundDiagnosticEvents: InboundDiagnosticEvent[] = [];
     /** A replay can arrive while connect() owns the conversation tab lock. */
     private connecting = false;
@@ -174,7 +190,7 @@ export class ModernConversation {
     private recoveryRuntime?: RecoveryRuntime;
     private durableProofs?: DeviceProofClient;
     private retryTimer?: ReturnType<typeof setInterval>;
-    private onMessage?: (text: string) => void;
+    private onMessage?: (text: string) => unknown;
     private onContactChange?: (contact: StoredContactIdentity) => void;
     private onDeviceControl?: (message: DeviceControlEvent) => void;
     private readonly tabOwnerId = `${Math.random().toString(36).slice(2)}-${Date.now()}`;
@@ -189,19 +205,31 @@ export class ModernConversation {
         const relay = transportManager ? undefined : new SocketIoRelayTransport(() => this.subscriptions, new Logger('ModernConversation'),
             async (message) => {
                 if (message.channel === 'signaling') {
-                    await this.assertCurrentDeviceTrust();
-                    this.prepareDeviceControl();
-                    if (this.deviceControlChannel) {
-                        const plaintext = await this.runtime.decrypt('signaling', message.envelope);
-                        const control = this.deviceControlChannel.decode(plaintext);
-                        if (control) await this.handleDeviceControl(control);
-                        else if (this.callSignalTransport) {
-                            await this.callSignalTransport.receivePlaintext(plaintext);
-                            testOnlyCallSignalStage('signal-received');
-                        }
-                    } else if (this.callSignalTransport) {
-                        await this.callSignalTransport.receive(message.envelope);
-                        testOnlyCallSignalStage('signal-received');
+                    testOnlyCallSignalStage('signal-received');
+                    try {
+                        if (this.sessionHealth === 'unhealthy') throw new Error('signaling_session_unhealthy');
+                        await this.assertCurrentDeviceTrust();
+                        testOnlyCallSignalStage('trust-check-passed');
+                        this.prepareDeviceControl();
+                        if (this.deviceControlChannel) {
+                            testOnlyCallSignalStage('signal-decrypt-started');
+                            const plaintext = await this.runtime.decrypt('signaling', message.envelope);
+                            testOnlyCallSignalStage('signal-decrypted');
+                            const control = this.deviceControlChannel.decode(plaintext);
+                            if (control) await this.handleDeviceControl(control);
+                            else if (this.callSignalTransport) {
+                                await this.callSignalTransport.receivePlaintext(plaintext);
+                                testOnlyCallSignalStage('call-signal-accepted');
+                            } else testOnlyCallSignalStage('call-listener-unavailable');
+                        } else if (this.callSignalTransport) {
+                            testOnlyCallSignalStage('signal-decrypt-started');
+                            await this.callSignalTransport.receive(message.envelope);
+                            testOnlyCallSignalStage('signal-decrypted');
+                            testOnlyCallSignalStage('call-signal-accepted');
+                        } else testOnlyCallSignalStage('call-listener-unavailable');
+                    } catch {
+                        testOnlyCallSignalStage('signal-handler-rejected');
+                        throw new Error('Authenticated signaling receive failed.');
                     }
                     return false;
                 }
@@ -214,20 +242,21 @@ export class ModernConversation {
         this.subscriptions.set('delivered', new Set([(id: string) => { void this.acceptDelivery(id); }]));
     }
 
-    public async connect(roomId: string, capability: string, remoteAddress?: string, remoteIdentityCommitment?: string, onMessage?: (text: string) => void, onContactChange?: (contact: StoredContactIdentity) => void, onDeviceControl?: (message: DeviceControlEvent) => void): Promise<ModernConnectionDetails> {
+    public async connect(roomId: string, capability: string, remoteAddress?: string, remoteIdentityCommitment?: string, onMessage?: (text: string) => unknown, onContactChange?: (contact: StoredContactIdentity) => void, onDeviceControl?: (message: DeviceControlEvent) => void): Promise<ModernConnectionDetails> {
         const details = await this.withTabLock(roomId, async () => {
             this.connecting = true;
             try { return await this.connectUnlocked(roomId, capability, remoteAddress, remoteIdentityCommitment, onMessage, onContactChange, onDeviceControl); }
             finally { this.connecting = false; }
         }, true);
         const activeTransport = this.transport.activeTransport();
-        if (activeTransport instanceof SocketIoRelayTransport) await activeTransport.requestMailboxReplay();
+        if (this.sessionHealth !== 'unhealthy' && activeTransport instanceof SocketIoRelayTransport) await activeTransport.requestMailboxReplay();
         return details;
     }
 
-    private async connectUnlocked(roomId: string, capability: string, remoteAddress?: string, remoteIdentityCommitment?: string, onMessage?: (text: string) => void, onContactChange?: (contact: StoredContactIdentity) => void, onDeviceControl?: (message: DeviceControlEvent) => void): Promise<ModernConnectionDetails> {
+    private async connectUnlocked(roomId: string, capability: string, remoteAddress?: string, remoteIdentityCommitment?: string, onMessage?: (text: string) => unknown, onContactChange?: (contact: StoredContactIdentity) => void, onDeviceControl?: (message: DeviceControlEvent) => void): Promise<ModernConnectionDetails> {
         if (!/^[0-9a-f-]{36}$/i.test(roomId) || !capability) throw new Error('Invalid private conversation invitation.');
         this.roomId = roomId;
+        this.sessionHealth = 'healthy';
         this.lastConnectionFailureCategory = undefined;
         this.capability = capability;
         this.remoteIdentityCommitment = remoteIdentityCommitment;
@@ -243,6 +272,8 @@ export class ModernConversation {
             throw new Error('A previous key publication has an uncertain outcome. This identity cannot publish again automatically.');
         }
         let saved = await this.modes.read(roomId);
+        const renewal = parseSessionRenewal(await this.storage.read(SESSION_RENEWAL_RECORD, roomId));
+        if (renewal) this.sessionHealth = 'renewal-pending';
         if (!saved?.sessionId) await this.cleanupRetiredSession(roomId);
         if (saved?.sessionId && await this.auditAndMigratePersistedSession(roomId, saved.sessionId)) {
             saved = await this.modes.read(roomId);
@@ -250,7 +281,15 @@ export class ModernConversation {
         const requestedContact = remoteAddress === saved?.localAddress ? undefined : remoteAddress;
         if (saved?.remoteAddress && requestedContact && saved.remoteAddress !== requestedContact) throw new Error('The contact address changed. Review the connection before continuing.');
         this.remoteAddress = requestedContact ?? saved?.remoteAddress;
-        if (saved?.sessionId) await this.runtime.restoreSession(roomId, saved.sessionId);
+        if (saved?.sessionId) {
+            try { await this.runtime.restoreSession(roomId, saved.sessionId); }
+            catch (error) {
+                const category = error && typeof error === 'object' && 'restoreFailureCategory' in error
+                    ? (error as { restoreFailureCategory?: unknown }).restoreFailureCategory : undefined;
+                if (category !== 'session-record-missing') throw error;
+                this.sessionHealth = 'unhealthy';
+            }
+        }
         if (this.remoteAddress && saved?.sessionId) {
             let contactBundle;
             try { contactBundle = validateVodozemacPublicBundle(await fetchVodozemacBundle(roomId, capability, this.remoteAddress)); }
@@ -388,12 +427,19 @@ export class ModernConversation {
 
     /** Guarded test harness view containing only approved message lifecycle metadata. */
     public async testOnlyCryptoSnapshot(): Promise<{ conversationId?: string; inboundEvents: InboundDiagnosticEvent[]; inboundFailureCategory?: string; connectionFailureCategory?: string }> {
-        if ((globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean }).__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ !== true) throw new Error('Test-only diagnostics are disabled.');
+        if (!testDiagnosticsEnabled()) throw new Error('Test-only diagnostics are disabled.');
         return { conversationId: this.roomId, inboundEvents: [...this.inboundDiagnosticEvents], inboundFailureCategory: this.lastInboundFailureCategory, connectionFailureCategory: this.lastConnectionFailureCategory };
     }
 
+    public async testOnlyRelayRegistration(): Promise<{ connected: boolean; joinAcknowledged: boolean; channelHash?: string }> {
+        if (!testDiagnosticsEnabled()) throw new Error('Test-only diagnostics are disabled.');
+        const transport = this.transport.activeTransport();
+        if (!(transport instanceof SocketIoRelayTransport)) return { connected: false, joinAcknowledged: false };
+        return await transport.testOnlyRelayRegistration();
+    }
+
     private async testOnlyRecordInboundStage(stage: InboundDiagnosticStage, senderFingerprint?: string, failureCategory?: string): Promise<void> {
-        if ((globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean }).__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ !== true || !this.roomId) return;
+        if (!testDiagnosticsEnabled() || !this.roomId) return;
         try {
             const fingerprintHash = async (value?: string): Promise<string | undefined> => {
                 if (!value || !globalThis.crypto?.subtle) return undefined;
@@ -537,6 +583,7 @@ export class ModernConversation {
     public onDeliveryUpdate(observer: (clientId: string, state: 'accepted') => void): void { this.deliveryObserver = observer; }
 
     private async sendUnlocked(text: string): Promise<string> {
+        if (this.sessionHealth === 'unhealthy') throw new Error('The encrypted session needs verified renewal before sending.');
         if (!this.roomId || !text.trim()) throw new Error('The private contact is not ready.');
         testOnlyDeliveryStage('send-start');
         await this.assertCurrentDeviceTrust();
@@ -544,6 +591,11 @@ export class ModernConversation {
         if (contact?.changeStatus !== 'unchanged') throw new Error('Review this contact’s changed identity before sending.');
         await this.ensureOutboundSession();
         const clientId = crypto.randomUUID();
+        if (this.sessionHealth === 'renewal-pending') {
+            const renewal = parseSessionRenewal(await this.storage.read(SESSION_RENEWAL_RECORD, this.roomId));
+            if (!renewal) throw new Error('Verified renewal state is unavailable.');
+            await this.storage.write(SESSION_RENEWAL_RECORD, this.roomId, asBytes({ ...renewal, clientId } satisfies SessionRenewal));
+        }
         await this.deliveryMutex.runExclusive(async () => {
             const pending = await this.readPending();
             if (pending.length >= MAX_PENDING) throw new Error('Too many messages are waiting to send.');
@@ -558,6 +610,7 @@ export class ModernConversation {
 
     /** Establishes the initial outbound session only when this device sends first. */
     private async ensureOutboundSession(): Promise<void> {
+        if (this.sessionHealth === 'unhealthy') throw new Error('The encrypted session needs verified renewal before sending.');
         if (this.runtime.activeSessionId) return;
         if (!this.roomId || !this.capability || !this.remoteAddress) throw new Error('The private contact is not ready.');
         let contact;
@@ -584,10 +637,14 @@ export class ModernConversation {
     }
 
     public async retryPending(): Promise<void> {
+        if (this.sessionHealth === 'unhealthy') return;
         if (!this.roomId) return;
         await this.deliveryMutex.runExclusive(async () => {
             const pending = await this.readPending();
+            const renewal = this.sessionHealth === 'renewal-pending'
+                ? parseSessionRenewal(await this.storage.read(SESSION_RENEWAL_RECORD, this.roomId!)) : undefined;
             for (const item of pending) {
+                if (this.sessionHealth === 'renewal-pending' && item.clientId !== renewal?.clientId) continue;
                 if (item.relayId && item.sentAt && Date.now() - item.sentAt < 5000) continue;
                 try {
                     await this.assertCurrentDeviceTrust();
@@ -608,12 +665,59 @@ export class ModernConversation {
             const accepted = pending.find((item) => item.relayId === relayId);
             const next = pending.filter((item) => item.relayId !== relayId);
             if (next.length !== pending.length) await this.storage.write(OUTBOX_RECORD, this.roomId!, asBytes(next));
+            const renewal = parseSessionRenewal(await this.storage.read(SESSION_RENEWAL_RECORD, this.roomId!));
+            if (accepted?.clientId && renewal?.clientId === accepted.clientId) {
+                await this.storage.delete(SESSION_RENEWAL_RECORD, this.roomId!);
+                this.sessionHealth = 'healthy';
+                this.sessionHealthObserver?.('healthy');
+            }
             if (accepted?.clientId) this.deliveryObserver?.(accepted.clientId, 'accepted');
         });
     }
 
     public async getContact(): Promise<StoredContactIdentity | undefined> {
         return this.remoteAddress ? this.registry.get(this.remoteAddress) : undefined;
+    }
+
+    /** Passive call-listener restoration must not create an outbound Olm session. */
+    public hasEstablishedSession(): boolean {
+        return Boolean(this.runtime.activeSessionId);
+    }
+
+    public getSessionHealth(): 'healthy' | 'unhealthy' | 'renewal-pending' {
+        return this.sessionHealth;
+    }
+
+    public onSessionHealthUpdate(observer: (health: 'healthy' | 'unhealthy' | 'renewal-pending') => void): void {
+        this.sessionHealthObserver = observer;
+    }
+
+    /** Explicit, peer-verified renewal retains every old vault record and waits for accepted encrypted delivery. */
+    public async prepareVerifiedSessionRenewal(confirmed: boolean): Promise<void> {
+        if (!confirmed || this.sessionHealth !== 'unhealthy' || !this.roomId || !this.remoteAddress || !this.capability) {
+            throw new Error('Session renewal requires explicit contact verification.');
+        }
+        await this.assertCurrentDeviceTrust();
+        const pinned = await this.registry.get(this.remoteAddress);
+        if (!pinned || pinned.verification !== 'verified' || pinned.changeStatus !== 'unchanged') throw new Error('The contact is not verified.');
+        const bundle = validateVodozemacPublicBundle(await fetchVodozemacBundle(this.roomId, this.capability, this.remoteAddress));
+        if (await fingerprintVodozemacIdentity(bundle.identity) !== pinned.identityId) throw new Error('The verified contact identity changed.');
+        const modeBytes = await this.storage.read('conversation-protocol', this.roomId);
+        if (!modeBytes || !this.storage.compareAndSwapRecords) throw new Error('Atomic session renewal is unavailable.');
+        const mode = JSON.parse(decoder.decode(modeBytes)) as Record<string, unknown>;
+        if (typeof mode.sessionId !== 'string' || !mode.sessionId || await this.storage.read('vodozemac-session', this.roomId)) {
+            throw new Error('The saved session state changed; renewal must be reviewed again.');
+        }
+        const nextMode = { ...mode };
+        delete nextMode.sessionId;
+        const changed = await this.storage.compareAndSwapRecords([
+            { recordType: 'conversation-protocol', recordId: this.roomId, expected: modeBytes, next: asBytes(nextMode) },
+            { recordType: SESSION_RENEWAL_RECORD, recordId: this.roomId, expected: undefined,
+                next: asBytes({ version: 1, previousSessionId: mode.sessionId } satisfies SessionRenewal) },
+        ]);
+        if (!changed) throw new Error('Session renewal state changed; try again.');
+        this.sessionHealth = 'renewal-pending';
+        this.sessionHealthObserver?.('renewal-pending');
     }
 
     /**
@@ -623,6 +727,7 @@ export class ModernConversation {
      * this boundary because they do not own a ModernConversation instance.
      */
     public async createAuthenticatedCallComposition(): Promise<AuthenticatedCallComposition> {
+        if (this.sessionHealth !== 'healthy') throw new Error('The encrypted session needs verified renewal before calling.');
         if (this.callComposition) return this.callComposition;
         if (!this.roomId || !this.localAddress || !this.localIdentityId || !this.remoteAddress) {
             throw new Error('Modern conversation is not ready for calling.');
@@ -746,7 +851,7 @@ export class ModernConversation {
         this.recoveryRuntime = undefined;
     }
 
-    public async close(): Promise<void> {
+    public async close(lockStorage = true): Promise<void> {
         this.syncRelay?.close();
         if (this.retryTimer) clearInterval(this.retryTimer);
         await this.transport.stop();
@@ -761,7 +866,7 @@ export class ModernConversation {
         }
         this.unloadHandler = undefined;
         this.releaseFallbackLease();
-        this.storage.lock();
+        if (lockStorage) this.storage.lock();
     }
 
     public async delete(): Promise<void> {
@@ -843,6 +948,7 @@ export class ModernConversation {
     }
 
     private async receive(envelope: EncryptedEnvelope, senderAddress?: string): Promise<boolean> {
+        if (this.sessionHealth === 'unhealthy') return false;
         this.lastInboundFailureCategory = undefined;
         let senderFingerprint: string | undefined;
         await this.testOnlyRecordInboundStage('received');
@@ -901,14 +1007,18 @@ export class ModernConversation {
                 try { plaintext = await this.runtime.decrypt('message', envelope); }
                 catch (error) { this.lastInboundFailureCategory = 'decryption-failure'; throw error; }
                 await this.testOnlyRecordInboundStage('decrypted', senderFingerprint);
-                text = decoder.decode(plaintext);
+                try { text = strictMessageDecoder.decode(plaintext); }
+                catch (error) { this.lastInboundFailureCategory = 'message-frame-parsing-failure'; throw error; }
                 await this.testOnlyRecordInboundStage('frame-parsed', senderFingerprint);
             }
+            // The consumer must durably accept the message before its replay
+            // marker can make a later mailbox delivery look complete.
+            if (!this.onMessage) { this.lastInboundFailureCategory = 'persistence-failure'; throw new Error('Inbound message consumer is unavailable.'); }
+            try { await this.onMessage(text); }
+            catch (error) { this.lastInboundFailureCategory = 'persistence-failure'; throw error; }
             try { await this.storage.write(SEEN_RECORD, this.roomId, asBytes([...seen.slice(-(MAX_SEEN - 1)), digest])); }
             catch (error) { this.lastInboundFailureCategory = 'persistence-failure'; throw error; }
             await this.testOnlyRecordInboundStage('persisted', senderFingerprint);
-            try { this.onMessage?.(text); }
-            catch (error) { this.lastInboundFailureCategory = 'ui-state-update-failure'; throw error; }
             await this.testOnlyRecordInboundStage('acknowledged', senderFingerprint);
             this.lastInboundFailureCategory = undefined;
             return true;

@@ -20,6 +20,18 @@ class CryptoStateStore(private val database: K3ncryptSecureDatabase, private val
     suspend fun write(namespace: String, id: String, bytes: ByteArray) { database.records().put(seal(namespace, id, bytes)) }
     suspend fun hasInboundDigest(digest: String): Boolean = database.records().get("inbound-digest", digest) != null
 
+    /** Local user approval for a new Olm pre-key session from an already pinned peer. */
+    suspend fun armSessionRenewal(peerRoutingId: String, expiresAt: Long) {
+        require(peerRoutingId.isNotBlank() && expiresAt > now() && expiresAt - now() <= 10 * 60_000)
+        database.records().put(seal("session-renewal-arm", peerRoutingId, expiresAt.toString().encodeToByteArray()))
+    }
+
+    suspend fun isSessionRenewalArmed(peerRoutingId: String): Boolean =
+        read("session-renewal-arm", peerRoutingId)?.let { bytes ->
+            try { bytes.decodeToString().toLongOrNull()?.let { it > now() } ?: false }
+            finally { bytes.fill(0) }
+        } ?: false
+
     suspend fun commitAccountAndSession(accountId: String, accountPickle: String, session: SessionState) {
         database.withTransaction {
             val records = database.records()
@@ -43,12 +55,23 @@ class CryptoStateStore(private val database: K3ncryptSecureDatabase, private val
     suspend fun readIdentityCheckpoint(): ByteArray? = read("identity-checkpoint", "local")
 
     /** Returns DUPLICATE without ratchet/state writes when the same envelope was committed before. */
-    suspend fun commitInbound(accountId: String, accountPickle: String, session: SessionState, digest: String, message: StoredMessage): InboundCommitResult = database.withTransaction {
+    suspend fun commitInbound(accountId: String, accountPickle: String, session: SessionState, digest: String, message: StoredMessage, renewalSenderRoute: String? = null): InboundCommitResult = database.withTransaction {
         val records = database.records()
         val prior = records.get("inbound-digest", digest)
         if (prior != null) return@withTransaction InboundCommitResult.DUPLICATE
         val deliveryPrior = records.get("inbound-delivery", message.deliveryId)
         check(deliveryPrior == null) { "Mailbox delivery identifier conflicts with stored state" }
+        if (renewalSenderRoute != null) {
+            val armed = records.get("session-renewal-arm", renewalSenderRoute)
+            val approval = armed?.let(::open)
+            val expiresAt = try { approval?.decodeToString()?.toLongOrNull() } finally { approval?.fill(0) }
+            check(renewalSenderRoute == message.senderRoutingId && expiresAt != null && expiresAt > now()) { "Verified session renewal approval is unavailable" }
+            val previous = records.get("session", renewalSenderRoute) ?: error("Previous encrypted session is unavailable")
+            val priorBytes = open(previous)
+            try { records.put(seal("session-archive", "$renewalSenderRoute:$digest", priorBytes)) }
+            finally { priorBytes.fill(0) }
+            records.remove("session-renewal-arm", renewalSenderRoute)
+        }
         val encodedMessage = JSONObject()
             .put("deliveryId", message.deliveryId)
             .put("conversationId", message.conversationId)

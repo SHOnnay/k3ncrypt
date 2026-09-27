@@ -52,7 +52,11 @@ class InboundMessageProcessor(
             trust.requireTrustedSender(delivery.senderRoutingId, bundle.senderIdentityKey)
             diagnosticStage("trust-check")
             val current = sessions.existing(delivery.senderRoutingId)
-            if (current == null) {
+            val replacingSession = current != null && envelope.isPreKeyMessage
+            if (replacingSession && !cryptoState.isSessionRenewalArmed(delivery.senderRoutingId)) {
+                return@withLock DeliveryAcceptance.Rejected("session-renewal-not-authorized")
+            }
+            if (current == null || replacingSession) {
                 val inbound = crypto.establishInboundSession(account, bundle.senderIdentityKey, envelope.olmMessage)
                 diagnosticStage("inbound-session-created")
                 cryptoMutated = true
@@ -79,6 +83,7 @@ class InboundMessageProcessor(
                                 SessionState(delivery.senderRoutingId, sessionPickle),
                                 digest,
                                 StoredMessage(delivery.id, delivery.conversationId, delivery.senderRoutingId, body, now()),
+                                if (replacingSession) delivery.senderRoutingId else null,
                             )
                         },
                         remember = { sessions.remember(delivery.senderRoutingId, inboundSession!!) },

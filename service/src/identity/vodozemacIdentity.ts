@@ -1,3 +1,4 @@
+import { testDiagnosticsEnabled } from '../utils/testDiagnostics';
 import type { IdentityManager, MessagingIdentity, SecureStorage } from '../core/contracts';
 import { toBase64Url } from '../crypto/base64url';
 import { createVodozemacPublicBundle, type VodozemacPublicBundle } from './vodozemacBundle';
@@ -131,7 +132,7 @@ export class PersistentVodozemacIdentity implements IdentityManager<MessagingIde
 
     /** Narrow test harness hook. It returns only public material and fails closed outside explicit diagnostics. */
     public async inspectPublicStateForTest(): Promise<{ identityKeys: string; oneTimeKeys: string[]; fallbackKey?: string }> {
-        if ((globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean }).__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ !== true) {
+        if (!testDiagnosticsEnabled()) {
             throw new Error('Test-only Vodozemac diagnostics are disabled.');
         }
         return this.withAccount((account) => {

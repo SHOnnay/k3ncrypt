@@ -315,6 +315,7 @@ describe('encrypt()', () => {
 
     it('send() seals the message with the chat strategy and delivers via the socket into a { version, strategy, data } envelope, never sending plaintext', async () => {
         mockSocket.emit.mockImplementation((event: string, payload: unknown, ack?: (r: unknown) => void) => {
+            if (event === 'chat-join') ack?.({ status: 'accepted' });
             if (event === 'chat-message') {
                 ack?.({ id: 42, timestamp: 1234 });
             }
@@ -337,6 +338,7 @@ describe('encrypt()', () => {
     it('each outgoing message uses a strictly increasing sequence number', async () => {
         const seen: unknown[] = [];
         mockSocket.emit.mockImplementation((event: string, payload: unknown, ack?: (r: unknown) => void) => {
+            if (event === 'chat-join') ack?.({ status: 'accepted' });
             if (event === 'chat-message') {
                 seen.push(payload);
                 ack?.({ id: seen.length, timestamp: Date.now() });
@@ -593,6 +595,7 @@ describe('createChatInstance() encryption strategy selection', () => {
     it('defaults to the secure AES-256-GCM strategy when unconfigured', async () => {
         mockSocket.emit.mockClear();
         mockSocket.emit.mockImplementation((event: string, _payload: unknown, ack?: (r: unknown) => void) => {
+            if (event === 'chat-join') ack?.({ status: 'accepted' });
             if (event === 'chat-message') ack?.({ id: 1, timestamp: 1 });
         });
         const instance = await buildInitializedInstance();
@@ -609,6 +612,7 @@ describe('createChatInstance() encryption strategy selection', () => {
         registerEncryptionStrategy(CUSTOM_STRATEGY_ID, buildCustomStrategyFactory);
         mockSocket.emit.mockClear();
         mockSocket.emit.mockImplementation((event: string, _payload: unknown, ack?: (r: unknown) => void) => {
+            if (event === 'chat-join') ack?.({ status: 'accepted' });
             if (event === 'chat-message') ack?.({ id: 1, timestamp: 1 });
         });
 
@@ -647,6 +651,7 @@ describe('createChatInstance() encryption strategy selection', () => {
     it('supports the built-in disabled/no-encryption strategy, using versioned envelopes with base64url-encoded plaintext', async () => {
         mockSocket.emit.mockClear();
         mockSocket.emit.mockImplementation((event: string, _payload: unknown, ack?: (r: unknown) => void) => {
+            if (event === 'chat-join') ack?.({ status: 'accepted' });
             if (event === 'chat-message') ack?.({ id: 1, timestamp: 1 });
         });
         const instance = createChatInstance({ encryption: { strategy: NO_ENCRYPTION_STRATEGY_ID, developmentAllowInsecurePlaintextStrategy: true } });

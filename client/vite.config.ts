@@ -12,6 +12,7 @@ export default defineConfig(({ mode }) => {
             },
         },
         define: {
+            'process.env.NODE_ENV': JSON.stringify(mode === 'production' ? 'production' : 'development'),
             'process.env.CHATE2EE_API_URL': JSON.stringify(env.CHATE2EE_API_URL ?? ''),
             'process.env.CHATE2EE_ICE_SERVERS': JSON.stringify(env.CHATE2EE_ICE_SERVERS ?? ''),
             'process.env.CHATE2EE_ICE_TRANSPORT_POLICY': JSON.stringify(env.CHATE2EE_ICE_TRANSPORT_POLICY ?? ''),

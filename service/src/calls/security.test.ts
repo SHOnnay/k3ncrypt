@@ -1,4 +1,4 @@
-import { signalDigest, verifySignalDigest } from './signalBinding';
+import { androidJsonQuoteSignalDigestForTest, diagnoseSignalDigestMismatch, signalDigest, signalDigestShape, verifySignalDigest } from './signalBinding';
 import { DurableReplayProtectionStore, MemoryReplayProtectionStore } from './replayProtection';
 import type { CallSignal } from './contracts';
 import { AuthenticatedCallSignalTransport } from './authenticatedTransport';
@@ -6,7 +6,33 @@ import { VerifiedCallIdentityVerifier } from './signalBinding';
 import { createAuthenticatedCallComposition } from './composition';
 const base = (): Omit<CallSignal, 'payloadDigest'> => ({ callId: 'call', conversationId: '11111111-1111-4111-8111-111111111111', sender: { participantId: 'a', identityId: 'id', verification: 'verified' }, receiverIdentityId: 'peer', mediaMode: 'audio', nonce: 'nonce-1', event: 'invite', kind: 'control', payload: { sdp: 'offer' }, sequence: 1, timestamp: 100, expiresAt: 1_000, identityBinding: 'binding' });
 describe('call signaling security', () => {
+  it('matches the Android canonical digest for SDP and ICE payloads', async () => {
+    const common: Omit<CallSignal, 'payloadDigest' | 'kind' | 'payload'> = {
+      callId: '11111111-1111-4111-8111-111111111111', conversationId: '22222222-2222-4222-8222-222222222222',
+      sender: { participantId: 'route-a', identityId: 'K3 device-a', verification: 'verified' }, receiverIdentityId: 'K3 device-b',
+      mediaMode: 'audio', nonce: '33333333-3333-4333-8333-333333333333', event: 'connect', sequence: 2,
+      timestamp: 1000, expiresAt: 61_000, identityBinding: 'binding',
+    };
+    const sdp = 'v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n';
+    expect(await signalDigest({ ...common, kind: 'offer', payload: { type: 'offer', sdp } })).toBe('e90ef86c39db5ddb05544835fc6f9eccb2be5ff4a99692d10d3bf35f7f6dfae9');
+    const realisticSdp = `${sdp}a=rtpmap:111 opus/48000/2\r\n`;
+    expect(await signalDigest({ ...common, kind: 'offer', payload: { type: 'offer', sdp: realisticSdp } })).toBe('21d0dbc9bb1292eafc0415d71c50fb613d9b259215aed4eef3980527b2474e9e');
+    expect(await signalDigest({ ...common, kind: 'ice-candidate', payload: { candidate: 'candidate:1 1 udp 2122260223 192.0.2.1 5000 typ host', sdpMLineIndex: 0 } })).toBe('f57dd5ede9fabfc325c657e28a8394624608cb56b35212fd5dfafc8cbeae7c7a');
+  });
+  it('reports only call digest input component lengths for matched signal kinds', () => {
+    const signal = { ...base(), kind: 'offer' as const, payload: { type: 'offer', sdp: 'v=0\r\no=-\r\n' }, payloadDigest: 'not-used-by-shape' };
+    const shape = signalDigestShape(signal);
+    expect(shape.inputLength).toBe(shape.metadataLength + shape.payloadJsonLength);
+    expect(shape.sdpValueLength).toBe(new TextEncoder().encode('v=0\r\no=-\r\n').byteLength);
+    expect(shape.inputLength).toBeGreaterThan(shape.payloadJsonLength);
+  });
   it('detects modified SDP/ICE payloads through the authenticated envelope digest', async () => { const signal = { ...base(), payloadDigest: await signalDigest(base()) }; expect(await verifySignalDigest(signal)).toBe(true); const modified = { ...signal, payload: { sdp: 'tampered' } }; expect(await verifySignalDigest(modified)).toBe(false); });
+  it('classifies legacy Android slash escaping without accepting the mismatched digest', async () => {
+    const slashSdp = { ...base(), payload: { sdp: 'v=0\r\na=rtpmap:opus/48000/2' } };
+    const received = { ...slashSdp, payloadDigest: await androidJsonQuoteSignalDigestForTest(slashSdp) };
+    await expect(diagnoseSignalDigestMismatch(received)).resolves.toBe('escape-mismatch');
+    await expect(verifySignalDigest(received)).resolves.toBe(false);
+  });
   it('bounds replay entries with TTL and rejects duplicates', async () => { const store = new MemoryReplayProtectionStore(); expect(await store.claim('call:1', 100, 1)).toBe('accepted'); expect(await store.claim('call:1', 100, 2)).toBe('duplicate'); await store.cleanup(101); expect(await store.claim('call:1', 200, 101)).toBe('accepted'); expect(await store.claim('expired', 100, 101)).toBe('expired'); });
   it('delegates production replay claims to an atomic shared adapter', async () => {
     const adapter = { atomicClaim: jest.fn(async () => 'accepted' as const), cleanupExpired: jest.fn(async () => undefined) };

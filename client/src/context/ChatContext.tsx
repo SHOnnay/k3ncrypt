@@ -44,12 +44,17 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [conversations, setConversations] = useState<ConversationDescriptor[]>([]);
   const [accountState, setAccountState] = useState<'checking' | 'new' | 'locked' | 'ready'>('checking');
   const [sessionError, setSessionError] = useState<string>();
+  const [sessionHealth, setSessionHealth] = useState<'healthy' | 'unhealthy' | 'renewal-pending'>('healthy');
   const [syncStatus, setSyncStatus] = useState<'unavailable' | 'recovering' | 'ready' | 'blocked'>('unavailable');
   const [privacyPreferences, setPrivacyPreferences] = useState<PrivacyPreferences>(readPrivacyPreferences);
   const privacyPreferencesRef = useRef(privacyPreferences);
   const [permissionStatus, setPermissionStatus] = useState<{ microphone: PermissionState | 'unknown'; camera: PermissionState | 'unknown' }>({ microphone: 'unknown', camera: 'unknown' });
   const acceptedDeliveries = useRef(new Set<string>());
   const callNegotiator = useRef<ProductionCallNegotiator>();
+  const callSupportConversation = useRef<ModernConversation | null>(null);
+  const callSupportInstallation = useRef<Promise<void> | null>(null);
+  const callMediaUnsubscribe = useRef<(() => void) | null>(null);
+  const callStateUnsubscribe = useRef<(() => void) | null>(null);
   const locallyAcceptedCalls = useRef(new Set<string>());
   const [userId, setUserId] = useState<string>('');
   const [channelHash, setChannelHash] = useState<string>('');
@@ -102,7 +107,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const createNewChannel = useCallback(async (): Promise<InviteInfo> => {
     if (!chat) throw new Error('Chat not initialized');
     try {
-      if (modern) await modern.close();
+      if (modern) await modern.close(false);
       setModern(null);
       setModernCallComposition(null);
       setModernCallId(undefined);
@@ -125,18 +130,87 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return vault;
   };
 
+  const installModernCallSupport = async (conversation: ModernConversation): Promise<void> => {
+    if (callSupportConversation.current === conversation && callNegotiator.current) return;
+    if (callSupportInstallation.current) {
+      await callSupportInstallation.current;
+      if (callSupportConversation.current === conversation && callNegotiator.current) return;
+    }
+    const installation = (async () => {
+      const composition = await conversation.createAuthenticatedCallComposition();
+      if (callSupportConversation.current === conversation && callNegotiator.current) return;
+
+      // Replacing call support is only valid when the conversation changes. Tear
+      // down the old subscriptions before disposal so its empty cleanup update
+      // cannot erase state owned by the new negotiator.
+      callMediaUnsubscribe.current?.();
+      callMediaUnsubscribe.current = null;
+      callStateUnsubscribe.current?.();
+      callStateUnsubscribe.current = null;
+      callNegotiator.current?.dispose();
+      callNegotiator.current = new ProductionCallNegotiator(composition, new BrowserCallTransport(), async () => getRuntimeConfig().webrtc);
+      setModernCallComposition(composition);
+      callSupportConversation.current = conversation;
+      callMediaUnsubscribe.current = callNegotiator.current.onMediaUpdate((update) => {
+      if (update.callId !== modernCallId && modernCallId) return;
+      setLocalCallStream(update.local);
+      // Empty updates are emitted by negotiator cleanup/disposal as well as
+      // terminal paths. Preserve the active renderer until a real call end.
+      if (update.remote) setRemoteCallStream(update.remote);
+      if (update.local) setCameraEnabledState(update.local.getVideoTracks().some((track) => track.enabled && track.readyState === 'live'));
+      if (update.state === 'connected') { setCallLifecycleState('connected'); setCallStatus('Connected'); }
+      if (update.state === 'reconnecting') { setCallLifecycleState('connecting'); setCallStatus('Reconnecting...'); }
+      if (update.state === 'failed') { setCallLifecycleState('ice-failed'); setCallStatus('Connection Failed'); }
+      });
+      callStateUnsubscribe.current = composition.onCallUpdate((session) => {
+      setModernCallId(session.callId);
+      setCallMediaMode(session.mediaMode);
+      setCallLifecycleState(session.state === 'inviting' ? 'ringing' : session.state === 'rejected' ? 'rejected' : session.state === 'cancelled' ? 'cancelled' : session.state === 'expired' ? 'timeout' : session.state === 'ended' ? 'ended' : session.state === 'accepted' ? 'connecting' : 'ringing');
+      setIsIncomingCall(session.state === 'ringing');
+      const terminal = ['rejected', 'cancelled', 'ended', 'expired', 'failed'].includes(session.state);
+      setCallActive(!terminal);
+      setCallStatus(session.state === 'ringing' ? 'Incoming Call...' : session.state.charAt(0).toUpperCase() + session.state.slice(1));
+      if (terminal) {
+        void callNegotiator.current?.end(session.callId).catch(() => undefined);
+        clearCallMedia();
+      }
+      if (session.state === 'accepted' && !locallyAcceptedCalls.current.delete(session.callId)) {
+        void callNegotiator.current?.beginOffer(session.callId).catch(() => { setCallStatus('Connection Failed'); });
+      }
+      });
+    })();
+    callSupportInstallation.current = installation;
+    try {
+      await installation;
+    } finally {
+      if (callSupportInstallation.current === installation) callSupportInstallation.current = null;
+    }
+  };
+
   const connectModern = async (secureVault: BrowserSecureStorage, descriptor: ConversationDescriptor): Promise<{ ownFingerprint: string; ownAddress: string; contact?: StoredContactIdentity }> => {
-    if (modern) await modern.close();
+    if (modern) await modern.close(false);
     setSyncStatus('recovering');
     setMessages(await readMessages(secureVault, descriptor.roomId));
     const conversation = new ModernConversation(secureVault, loadVodozemacBindings);
+    conversation.onSessionHealthUpdate((health) => {
+      setSessionHealth(health);
+      setSessionError(health === 'healthy' ? undefined : health === 'renewal-pending'
+        ? 'Verified renewal is waiting for an encrypted message to be accepted by your contact.'
+        : 'This conversation’s encrypted session is missing. Saved identity, trust, and history remain available.');
+      if (health === 'healthy') {
+        void conversation.getDeviceTrust().then((trust) => setSyncStatus(trust === 'trusted' ? 'ready' : 'blocked'))
+          .catch(() => setSyncStatus('blocked'));
+        void installModernCallSupport(conversation).catch(() => setCallError('Call signaling is unavailable for this saved contact.'));
+      }
+    });
     conversation.onDeliveryUpdate((clientId, state) => {
       acceptedDeliveries.current.add(clientId);
       setMessages((current) => current.map((message) => message.id === clientId ? { ...message, delivery: state } : message));
     });
     try {
-      const details = await conversation.connect(descriptor.roomId, descriptor.controlCapability, descriptor.remoteAddress, descriptor.remoteIdentityCommitment, (text) => {
+      const details = await conversation.connect(descriptor.roomId, descriptor.controlCapability, descriptor.remoteAddress, descriptor.remoteIdentityCommitment, async (text) => {
         const message = displayMessage('contact', text, 'received');
+        await writeMessages(secureVault, descriptor.roomId, [...await readMessages(secureVault, descriptor.roomId), message]);
         setMessages((previous) => [...previous, message]);
         deliverNotification({ kind: 'message', conversationId: descriptor.roomId, preview: message.text }, privacyPreferencesRef.current);
       }, setContactIdentity, (event: DeviceControlEvent) => {
@@ -144,6 +218,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         if (event.type === 'enrollment-approval') setPendingDeviceApproval(event.payload as EnrollmentApprovalPacket);
       });
       setModern(conversation);
+      const restoredSessionHealth = conversation.getSessionHealth();
+      setSessionHealth(restoredSessionHealth);
       setModernCallComposition(null);
       setModernCallId(undefined);
       setProtocolMode('modern');
@@ -153,23 +229,30 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       // An inbound first message can establish an unverified contact during
       // that replay, so read the final durable contact state rather than
       // overwriting it with connect()'s pre-replay snapshot.
-      setContactIdentity(await conversation.getContact());
+      const restoredContact = await conversation.getContact();
+      setContactIdentity(restoredContact);
+      if (restoredContact?.verification === 'verified' && restoredContact.changeStatus === 'unchanged' && conversation.hasEstablishedSession()) {
+        await installModernCallSupport(conversation).catch(() => setCallError('Call signaling is unavailable for this saved contact.'));
+      }
       setUserId(details.ownAddress);
       setDeviceLifecycleState(await conversation.getDeviceLifecycleState());
-      if ((globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean; __k3ncryptGetCryptoSnapshot?: () => Promise<unknown> }).__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ === true) {
-        (globalThis as typeof globalThis & { __k3ncryptGetCryptoSnapshot?: () => Promise<unknown> }).__k3ncryptGetCryptoSnapshot = () => conversation.testOnlyCryptoSnapshot();
-      }
+
       setIsConnected(true);
-      setSyncStatus((await conversation.getDeviceTrust()) === 'trusted' ? 'ready' : 'blocked');
-      setSessionError(undefined);
+      setSyncStatus(restoredSessionHealth !== 'healthy' ? 'blocked' : (await conversation.getDeviceTrust()) === 'trusted' ? 'ready' : 'blocked');
+      setSessionError(restoredSessionHealth === 'unhealthy'
+        ? 'This conversation’s encrypted session is missing. Your identity, verification, and saved messages remain available; sending and calls are paused until verified renewal.'
+        : restoredSessionHealth === 'renewal-pending' ? 'Verified renewal awaits accepted encrypted delivery.' : undefined);
       return details;
     } catch (error) {
-      if ((globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean; __k3ncryptGetCryptoSnapshot?: () => Promise<unknown> }).__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ === true) {
-        (globalThis as typeof globalThis & { __k3ncryptGetCryptoSnapshot?: () => Promise<unknown> }).__k3ncryptGetCryptoSnapshot = () => conversation.testOnlyCryptoSnapshot();
-      }
-      await conversation.close().catch(() => undefined);
+      setSessionHealth('unhealthy');
+
+      await conversation.close(false).catch(() => undefined);
       setSyncStatus('blocked');
-      setSessionError(error instanceof Error ? error.message : 'Could not open the private session.');
+      const safeCategory = error && typeof error === 'object' && 'restoreFailureCategory' in error
+        ? (error as { restoreFailureCategory?: unknown }).restoreFailureCategory : undefined;
+      setSessionError(typeof safeCategory === 'string' && safeCategory === 'session-record-missing'
+        ? 'The vault opened, but a saved encrypted session is missing. Keep this device data intact and contact support.'
+        : 'Could not restore the encrypted account. Check the local passphrase and try again.');
       throw error;
     }
   };
@@ -201,7 +284,22 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const saved = await readConversationDescriptors(secureVault);
     setConversations(saved);
     if (!saved[0]) { setAccountState('ready'); return; }
-    await connectModern(secureVault, saved[0]);
+    let missingSessionError: unknown;
+    for (const descriptor of saved) {
+      try {
+        await connectModern(secureVault, descriptor);
+        return;
+      } catch (error) {
+        // A missing record in one saved conversation must not prevent another
+        // intact, independently validated conversation from opening. Preserve
+        // the broken descriptor and all vault records for explicit recovery.
+        const category = error && typeof error === 'object' && 'restoreFailureCategory' in error
+          ? (error as { restoreFailureCategory?: unknown }).restoreFailureCategory : undefined;
+        if (category !== 'session-record-missing') throw error;
+        missingSessionError = error;
+      }
+    }
+    throw missingSessionError;
   }, [modern]);
 
   const openConversation = useCallback(async (roomId: string): Promise<void> => {
@@ -217,30 +315,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (!modern) throw new Error('No modern contact is open.');
     await modern.verifyContact(true);
     setContactIdentity(await modern.getContact());
-    const composition = await modern.createAuthenticatedCallComposition();
-    setModernCallComposition(composition);
-    callNegotiator.current?.dispose();
-    callNegotiator.current = new ProductionCallNegotiator(composition, new BrowserCallTransport(), async () => getRuntimeConfig().webrtc);
-    callNegotiator.current.onMediaUpdate((update) => {
-      if (update.callId !== modernCallId && modernCallId) return;
-      setLocalCallStream(update.local);
-      setRemoteCallStream(update.remote);
-      if (update.local) setCameraEnabledState(update.local.getVideoTracks().some((track) => track.enabled && track.readyState === 'live'));
-      if (update.state === 'connected') { setCallLifecycleState('connected'); setCallStatus('Connected'); }
-      if (update.state === 'reconnecting') { setCallLifecycleState('connecting'); setCallStatus('Reconnecting...'); }
-      if (update.state === 'failed') { setCallLifecycleState('ice-failed'); setCallStatus('Connection Failed'); }
-    });
-    composition.onCallUpdate((session) => {
-      setModernCallId(session.callId);
-      setCallMediaMode(session.mediaMode);
-      setCallLifecycleState(session.state === 'inviting' ? 'ringing' : session.state === 'rejected' ? 'rejected' : session.state === 'cancelled' ? 'cancelled' : session.state === 'ended' ? 'ended' : session.state === 'accepted' ? 'connecting' : 'ringing');
-      setIsIncomingCall(session.state === 'ringing');
-      setCallActive(!['rejected', 'cancelled', 'ended', 'expired', 'failed'].includes(session.state));
-      setCallStatus(session.state === 'ringing' ? 'Incoming Call...' : session.state.charAt(0).toUpperCase() + session.state.slice(1));
-      if (session.state === 'accepted' && !locallyAcceptedCalls.current.delete(session.callId)) {
-        void callNegotiator.current?.beginOffer(session.callId).catch(() => setCallStatus('Connection Failed'));
-      }
-    });
+    await installModernCallSupport(modern);
   }, [modern]);
 
   const acceptChangedIdentity = useCallback(async (): Promise<void> => {
@@ -248,6 +323,11 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     await modern.acceptChangedIdentity();
     setContactIdentity(await modern.getContact());
     setModernCallComposition(null);
+  }, [modern]);
+
+  const prepareVerifiedSessionRenewal = useCallback(async (): Promise<void> => {
+    if (!modern) throw new Error('No private conversation is open.');
+    await modern.prepareVerifiedSessionRenewal(true);
   }, [modern]);
 
   const requestDeviceEnrollment = useCallback(async (deviceId: string, publicIdentityReference: string, algorithm: string): Promise<void> => {
@@ -287,7 +367,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     async (roomId: string, secret: string, controlCapability: string) => {
       if (!chat) throw new Error('Chat not initialized');
       try {
-        if (modern) await modern.close();
+        if (modern) await modern.close(false);
         setModern(null);
         setModernCallComposition(null);
         // Check for channel status before joining
@@ -384,7 +464,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (name === 'NotAllowedError' || name === 'SecurityError') return mediaMode === 'video' ? 'Camera permission is required for video calls.' : 'Microphone permission is required for calls.';
     if (name === 'NotFoundError' || name === 'OverconstrainedError') return mediaMode === 'video' ? 'No camera or microphone was found.' : 'No microphone was found.';
     if (name === 'NotSupportedError') return 'This browser does not support video calls.';
-    return error instanceof Error ? error.message : 'Unable to start the call.';
+    return 'Unable to start the call. Please retry.';
   };
 
   const clearCallMedia = useCallback((): void => {
@@ -553,19 +633,23 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   // End call
   const endCall = useCallback(async () => {
+    const activeCallId = modernCallId;
+    const negotiator = callNegotiator.current;
+    const composition = modernCallComposition;
+    // Local teardown must not wait for a remote cancellation acknowledgement.
+    setCallActive(false);
+    setIsIncomingCall(false);
+    setCallDuration(0);
+    setCallLifecycleState('ended');
+    setCallStatus('Call Ended');
+    clearCallMedia();
     try {
-      if (protocolMode === 'modern' && modernCallComposition && modernCallId) {
-        await callNegotiator.current?.end(modernCallId);
-        await modernCallComposition.cancel(modernCallId).catch(() => undefined);
+      if (protocolMode === 'modern' && composition && activeCallId) {
+        await negotiator?.end(activeCallId);
+        await composition.cancel(activeCallId).catch(() => undefined);
       } else if (chat && protocolMode === 'legacy') {
         await chat.endCall();
       }
-      setCallActive(false);
-      setIsIncomingCall(false);
-      setCallDuration(0);
-      setCallLifecycleState('ended');
-      setCallStatus('Call Ended');
-      clearCallMedia();
     } catch (err) {
       debugError('Call end failed', err);
     }
@@ -760,6 +844,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     conversations,
     accountState,
     sessionError,
+    sessionHealth,
     syncStatus,
     privacyPreferences,
     permissionStatus,
@@ -771,6 +856,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     joinModernChannel,
     verifyContact,
     acceptChangedIdentity,
+    prepareVerifiedSessionRenewal,
     requestDeviceEnrollment,
     approveDeviceEnrollment,
     rejectDeviceEnrollment,

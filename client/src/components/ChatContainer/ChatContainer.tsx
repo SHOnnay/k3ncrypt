@@ -7,7 +7,6 @@ import { useChat } from '../../context/ChatContext';
 import { ChatHeader } from './ChatHeader';
 import { MessagesArea } from './MessagesArea';
 import { ChatFooter } from './ChatFooter';
-import { CallOverlay } from '../CallOverlay/CallOverlay';
 import './ChatContainer.css';
 import { debugError } from '../../utils/debug';
 
@@ -26,7 +25,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ isHidden }) => {
       await startCall();
     } catch (err) {
       debugError('Call start failed', err);
-      alert((err as any).message || 'Failed to start call');
+      alert('Could not start the call. Check microphone permission and connection, then retry.');
     } finally {
       setIsStartingCall(false);
     }
@@ -38,7 +37,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ isHidden }) => {
       await startVideoCall();
     } catch (err) {
       debugError('Video call start failed', err);
-      alert((err as any).message || 'Failed to start video call');
+      alert('Could not start the video call. Check camera and microphone permission, then retry.');
     } finally {
       setIsStartingCall(false);
     }
@@ -51,7 +50,6 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ isHidden }) => {
         <MessagesArea />
         <ChatFooter />
       </div>
-      <CallOverlay />
     </>
   );
 };
