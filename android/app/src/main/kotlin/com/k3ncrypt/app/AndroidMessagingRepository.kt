@@ -55,6 +55,7 @@ data class ConversationInvitation(
 /** Safe UI metadata for choosing a previously saved conversation. */
 data class SavedConversationSummary(
     val conversationHash: String,
+    val label: String,
     val trustState: String,
     val connectionState: String,
     val deliveryState: String,
@@ -94,6 +95,27 @@ class AndroidMessagingRepository(
     private var peerIdentityObserver: ((String, String) -> Unit)? = null
     @Volatile private var callSignalObserver: ((String) -> Unit)? = null
     private val firstContactCandidates = ConcurrentHashMap<String, String>()
+
+    suspend fun profileDisplayName(): String = stateStore.read("profile", "display-name")?.let { bytes ->
+        try { bytes.decodeToString() } finally { bytes.fill(0) }
+    }?.takeIf(String::isNotBlank) ?: "You"
+
+    suspend fun saveProfileDisplayName(value: String): String {
+        val trimmed = value.trim()
+        require(trimmed.isNotEmpty() && trimmed.length <= 40 && trimmed.none { it.isISOControl() }) { "Display name is invalid" }
+        val name = trimmed.replace(Regex("\\s+"), " ")
+        stateStore.write("profile", "display-name", name.encodeToByteArray())
+        return name
+    }
+
+    suspend fun saveContactNickname(conversationHash: String, value: String): String {
+        require(conversationHash.matches(Regex("^[0-9a-f]{64}$"))) { "Saved contact is unavailable" }
+        val trimmed = value.trim()
+        require(trimmed.isNotEmpty() && trimmed.length <= 80 && trimmed.none { it.isISOControl() }) { "Contact name is invalid" }
+        val name = trimmed.replace(Regex("\\s+"), " ")
+        stateStore.write("contact-nickname", conversationHash, name.encodeToByteArray())
+        return name
+    }
 
     init {
         scope.launch {
@@ -341,6 +363,9 @@ class AndroidMessagingRepository(
             if (!SavedConversationIndex.isTrusted(invitation)) return@mapNotNull null
             SavedConversationSummary(
                 conversationHash = SavedConversationIndex.hash(invitation.conversationId),
+                label = stateStore.read("contact-nickname", SavedConversationIndex.hash(invitation.conversationId))?.let { bytes ->
+                    try { bytes.decodeToString() } finally { bytes.fill(0) }
+                }?.takeIf(String::isNotBlank) ?: "Trusted contact",
                 trustState = "verified",
                 connectionState = if (invitation.conversationId == activeId && relay.connected.value) "connected" else "saved",
                 deliveryState = if (lastActivityByConversation[invitation.conversationId]?.let { it > 0L } == true) "has_messages" else "empty",

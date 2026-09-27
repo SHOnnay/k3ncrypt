@@ -14,7 +14,7 @@ interface WorkspaceSectionProps {
 export const WorkspaceSection: React.FC<WorkspaceSectionProps> = ({ section, onOpenConversation, onNewConversation }) => {
   const [callMessage, setCallMessage] = useState('');
   const [contactQuery, setContactQuery] = useState('');
-  const { conversations, channelHash, isConnected, sessionHealth, protocolMode, startCall, startVideoCall, callLifecycleState } = useChat();
+  const { conversations, channelHash, isConnected, sessionHealth, protocolMode, startCall, startVideoCall, callLifecycleState, setContactNickname } = useChat();
   const filteredConversations = useMemo(() => {
     const query = contactQuery.trim().toLocaleLowerCase();
     return conversations.filter((item) => !query || item.label.toLocaleLowerCase().includes(query));
@@ -27,11 +27,16 @@ export const WorkspaceSection: React.FC<WorkspaceSectionProps> = ({ section, onO
     return <main className="workspace-page">
       <header className="workspace-page__header"><div><span className="eyebrow">Your people</span><h1>Contacts</h1><p>Private conversations saved on this device.</p></div><Button variant="primary" onClick={onNewConversation}><PlusIcon size={17} /> Add contact</Button></header>
       {conversations.length > 0 && <label className="workspace-search"><SearchIcon size={17} /><input value={contactQuery} onChange={(event) => setContactQuery(event.target.value)} placeholder="Search saved contacts" aria-label="Search saved contacts" /></label>}
-      {filteredConversations.length ? <div className="workspace-contact-list">{filteredConversations.map((contact) => <button className="workspace-contact" key={contact.roomId} onClick={() => onOpenConversation(contact.roomId)} type="button">
-        <Avatar label={contact.label} size="large" status={contact.roomId === channelHash && isConnected ? 'online' : 'offline'} />
-        <span className="workspace-contact__copy"><strong>{contact.label}</strong><small>{contact.roomId === channelHash && sessionHealth !== 'healthy' ? 'Security update required' : contact.roomId === channelHash && isConnected ? 'Secure connection established' : 'Saved on this device'}</small></span>
-        <span className="workspace-contact__chevron" aria-hidden="true">›</span>
-      </button>)}</div> : conversations.length > 0 ? <div className="workspace-empty workspace-empty--compact"><h2>No matching contact</h2><p>Try another search.</p></div> : <div className="workspace-empty"><span className="workspace-empty__mark"><img src="/branding/k3ncrypt-cluster-white.svg" alt="" /></span><h2>Your contacts will appear here</h2><p>Create or join a private conversation to connect with someone you trust.</p><Button variant="primary" onClick={onNewConversation}><PlusIcon size={17} /> Add contact</Button></div>}
+      {filteredConversations.length ? <div className="workspace-contact-list">{filteredConversations.map((contact) => <div className="workspace-contact-shell" key={contact.roomId}>
+        <button className="workspace-contact" onClick={() => onOpenConversation(contact.roomId)} type="button">
+          <Avatar label={contact.label} size="large" status={contact.roomId === channelHash && isConnected ? 'online' : 'offline'} />
+          <span className="workspace-contact__copy"><strong>{contact.label}</strong><small>{contact.roomId === channelHash && sessionHealth !== 'healthy' ? 'Security update required' : contact.roomId === channelHash && isConnected ? 'Secure connection established' : 'Saved on this device'}</small></span>
+        </button>
+        <button className="workspace-contact__edit" type="button" aria-label={`Edit nickname for ${contact.label}`} onClick={() => {
+          const next = window.prompt('Contact nickname (saved only on this device)', contact.label);
+          if (next !== null) void setContactNickname(contact.roomId, next).catch(() => window.alert('Could not save this contact nickname.'));
+        }}>Edit name</button>
+      </div>)}</div> : conversations.length > 0 ? <div className="workspace-empty workspace-empty--compact"><h2>No matching contact</h2><p>Try another search.</p></div> : <div className="workspace-empty"><span className="workspace-empty__mark"><img src="/branding/k3ncrypt-cluster-white.svg" alt="" /></span><h2>Your contacts will appear here</h2><p>Create or join a private conversation to connect with someone you trust.</p><Button variant="primary" onClick={onNewConversation}><PlusIcon size={17} /> Add contact</Button></div>}
     </main>;
   }
 

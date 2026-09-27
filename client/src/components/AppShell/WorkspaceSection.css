@@ -9,6 +9,10 @@
 .workspace-search input::placeholder { color: var(--muted); }
 .eyebrow { color: var(--brand-strong); font-size: .68rem; font-weight: 750; letter-spacing: .11em; text-transform: uppercase; }
 .workspace-contact-list { display: flex; flex-direction: column; gap: 9px; }
+.workspace-contact-shell { display: flex; align-items: center; gap: 10px; }
+.workspace-contact-shell .workspace-contact { flex: 1; min-width: 0; }
+.workspace-contact__edit { min-height: 40px; padding: 0 10px; border: 1px solid var(--border); border-radius: 11px; color: var(--muted-strong); background: var(--surface); font: inherit; font-size: .7rem; cursor: pointer; }
+.workspace-contact__edit:hover { border-color: var(--border-strong); color: var(--brand-strong); }
 .workspace-contact { width: 100%; display: flex; align-items: center; gap: 14px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 17px; color: var(--ink); background: var(--surface); text-align: left; cursor: pointer; box-shadow: var(--shadow-sm); transition: transform var(--motion-fast), border-color var(--motion-fast), background var(--motion-fast); }
 .workspace-contact:hover { transform: translateY(-1px); border-color: var(--border-strong); background: var(--surface-raised); }
 .workspace-contact__copy { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }

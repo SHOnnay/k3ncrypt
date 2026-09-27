@@ -337,6 +337,10 @@ private fun IdentityAndConversationScreen(
     val preferences = remember { context.getSharedPreferences("k3ncrypt-runtime", Context.MODE_PRIVATE) }
     var state by remember { mutableStateOf<AndroidIdentityState?>(null) }
     var target by remember { mutableStateOf<NewDeviceEnrollmentIdentity?>(null) }
+    var profileName by remember { mutableStateOf("You") }
+    var profileNameDraft by remember { mutableStateOf("You") }
+    var nicknameEditingHash by remember { mutableStateOf<String?>(null) }
+    var nicknameDraft by remember { mutableStateOf("") }
     var targetDeviceId by remember { mutableStateOf("") }
     var targetIdentityReference by remember { mutableStateOf("") }
     var targetVerificationKey by remember { mutableStateOf("") }
@@ -468,6 +472,8 @@ private fun IdentityAndConversationScreen(
         }
         runCatching { identities.restore() }.onSuccess { restored ->
             state = restored
+            profileName = runCatching { messaging.profileDisplayName() }.getOrDefault("You")
+            profileNameDraft = profileName
             identityChecked = true
             if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("identity-restored")
             status = "Your saved identity is ready."
@@ -695,7 +701,7 @@ private fun IdentityAndConversationScreen(
                                     Image(painter = painterResource(R.drawable.k3ncrypt_cluster_white), contentDescription = null, modifier = Modifier.size(27.dp), contentScale = ContentScale.Fit)
                                 }
                                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    Text("Trusted contact", style = MaterialTheme.typography.titleMedium)
+                                    Text(saved.label, style = MaterialTheme.typography.titleMedium)
                                     Text(preview?.text?.take(64) ?: "Messages are end-to-end encrypted", maxLines = 1, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                                     Text(if (preview != null) formatChatTime(preview.timestamp) else if (saved.connectionState == "connected") "Secure connection established" else "Saved on this device", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
                                 }
@@ -820,14 +826,14 @@ private fun IdentityAndConversationScreen(
             if (focusedChat) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(if (SavedConversationIndex.isTrusted(active)) "Trusted contact" else "New contact", style = MaterialTheme.typography.titleMedium)
+                        Text(savedTrustedConversations.firstOrNull { it.conversationHash == SavedConversationIndex.hash(active.conversationId) }?.label ?: if (SavedConversationIndex.isTrusted(active)) "Trusted contact" else "New contact", style = MaterialTheme.typography.titleMedium)
                         Text(if (SavedConversationIndex.isTrusted(active)) "Secure connection established" else "Identity confirmation required", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     K3ncryptStatus(if (SavedConversationIndex.isTrusted(active)) "Verified" else "Review", positive = SavedConversationIndex.isTrusted(active))
                 }
             } else {
                 Spacer(Modifier.height(8.dp))
-                Text(if (SavedConversationIndex.isTrusted(active)) "Trusted contact" else "New contact", style = MaterialTheme.typography.titleMedium)
+                Text(savedTrustedConversations.firstOrNull { it.conversationHash == SavedConversationIndex.hash(active.conversationId) }?.label ?: if (SavedConversationIndex.isTrusted(active)) "Trusted contact" else "New contact", style = MaterialTheme.typography.titleMedium)
             }
             if (outgoingInvite.isNotBlank()) {
                 K3ncryptCard {
@@ -965,11 +971,28 @@ private fun IdentityAndConversationScreen(
                     Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                             Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                                Text("Trusted contact", style = MaterialTheme.typography.titleMedium)
+                                Text(saved.label, style = MaterialTheme.typography.titleMedium)
                                 Text(if (saved.connectionState == "connected") "Connected on this device" else "Saved on this device", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                                 if (saved.lastActivityTimestamp > 0L) Text("Last message · ${formatChatTime(saved.lastActivityTimestamp)}", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
                             }
                             K3ncryptStatus("Verified", positive = saved.trustState == "verified")
+                        }
+                        if (nicknameEditingHash == saved.conversationHash) {
+                            OutlinedTextField(nicknameDraft, { nicknameDraft = it }, label = { Text("Contact nickname") }, supportingText = { Text("For recognition on this device only. A nickname does not verify identity.") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(enabled = !busy && nicknameDraft.isNotBlank(), onClick = {
+                                    scope.launch {
+                                        busy = true
+                                        runCatching { messaging.saveContactNickname(saved.conversationHash, nicknameDraft) }
+                                            .onSuccess { savedTrustedConversations = messaging.savedTrustedConversations(); nicknameEditingHash = null; status = "Contact nickname saved on this device." }
+                                            .onFailure { status = "Contact nickname could not be saved. Use 1–80 characters." }
+                                        busy = false
+                                    }
+                                }) { Text("Save name") }
+                                OutlinedButton(onClick = { nicknameEditingHash = null }) { Text("Cancel") }
+                            }
+                        } else {
+                            OutlinedButton(onClick = { nicknameDraft = saved.label; nicknameEditingHash = saved.conversationHash }) { Text("Edit nickname") }
                         }
                         Button(enabled = !busy, onClick = {
                             scope.launch {
@@ -1020,6 +1043,22 @@ private fun IdentityAndConversationScreen(
        } else {
         Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             K3ncryptSectionTitle("Your device", "Settings", "Choose how K3NCRYPT looks and review this device’s security.")
+            K3ncryptCard {
+                Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                    Text("Your profile", style = MaterialTheme.typography.titleMedium)
+                    Text("This display name is stored only on this device. It does not change your cryptographic identity and is not shared with contacts.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                    OutlinedTextField(profileNameDraft, { profileNameDraft = it }, label = { Text("Display name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    Button(enabled = !busy && profileNameDraft.trim().isNotEmpty() && profileNameDraft.trim() != profileName, onClick = {
+                        scope.launch {
+                            busy = true
+                            runCatching { messaging.saveProfileDisplayName(profileNameDraft) }
+                                .onSuccess { profileName = it; profileNameDraft = it; status = "Display name saved on this device." }
+                                .onFailure { status = "Display name could not be saved. Use 1–40 characters." }
+                            busy = false
+                        }
+                    }) { Text("Save display name") }
+                }
+            }
             K3ncryptCard {
                 Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("Appearance", style = MaterialTheme.typography.titleMedium)
@@ -1133,7 +1172,7 @@ private fun IdentityAndConversationScreen(
                   ) {
                       K3ncryptBrandMark()
                       Text(if (callState.incoming) "Incoming ${callState.mediaMode} call" else "${callState.mediaMode.replaceFirstChar { it.uppercase() }} call", style = MaterialTheme.typography.titleLarge)
-                      Text("Trusted contact", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                      Text(conversation?.let { active -> savedTrustedConversations.firstOrNull { it.conversationHash == SavedConversationIndex.hash(active.conversationId) }?.label } ?: "Trusted contact", color = MaterialTheme.colorScheme.onSurfaceVariant)
                       K3ncryptStatus(callLabel, positive = callState.status in setOf("connected", "completed"))
                       if (callState.status == "connected") {
                           Text("${callElapsedSeconds / 60}:${(callElapsedSeconds % 60).toString().padStart(2, '0')}", style = MaterialTheme.typography.titleMedium)

@@ -69,6 +69,7 @@ export interface ChatContextType {
   pendingDeviceEnrollment?: EnrollmentRequest;
   pendingDeviceApproval?: EnrollmentApprovalPacket;
   conversations: ConversationDescriptor[];
+  profileDisplayName: string;
   accountState: 'checking' | 'new' | 'locked' | 'ready';
   sessionError?: string;
   sessionHealth: 'healthy' | 'unhealthy' | 'renewal-pending';
@@ -105,6 +106,8 @@ export interface ChatContextType {
   addMessage: (message: Message) => void;
   setCallDuration: (duration: number) => void;
   deleteChannel: () => Promise<void>;
+  updateProfileDisplayName: (name: string) => Promise<void>;
+  setContactNickname: (roomId: string, nickname: string) => Promise<void>;
   updatePrivacyPreferences: (next: Partial<PrivacyPreferences>) => void;
   refreshPermissionStatus: () => Promise<void>;
   attachmentRequestHeaders: () => Promise<Record<string, string>>;

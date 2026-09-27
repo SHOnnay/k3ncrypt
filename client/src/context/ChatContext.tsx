@@ -10,8 +10,10 @@ import { createMessage } from '../utils/messageHandling';
 import { playBeep } from '../utils/audioNotification';
 import { getRuntimeConfig } from '../config/runtimeConfig';
 import { debugError } from '../utils/debug';
+import { bindPageHideCallTermination } from '../calls/pagehideTermination';
 import { loadVodozemacBindings } from '../crypto/vodozemacModule';
 import { readConversationDescriptors, removeConversationDescriptor, saveConversationDescriptor, type ConversationDescriptor } from '../product/sessionStore';
+import { readProfileName, writeProfileName } from '../product/profileStore';
 import { readPrivacyPreferences, writePrivacyPreferences, type PrivacyPreferences } from '../product/preferences';
 import { deliverNotification } from '../product/notifications';
 import { readMessages, writeMessages } from '../product/messageStore';
@@ -42,6 +44,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [pendingDeviceApproval, setPendingDeviceApproval] = useState<EnrollmentApprovalPacket>();
   const [vault, setVault] = useState<BrowserSecureStorage>();
   const [conversations, setConversations] = useState<ConversationDescriptor[]>([]);
+  const [profileDisplayName, setProfileDisplayNameState] = useState('You');
   const [accountState, setAccountState] = useState<'checking' | 'new' | 'locked' | 'ready'>('checking');
   const [sessionError, setSessionError] = useState<string>();
   const [sessionHealth, setSessionHealth] = useState<'healthy' | 'unhealthy' | 'renewal-pending'>('healthy');
@@ -50,6 +53,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const privacyPreferencesRef = useRef(privacyPreferences);
   const [permissionStatus, setPermissionStatus] = useState<{ microphone: PermissionState | 'unknown'; camera: PermissionState | 'unknown' }>({ microphone: 'unknown', camera: 'unknown' });
   const acceptedDeliveries = useRef(new Set<string>());
+  const endCallRef = useRef<() => Promise<void>>(async () => undefined);
   const callNegotiator = useRef<ProductionCallNegotiator>();
   const callSupportConversation = useRef<ModernConversation | null>(null);
   const callSupportInstallation = useRef<Promise<void> | null>(null);
@@ -71,6 +75,10 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [microphoneMuted, setMicrophoneMutedState] = useState(false);
   const [cameraEnabled, setCameraEnabledState] = useState(false);
   const [callError, setCallError] = useState<string>();
+  const callActiveRef = useRef(callActive);
+  const modernCallIdRef = useRef(modernCallId);
+  callActiveRef.current = callActive;
+  modernCallIdRef.current = modernCallId;
   const activeLegacyCall = useRef<IE2ECall>();
   const callMediaPoll = useRef<ReturnType<typeof setInterval>>();
   useEffect(() => { privacyPreferencesRef.current = privacyPreferences; }, [privacyPreferences]);
@@ -125,6 +133,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (await persistence.loadMetadata()) await vault.unlock(passphrase);
     else await vault.initializeWithPassphrase(passphrase);
     setVault(vault);
+    setProfileDisplayNameState(await readProfileName(vault).catch(() => undefined) ?? 'You');
     setAccountState('ready');
     setSessionError(undefined);
     return vault;
@@ -163,11 +172,11 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (update.state === 'failed') { setCallLifecycleState('ice-failed'); setCallStatus('Connection Failed'); }
       });
       callStateUnsubscribe.current = composition.onCallUpdate((session) => {
-      setModernCallId(session.callId);
+      const terminal = ['rejected', 'cancelled', 'ended', 'expired', 'failed'].includes(session.state);
+      setModernCallId(terminal ? undefined : session.callId);
       setCallMediaMode(session.mediaMode);
       setCallLifecycleState(session.state === 'inviting' ? 'ringing' : session.state === 'rejected' ? 'rejected' : session.state === 'cancelled' ? 'cancelled' : session.state === 'expired' ? 'timeout' : session.state === 'ended' ? 'ended' : session.state === 'accepted' ? 'connecting' : 'ringing');
       setIsIncomingCall(session.state === 'ringing');
-      const terminal = ['rejected', 'cancelled', 'ended', 'expired', 'failed'].includes(session.state);
       setCallActive(!terminal);
       setCallStatus(session.state === 'ringing' ? 'Incoming Call...' : session.state.charAt(0).toUpperCase() + session.state.slice(1));
       if (terminal) {
@@ -278,6 +287,22 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     await connectModern(secureVault, descriptor);
     setConversations(await saveConversationDescriptor(secureVault, descriptor));
   }, [modern]);
+
+  const updateProfileDisplayName = useCallback(async (name: string): Promise<void> => {
+    if (!vault) throw new Error('Unlock this device before editing your profile.');
+    const saved = await writeProfileName(vault, name);
+    setProfileDisplayNameState(saved);
+  }, [vault]);
+
+  const setContactNickname = useCallback(async (roomId: string, nickname: string): Promise<void> => {
+    if (!vault) throw new Error('Unlock this device before editing contacts.');
+    const existing = conversations.find((item) => item.roomId === roomId);
+    if (!existing) throw new Error('Saved contact is unavailable.');
+    const trimmed = nickname.trim();
+    if (!trimmed || trimmed.length > 80 || /[\u0000-\u001f\u007f]/.test(trimmed)) throw new Error('Contact name must be 1–80 characters.');
+    const label = trimmed.replace(/\s+/g, ' ');
+    setConversations(await saveConversationDescriptor(vault, { ...existing, label, updatedAt: Date.now() }));
+  }, [conversations, vault]);
 
   const restoreSession = useCallback(async (passphrase: string): Promise<void> => {
     const secureVault = await openModernVault(passphrase);
@@ -636,24 +661,46 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const activeCallId = modernCallId;
     const negotiator = callNegotiator.current;
     const composition = modernCallComposition;
-    // Local teardown must not wait for a remote cancellation acknowledgement.
+    const termination = protocolMode === 'modern' && composition && activeCallId
+      ? (negotiator ? negotiator.end(activeCallId) : composition.end(activeCallId))
+      : chat && protocolMode === 'legacy'
+        ? chat.endCall()
+        : Promise.resolve();
+    // Hide the call UI immediately; the negotiator keeps media alive only until
+    // the authenticated terminal signal is attempted, then releases it.
     setCallActive(false);
     setIsIncomingCall(false);
     setCallDuration(0);
+    setModernCallId(undefined);
     setCallLifecycleState('ended');
     setCallStatus('Call Ended');
     clearCallMedia();
     try {
-      if (protocolMode === 'modern' && composition && activeCallId) {
-        await negotiator?.end(activeCallId);
-        await composition.cancel(activeCallId).catch(() => undefined);
-      } else if (chat && protocolMode === 'legacy') {
-        await chat.endCall();
-      }
+      await termination;
     } catch (err) {
       debugError('Call end failed', err);
     }
   }, [chat, clearCallMedia, modernCallComposition, modernCallId, protocolMode]);
+  endCallRef.current = endCall;
+
+  useEffect(() => {
+    if (!modern) return;
+    return modern.onPeerDisconnect(() => {
+      if (callActiveRef.current) void endCallRef.current();
+    });
+  }, [modern]);
+
+  useEffect(() => {
+    if (!callActive || protocolMode !== 'modern' || !modernCallId) return;
+    return bindPageHideCallTermination(window, () => {
+      const termination = isIncomingCall
+        ? rejectCall()
+        : callLifecycleState === 'ringing'
+          ? cancelCall()
+          : endCall();
+      return termination;
+    });
+  }, [callActive, callLifecycleState, cancelCall, endCall, isIncomingCall, modernCallId, protocolMode, rejectCall]);
 
   const setMicrophoneMuted = useCallback((muted: boolean): void => {
     if (protocolMode === 'modern') {
@@ -693,6 +740,9 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     chatInstance.on('on-alice-disconnect', () => {
       setIsConnected(false);
+      if (callActiveRef.current && !modernCallIdRef.current) {
+        void chatInstance.endCall().catch(() => undefined);
+      }
     });
 
     // The SDK has already decrypted (and replay-checked) the message before
@@ -842,6 +892,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     pendingDeviceEnrollment,
     pendingDeviceApproval,
     conversations,
+    profileDisplayName,
     accountState,
     sessionError,
     sessionHealth,
@@ -876,6 +927,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     addMessage,
     setCallDuration,
     deleteChannel,
+    updateProfileDisplayName,
+    setContactNickname,
     updatePrivacyPreferences,
     refreshPermissionStatus,
     attachmentRequestHeaders,

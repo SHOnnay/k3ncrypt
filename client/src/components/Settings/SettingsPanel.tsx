@@ -41,7 +41,7 @@ const viewTitles: Record<SettingsView, string> = {
 
 export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose }) => {
   const [view, setView] = useState<SettingsView>('settings');
-  const { channelHash, isConnected, protocolMode, userId, ownFingerprint, contactIdentity, verifyContact, acceptChangedIdentity, prepareVerifiedSessionRenewal, sessionHealth, deleteChannel, deviceLifecycleState, pendingDeviceEnrollment, pendingDeviceApproval, requestDeviceEnrollment, approveDeviceEnrollment, rejectDeviceEnrollment, confirmDeviceEnrollment, revokeDevice, privacyPreferences, updatePrivacyPreferences, permissionStatus, refreshPermissionStatus, syncStatus } = useChat();
+  const { channelHash, isConnected, protocolMode, userId, ownFingerprint, contactIdentity, verifyContact, acceptChangedIdentity, prepareVerifiedSessionRenewal, sessionHealth, deleteChannel, deviceLifecycleState, pendingDeviceEnrollment, pendingDeviceApproval, requestDeviceEnrollment, approveDeviceEnrollment, rejectDeviceEnrollment, confirmDeviceEnrollment, revokeDevice, privacyPreferences, updatePrivacyPreferences, permissionStatus, refreshPermissionStatus, syncStatus, profileDisplayName, updateProfileDisplayName, accountState } = useChat();
   const [comparisonConfirmed, setComparisonConfirmed] = useState(false);
   const [verificationError, setVerificationError] = useState('');
   const [qrInput, setQrInput] = useState('');
@@ -50,7 +50,12 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
   const [recoveryNotice, setRecoveryNotice] = useState('');
   const [deviceIdInput, setDeviceIdInput] = useState('');
   const [deviceIdentityInput, setDeviceIdentityInput] = useState('');
+  const [profileNameDraft, setProfileNameDraft] = useState(profileDisplayName);
   const { theme } = useTheme();
+
+  useEffect(() => {
+    setProfileNameDraft(profileDisplayName);
+  }, [profileDisplayName]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -79,8 +84,8 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
           {view === 'settings' && (
             <>
               <div className="identity-card">
-                <Avatar label="You" size="large" />
-                <div><strong>Your space</strong><p>{protocolMode === 'modern' ? 'Your private identity is on this device.' : 'Identity setup is available for modern contacts.'}</p></div>
+                <Avatar label={profileDisplayName} size="large" />
+                <div><strong>{profileDisplayName}</strong><p>{protocolMode === 'modern' ? 'Your private identity is on this device.' : 'Identity setup is available for modern contacts.'}</p></div>
                 <StatusPill tone="quiet">Local</StatusPill>
               </div>
               <section className="settings-group" aria-label="Settings sections">
@@ -154,6 +159,14 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
 
           {view === 'verification' && (
             <section className="settings-detail verification-view">
+              <div className="unavailable-card profile-name-card">
+                <strong>Your display name</strong>
+                <p>This name is saved only on this device for your own interface. It is not part of your cryptographic identity and is not shared with contacts.</p>
+                <label htmlFor="local-profile-name">Display name</label>
+                <input id="local-profile-name" className="message-input" maxLength={40} value={profileNameDraft} disabled={accountState !== 'ready'} onChange={(event) => setProfileNameDraft(event.target.value)} />
+                {accountState !== 'ready' && <p>Unlock your device vault to edit this name.</p>}
+                <button className="btn btn--secondary" type="button" disabled={accountState !== 'ready' || !profileNameDraft.trim() || profileNameDraft.trim() === profileDisplayName} onClick={() => updateProfileDisplayName(profileNameDraft).catch(() => setVerificationError('Could not save your display name.'))}>Save display name</button>
+              </div>
               <div className="verification-mark"><ShieldIcon size={30} /></div>
               <h3>{copy.verification.title}</h3>
               <p>{copy.verification.description}</p>

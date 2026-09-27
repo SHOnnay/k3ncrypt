@@ -22,7 +22,7 @@ const formatSidebarTime = (date?: Date): string => {
 };
 
 export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection, onNavigate, onNewConversation, onOpenConversation, onOpenSettings, settingsOpen = false }) => {
-  const { channelHash, messages, isConnected, conversations, syncStatus, sessionHealth } = useChat();
+  const { channelHash, messages, isConnected, conversations, syncStatus, sessionHealth, profileDisplayName } = useChat();
   const latest = messages.at(-1);
 
   return (
@@ -64,8 +64,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection
       </div>
 
       <div className="sidebar-profile">
-        <Avatar label="You" size="small" />
-        <span><strong>Your space</strong><small>On this device</small></span>
+        <Avatar label={profileDisplayName} size="small" />
+        <span><strong>{profileDisplayName}</strong><small>Your profile · this device</small></span>
         <button className="sidebar-settings" type="button" onClick={onOpenSettings} aria-label="Open settings"><ApprovedIcon name="settings" size={17} /></button>
       </div>
     </aside>
