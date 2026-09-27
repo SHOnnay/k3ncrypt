@@ -16,9 +16,11 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.background
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -26,6 +28,8 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
@@ -65,6 +69,11 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import org.webrtc.SurfaceViewRenderer
 import org.webrtc.VideoTrack
 import dagger.hilt.android.AndroidEntryPoint
@@ -331,7 +340,7 @@ private fun IdentityAndConversationScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-      Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
+      Column(modifier = Modifier.fillMaxSize().statusBarsPadding().animateContentSize()) {
        K3ncryptTopBar(
            title = when (selectedTab) { "contacts" -> "Contacts"; "calls" -> "Calls"; "settings" -> "Settings"; else -> "K3NCRYPT" },
            subtitle = when (selectedTab) {
@@ -353,6 +362,7 @@ private fun IdentityAndConversationScreen(
                }
            }) else null,
        )
+       if (busy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
        if (!identityChecked) {
         Column(Modifier.weight(1f).fillMaxWidth().padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
             K3ncryptCard {
@@ -360,6 +370,7 @@ private fun IdentityAndConversationScreen(
                     K3ncryptBrandMark()
                     Text("Opening your private space", style = MaterialTheme.typography.titleLarge)
                     Text("Restoring this device securely…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    CircularProgressIndicator(modifier = Modifier.padding(top = 4.dp).size(24.dp), strokeWidth = 2.dp)
                 }
             }
         }
@@ -375,7 +386,7 @@ private fun IdentityAndConversationScreen(
             if (showNewConversation && conversation != null) {
                 OutlinedButton(onClick = { showNewConversation = false }) { Text("Back to conversation") }
             }
-            Text(status)
+            if (status.isNotBlank()) K3ncryptNotice(status, k3ncryptNoticeToneFor(status))
         }
 
         if (!showNewConversation) conversation?.let { active ->
@@ -599,15 +610,7 @@ private fun IdentityAndConversationScreen(
                 val visibleMessages = chatMessages.filter { it.conversationId == active.conversationId }
                 if (visibleMessages.isEmpty()) {
                     item {
-                        Column(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 28.dp, horizontal = 12.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            K3ncryptBrandMark()
-                            Text("Your conversation starts here", style = MaterialTheme.typography.titleMedium)
-                            Text("Messages are protected and saved on this device.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
-                        }
+                        K3ncryptEmptyState("Your conversation starts here", "Messages are protected and saved on this device.")
                     }
                 } else items(visibleMessages, key = { it.id }) { message ->
                     val sentByThisDevice = message.senderRoutingId == active.localRoutingId
@@ -656,7 +659,7 @@ private fun IdentityAndConversationScreen(
                     }
                 }) { Text("Reconnect") }
             }
-            Text(messageStatus)
+            if (messageStatus.isNotBlank()) K3ncryptNotice(messageStatus, k3ncryptNoticeToneFor(messageStatus))
             if (SavedConversationIndex.isTrusted(active)) {
                 if (showAdvancedVerification) {
                     Text("If your contact lost only their encrypted conversation session, compare their fingerprint through another trusted channel before approving one replacement pre-key message. Your saved conversation and prior session remain encrypted on this device.")
@@ -683,14 +686,10 @@ private fun IdentityAndConversationScreen(
         }
        } else if (selectedTab == "contacts") {
         Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Contacts", style = MaterialTheme.typography.headlineMedium)
-            Text("Trusted conversations saved on this device.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            K3ncryptSectionTitle("Your people", "Contacts", "Trusted conversations saved on this device.")
             if (savedTrustedConversations.isEmpty()) {
                 Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
-                    Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("Your contacts will appear here", style = MaterialTheme.typography.titleMedium)
-                        Text("Create or join a private conversation to connect with someone you trust.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
+                    K3ncryptEmptyState("Your contacts will appear here", "Create or join a private conversation to connect with someone you trust.")
                 }
             } else savedTrustedConversations.forEach { saved ->
                 Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface, tonalElevation = 1.dp) {
@@ -720,15 +719,11 @@ private fun IdentityAndConversationScreen(
         }
        } else if (selectedTab == "calls") {
         Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Text("Calls", style = MaterialTheme.typography.headlineMedium)
-            Text("Start a call from a trusted, connected conversation.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            K3ncryptSectionTitle("Stay in touch", "Calls", "Start a call from a trusted, connected conversation.")
             val active = conversation
             if (active == null) {
                 Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
-                    Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("No active conversation", style = MaterialTheme.typography.titleMedium)
-                        Text("Open a saved contact before calling. Call authorization remains bound to that conversation.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
+                    K3ncryptEmptyState("No active conversation", "Open a saved contact before calling. Call authorization remains bound to that conversation.")
                 }
             } else {
                 Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
@@ -816,7 +811,11 @@ private fun IdentityAndConversationScreen(
         }
        }
       }
-      if (callState.callId != null) {
+      AnimatedVisibility(
+          visible = callState.callId != null,
+          enter = fadeIn() + scaleIn(initialScale = 0.97f),
+          exit = fadeOut() + scaleOut(targetScale = 0.98f),
+      ) {
           val callLabel = when (callState.status.lowercase()) {
               "ringing" -> if (callState.incoming) "Incoming call" else "Calling…"
               "connecting" -> "Connecting securely…"

@@ -21,7 +21,7 @@ export const MessagesArea: React.FC = () => {
     <main id="messages-area" className="messages-area">
       {messages.length === 0 ? (
         <div className="empty-state">
-          <div className="empty-lock" aria-hidden="true">K</div>
+          <div className="empty-lock" aria-hidden="true"><img src="/branding/k3ncrypt-cluster.svg" alt="" /></div>
           <strong>{copy.empty.title}</strong>
           <p>{copy.empty.description} Send the first message when they arrive.</p>
         </div>

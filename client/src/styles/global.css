@@ -29,8 +29,14 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px
 
 .app-shell { height: 100%; display: flex; overflow: hidden; background: var(--canvas); }
 .app-shell--privacy-blur { filter: blur(14px); pointer-events: none; }
-.conversation-workspace { flex: 1; min-width: 0; height: 100%; padding: 16px; }
-.app-error { position: fixed; z-index: 999; top: 18px; right: 18px; max-width: 360px; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border)); border-radius: 12px; color: var(--danger); background: var(--danger-soft); box-shadow: var(--shadow-sm); font-size: .78rem; }
+.conversation-workspace { flex: 1; min-width: 0; height: 100%; padding: 16px; isolation: isolate; }
+.app-error { position: fixed; z-index: 999; top: max(18px, env(safe-area-inset-top)); right: max(18px, env(safe-area-inset-right)); max-width: min(420px, calc(100vw - 36px)); padding: 13px 16px; border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border)); border-radius: 14px; color: var(--danger); background: var(--danger-soft); box-shadow: var(--shadow-md); font-size: .8rem; line-height: 1.45; animation: notice-in 180ms ease-out both; }
+@keyframes notice-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
+
+::selection { color: var(--brand-contrast); background: var(--brand); }
+button, [role="button"] { -webkit-tap-highlight-color: transparent; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, video:focus-visible { outline-color: var(--brand); }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; } }
-@media (max-width: 620px) { .conversation-workspace { padding: 0 0 calc(68px + env(safe-area-inset-bottom)); } }
+@media (max-width: 900px) { .conversation-workspace { padding: 12px; } }
+@media (max-width: 620px) { .conversation-workspace { padding: 0 0 calc(72px + env(safe-area-inset-bottom)); } }

@@ -3,6 +3,8 @@
   flex-direction: column;
   gap: 16px;
 }
+.create-hash-view .input-field, .create-hash-view .message-input { min-height: 46px; border-radius: 12px; }
+.create-hash-view .button-group { margin-top: 4px; }
 
 .copy-feedback {
   font-size: 0.75rem;
@@ -21,3 +23,4 @@
   gap: 10px;
   margin-top: 0.35rem;
 }
+@media (max-width: 420px) { .button-group { grid-template-columns: 1fr; } }
