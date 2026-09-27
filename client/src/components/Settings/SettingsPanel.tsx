@@ -161,7 +161,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
             <section className="settings-detail verification-view">
               <div className="unavailable-card profile-name-card">
                 <strong>Your display name</strong>
-                <p>This name is saved only on this device for your own interface. It is not part of your cryptographic identity and is not shared with contacts.</p>
+                <p>This name is saved only on this device to help you recognize your space. It is not part of your secure identity, is not shared with contacts, and does not prove anyone’s identity.</p>
                 <label htmlFor="local-profile-name">Display name</label>
                 <input id="local-profile-name" className="message-input" maxLength={40} value={profileNameDraft} disabled={accountState !== 'ready'} onChange={(event) => setProfileNameDraft(event.target.value)} />
                 {accountState !== 'ready' && <p>Unlock your device vault to edit this name.</p>}

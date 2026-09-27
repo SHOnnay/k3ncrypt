@@ -65,7 +65,7 @@ export const CreateHashView: React.FC<CreateHashViewProps> = ({
         {copied && <span className="copy-feedback">Invitation copied</span>}
       </div>
 
-      <p className="invite-note">This invitation opens a private conversation. Share it only with the person you intend to contact.</p>
+      <p className="invite-note">This invitation starts contact setup; it does not verify who sent it. Compare fingerprints and confirm before trusting the contact. Names and nicknames are only for recognition.</p>
       {inviteLink && <InvitationQr invitation={inviteLink} />}
 
       {onShareClick && inviteLink && <Button variant="secondary" size="medium" onClick={onShareClick}>

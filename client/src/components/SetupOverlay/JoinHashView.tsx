@@ -46,6 +46,7 @@ export const JoinHashView: React.FC<JoinHashViewProps> = ({
         value={inviteInput}
         onChange={onInviteInputChange}
       />
+      <p className="invite-note">An invitation does not verify who sent it. Compare fingerprints with your contact through a separate trusted channel, then confirm before trusting them. Names and nicknames are only for recognition.</p>
       <InvitationQrScanner onScanned={onInviteInputChange} />
 
       <div className="button-group">

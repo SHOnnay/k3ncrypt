@@ -177,15 +177,15 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onM
 
   const heading = view === 'initial' ? 'Private communication, on your terms' : view === 'create' ? 'Create an invitation' : view === 'join' ? 'Join someone you trust' : view === 'modern' ? 'Create your account' : view === 'restore' ? 'Welcome back' : 'Conversation closed';
   const description = view === 'initial'
-    ? 'Create a protected identity on this device, then invite one person to start a private conversation.'
+    ? 'This device has its own secure identity. Your local passphrase protects its encrypted vault. An invitation starts contact setup; fingerprint verification is required before a contact is trusted.'
     : view === 'create'
       ? 'Share this invitation with one person you trust.'
       : view === 'join'
-        ? 'Paste the private invitation they shared with you. You’ll compare identities before the conversation is trusted.'
-        : view === 'modern'
-          ? 'Start a new private conversation with a lasting identity on this device.'
+      ? 'Paste the private invitation they shared with you. You’ll compare identities before the conversation is trusted.'
+      : view === 'modern'
+          ? 'Create a secure identity for this device. Your passphrase protects the encrypted vault stored here; it is not shared with contacts.'
         : view === 'restore'
-            ? 'Your identity and saved conversations are protected in this device’s encrypted vault.'
+            ? 'Enter the local passphrase to unlock this device’s encrypted vault and restore its identity and saved conversations.'
         : 'This invitation is no longer available.';
 
   const shareInvitation = async (link: string, fallback: () => Promise<void>) => {
@@ -245,14 +245,14 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onM
 
         {view === 'modern' && <div className="create-hash-view">
           <label className="input-group">Create a local passphrase<input ref={passphraseRef} type="password" autoComplete="new-password" minLength={12} /></label>
-          <p className="invite-note">It protects this device’s encrypted identity and stays on this device. Never share your passphrase.</p>
-          {modernInvite ? <><p className="invite-note">Share this private invitation only with the person you intend to contact. You’ll both compare identity details before trusting the conversation.</p><InvitationQr invitation={modernInvite} /><input className="message-input" readOnly value={modernInvite} aria-label="Private invitation" /><button className="btn btn--secondary" type="button" onClick={() => void shareInvitation(modernInvite, async () => { await navigator.clipboard.writeText(modernInvite); })}>Share invitation</button><button className="btn btn--secondary" type="button" onClick={() => void navigator.clipboard.writeText(modernInvite).then(() => setStatus('Invitation copied. Share it privately.')).catch(() => setStatus('Clipboard is unavailable. Select and copy the invitation manually.'))}>Copy invitation</button><button className="btn btn--primary" type="button" onClick={() => onModernSetupComplete()}>Continue to your chats</button></> : <button className="btn btn--primary" type="button" disabled={isLoading} onClick={handleModernCreate}>{isLoading ? 'Creating your account…' : 'Create secure account'}</button>}
+          <p className="invite-note">This passphrase protects the encrypted vault on this device. It is not your identity and must not be shared.</p>
+          {modernInvite ? <><p className="invite-note">Share this invitation only with the intended person. Joining does not make them trusted: compare fingerprints and confirm verification first. Names and nicknames are only for recognition.</p><InvitationQr invitation={modernInvite} /><input className="message-input" readOnly value={modernInvite} aria-label="Private invitation" /><button className="btn btn--secondary" type="button" onClick={() => void shareInvitation(modernInvite, async () => { await navigator.clipboard.writeText(modernInvite); })}>Share invitation</button><button className="btn btn--secondary" type="button" onClick={() => void navigator.clipboard.writeText(modernInvite).then(() => setStatus('Invitation copied. Share it privately.')).catch(() => setStatus('Clipboard is unavailable. Select and copy the invitation manually.'))}>Copy invitation</button><button className="btn btn--primary" type="button" onClick={() => onModernSetupComplete()}>Continue to your chats</button></> : <button className="btn btn--primary" type="button" disabled={isLoading} onClick={handleModernCreate}>{isLoading ? 'Creating your account…' : 'Create secure account'}</button>}
           <button className="btn btn--secondary" type="button" onClick={handleBack}>Back</button>
         </div>}
 
         {view === 'restore' && <div className="create-hash-view">
           <label className="input-group">Local passphrase<input ref={passphraseRef} type="password" autoComplete="current-password" minLength={12} /></label>
-          <p className="invite-note">K3ncrypt reads account and conversation routing data only after the local vault unlocks.</p>
+          <p className="invite-note">Your passphrase unlocks the encrypted vault on this device. It is never your contact’s identity or verification.</p>
           <button className="btn btn--primary" type="button" disabled={isLoading} onClick={handleRestore}>{isLoading ? 'Unlocking…' : 'Unlock account'}</button>
           <button className="btn btn--secondary" type="button" onClick={handleBack}>Back</button>
         </div>}

@@ -124,7 +124,7 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var vaultGate: LocalVaultGate
     @Inject lateinit var storageCipher: KeystoreAead
     private var vaultReady by mutableStateOf(false)
-    private var unlockMessage by mutableStateOf("Authenticate with your device to open your private space.")
+    private var unlockMessage by mutableStateOf("Use your device PIN, password, or biometrics to unlock the encrypted vault on this device. Your secure identity remains on this device.")
     private var backgroundSince: Long? = null
     private var lockCleanupInProgress by mutableStateOf(false)
     private val credentialPrompt = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -176,7 +176,7 @@ class MainActivity : ComponentActivity() {
             (!this::calls.isInitialized || calls.state.value.callId == null)) {
             vaultReady = false
             storageCipher.lock()
-            unlockMessage = "Authenticate with your device to continue."
+            unlockMessage = "Use your device PIN, password, or biometrics to unlock the encrypted vault on this device."
             lockCleanupInProgress = true
             lifecycleScope.launch {
                 try {
@@ -557,7 +557,7 @@ private fun IdentityAndConversationScreen(
                         K3ncryptBrandMark()
                         Text("Your device is your identity", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            "Create your private identity on this device. Add someone with an invitation, then compare security details before you trust the conversation.",
+                            "This device has its own secure identity. An invitation starts contact setup, but does not make someone trusted. Compare fingerprints through a separate trusted channel and confirm before trusting a contact. Names and nicknames are only for recognition.",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodyMedium,
                         )
@@ -570,7 +570,7 @@ private fun IdentityAndConversationScreen(
             pendingPeer?.let { (route, fingerprint) ->
                 K3ncryptCard {
                     Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        K3ncryptSectionTitle("Contact request", "Review before connecting", "Compare the security code with your contact through a separate trusted channel. Messages stay on hold until you confirm.")
+                        K3ncryptSectionTitle("Contact request", "Review before connecting", "A contact is not trusted until you compare fingerprints through a separate trusted channel and confirm. Messages stay on hold until then. Names and nicknames do not prove identity.")
                         Button(enabled = !busy, onClick = { showPeerComparison = !showPeerComparison }) {
                             Text(if (showPeerComparison) "Hide security code" else "View security code")
                         }
@@ -719,7 +719,7 @@ private fun IdentityAndConversationScreen(
                     invitationInput,
                     { invitationInput = it },
                     label = { Text("Private invitation") },
-                    supportingText = { Text("Paste the invitation shared with you.") },
+                    supportingText = { Text("An invitation starts contact setup; it does not verify who sent it. Compare fingerprints and confirm before trusting the contact.") },
                     modifier = Modifier.fillMaxWidth(),
                     minLines = 2,
                     maxLines = 4,
@@ -727,7 +727,7 @@ private fun IdentityAndConversationScreen(
                 OutlinedButton(enabled = !busy, onClick = ::scanInvitation) { Text("Scan invitation QR") }
                 val invitationFingerprint = runCatching { parseModernInvitation(invitationInput.trim()).peerFingerprint }.getOrNull()
                 if (invitationFingerprint != null) {
-                    K3ncryptNotice("Before connecting, compare this security code with the one shown on your contact’s device using another trusted channel. This helps ensure you are talking to the right person.", K3ncryptNoticeTone.Attention)
+                    K3ncryptNotice("Before trusting this contact, compare fingerprints through a separate trusted channel and confirm verification. Names and nicknames are only for recognition.", K3ncryptNoticeTone.Attention)
                     K3ncryptCard {
                         Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text("Security code to compare", style = MaterialTheme.typography.labelLarge)
@@ -839,7 +839,7 @@ private fun IdentityAndConversationScreen(
                 K3ncryptCard {
                     Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                         Text("Your private invitation", style = MaterialTheme.typography.titleMedium)
-                        Text("Share this link only with the person you want to contact. You’ll compare security codes before trusting the conversation.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                        Text("Share this invitation only with the intended person. It does not verify who they are; compare fingerprints through a separate trusted channel and confirm before trusting the contact.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                         InvitationQr(outgoingInvite)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(onClick = {
@@ -1046,7 +1046,7 @@ private fun IdentityAndConversationScreen(
             K3ncryptCard {
                 Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                     Text("Your profile", style = MaterialTheme.typography.titleMedium)
-                    Text("This display name is stored only on this device. It does not change your cryptographic identity and is not shared with contacts.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                    Text("This display name is stored only on this device to help you recognize your space. It does not change your secure identity, is not shared with contacts, and does not prove anyone’s identity.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                     OutlinedTextField(profileNameDraft, { profileNameDraft = it }, label = { Text("Display name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                     Button(enabled = !busy && profileNameDraft.trim().isNotEmpty() && profileNameDraft.trim() != profileName, onClick = {
                         scope.launch {

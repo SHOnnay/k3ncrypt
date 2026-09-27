@@ -11,7 +11,7 @@ export const copy = {
   },
   verification: {
     title: 'Confirm connection',
-    description: 'Compare your security details through another trusted channel before confirming.',
+    description: 'A contact is not trusted until you compare fingerprints through another trusted channel and confirm verification. Display names and nicknames help you recognize people; they do not prove identity.',
   },
   empty: {
     title: 'Your private space is ready.',
