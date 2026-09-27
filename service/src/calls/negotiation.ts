@@ -44,6 +44,7 @@ export class ProductionCallNegotiator {
   private readonly localStreams = new Map<string, MediaStream>();
   private readonly remoteStreams = new Map<string, MediaStream>();
   private readonly firstRemoteCandidateTimed = new Set<string>();
+  private readonly ending = new Map<string, Promise<void>>();
   private readonly mediaListeners = new Set<(value: { callId: string; local?: MediaStream; remote?: MediaStream; state?: import('./webrtc').CallMediaState }) => void>();
   constructor(private readonly calls: AuthenticatedCallComposition, private readonly transport: CallTransport, private readonly config: WebRtcConfigProvider, private readonly media = new CallMediaController()) {
     this.unsubscribe = calls.onMediaSignal((session, signal) => this.receive(session, signal));
@@ -66,13 +67,21 @@ export class ProductionCallNegotiator {
     await this.calls.sendMediaSignal(callId, restart ? 'reconnect' : 'connect', 'offer', offer);
   }
   async end(callId: string): Promise<void> {
-    try {
-      const session = await this.calls.service.get(callId);
-      if (session && ['connected', 'reconnecting'].includes(session.state)) await this.calls.service.event(callId, 'end');
-    } finally {
-      callStabilityDiagnostic('cleanup-trigger', 'local-end');
-      await this.cleanup(callId);
-    }
+    const ongoing = this.ending.get(callId);
+    if (ongoing) return ongoing;
+    // Register before invoking composition.end(): its local state notification
+    // can synchronously re-enter this method through ChatContext.
+    const ending = Promise.resolve().then(async () => {
+      try {
+        await this.calls.end(callId);
+      } finally {
+        callStabilityDiagnostic('cleanup-trigger', 'local-end');
+        await this.cleanup(callId);
+      }
+    });
+    this.ending.set(callId, ending);
+    void ending.finally(() => { if (this.ending.get(callId) === ending) this.ending.delete(callId); }).catch(() => undefined);
+    return ending;
   }
   dispose(): void { this.unsubscribe(); for (const id of this.connections.keys()) { callStabilityDiagnostic('cleanup-trigger', 'negotiator-dispose'); void this.cleanup(id); } }
   private async receive(session: CallSession, signal: CallSignal): Promise<void> {

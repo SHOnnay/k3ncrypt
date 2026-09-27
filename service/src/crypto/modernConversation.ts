@@ -582,6 +582,17 @@ export class ModernConversation {
 
     public onDeliveryUpdate(observer: (clientId: string, state: 'accepted') => void): void { this.deliveryObserver = observer; }
 
+    /** Observe the existing relay presence event to release active media when a peer leaves. */
+    public onPeerDisconnect(observer: () => void): () => void {
+        const listeners = this.subscriptions.get('on-alice-disconnect') ?? new Set<Function>();
+        listeners.add(observer);
+        this.subscriptions.set('on-alice-disconnect', listeners);
+        return () => {
+            listeners.delete(observer);
+            if (listeners.size === 0) this.subscriptions.delete('on-alice-disconnect');
+        };
+    }
+
     private async sendUnlocked(text: string): Promise<string> {
         if (this.sessionHealth === 'unhealthy') throw new Error('The encrypted session needs verified renewal before sending.');
         if (!this.roomId || !text.trim()) throw new Error('The private contact is not ready.');

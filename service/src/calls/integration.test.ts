@@ -63,6 +63,48 @@ describe('authenticated bidirectional call flow', () => {
     expect((await alice.service.get(outgoing.callId))?.state).toBe('accepted');
   });
 
+  it.each(['alice', 'bob'] as const)('%s hangup sends the existing authenticated end event and ends both peers', async (endingSide) => {
+    const transports = connectedTransports();
+    const alice = createAuthenticatedCallComposition({ session: session(), transport: transports.alice, conversationId, localIdentityId: 'alice-id', localParticipantId: 'alice', remoteParticipant: participant('bob', 'bob-id'), identity: identity('alice', 'bob'), deviceTrust });
+    const bob = createAuthenticatedCallComposition({ session: session(), transport: transports.bob, conversationId, localIdentityId: 'bob-id', localParticipantId: 'bob', remoteParticipant: participant('alice', 'alice-id'), identity: identity('bob', 'alice'), deviceTrust });
+    transports.connect(alice.signalTransport, bob.signalTransport);
+    const call = await alice.invite();
+    await bob.accept(call.callId);
+    for (const composition of [alice, bob]) {
+      await composition.service.event(call.callId, 'connect');
+      await composition.service.event(call.callId, 'connected');
+    }
+
+    await (endingSide === 'alice' ? alice : bob).end(call.callId);
+
+    expect((await alice.service.get(call.callId))?.state).toBe('ended');
+    expect((await bob.service.get(call.callId))?.state).toBe('ended');
+  });
+
+  it('does not send duplicate terminal signals for concurrent or repeated End actions', async () => {
+    const transports = connectedTransports();
+    const alice = createAuthenticatedCallComposition({ session: session(), transport: transports.alice, conversationId, localIdentityId: 'alice-id', localParticipantId: 'alice', remoteParticipant: participant('bob', 'bob-id'), identity: identity('alice', 'bob'), deviceTrust });
+    const bob = createAuthenticatedCallComposition({ session: session(), transport: transports.bob, conversationId, localIdentityId: 'bob-id', localParticipantId: 'bob', remoteParticipant: participant('alice', 'alice-id'), identity: identity('bob', 'alice'), deviceTrust });
+    transports.connect(alice.signalTransport, bob.signalTransport);
+    const call = await alice.invite();
+    await bob.accept(call.callId);
+    for (const composition of [alice, bob]) {
+      await composition.service.event(call.callId, 'connect');
+      await composition.service.event(call.callId, 'connected');
+    }
+    const events: string[] = [];
+    const originalSend = transports.alice.sendEnvelope.bind(transports.alice);
+    transports.alice.sendEnvelope = async (channel, envelope, recipient, operation) => {
+      if (channel === 'signaling') events.push('signal');
+      return originalSend(channel, envelope, recipient, operation);
+    };
+
+    await Promise.all([alice.end(call.callId), alice.end(call.callId)]);
+    await alice.end(call.callId);
+
+    expect(events).toHaveLength(1);
+  });
+
   it('rejects a replayed or cross-conversation signal before lifecycle processing', async () => {
     const transports = connectedTransports();
     const alice = createAuthenticatedCallComposition({ session: session(), transport: transports.alice, conversationId, localIdentityId: 'alice-id', localParticipantId: 'alice', remoteParticipant: participant('bob', 'bob-id'), identity: identity('alice', 'bob'), deviceTrust });

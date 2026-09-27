@@ -10,6 +10,8 @@ import { SecureCallSignaling } from './signaling';
 import { signalDigest } from './signalBinding';
 import { generateUUID } from '../utils/uuid';
 
+const TERMINAL_SIGNAL_WAIT_MS = 3_000;
+
 const callSignalDiagnostic = (category: 'device-trust-rejected' | 'invite-binding-rejected' | 'session-binding-rejected' | 'media-listener-missing' | 'media-handler-rejected' | 'call-state-transition-rejected'): void => {
   if (testDiagnosticsEnabled()) console.info(`k3ncrypt-call-failure:${category}`);
 };
@@ -36,6 +38,8 @@ export interface AuthenticatedCallComposition {
   readonly accept: (callId: string) => Promise<CallSession>;
   readonly reject: (callId: string) => Promise<CallSession>;
   readonly cancel: (callId: string) => Promise<CallSession>;
+  /** Ends an established call with the existing authenticated terminal event. */
+  readonly end: (callId: string) => Promise<CallSession | undefined>;
   readonly onCallUpdate: (listener: (session: CallSession) => void) => () => void;
   readonly sendMediaSignal: (callId: string, event: 'connect' | 'connected' | 'reconnect', kind: Exclude<CallSignalKind, 'control'>, payload: unknown) => Promise<void>;
   readonly onMediaSignal: (listener: (session: CallSession, signal: CallSignal) => Promise<void>) => () => void;
@@ -52,6 +56,7 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
   const listeners = new Set<(session: CallSession) => void>();
   const mediaListeners = new Set<(session: CallSession, signal: CallSignal) => Promise<void>>();
   const sequences = new Map<string, number>();
+  const endings = new Map<string, Promise<CallSession | undefined>>();
   const expiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const localParticipant: CallParticipant = {
     participantId: input.localParticipantId ?? input.localIdentityId,
@@ -167,6 +172,34 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
     if (event !== 'cancel') notify(session);
     return session;
   };
+  const end = (callId: string): Promise<CallSession | undefined> => {
+    const ongoing = endings.get(callId);
+    if (ongoing) return ongoing;
+    const ending = (async (): Promise<CallSession | undefined> => {
+      const current = await service.get(callId);
+      if (!current || ['ended', 'rejected', 'cancelled', 'expired', 'failed'].includes(current.state)) return current;
+      const event: 'end' | 'cancel' = ['connected', 'reconnecting'].includes(current.state) ? 'end' : 'cancel';
+      const updated = await service.event(callId, event);
+      const sequence = (sequences.get(callId) ?? 0) + 1;
+      sequences.set(callId, sequence);
+      // Update local state immediately, but keep the authenticated call context
+      // alive until the existing terminal signal has been attempted.
+      notify(updated);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          sendEvent(current, event, sequence),
+          new Promise<void>((resolve) => { timer = setTimeout(resolve, TERMINAL_SIGNAL_WAIT_MS); }),
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+      return updated;
+    })();
+    endings.set(callId, ending);
+    void ending.finally(() => { if (endings.get(callId) === ending) endings.delete(callId); }).catch(() => undefined);
+    return ending;
+  };
   const onCallUpdate = (listener: (session: CallSession) => void): (() => void) => { listeners.add(listener); return () => listeners.delete(listener); };
   const sendMediaSignal = async (callId: string, event: 'connect' | 'connected' | 'reconnect', kind: Exclude<CallSignalKind, 'control'>, payload: unknown): Promise<void> => {
     const session = await repository.get(callId); if (!session) throw new Error('Unknown call.');
@@ -176,5 +209,5 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
   const onMediaSignal = (listener: (session: CallSession, signal: CallSignal) => Promise<void>): (() => void) => { mediaListeners.add(listener); return () => mediaListeners.delete(listener); };
   // Keep the transport listener alive for the lifetime of the composition.
   void unsubscribeSignals;
-  return Object.freeze({ service, signaling, signalTransport, repository, invite, accept: (id: string) => respond(id, 'accept'), reject: (id: string) => respond(id, 'reject'), cancel: (id: string) => respond(id, 'cancel'), onCallUpdate, sendMediaSignal, onMediaSignal });
+  return Object.freeze({ service, signaling, signalTransport, repository, invite, accept: (id: string) => respond(id, 'accept'), reject: (id: string) => respond(id, 'reject'), cancel: (id: string) => respond(id, 'cancel'), end, onCallUpdate, sendMediaSignal, onMediaSignal });
 };

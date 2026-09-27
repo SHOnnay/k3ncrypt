@@ -86,6 +86,17 @@ const fakeTransport = () => {
 
 beforeEach(() => { jest.clearAllMocks(); outboundSessionCreations = 0; inboundSessionCreations = 0; sessionDecryptions = 0; decryptedBytes = undefined; });
 
+it('registers and removes the existing relay peer-disconnect observer', () => {
+    const conversation = new ModernConversation(new Storage(), loader, fakeTransport().transport);
+    const observer = jest.fn();
+    const unsubscribe = conversation.onPeerDisconnect(observer);
+    const subscriptions = (conversation as unknown as { subscriptions: Map<string, Set<(...args: unknown[]) => void>> }).subscriptions;
+    subscriptions.get('on-alice-disconnect')?.forEach((callback) => callback());
+    expect(observer).toHaveBeenCalledTimes(1);
+    unsubscribe();
+    expect(subscriptions.has('on-alice-disconnect')).toBe(false);
+});
+
 it('rejects malformed UTF-8 without recording a replay marker', async () => {
     jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
     jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
