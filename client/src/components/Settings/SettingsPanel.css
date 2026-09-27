@@ -52,5 +52,14 @@ button.settings-row:focus-visible, .settings-row input:focus-visible, .quiet-ico
 .profile-name-card p { color: var(--muted); font-size: .74rem; line-height: 1.5; }
 .profile-name-card label { font-size: .72rem; font-weight: 650; }
 .profile-name-card input { width: 100%; min-height: 42px; padding: 0 11px; border: 1px solid var(--border-strong); border-radius: 10px; color: var(--ink); background: var(--surface); font: inherit; }
+.device-enrollment-steps { display: grid; gap: 12px; width: 100%; margin: 0; padding: 16px 18px 16px 38px; border: 1px solid var(--border); border-radius: var(--radius-md); color: var(--ink); background: var(--surface-raised); text-align: left; }
+.device-enrollment-steps li { padding-left: 3px; }
+.device-enrollment-steps strong, .device-enrollment-steps span { display: block; }
+.device-enrollment-steps strong { font-size: .78rem; }
+.device-enrollment-steps span { margin-top: 3px; color: var(--muted); font-size: .71rem; line-height: 1.45; }
+.device-advanced-details { display: grid; width: 100%; gap: 9px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-md); text-align: left; }
+.device-advanced-details summary { color: var(--brand); font-size: .78rem; font-weight: 700; cursor: pointer; }
+.device-advanced-details p { color: var(--muted); font-size: .71rem; line-height: 1.5; }
+.device-advanced-details label { font-size: .72rem; font-weight: 650; }
 .settings-panel input[type="checkbox"]:disabled { cursor: not-allowed; opacity: .5; }
 @media (max-width: 620px) { .settings-panel { width: 100%; border-left: 0; }.settings-panel__header { padding-top: calc(16px + env(safe-area-inset-top)); }.settings-panel__body { padding-bottom: calc(90px + env(safe-area-inset-bottom)); } }

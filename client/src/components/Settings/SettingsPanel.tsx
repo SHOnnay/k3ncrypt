@@ -22,7 +22,7 @@ import { SettingsRow } from './SettingsRow';
 import { copy } from '../../content/copy';
 import './SettingsPanel.css';
 
-type SettingsView = 'settings' | 'privacy' | 'notifications' | 'calls' | 'appearance' | 'network' | 'verification';
+type SettingsView = 'settings' | 'profile' | 'devices' | 'privacy' | 'notifications' | 'calls' | 'appearance' | 'network' | 'verification';
 
 interface SettingsPanelProps {
   isOpen: boolean;
@@ -31,12 +31,14 @@ interface SettingsPanelProps {
 
 const viewTitles: Record<SettingsView, string> = {
   settings: 'Settings',
+  profile: 'Profile',
+  devices: 'Devices',
   privacy: 'Privacy',
   notifications: 'Notifications',
   calls: 'Calls',
   appearance: 'Appearance',
   network: 'Connection',
-  verification: copy.verification.title,
+  verification: 'Security identity',
 };
 
 export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose }) => {
@@ -89,7 +91,9 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
                 <StatusPill tone="quiet">Local</StatusPill>
               </div>
               <section className="settings-group" aria-label="Settings sections">
-                <SettingsRow icon={<UserIcon size={18} />} title="Identity" description="Your private identity" onClick={() => setView('verification')} />
+                <SettingsRow icon={<UserIcon size={18} />} title="Profile" description="Your name on this device" onClick={() => setView('profile')} />
+                <SettingsRow icon={<ShieldIcon size={18} />} title="Security identity" description="This device and verified contacts" onClick={() => setView('verification')} />
+                <SettingsRow icon={<LockIcon size={18} />} title="Devices" description="Review and approve devices" onClick={() => setView('devices')} />
                 <SettingsRow icon={<ShieldIcon size={18} />} title="Privacy" description="Conversation and device privacy" onClick={() => setView('privacy')} />
                 <SettingsRow icon={<NetworkIcon size={18} />} title="Connection" description="How this space reaches others" onClick={() => setView('network')} />
                 <SettingsRow icon={<PaletteIcon size={18} />} title="Appearance" description={theme === 'paper' ? 'Paper & Ink' : 'Slate Dusk'} onClick={() => setView('appearance')} />
@@ -106,6 +110,19 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
             <section className="settings-detail">
               <div className="detail-intro"><h3>Choose a feeling</h3><p>Appearance stays on this device and never changes how your conversations work.</p></div>
               <ThemeSwitcher />
+            </section>
+          )}
+
+          {view === 'profile' && (
+            <section className="settings-detail">
+              <div className="detail-intro"><h3>Your profile</h3><p>Your display name is stored only on this device to help you recognize your space. It is not part of your secure identity, is not shared with contacts, and does not prove anyone’s identity.</p></div>
+              <div className="unavailable-card profile-name-card">
+                <label htmlFor="local-profile-name">Display name</label>
+                <input id="local-profile-name" className="message-input" maxLength={40} value={profileNameDraft} disabled={accountState !== 'ready'} onChange={(event) => setProfileNameDraft(event.target.value)} />
+                {accountState !== 'ready' && <p>Unlock your device vault to edit this name.</p>}
+                <button className="btn btn--secondary" type="button" disabled={accountState !== 'ready' || !profileNameDraft.trim() || profileNameDraft.trim() === profileDisplayName} onClick={() => updateProfileDisplayName(profileNameDraft).catch(() => setVerificationError('Could not save your display name.'))}>Save display name</button>
+                {verificationError && <p role="alert">{verificationError}</p>}
+              </div>
             </section>
           )}
 
@@ -159,18 +176,12 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
 
           {view === 'verification' && (
             <section className="settings-detail verification-view">
-              <div className="unavailable-card profile-name-card">
-                <strong>Your display name</strong>
-                <p>This name is saved only on this device to help you recognize your space. It is not part of your secure identity, is not shared with contacts, and does not prove anyone’s identity.</p>
-                <label htmlFor="local-profile-name">Display name</label>
-                <input id="local-profile-name" className="message-input" maxLength={40} value={profileNameDraft} disabled={accountState !== 'ready'} onChange={(event) => setProfileNameDraft(event.target.value)} />
-                {accountState !== 'ready' && <p>Unlock your device vault to edit this name.</p>}
-                <button className="btn btn--secondary" type="button" disabled={accountState !== 'ready' || !profileNameDraft.trim() || profileNameDraft.trim() === profileDisplayName} onClick={() => updateProfileDisplayName(profileNameDraft).catch(() => setVerificationError('Could not save your display name.'))}>Save display name</button>
-              </div>
               <div className="verification-mark"><ShieldIcon size={30} /></div>
-              <h3>{copy.verification.title}</h3>
+              <h3>Security identity</h3>
               <p>{copy.verification.description}</p>
               {protocolMode === 'modern' && ownFingerprint ? <div className="unavailable-card">
+                <strong>This device identity</strong>
+                <p>This identity belongs to this device. It is separate from your profile name.</p>
                 <strong>Your fingerprint</strong><code className="verification-code">{ownFingerprint}</code>
                 <button className="btn btn--secondary" type="button" onClick={() => navigator.clipboard.writeText(ownFingerprint)}>Copy yours</button>
                 <strong>Verification QR payload</strong>
@@ -178,6 +189,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
                 <textarea className="verification-qr-payload" aria-label="Your verification QR payload" readOnly value={encodeVerificationQrPayload(ownFingerprint)} />
                 <button className="btn btn--secondary" type="button" onClick={() => navigator.clipboard.writeText(encodeVerificationQrPayload(ownFingerprint))}>Copy verification code</button>
                 {contactIdentity ? <>
+                  <strong>Verified contacts</strong>
                   <StatusPill tone={contactIdentity.verification === 'verified' && contactIdentity.changeStatus === 'unchanged' ? 'positive' : 'quiet'}>{contactIdentity.changeStatus === 'changed-pending-review' ? 'Identity changed · review required' : contactIdentity.verification === 'verified' ? 'Verified' : 'Unverified'}</StatusPill>
                   <strong>Contact fingerprint</strong><code className="verification-code">{contactIdentity.identityId}</code>
                   <button className="btn btn--secondary" type="button" onClick={() => navigator.clipboard.writeText(contactIdentity.identityId)}>Copy contact fingerprint</button>
@@ -222,24 +234,41 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
                     {sessionHealth === 'renewal-pending' && <p role="status">Ask your contact to prepare verified session renewal on their device, then send one text message. Calls remain paused until that message is accepted.</p>}
                   </>}
                 </> : <p>Your contact will appear here after the first message.</p>}
-                {protocolMode === 'modern' && <div className="device-management" aria-label="Device management">
-                  <strong>Your devices</strong>
-                  <p>Device changes require an authenticated modern session and explicit approval.</p>
-                  {deviceLifecycleState?.list.devices.map((device) => <div className="network-status" key={device.deviceId}>
-                    <div><strong>{device.deviceId === userId ? 'This device' : 'Approved device'}</strong><p>{device.state === 'revoked' ? 'Removed' : device.state === 'active' ? 'Active' : 'Approval pending'}</p></div>
-                    {device.deviceId !== userId && device.state !== 'revoked' && <button className="btn btn--danger" type="button" onClick={() => { if (window.confirm('Confirm removing this device from your private device list?')) revokeDevice(device.deviceId).catch(() => setVerificationError('Could not revoke this device.')); }}>Revoke</button>}
-                  </div>)}
+                {recoveryNotice && <p role="status">{recoveryNotice}</p>}
+                {verificationError && <p role="alert">{verificationError}</p>}
+              </div> : <div className="unavailable-card"><StatusPill tone="quiet">Not available in this conversation</StatusPill><p>Verification is available for new modern private contacts.</p></div>}
+            </section>
+          )}
+
+          {view === 'devices' && (
+            <section className="settings-detail verification-view">
+              <div className="detail-intro"><h3>Add another device</h3><p>Each device has its own secure identity. The new device prepares its own identity, then an existing trusted device approves it. This does not sign the new device into a shared identity.</p></div>
+              <ol className="device-enrollment-steps">
+                <li><strong>Open K3NCRYPT on the new device.</strong><span>Choose the option to set up another device.</span></li>
+                <li><strong>Request approval.</strong><span>On this trusted device, enter the new device’s public enrollment details under Advanced details.</span></li>
+                <li><strong>Approve and confirm.</strong><span>Review the request here, then complete confirmation on the new device.</span></li>
+              </ol>
+              {protocolMode === 'modern' ? <div className="device-management" aria-label="Device management">
+                <strong>Devices on this account</strong>
+                <p>Only devices explicitly approved through the existing trust process become active.</p>
+                {deviceLifecycleState?.list.devices.map((device) => <div className="network-status" key={device.deviceId}>
+                  <div><strong>{device.deviceId === userId ? 'This device' : 'Approved device'}</strong><p>{device.state === 'revoked' ? 'Removed' : device.state === 'active' ? 'Active' : 'Approval pending'}</p></div>
+                  {device.deviceId !== userId && device.state !== 'revoked' && <button className="btn btn--danger" type="button" onClick={() => { if (window.confirm('Confirm removing this device from your private device list?')) revokeDevice(device.deviceId).catch(() => setVerificationError('Could not revoke this device.')); }}>Revoke</button>}
+                </div>)}
+                {pendingDeviceEnrollment && <div className="state-card state-card--positive"><strong>A device is waiting for approval</strong><div className="verification-actions"><button className="btn btn--primary" type="button" onClick={() => approveDeviceEnrollment().catch(() => setVerificationError('Could not approve this device.'))}>Approve</button><button className="btn btn--secondary" type="button" onClick={() => rejectDeviceEnrollment().catch(() => setVerificationError('Could not reject this device.'))}>Reject</button></div></div>}
+                {pendingDeviceApproval && <div className="state-card state-card--positive"><strong>Device approval received</strong><p>Finish the approval on this device to activate its separate identity.</p><button className="btn btn--primary" type="button" onClick={() => confirmDeviceEnrollment().then(() => setRecoveryNotice('This independent device is now active on the account.')).catch(() => setVerificationError('Could not confirm device enrollment.'))}>Confirm on this device</button></div>}
+                <details className="device-advanced-details">
+                  <summary>Advanced details</summary>
+                  <p>Use these public enrollment values only when following the existing device approval process.</p>
                   <label htmlFor="device-id-input">New device ID</label>
                   <input id="device-id-input" className="verification-qr-payload" value={deviceIdInput} onChange={(event) => setDeviceIdInput(event.target.value)} placeholder="Public device identifier" />
                   <label htmlFor="device-identity-input">New public identity reference</label>
                   <input id="device-identity-input" className="verification-qr-payload" value={deviceIdentityInput} onChange={(event) => setDeviceIdentityInput(event.target.value)} placeholder="Public identity reference" />
                   <button className="btn btn--secondary" type="button" disabled={!deviceIdInput || !deviceIdentityInput} onClick={() => requestDeviceEnrollment(deviceIdInput, deviceIdentityInput, 'Olm-Curve25519+Ed25519').then(() => { setDeviceIdInput(''); setDeviceIdentityInput(''); setRecoveryNotice('Enrollment request sent through the protected session.'); }).catch(() => setVerificationError('Could not send the enrollment request.'))}>Request device approval</button>
-                  {pendingDeviceEnrollment && <div className="state-card state-card--positive"><strong>A device is waiting for approval</strong><div className="verification-actions"><button className="btn btn--primary" type="button" onClick={() => approveDeviceEnrollment().catch(() => setVerificationError('Could not approve this device.'))}>Approve</button><button className="btn btn--secondary" type="button" onClick={() => rejectDeviceEnrollment().catch(() => setVerificationError('Could not reject this device.'))}>Reject</button></div></div>}
-                  {pendingDeviceApproval && <div className="state-card state-card--positive"><strong>Device approval received</strong><button className="btn btn--primary" type="button" onClick={() => confirmDeviceEnrollment().then(() => setRecoveryNotice('This independent device is now active on the account.')).catch(() => setVerificationError('Could not confirm device enrollment.'))}>Confirm on this device</button></div>}
-                </div>}
+                </details>
                 {recoveryNotice && <p role="status">{recoveryNotice}</p>}
                 {verificationError && <p role="alert">{verificationError}</p>}
-              </div> : <div className="unavailable-card"><StatusPill tone="quiet">Not available in this conversation</StatusPill><p>Verification is available for new modern private contacts.</p></div>}
+              </div> : <div className="unavailable-card"><StatusPill tone="quiet">Devices unavailable</StatusPill><p>Device approval is available for modern private contacts.</p></div>}
             </section>
           )}
         </div>

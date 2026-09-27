@@ -98,6 +98,7 @@ import dagger.hilt.android.AndroidEntryPoint
 import com.k3ncrypt.network.K3ncryptApi
 import com.k3ncrypt.network.NetworkEndpoint
 import com.k3ncrypt.network.SocketRelay
+import com.k3ncrypt.crypto.IdentityFingerprint
 import com.k3ncrypt.calls.CallPermissionFeedback
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
@@ -381,6 +382,7 @@ private fun IdentityAndConversationScreen(
     }
     var busy by remember { mutableStateOf(false) }
     var showAdvancedVerification by remember { mutableStateOf(false) }
+    var showAdvancedDeviceDetails by remember { mutableStateOf(false) }
     var showAdvancedNetwork by remember { mutableStateOf(false) }
     var identityChecked by remember { mutableStateOf(false) }
     val callState by calls.state.collectAsState()
@@ -783,43 +785,12 @@ private fun IdentityAndConversationScreen(
                         .onFailure { status = "Could not prepare this device for approval. Please try again." }
                     busy = false
                 }
-            }) { Text("Set up another device") }
+            }) { Text("Add another device") }
+            Text("Each device has its own secure identity. An existing trusted device must approve it; this is not a shared-profile login.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
         }
 
         if (!focusedChat && target != null) {
-            Text("A separate device identity is ready for trusted approval.")
-        }
-
-        if (!focusedChat) state?.takeIf { it.lifecycleState == "active" && showAdvancedVerification }?.let { identity ->
-            Text("Approve another device")
-            OutlinedTextField(targetDeviceId, { targetDeviceId = it }, label = { Text("Target device ID") }, singleLine = true)
-            OutlinedTextField(targetIdentityReference, { targetIdentityReference = it }, label = { Text("Target identity fingerprint") }, singleLine = true)
-            OutlinedTextField(targetVerificationKey, { targetVerificationKey = it }, label = { Text("Target Ed25519 public key") }, singleLine = true)
-            OutlinedTextField(targetFingerprint, { targetFingerprint = it }, label = { Text("Confirm target fingerprint") }, singleLine = true)
-            Button(enabled = !busy && targetDeviceId.isNotBlank() && endpoint.isNotBlank(), onClick = {
-                scope.launch {
-                    busy = true
-                    runCatching { identities.approveDevice(NewDeviceEnrollmentIdentity(targetDeviceId.trim(), targetIdentityReference.trim(), targetVerificationKey.trim(), targetFingerprint.trim())) }
-                        .onSuccess { result -> approvedAccountReference = result.getString("accountIdentityReference"); approvedPendingEpoch = result.getLong("trustEpoch").toString(); status = "Target was durably enrolled as pending approval." }
-                        .onFailure { status = "Enrollment was rejected by the device trust authority." }
-                    busy = false
-                }
-            }) { Text("Approve and enroll device") }
-            if (approvedAccountReference.isNotBlank()) Text("Device enrollment is ready for confirmation on the new device.")
-            if (identity.lifecycleState == "target-awaiting-approval") {
-                Text("Enter the account reference and pending epoch provided by the approving device.")
-                OutlinedTextField(approvedAccountReference, { approvedAccountReference = it }, label = { Text("Account reference") }, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(approvedPendingEpoch, { approvedPendingEpoch = it }, label = { Text("Pending epoch") }, modifier = Modifier.fillMaxWidth())
-                Button(enabled = !busy && approvedAccountReference.isNotBlank() && approvedPendingEpoch.toLongOrNull() != null && endpoint.isNotBlank(), onClick = {
-                    scope.launch {
-                        busy = true
-                        runCatching { identities.activateApprovedDevice(approvedAccountReference.trim(), approvedPendingEpoch.toLong()) }
-                            .onSuccess { state = it; status = "Signed device activation accepted." }
-                            .onFailure { status = "Activation was rejected by the backend trust authority." }
-                        busy = false
-                    }
-                }) { Text("Confirm and activate device") }
-            }
+            K3ncryptNotice("This device has its own secure identity. Open K3NCRYPT on an existing trusted device and approve this device there.", K3ncryptNoticeTone.Attention)
         }
 
         if (!showNewConversation) conversation?.let { active ->
@@ -1045,8 +1016,8 @@ private fun IdentityAndConversationScreen(
             K3ncryptSectionTitle("Your device", "Settings", "Choose how K3NCRYPT looks and review this device’s security.")
             K3ncryptCard {
                 Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                    Text("Your profile", style = MaterialTheme.typography.titleMedium)
-                    Text("This display name is stored only on this device to help you recognize your space. It does not change your secure identity, is not shared with contacts, and does not prove anyone’s identity.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                    Text("Profile", style = MaterialTheme.typography.titleMedium)
+                    Text("Your display name is only for recognizing your space on this device. It is not your secure identity and does not verify contacts.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                     OutlinedTextField(profileNameDraft, { profileNameDraft = it }, label = { Text("Display name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                     Button(enabled = !busy && profileNameDraft.trim().isNotEmpty() && profileNameDraft.trim() != profileName, onClick = {
                         scope.launch {
@@ -1060,7 +1031,76 @@ private fun IdentityAndConversationScreen(
                 }
             }
             K3ncryptCard {
-                Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                    Text("Devices", style = MaterialTheme.typography.titleMedium)
+                    Text("Each device has its own secure identity. This is an approval flow, not a shared-profile login.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                    Text("1 · Open K3NCRYPT on the new device and choose Add another device.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                    Text("2 · On the new device, open Advanced details and share its public enrollment details privately. Enter them on this trusted device to request approval.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                    Text("3 · Review and approve here, then finish confirmation on the new device.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                    state?.let { identity ->
+                        K3ncryptStatus(when (identity.lifecycleState) {
+                            "active" -> "This device is approved"
+                            "target-awaiting-approval" -> "Approval needed"
+                            "bootstrap-pending" -> "Setup needs a retry"
+                            else -> "Setup in progress"
+                        }, positive = identity.lifecycleState == "active")
+                        if (identity.lifecycleState == "target-awaiting-approval") {
+                            Text("Step 3 · Confirm this device after the trusted device approves it.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                            OutlinedButton(onClick = { showAdvancedDeviceDetails = !showAdvancedDeviceDetails }) { Text(if (showAdvancedDeviceDetails) "Hide advanced details" else "Advanced details") }
+                            if (showAdvancedDeviceDetails) {
+                                Text("Share these public enrollment details with the trusted device using a private channel. Never share a passphrase or private key.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                                val targetIdentity = target ?: NewDeviceEnrollmentIdentity(identity.deviceId, identity.deviceIdentityReference, IdentityFingerprint.normalize(identity.identity.ed25519), identity.deviceIdentityReference)
+                                listOf("Device ID" to targetIdentity.deviceId, "Identity reference" to targetIdentity.deviceIdentityReference, "Verification key" to targetIdentity.verificationKey, "Fingerprint" to targetIdentity.fingerprint).forEach { (label, value) ->
+                                    Text(label, style = MaterialTheme.typography.labelLarge)
+                                    Text(value, style = MaterialTheme.typography.bodySmall)
+                                    OutlinedButton(onClick = { clipboard.setText(AnnotatedString(value)) }) { Text("Copy $label") }
+                                }
+                                Text("Enter the account reference and pending epoch supplied by the approving device.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                                OutlinedTextField(approvedAccountReference, { approvedAccountReference = it }, label = { Text("Account reference") }, modifier = Modifier.fillMaxWidth())
+                                OutlinedTextField(approvedPendingEpoch, { approvedPendingEpoch = it }, label = { Text("Pending epoch") }, modifier = Modifier.fillMaxWidth())
+                                Button(enabled = !busy && approvedAccountReference.isNotBlank() && approvedPendingEpoch.toLongOrNull() != null && endpoint.isNotBlank(), onClick = {
+                                    scope.launch {
+                                        busy = true
+                                        runCatching { identities.activateApprovedDevice(approvedAccountReference.trim(), approvedPendingEpoch.toLong()) }
+                                            .onSuccess { state = it; status = "This device is approved and ready." }
+                                            .onFailure { status = "Could not activate this device. Check the approval details and try again." }
+                                        busy = false
+                                    }
+                                }) { Text("Confirm and activate device") }
+                            }
+                        } else if (identity.lifecycleState == "active") {
+                            OutlinedButton(onClick = { showAdvancedDeviceDetails = !showAdvancedDeviceDetails }) { Text(if (showAdvancedDeviceDetails) "Hide advanced details" else "Advanced details") }
+                            if (showAdvancedDeviceDetails) {
+                                Text("On the new device, open K3NCRYPT and choose Add another device. Enter its public enrollment details here, review the request, then confirm on the new device.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                                OutlinedTextField(targetDeviceId, { targetDeviceId = it }, label = { Text("Device ID") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                                OutlinedTextField(targetIdentityReference, { targetIdentityReference = it }, label = { Text("Identity reference") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                                OutlinedTextField(targetVerificationKey, { targetVerificationKey = it }, label = { Text("Verification key") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                                OutlinedTextField(targetFingerprint, { targetFingerprint = it }, label = { Text("Confirm fingerprint") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                                Button(enabled = !busy && targetDeviceId.isNotBlank() && endpoint.isNotBlank(), onClick = {
+                                    scope.launch {
+                                        busy = true
+                                        runCatching { identities.approveDevice(NewDeviceEnrollmentIdentity(targetDeviceId.trim(), targetIdentityReference.trim(), targetVerificationKey.trim(), targetFingerprint.trim())) }
+                                            .onSuccess { result -> approvedAccountReference = result.getString("accountIdentityReference"); approvedPendingEpoch = result.getLong("trustEpoch").toString(); status = "Approval is ready to confirm on the new device." }
+                                            .onFailure { status = "This device request could not be approved. Check the details and try again." }
+                                        busy = false
+                                    }
+                                }) { Text("Review and approve device") }
+                                if (approvedAccountReference.isNotBlank()) {
+                                    Text("On the new device, enter the approval reference and epoch below.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                                    Text("Account reference", style = MaterialTheme.typography.labelLarge)
+                                    Text(approvedAccountReference, style = MaterialTheme.typography.bodySmall)
+                                    OutlinedButton(onClick = { clipboard.setText(AnnotatedString(approvedAccountReference)) }) { Text("Copy account reference") }
+                                    Text("Pending epoch", style = MaterialTheme.typography.labelLarge)
+                                    Text(approvedPendingEpoch, style = MaterialTheme.typography.bodySmall)
+                                    OutlinedButton(onClick = { clipboard.setText(AnnotatedString(approvedPendingEpoch)) }) { Text("Copy pending epoch") }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            K3ncryptCard {
+                Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                     Text("Appearance", style = MaterialTheme.typography.titleMedium)
                     Text("This preference stays on this device.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1101,7 +1141,7 @@ private fun IdentityAndConversationScreen(
                 Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Security", style = MaterialTheme.typography.titleMedium)
                     K3ncryptStatus(if (state?.lifecycleState == "active") "Verified device" else "Device setup required", positive = state?.lifecycleState == "active")
-                    Text("Identity comparison and device lifecycle controls stay explicit. Fingerprints are available only in advanced verification.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Your device identity is separate from your profile name. A contact is verified only after you compare fingerprints and confirm.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Button(onClick = { showAdvancedVerification = !showAdvancedVerification }) { Text(if (showAdvancedVerification) "Close advanced verification" else "Advanced verification") }
                     if (showAdvancedVerification) state?.let { identity ->
                         Text("Device identity fingerprint", style = MaterialTheme.typography.labelLarge)
