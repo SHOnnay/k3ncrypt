@@ -453,6 +453,122 @@ it('preserves an existing established conversation session and decrypts after th
     await restored.close();
 });
 
+it('restores missing contact and route state after an existing session authenticates a message', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
+    const storage = new Storage();
+    const initial = new ModernConversation(storage, loader, fakeTransport().transport);
+    await initial.connect(room, key(9), remoteAddress, await remoteCommitment());
+    await initial.verifyContact(true);
+    await initial.send('persist an established session');
+    await initial.close();
+
+    // Model an older/raced descriptor that retained the encrypted session but
+    // lost its peer route and registry entry.
+    const mode = JSON.parse(new TextDecoder().decode((await storage.read('conversation-protocol', room))!));
+    delete mode.remoteAddress;
+    await storage.write('conversation-protocol', room, new TextEncoder().encode(JSON.stringify(mode)).buffer as ArrayBuffer);
+    await storage.delete('contact-identity', remoteAddress);
+
+    const received: string[] = [];
+    const onContactChange = jest.fn();
+    const restored = new ModernConversation(storage, loader, fakeTransport().transport);
+    await restored.connect(room, key(9), undefined, undefined, (text) => received.push(text), onContactChange);
+    decryptedBytes = new Uint8Array([1, 1, ...new TextEncoder().encode('authenticated peer message')]);
+    const envelope: EncryptedEnvelope = {
+        version: 2,
+        strategy: 'vodozemac-olm-v1',
+        data: { version: 1, olmMessage: JSON.stringify({ version: 1, message_type: 1, ciphertext: 'authenticated' }) },
+    };
+
+    await expect(receiveFirstMessage(restored, envelope, remoteAddress)).resolves.toBe(true);
+    expect(received).toEqual(['authenticated peer message']);
+    expect(await restored.getContact()).toMatchObject({ contactId: remoteAddress, verification: 'unverified', changeStatus: 'unchanged' });
+    expect(onContactChange).toHaveBeenLastCalledWith(expect.objectContaining({ contactId: remoteAddress, verification: 'unverified' }));
+    expect(JSON.parse(new TextDecoder().decode((await storage.read('conversation-protocol', room))!))).toMatchObject({ remoteAddress });
+
+    // The normal explicit verification action is available after repair; no
+    // trust state is created automatically by receiving the message.
+    await restored.verifyContact(true);
+    await expect(restored.sendWithReceipt('reply after explicit verification')).resolves.toBeDefined();
+    await restored.close();
+});
+
+it('does not create contact state when an authenticated session sender conflicts with the saved identity commitment', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
+    const storage = new Storage();
+    const initial = new ModernConversation(storage, loader, fakeTransport().transport);
+    await initial.connect(room, key(9), remoteAddress, await remoteCommitment());
+    await initial.verifyContact(true);
+    await initial.send('persist an established session');
+    await initial.close();
+
+    const mode = JSON.parse(new TextDecoder().decode((await storage.read('conversation-protocol', room))!));
+    delete mode.remoteAddress;
+    await storage.write('conversation-protocol', room, new TextEncoder().encode(JSON.stringify(mode)).buffer as ArrayBuffer);
+    await storage.delete('contact-identity', remoteAddress);
+
+    const onMessage = jest.fn();
+    const onContactChange = jest.fn();
+    const restored = new ModernConversation(storage, loader, fakeTransport().transport);
+    await restored.connect(room, key(9), undefined, '0'.repeat(43), onMessage, onContactChange);
+    decryptedBytes = new Uint8Array([1, 1, ...new TextEncoder().encode('authenticated peer message')]);
+    const envelope: EncryptedEnvelope = {
+        version: 2,
+        strategy: 'vodozemac-olm-v1',
+        data: { version: 1, olmMessage: JSON.stringify({ version: 1, message_type: 1, ciphertext: 'authenticated' }) },
+    };
+
+    await expect(receiveFirstMessage(restored, envelope, remoteAddress)).rejects.toThrow('does not match the saved invitation');
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(onContactChange).not.toHaveBeenCalled();
+    expect(await restored.getContact()).toBeUndefined();
+    expect(JSON.parse(new TextDecoder().decode((await storage.read('conversation-protocol', room))!)).remoteAddress).toBeUndefined();
+    expect(await storage.read('modern-seen', room)).toBeUndefined();
+    await restored.close();
+});
+
+it('does not create contact state when the restored session rejects an incoming sender message', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
+    const storage = new Storage();
+    const initial = new ModernConversation(storage, loader, fakeTransport().transport);
+    await initial.connect(room, key(9), remoteAddress, await remoteCommitment());
+    await initial.verifyContact(true);
+    await initial.send('persist an established session');
+    await initial.close();
+
+    const mode = JSON.parse(new TextDecoder().decode((await storage.read('conversation-protocol', room))!));
+    delete mode.remoteAddress;
+    await storage.write('conversation-protocol', room, new TextEncoder().encode(JSON.stringify(mode)).buffer as ArrayBuffer);
+    await storage.delete('contact-identity', remoteAddress);
+
+    const onMessage = jest.fn();
+    const onContactChange = jest.fn();
+    const restored = new ModernConversation(storage, loader, fakeTransport().transport);
+    await restored.connect(room, key(9), undefined, undefined, onMessage, onContactChange);
+    // Wrong inner version/channel causes the session authentication boundary
+    // to reject before identity lookup or route repair can run.
+    decryptedBytes = new Uint8Array([9, 9, ...new TextEncoder().encode('untrusted')]);
+    const envelope: EncryptedEnvelope = {
+        version: 2,
+        strategy: 'vodozemac-olm-v1',
+        data: { version: 1, olmMessage: JSON.stringify({ version: 1, message_type: 1, ciphertext: 'invalid' }) },
+    };
+
+    await expect(receiveFirstMessage(restored, envelope, remoteAddress)).rejects.toThrow();
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(onContactChange).not.toHaveBeenCalled();
+    expect(await restored.getContact()).toBeUndefined();
+    expect(JSON.parse(new TextDecoder().decode((await storage.read('conversation-protocol', room))!)).remoteAddress).toBeUndefined();
+    expect(await storage.read('modern-seen', room)).toBeUndefined();
+    await restored.close();
+});
+
 it('keeps an unclassified legacy session when history evidence is absent', async () => {
     jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
     jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);

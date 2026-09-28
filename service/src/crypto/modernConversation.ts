@@ -1173,6 +1173,10 @@ export class ModernConversation {
                     text = strictMessageDecoder.decode(payload);
                 } catch (error) { this.lastInboundFailureCategory = 'message-frame-parsing-failure'; throw error; }
                 await this.testOnlyRecordInboundStage('frame-parsed', senderFingerprint);
+                // A restored session can authenticate a peer even when the
+                // local contact and route metadata were lost. Repair that
+                // metadata only after decrypt and strict payload validation.
+                await this.restoreContactAfterAuthenticatedMessage(senderAddress);
             }
             // The consumer must durably accept the message before its replay
             // marker can make a later mailbox delivery look complete.
@@ -1240,6 +1244,36 @@ export class ModernConversation {
         this.remoteIdentityCommitment = fingerprint;
         await this.storage.write(JOIN_INTRODUCTION_SEEN_RECORD, this.roomId, asBytes({ version: 1, eventId: event.eventId }));
         await this.storage.write(SEEN_RECORD, this.roomId, asBytes(nextSeen.slice(-MAX_SEEN)));
+    }
+
+    /** Repair contact metadata for a message authenticated by a restored session. */
+    private async restoreContactAfterAuthenticatedMessage(senderAddress: string): Promise<void> {
+        if (!this.roomId || !this.capability) throw new Error('Authenticated sender cannot be associated with this conversation.');
+        const contact = await this.getContact();
+        if (!this.remoteAddress || !contact) {
+            const bundle = validateVodozemacPublicBundle(await fetchVodozemacBundle(this.roomId, this.capability, senderAddress));
+            const fingerprint = await fingerprintVodozemacIdentity(bundle.identity);
+            if (this.remoteIdentityCommitment && this.remoteIdentityCommitment !== fingerprint) {
+                throw new Error('The authenticated sender identity does not match the saved invitation.');
+            }
+            // The established Olm session authenticated this message. Observe
+            // the relay-bound sender route only now, after successful decrypt
+            // and strict message decoding; registry.observe keeps it unverified.
+            await this.observe(senderAddress, bundle.identity, this.remoteIdentityCommitment, true);
+            this.remoteAddress = senderAddress;
+            this.remoteIdentityCommitment ??= fingerprint;
+            await this.modes.write(this.roomId, { sessionId: this.runtime.activeSessionId, remoteAddress: senderAddress });
+            // observe() notifies before remoteAddress is assigned. Notify again
+            // after route persistence so React can re-read the durable contact.
+            const persistedContact = await this.getContact();
+            if (persistedContact) await this.onContactChange?.(persistedContact);
+            return;
+        }
+
+        const mode = await this.modes.read(this.roomId);
+        if (mode?.remoteAddress !== senderAddress) {
+            await this.modes.write(this.roomId, { sessionId: this.runtime.activeSessionId, remoteAddress: senderAddress });
+        }
     }
 
     private async verifyJoinIntroductionSignature(event: JoinIntroduction, publicKey: string): Promise<boolean> {
