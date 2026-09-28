@@ -10,6 +10,7 @@ export interface CustomSocket extends Socket {
   deviceId?: string,
   accountIdentityReference?: string
   deviceTrustEpoch?: number
+  protocolFeatures?: string[]
 }
 
 /** Opaque, versioned envelope — the server never inspects its contents. */
@@ -35,7 +36,7 @@ type emitDataTypes = {
   [SOCKET_TOPIC.DELIVERED]: string | number,
   [SOCKET_TOPIC.ON_ALICE_DISCONNECTED]: null,
   // No key material is exchanged any more — this is purely a presence signal.
-  [SOCKET_TOPIC.ON_ALICE_JOIN]: null,
+  [SOCKET_TOPIC.ON_ALICE_JOIN]: { protocolFeatures: string[] },
   [SOCKET_TOPIC.MESSAGE]: string,
   [SOCKET_TOPIC.WEBRTC_SESSION_DESCRIPTION]: { envelope: WireEnvelope },
   [key: string]: unknown,

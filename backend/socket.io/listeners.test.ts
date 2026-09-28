@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'crypto';
-import { authorizeRoutingAddress, isValidWireEnvelope } from './listeners';
+import { authorizeRoutingAddress, isValidWireEnvelope, parseProtocolFeatures } from './listeners';
 import connectionListener from './listeners';
 import getClientInstance from './clients';
 import * as durableTrust from '../security/durableDeviceTrust';
@@ -23,6 +23,22 @@ describe('relay wire-envelope schema', () => {
     { version: 1, strategy: 'x', data: {}, critical: true },
   ])('rejects malformed and unknown-critical-field input', (value) => {
     expect(isValidWireEnvelope(value)).toBe(false);
+  });
+});
+
+describe('optional join protocol feature negotiation', () => {
+  it('accepts old clients that omit feature metadata and only whitelisted new features', () => {
+    expect(parseProtocolFeatures(undefined)).toEqual([]);
+    expect(parseProtocolFeatures(['join-introduction-v1'])).toEqual(['join-introduction-v1']);
+  });
+
+  it.each([
+    'join-introduction-v1',
+    ['unknown-feature'],
+    ['join-introduction-v1', 'join-introduction-v1'],
+    ['join-introduction-v1', 1],
+  ])('rejects malformed or unsupported feature declarations', (value) => {
+    expect(parseProtocolFeatures(value)).toBeUndefined();
   });
 });
 

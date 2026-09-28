@@ -20,6 +20,7 @@ const OFFLINE_REPLAY_ACK_MS = 10 * 1000;
 const LIVE_DELIVERY_ACK_MS = 5 * 1000;
 /** Burst of 40 messages, refilling at 10/s — plenty for normal signaling/chat traffic. */
 const rateLimiter = new RateLimiter({ capacity: 40, refillPerSecond: 10 });
+const SUPPORTED_PROTOCOL_FEATURES = new Set(['join-introduction-v1']);
 
 type Ack = (response: Record<string, unknown>) => void;
 const noop: Ack = () => undefined;
@@ -58,6 +59,14 @@ export const isValidWireEnvelope = (value: unknown): value is WireEnvelope => {
   return Number.isInteger(envelope.version) && envelope.version >= 1 && envelope.version <= 16 &&
     typeof envelope.strategy === 'string' && /^[A-Za-z0-9._-]{1,64}$/.test(envelope.strategy) &&
     envelope.data !== undefined && envelope.data !== null;
+};
+
+export const parseProtocolFeatures = (value: unknown): string[] | undefined => {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > SUPPORTED_PROTOCOL_FEATURES.size ||
+      value.some((feature) => typeof feature !== 'string' || !SUPPORTED_PROTOCOL_FEATURES.has(feature)) ||
+      new Set(value).size !== value.length) return undefined;
+  return value as string[];
 };
 
 type ProofCarrier = { deviceAuthorizationProof: DeviceAuthorizationProof; proofNonce: string; proofOperation?: DeviceOperation };
@@ -163,10 +172,12 @@ const findPeerSid = (socket: CustomSocket): string | undefined => {
 const connectionListener = (socket: CustomSocket, io) => {
   socket.on("chat-join", async (data, ack: Ack = noop) => {
     const rejectJoin = (error: string, code: string) => ack(process.env.NODE_ENV === 'production' ? { error } : { error, code });
-    const { userID, channelID, controlCapability, routingProof, deviceAuthorizationProof, proofNonce } = data || {};
+    const { userID, channelID, controlCapability, routingProof, deviceAuthorizationProof, proofNonce, protocolFeatures } = data || {};
+    const parsedFeatures = parseProtocolFeatures(protocolFeatures);
     if (!data || typeof data !== 'object' || Array.isArray(data) ||
-        !Object.keys(data).every((key) => ['userID', 'channelID', 'controlCapability', 'routingProof', 'deviceAuthorizationProof', 'proofNonce'].includes(key)) ||
+        !Object.keys(data).every((key) => ['userID', 'channelID', 'controlCapability', 'routingProof', 'deviceAuthorizationProof', 'proofNonce', 'protocolFeatures'].includes(key)) ||
         !['userID', 'channelID', 'controlCapability', 'deviceAuthorizationProof', 'proofNonce'].every((key) => key in data) || !validCarrier({ deviceAuthorizationProof, proofNonce }) ||
+        parsedFeatures === undefined ||
         !isValidRoomId(userID) ||
         !isValidRoomId(channelID) || !isValidControlCapability(controlCapability)) {
       console.error("Rejected malformed channel join");
@@ -207,6 +218,7 @@ const connectionListener = (socket: CustomSocket, io) => {
     clients.setClientToChannel(userID, channelID, socket.id);
     socket.channelID = channelID;
     socket.userID = userID;
+    socket.protocolFeatures = parsedFeatures;
     // Reconnection by the same device replaces its previous live registration.
     // Install the new SID first so the old socket's delayed disconnect cannot
     // remove the replacement mapping or emit a false peer-disconnect event.
@@ -220,10 +232,11 @@ const connectionListener = (socket: CustomSocket, io) => {
     // reach this relay.
     const receiverId = clients.getReceiverIDBySenderID(userID, channelID);
     const receiver = receiverId && clients.getSIDByIDs(receiverId, channelID);
+    const receiverSocket = receiver && io.sockets.sockets.get(receiver.sid) as CustomSocket | undefined;
     if (receiver) {
-      socketEmit<SOCKET_TOPIC.ON_ALICE_JOIN>(SOCKET_TOPIC.ON_ALICE_JOIN, receiver.sid, null);
+      socketEmit<SOCKET_TOPIC.ON_ALICE_JOIN>(SOCKET_TOPIC.ON_ALICE_JOIN, receiver.sid, { protocolFeatures: socket.protocolFeatures ?? [] });
     }
-    ack({ status: 'accepted' });
+    ack({ status: 'accepted', peerFeatures: receiverSocket?.protocolFeatures ?? [] });
   });
 
   socket.on('mailbox-replay', async (_payload: unknown, ack: Ack = noop) => {

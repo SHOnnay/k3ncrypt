@@ -32,6 +32,8 @@ export type chatJoinPayloadType = {
     routingProof?: string,
     deviceAuthorizationProof?: import('../devices/trustProtocol').DeviceAuthorizationProof,
     proofNonce?: string,
+    /** Additive protocol capability metadata; it does not affect join authorization. */
+    protocolFeatures?: string[],
 }
 
 export interface IChatE2EE {

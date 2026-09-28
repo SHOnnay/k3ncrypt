@@ -200,7 +200,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
-  const connectModern = async (secureVault: BrowserSecureStorage, descriptor: ConversationDescriptor): Promise<{ ownFingerprint: string; ownAddress: string; contact?: StoredContactIdentity }> => {
+  const connectModern = async (secureVault: BrowserSecureStorage, descriptor: ConversationDescriptor, sendJoinIntroduction = false): Promise<{ ownFingerprint: string; ownAddress: string; contact?: StoredContactIdentity }> => {
     if (modern) await modern.close(false);
     setSyncStatus('recovering');
     setMessages(await readMessages(secureVault, descriptor.roomId));
@@ -232,10 +232,23 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             await installModernCallSupport(conversation).catch(() => setCallError('Call signaling is unavailable for this saved contact.'));
           }
         }
-      }, setContactIdentity, (event: DeviceControlEvent) => {
+      }, async (contact) => {
+        setContactIdentity(contact);
+        if (contact.contactId && (!descriptor.remoteAddress || descriptor.remoteAddress !== contact.contactId || descriptor.remoteIdentityCommitment !== contact.identityId)) {
+          const latestDescriptor = (await readConversationDescriptors(secureVault))
+            .find((item) => item.roomId === descriptor.roomId) ?? descriptor;
+          const updated = await saveConversationDescriptor(secureVault, {
+            ...latestDescriptor,
+            remoteAddress: contact.contactId,
+            remoteIdentityCommitment: contact.identityId,
+            updatedAt: Date.now(),
+          });
+          setConversations(updated);
+        }
+      }, (event: DeviceControlEvent) => {
         if (event.type === 'enrollment-request') setPendingDeviceEnrollment(event.payload as EnrollmentRequest);
         if (event.type === 'enrollment-approval') setPendingDeviceApproval(event.payload as EnrollmentApprovalPacket);
-      });
+      }, { sendJoinIntroduction });
       setModern(conversation);
       const restoredSessionHealth = conversation.getSessionHealth();
       setSessionHealth(restoredSessionHealth);
@@ -294,7 +307,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const joinModernChannel = useCallback(async (roomId: string, capability: string, address: string, identityCommitment: string, passphrase: string): Promise<void> => {
     const secureVault = await openModernVault(passphrase);
     const descriptor: ConversationDescriptor = { version: 1, roomId, controlCapability: capability, remoteAddress: address, remoteIdentityCommitment: identityCommitment, label: 'Private contact', updatedAt: Date.now() };
-    await connectModern(secureVault, descriptor);
+    await connectModern(secureVault, descriptor, true);
     setConversations(await saveConversationDescriptor(secureVault, descriptor));
   }, [modern]);
 

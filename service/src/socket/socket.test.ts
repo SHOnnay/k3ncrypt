@@ -129,6 +129,33 @@ describe('SocketInstance', () => {
             expect(await instance.testOnlyRelayRegistration()).toMatchObject({ connected: true, joinAcknowledged: true });
         });
 
+        it('advertises join-introduction support and uses only the peer features from the join acknowledgement', async () => {
+            const instance = createInstance();
+            instance.setProtocolFeatures(['join-introduction-v1']);
+            mockSocket.emit.mockImplementation((event: string, _payload: unknown, ack?: (result: unknown) => void) => {
+                if (event === 'chat-join') ack?.({ status: 'accepted', peerFeatures: ['join-introduction-v1'] });
+            });
+
+            await instance.join('room', 'route', 'capability');
+
+            expect(mockSocket.emit).toHaveBeenCalledWith('chat-join', expect.objectContaining({
+                protocolFeatures: ['join-introduction-v1'],
+            }), expect.any(Function));
+            expect(instance.peerSupportsFeature('join-introduction-v1')).toBe(true);
+            expect(instance.peerSupportsFeature('unrecognized-feature')).toBe(false);
+        });
+
+        it('keeps peers without introduction capability on the legacy first-message path', async () => {
+            const instance = createInstance();
+            mockSocket.emit.mockImplementation((event: string, _payload: unknown, ack?: (result: unknown) => void) => {
+                if (event === 'chat-join') ack?.({ status: 'accepted' });
+            });
+
+            await instance.join('room', 'route', 'capability');
+
+            expect(instance.peerSupportsFeature('join-introduction-v1')).toBe(false);
+        });
+
         it('waits for a socket connection before obtaining and sending the join proof', async () => {
             const instance = createInstance();
             const acquire = jest.fn().mockResolvedValue({ deviceAuthorizationProof: {}, proofNonce: 'fresh-nonce' });
@@ -161,6 +188,17 @@ describe('SocketInstance', () => {
             handlerFor('on-alice-join')(null);
 
             expect(callback).toHaveBeenCalledWith(null);
+        });
+
+        it('updates negotiated peer features from authenticated presence metadata', () => {
+            const instance = createInstance();
+            const callback = jest.fn();
+            subscription.set('on-alice-join', new Set([callback]));
+
+            handlerFor('on-alice-join')({ protocolFeatures: ['join-introduction-v1'] });
+
+            expect(instance.peerSupportsFeature('join-introduction-v1')).toBe(true);
+            expect(callback).toHaveBeenCalledWith({ protocolFeatures: ['join-introduction-v1'] });
         });
 
         it('ignores events that have no subscribers', () => {

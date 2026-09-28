@@ -25,6 +25,9 @@ export type RawChatMessage = {
 };
 export type RawSignalMessage = { envelope: EncryptedEnvelope };
 
+export const JOIN_INTRODUCTION_FEATURE = 'join-introduction-v1';
+const SUPPORTED_PROTOCOL_FEATURES = [JOIN_INTRODUCTION_FEATURE] as const;
+
 const WIRE_EVENTS = {
     LIMIT_REACHED: 'limit-reached',
     DELIVERED: 'delivered',
@@ -48,6 +51,8 @@ export class SocketIoRelayTransport implements Transport {
     private connectionGeneration = 0;
     private joinedGeneration = -1;
     private joinedConversationId?: string;
+    private peerProtocolFeatures = new Set<string>();
+    private advertisedProtocolFeatures = new Set<string>();
     private joinInFlight?: { generation: number; conversationId: string; promise: Promise<void> };
 
     constructor(
@@ -63,10 +68,19 @@ export class SocketIoRelayTransport implements Transport {
             this.joinedConversationId = undefined;
             void this.restoreChannelPresence();
         });
-        this.socket.on('disconnect', () => { this.joinedGeneration = -1; this.joinedConversationId = undefined; });
+        this.socket.on('disconnect', () => {
+            this.joinedGeneration = -1;
+            this.joinedConversationId = undefined;
+            this.peerProtocolFeatures.clear();
+        });
         this.socket.on(WIRE_EVENTS.LIMIT_REACHED, (...args) => this.handleEvent('limit-reached', args));
         this.socket.on(WIRE_EVENTS.DELIVERED, (...args) => this.handleEvent('delivered', args));
-        this.socket.on(WIRE_EVENTS.ON_ALICE_JOIN, (...args) => this.handleEvent('on-alice-join', args));
+        this.socket.on(WIRE_EVENTS.ON_ALICE_JOIN, (payload: unknown) => {
+            const features = payload && typeof payload === 'object' && !Array.isArray(payload)
+                ? (payload as { protocolFeatures?: unknown }).protocolFeatures : payload;
+            this.peerProtocolFeatures = new Set(this.parsePeerFeatures(features));
+            this.handleEvent('on-alice-join', [payload]);
+        });
         this.socket.on(WIRE_EVENTS.ON_ALICE_DISCONNECT, (...args) => this.handleEvent('on-alice-disconnect', args));
         this.socket.on(WIRE_EVENTS.CHAT_MESSAGE, (message: RawChatMessage, ack?: (response: { accepted: boolean }) => void) => {
             void this.acceptChatEnvelope(message, ack);
@@ -86,16 +100,28 @@ export class SocketIoRelayTransport implements Transport {
         this.joinedGeneration = -1;
         this.joinedConversationId = undefined;
         this.activeConversationId = undefined;
+        this.peerProtocolFeatures.clear();
         this.socket.disconnect();
     }
 
     public setDeviceProofProvider(provider: DeviceProofProvider | undefined): void { this.proofProvider = provider; }
 
     public async join(conversationId: string, peerRoutingId: string, controlCapability: string, routingProof?: string): Promise<void> {
+        if (this.desiredConversation?.conversationId !== conversationId) this.peerProtocolFeatures.clear();
         this.activeConversationId = conversationId;
         const desired = { conversationId, peerRoutingId, controlCapability, routingProof };
         this.desiredConversation = desired;
         await this.ensureChannelPresence(desired);
+    }
+
+    public peerSupportsFeature(feature: string): boolean {
+        return this.peerProtocolFeatures.has(feature);
+    }
+
+    public setProtocolFeatures(features: readonly string[]): void {
+        if (features.some((feature) => !SUPPORTED_PROTOCOL_FEATURES.includes(feature as typeof SUPPORTED_PROTOCOL_FEATURES[number])) ||
+            new Set(features).size !== features.length) throw new Error('Unsupported relay protocol feature.');
+        this.advertisedProtocolFeatures = new Set(features);
     }
 
     /** Called only after the conversation transition has released its local lock. */
@@ -198,8 +224,10 @@ export class SocketIoRelayTransport implements Transport {
                 controlCapability: desired.controlCapability,
                 ...(desired.routingProof ? { routingProof: desired.routingProof } : {}),
                 ...(carrier ? carrier : {}),
+                ...(this.advertisedProtocolFeatures.size ? { protocolFeatures: [...this.advertisedProtocolFeatures] } : {}),
             };
-            await this.emitWithAck<{ status: 'accepted' }>('chat-join', payload);
+            const response = await this.emitWithAck<{ status: 'accepted'; peerFeatures?: unknown }>('chat-join', payload);
+            this.peerProtocolFeatures = new Set(this.parsePeerFeatures(response?.peerFeatures));
             if (this.desiredConversation?.conversationId !== desired.conversationId) {
                 throw new Error('Conversation changed before relay registration completed.');
             }
@@ -237,6 +265,13 @@ export class SocketIoRelayTransport implements Transport {
             this.socket.on('connect_error', onConnectError);
             if (this.socket.connected) finish();
         });
+    }
+
+    private parsePeerFeatures(value: unknown): string[] {
+        if (!Array.isArray(value) || value.length > SUPPORTED_PROTOCOL_FEATURES.length ||
+            value.some((feature) => typeof feature !== 'string' || !SUPPORTED_PROTOCOL_FEATURES.includes(feature as typeof SUPPORTED_PROTOCOL_FEATURES[number])) ||
+            new Set(value).size !== value.length) return [];
+        return value as string[];
     }
 
     public capabilities(): TransportCapabilities {

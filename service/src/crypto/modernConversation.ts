@@ -7,7 +7,7 @@ import { ContactIdentityRegistry, type StoredContactIdentity } from '../identity
 import { fingerprintVodozemacIdentity, type VodozemacPublicIdentity } from '../identity/vodozemacIdentity';
 import { validateVodozemacPublicBundle } from '../identity/vodozemacBundle';
 import { DefaultTransportManager } from '../transports/transportManager';
-import { SocketIoRelayTransport, type SubscriptionType } from '../transports/socketIoRelayTransport';
+import { JOIN_INTRODUCTION_FEATURE, SocketIoRelayTransport, type SubscriptionType } from '../transports/socketIoRelayTransport';
 import { Logger } from '../utils/logger';
 import { AsyncMutex } from '../utils/asyncMutex';
 import { ConversationModeStore } from './conversationMode';
@@ -44,6 +44,9 @@ const SEEN_RECORD = 'modern-seen';
 const PUBLICATION_RECORD = 'modern-publication';
 const SESSION_AUDIT_RECORD = 'conversation-session-audit';
 const SESSION_RENEWAL_RECORD = 'conversation-session-renewal';
+const JOIN_INTRODUCTION_RECORD = 'conversation-join-introduction';
+const JOIN_INTRODUCTION_SEEN_RECORD = 'conversation-join-introduction-seen';
+const JOIN_INTRODUCTION_MAGIC = new Uint8Array([0x00, 0x4b, 0x33, 0x4e, 0x43, 0x49, 0x01]);
 const MAX_PENDING = 32;
 const MAX_SEEN = 1024;
 
@@ -54,6 +57,22 @@ type SessionAudit = {
     origin?: 'join' | 'first-message';
 };
 type SessionRenewal = { version: 1; previousSessionId: string; clientId?: string };
+type JoinIntroduction = {
+    version: 1;
+    type: 'join-introduction';
+    eventId: string;
+    conversationId: string;
+    senderAddress: string;
+    identityCommitment: string;
+    createdAt: number;
+    signature: string;
+};
+type JoinIntroductionRecord = {
+    version: 1;
+    recipientAddress: string;
+    recipientIdentityCommitment: string;
+    envelope?: EncryptedEnvelope;
+};
 const parseSessionRenewal = (bytes: ArrayBuffer | undefined): SessionRenewal | undefined => {
     if (!bytes) return undefined;
     const value: unknown = JSON.parse(decoder.decode(bytes));
@@ -142,12 +161,62 @@ const firstMessage = (envelope: EncryptedEnvelope): string => {
     return data.olmMessage;
 };
 
-const unframeFirstMessage = (bytes: ArrayBuffer): string => {
+const unframeFirstMessage = (bytes: ArrayBuffer): Uint8Array => {
     const value = new Uint8Array(bytes);
     try {
         if (value.length < 2 || value[0] !== 1 || value[1] !== 1) throw new Error('Modern message binding is invalid.');
-        return strictMessageDecoder.decode(value.slice(2));
+        return value.slice(2);
     } finally { value.fill(0); }
+};
+
+const canonicalJoinIntroduction = (event: Omit<JoinIntroduction, 'signature'>): Uint8Array => encoder.encode(JSON.stringify(event));
+
+const encodeJoinIntroduction = (event: JoinIntroduction): ArrayBuffer => {
+    const body = encoder.encode(JSON.stringify(event));
+    const result = new Uint8Array(JOIN_INTRODUCTION_MAGIC.length + body.length);
+    result.set(JOIN_INTRODUCTION_MAGIC);
+    result.set(body, JOIN_INTRODUCTION_MAGIC.length);
+    body.fill(0);
+    return result.buffer;
+};
+
+const parseJoinIntroduction = (payload: Uint8Array): JoinIntroduction | undefined => {
+    if (payload.length < JOIN_INTRODUCTION_MAGIC.length ||
+        !JOIN_INTRODUCTION_MAGIC.every((byte, index) => payload[index] === byte)) return undefined;
+    const bytes = payload.subarray(JOIN_INTRODUCTION_MAGIC.length);
+    if (bytes.length > 2048) throw new Error('Join introduction is invalid.');
+    let value: unknown;
+    try { value = JSON.parse(strictMessageDecoder.decode(bytes)); }
+    catch { throw new Error('Join introduction is invalid.'); }
+    const expected = ['conversationId', 'createdAt', 'eventId', 'identityCommitment', 'senderAddress', 'signature', 'type', 'version'];
+    if (!value || typeof value !== 'object' || Array.isArray(value) ||
+        Object.keys(value).sort().join(',') !== expected.join(',') ) throw new Error('Join introduction is invalid.');
+    const item = value as Record<string, unknown>;
+    if (item.version !== 1 || item.type !== 'join-introduction' ||
+        typeof item.eventId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(item.eventId) ||
+        typeof item.conversationId !== 'string' || !/^[0-9a-f-]{36}$/i.test(item.conversationId) ||
+        typeof item.senderAddress !== 'string' || !/^[0-9a-f-]{36}$/i.test(item.senderAddress) ||
+        typeof item.identityCommitment !== 'string' || item.identityCommitment.length < 8 || item.identityCommitment.length > 128 ||
+        !Number.isSafeInteger(item.createdAt) ||
+        typeof item.signature !== 'string' || !/^[A-Za-z0-9_-]{86}$/.test(item.signature)) {
+        throw new Error('Join introduction is invalid.');
+    }
+    return item as JoinIntroduction;
+};
+
+const parseJoinIntroductionRecord = (bytes: ArrayBuffer | undefined): JoinIntroductionRecord | undefined => {
+    if (!bytes) return undefined;
+    let value: unknown;
+    try { value = JSON.parse(decoder.decode(bytes)); } catch { throw new Error('Saved join introduction is invalid.'); }
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Saved join introduction is invalid.');
+    const item = value as Record<string, unknown>;
+    if (Object.keys(item).some((key) => !['version', 'recipientAddress', 'recipientIdentityCommitment', 'envelope'].includes(key)) ||
+        item.version !== 1 || typeof item.recipientAddress !== 'string' || !/^[0-9a-f-]{36}$/i.test(item.recipientAddress) ||
+        typeof item.recipientIdentityCommitment !== 'string' || item.recipientIdentityCommitment.length < 8 || item.recipientIdentityCommitment.length > 128 ||
+        (item.envelope !== undefined && firstMessage(item.envelope as EncryptedEnvelope) === undefined)) {
+        throw new Error('Saved join introduction is invalid.');
+    }
+    return item as JoinIntroductionRecord;
 };
 
 /** Application-facing modern path; it uses the same relay transport and ACK callback as legacy chat. */
@@ -163,6 +232,7 @@ export class ModernConversation {
     private capability?: string;
     private remoteAddress?: string;
     private remoteIdentityCommitment?: string;
+    private joinIntroductionPending = false;
     private lastInboundFailureCategory?: string;
     private lastConnectionFailureCategory?: string;
     private sessionHealth: 'healthy' | 'unhealthy' | 'renewal-pending' = 'healthy';
@@ -191,7 +261,7 @@ export class ModernConversation {
     private durableProofs?: DeviceProofClient;
     private retryTimer?: ReturnType<typeof setInterval>;
     private onMessage?: (text: string) => unknown;
-    private onContactChange?: (contact: StoredContactIdentity) => void;
+    private onContactChange?: (contact: StoredContactIdentity) => void | Promise<void>;
     private onDeviceControl?: (message: DeviceControlEvent) => void;
     private readonly tabOwnerId = `${Math.random().toString(36).slice(2)}-${Date.now()}`;
     private fallbackLeaseKey?: string;
@@ -238,14 +308,17 @@ export class ModernConversation {
                     : this.withTabLock(this.roomId ?? 'unknown', () => this.receive(message.envelope, message.senderRoutingId)));
             });
         this.transport = transportManager ?? new DefaultTransportManager(relay!);
-        this.subscriptions.set('on-alice-join', new Set([() => { void this.retryPending(); }]));
+        this.subscriptions.set('on-alice-join', new Set([() => {
+            void this.retryPending();
+            void this.retryJoinIntroduction();
+        }]));
         this.subscriptions.set('delivered', new Set([(id: string) => { void this.acceptDelivery(id); }]));
     }
 
-    public async connect(roomId: string, capability: string, remoteAddress?: string, remoteIdentityCommitment?: string, onMessage?: (text: string) => unknown, onContactChange?: (contact: StoredContactIdentity) => void, onDeviceControl?: (message: DeviceControlEvent) => void): Promise<ModernConnectionDetails> {
+    public async connect(roomId: string, capability: string, remoteAddress?: string, remoteIdentityCommitment?: string, onMessage?: (text: string) => unknown, onContactChange?: (contact: StoredContactIdentity) => void | Promise<void>, onDeviceControl?: (message: DeviceControlEvent) => void, options?: { sendJoinIntroduction?: boolean }): Promise<ModernConnectionDetails> {
         const details = await this.withTabLock(roomId, async () => {
             this.connecting = true;
-            try { return await this.connectUnlocked(roomId, capability, remoteAddress, remoteIdentityCommitment, onMessage, onContactChange, onDeviceControl); }
+            try { return await this.connectUnlocked(roomId, capability, remoteAddress, remoteIdentityCommitment, onMessage, onContactChange, onDeviceControl, options); }
             finally { this.connecting = false; }
         }, true);
         const activeTransport = this.transport.activeTransport();
@@ -253,13 +326,22 @@ export class ModernConversation {
         return details;
     }
 
-    private async connectUnlocked(roomId: string, capability: string, remoteAddress?: string, remoteIdentityCommitment?: string, onMessage?: (text: string) => unknown, onContactChange?: (contact: StoredContactIdentity) => void, onDeviceControl?: (message: DeviceControlEvent) => void): Promise<ModernConnectionDetails> {
+    private async connectUnlocked(roomId: string, capability: string, remoteAddress?: string, remoteIdentityCommitment?: string, onMessage?: (text: string) => unknown, onContactChange?: (contact: StoredContactIdentity) => void | Promise<void>, onDeviceControl?: (message: DeviceControlEvent) => void, options?: { sendJoinIntroduction?: boolean }): Promise<ModernConnectionDetails> {
         if (!/^[0-9a-f-]{36}$/i.test(roomId) || !capability) throw new Error('Invalid private conversation invitation.');
         this.roomId = roomId;
         this.sessionHealth = 'healthy';
         this.lastConnectionFailureCategory = undefined;
         this.capability = capability;
         this.remoteIdentityCommitment = remoteIdentityCommitment;
+        let introductionRecord = parseJoinIntroductionRecord(await this.storage.read(JOIN_INTRODUCTION_RECORD, roomId));
+        if (options?.sendJoinIntroduction && remoteAddress && remoteIdentityCommitment) {
+            if (introductionRecord && (introductionRecord.recipientAddress !== remoteAddress || introductionRecord.recipientIdentityCommitment !== remoteIdentityCommitment)) {
+                throw new Error('Saved join introduction does not match this invitation.');
+            }
+            introductionRecord ??= { version: 1, recipientAddress: remoteAddress, recipientIdentityCommitment: remoteIdentityCommitment };
+            await this.storage.write(JOIN_INTRODUCTION_RECORD, roomId, asBytes(introductionRecord));
+        }
+        this.joinIntroductionPending = Boolean(introductionRecord);
         this.onMessage = onMessage;
         this.onContactChange = onContactChange;
         this.onDeviceControl = onDeviceControl;
@@ -399,7 +481,9 @@ export class ModernConversation {
         }
         await this.transport.start();
         if (!routingProof) throw new Error('Modern routing ownership proof is unavailable.');
+        this.transport.activeTransport()?.setProtocolFeatures?.([JOIN_INTRODUCTION_FEATURE]);
         await this.transport.join(roomId, localAddress, capability, routingProof);
+        if (this.joinIntroductionPending) await this.sendJoinIntroductionUnlocked();
         if (trustSnapshot.list.devices.filter((entry) => entry.state === 'active').length > 1) {
             void this.requestTrustRefresh().catch(() => undefined);
         }
@@ -614,13 +698,14 @@ export class ModernConversation {
             testOnlyDeliveryStage('envelope-created');
             pending.push({ envelope, clientId });
             await this.storage.write(OUTBOX_RECORD, this.roomId!, asBytes(pending));
+            recordFirstMessageDiagnostic('envelope-stored-locally', true);
         });
         await this.retryPending();
         return clientId;
     }
 
     /** Establishes the initial outbound session only when this device sends first. */
-    private async ensureOutboundSession(): Promise<void> {
+    private async ensureOutboundSession(origin: 'join' | 'first-message' = 'first-message'): Promise<void> {
         if (this.sessionHealth === 'unhealthy') throw new Error('The encrypted session needs verified renewal before sending.');
         if (this.runtime.activeSessionId) return;
         if (!this.roomId || !this.capability || !this.remoteAddress) throw new Error('The private contact is not ready.');
@@ -643,7 +728,8 @@ export class ModernConversation {
         try { await this.runtime.establishOutboundSession(this.roomId, contact.identity.curve25519, claimed.key); }
         catch (error) { this.lastConnectionFailureCategory = 'prekey-session-lookup-failure'; throw error; }
         await this.modes.write(this.roomId, { sessionId: this.runtime.activeSessionId, remoteAddress: this.remoteAddress });
-        await this.writeSessionAudit('outbound', 'first-message');
+        recordFirstMessageDiagnostic('outbound-session-created', true);
+        await this.writeSessionAudit('outbound', origin);
         this.lastConnectionFailureCategory = undefined;
     }
 
@@ -987,7 +1073,7 @@ export class ModernConversation {
                 await this.testOnlyRecordInboundStage('acknowledged');
                 return true;
             }
-            let text: string;
+            let text: string | undefined;
             if (!this.runtime.activeSessionId) {
                 let bundle;
                 try { bundle = validateVodozemacPublicBundle(await fetchVodozemacBundle(this.roomId, this.capability, senderAddress)); }
@@ -1005,8 +1091,21 @@ export class ModernConversation {
                 catch (error) { this.lastInboundFailureCategory = 'prekey-session-lookup-failure'; throw error; }
                 await this.testOnlyRecordInboundStage('session-found', senderFingerprint);
                 await this.testOnlyRecordInboundStage('decrypted', senderFingerprint);
-                try { text = unframeFirstMessage(plaintext); }
+                let payload: Uint8Array;
+                try { payload = unframeFirstMessage(plaintext); }
                 catch (error) { this.lastInboundFailureCategory = 'message-frame-parsing-failure'; throw error; }
+                try {
+                    const introduction = parseJoinIntroduction(payload);
+                    if (introduction) {
+                        await this.acceptJoinIntroduction(introduction, senderAddress, bundle.identity, digest, seen);
+                        await this.testOnlyRecordInboundStage('frame-parsed', senderFingerprint);
+                        await this.testOnlyRecordInboundStage('persisted', senderFingerprint);
+                        await this.testOnlyRecordInboundStage('acknowledged', senderFingerprint);
+                        recordFirstMessageDiagnostic('receiver-delivery-acknowledged', true);
+                        return true;
+                    }
+                    text = strictMessageDecoder.decode(payload);
+                } catch (error) { this.lastInboundFailureCategory = 'message-frame-parsing-failure'; throw error; }
                 await this.testOnlyRecordInboundStage('frame-parsed', senderFingerprint);
                 // First contact is persisted only after Olm authenticates the
                 // peer identity; subsequent changes still fail closed.
@@ -1022,15 +1121,32 @@ export class ModernConversation {
                 try { plaintext = await this.runtime.decrypt('message', envelope); }
                 catch (error) { this.lastInboundFailureCategory = 'decryption-failure'; throw error; }
                 await this.testOnlyRecordInboundStage('decrypted', senderFingerprint);
-                try { text = strictMessageDecoder.decode(plaintext); }
-                catch (error) { this.lastInboundFailureCategory = 'message-frame-parsing-failure'; throw error; }
+                try {
+                    const payload = new Uint8Array(plaintext);
+                    const introduction = parseJoinIntroduction(payload);
+                    if (introduction) {
+                        const bundle = validateVodozemacPublicBundle(await fetchVodozemacBundle(this.roomId, this.capability, senderAddress));
+                        await this.acceptJoinIntroduction(introduction, senderAddress, bundle.identity, digest, seen);
+                        await this.testOnlyRecordInboundStage('frame-parsed', senderFingerprint);
+                        await this.testOnlyRecordInboundStage('persisted', senderFingerprint);
+                        await this.testOnlyRecordInboundStage('acknowledged', senderFingerprint);
+                        recordFirstMessageDiagnostic('receiver-delivery-acknowledged', true);
+                        return true;
+                    }
+                    text = strictMessageDecoder.decode(payload);
+                } catch (error) { this.lastInboundFailureCategory = 'message-frame-parsing-failure'; throw error; }
                 await this.testOnlyRecordInboundStage('frame-parsed', senderFingerprint);
             }
             // The consumer must durably accept the message before its replay
             // marker can make a later mailbox delivery look complete.
             if (!this.onMessage) { this.lastInboundFailureCategory = 'persistence-failure'; throw new Error('Inbound message consumer is unavailable.'); }
-            try { await this.onMessage(text); }
-            catch (error) { this.lastInboundFailureCategory = 'persistence-failure'; throw error; }
+            try { await this.onMessage(text!); }
+            catch (error) {
+                this.lastInboundFailureCategory = 'persistence-failure';
+                recordFirstMessageDiagnostic('receiver-message-persisted', false);
+                throw error;
+            }
+            recordFirstMessageDiagnostic('receiver-message-persisted', true);
             try { await this.storage.write(SEEN_RECORD, this.roomId, asBytes([...seen.slice(-(MAX_SEEN - 1)), digest])); }
             catch (error) { this.lastInboundFailureCategory = 'persistence-failure'; throw error; }
             await this.testOnlyRecordInboundStage('persisted', senderFingerprint);
@@ -1040,6 +1156,67 @@ export class ModernConversation {
         } catch (error) {
             if (this.lastInboundFailureCategory) await this.testOnlyRecordInboundStage('parsed', senderFingerprint, this.lastInboundFailureCategory);
             throw error;
+        }
+    }
+
+    private async acceptJoinIntroduction(
+        event: JoinIntroduction,
+        senderAddress: string,
+        identity: VodozemacPublicIdentity,
+        digest: string,
+        seen: string[],
+    ): Promise<void> {
+        if (!this.roomId || event.conversationId !== this.roomId || event.senderAddress !== senderAddress ||
+            (this.remoteAddress !== undefined && this.remoteAddress !== senderAddress)) {
+            throw new Error('Join introduction binding is invalid.');
+        }
+        const fingerprint = await fingerprintVodozemacIdentity(identity);
+        if (event.identityCommitment !== fingerprint ||
+            (this.remoteIdentityCommitment !== undefined && this.remoteIdentityCommitment !== fingerprint)) {
+            throw new Error('Join introduction identity association is invalid.');
+        }
+        const signatureValid = await this.verifyJoinIntroductionSignature(event, identity.ed25519);
+        if (!signatureValid) throw new Error('Join introduction authentication failed.');
+
+        const acceptedBytes = await this.storage.read(JOIN_INTRODUCTION_SEEN_RECORD, this.roomId);
+        const nextSeen = [...seen.filter((item) => item !== digest), digest];
+        if (acceptedBytes) {
+            let accepted: unknown;
+            try { accepted = JSON.parse(decoder.decode(acceptedBytes)); } catch { throw new Error('Saved join introduction replay state is invalid.'); }
+            if (!accepted || typeof accepted !== 'object' || Array.isArray(accepted) ||
+                Object.keys(accepted).sort().join(',') !== 'eventId,version' ||
+                (accepted as { version?: unknown }).version !== 1 ||
+                typeof (accepted as { eventId?: unknown }).eventId !== 'string') {
+                throw new Error('Saved join introduction replay state is invalid.');
+            }
+            if ((accepted as { eventId: string }).eventId !== event.eventId) throw new Error('Join introduction replay rejected.');
+            await this.storage.write(SEEN_RECORD, this.roomId, asBytes(nextSeen.slice(-MAX_SEEN)));
+            return;
+        }
+
+        // Route and unverified contact metadata are written only after the
+        // encrypted sender, conversation binding, identity commitment, and
+        // signature have all been validated. observe() preserves any existing
+        // verification state and never upgrades trust.
+        await this.observe(senderAddress, identity, this.remoteIdentityCommitment, true);
+        await this.modes.write(this.roomId, { sessionId: this.runtime.activeSessionId, remoteAddress: senderAddress });
+        await this.writeSessionAudit('inbound', 'join');
+        this.remoteAddress = senderAddress;
+        this.remoteIdentityCommitment = fingerprint;
+        await this.storage.write(JOIN_INTRODUCTION_SEEN_RECORD, this.roomId, asBytes({ version: 1, eventId: event.eventId }));
+        await this.storage.write(SEEN_RECORD, this.roomId, asBytes(nextSeen.slice(-MAX_SEEN)));
+    }
+
+    private async verifyJoinIntroductionSignature(event: JoinIntroduction, publicKey: string): Promise<boolean> {
+        try {
+            const { signature, ...unsigned } = event;
+            const keyBytes = fromBase64Url(publicKey);
+            const signatureBytes = fromBase64Url(signature);
+            const messageBytes = canonicalJoinIntroduction(unsigned);
+            const key = await globalThis.crypto.subtle.importKey('raw', keyBytes.slice().buffer as ArrayBuffer, { name: 'Ed25519' }, false, ['verify']);
+            return await globalThis.crypto.subtle.verify('Ed25519', key, signatureBytes.slice().buffer as ArrayBuffer, messageBytes.slice().buffer as ArrayBuffer);
+        } catch {
+            return false;
         }
     }
 
@@ -1269,7 +1446,7 @@ export class ModernConversation {
             publicKey: encoder.encode(JSON.stringify(identity)),
             algorithm: 'Olm-Curve25519+Ed25519', verification: 'unverified',
         });
-        this.onContactChange?.(event.current);
+        await this.onContactChange?.(event.current);
         if (event.kind === 'identity-changed' || event.current.changeStatus !== 'unchanged') {
             throw new Error('This contact’s identity changed. Review it before continuing.');
         }

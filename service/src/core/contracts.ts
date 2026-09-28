@@ -89,6 +89,10 @@ export interface Transport {
     sendBlob?(ciphertext: ArrayBuffer): Promise<void>;
     connectionState(): TransportConnectionState;
     capabilities(): TransportCapabilities;
+    /** Optional peer feature negotiation supplied by the relay join acknowledgement. */
+    peerSupportsFeature?(feature: string): boolean;
+    /** Opts a protocol-aware caller into advertising only explicitly enabled features. */
+    setProtocolFeatures?(features: readonly string[]): void;
 }
 
 /** Chooses among transports without creating or resetting cryptographic state. */
