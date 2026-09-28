@@ -698,7 +698,6 @@ export class ModernConversation {
             testOnlyDeliveryStage('envelope-created');
             pending.push({ envelope, clientId });
             await this.storage.write(OUTBOX_RECORD, this.roomId!, asBytes(pending));
-            recordFirstMessageDiagnostic('envelope-stored-locally', true);
         });
         await this.retryPending();
         return clientId;
@@ -728,9 +727,49 @@ export class ModernConversation {
         try { await this.runtime.establishOutboundSession(this.roomId, contact.identity.curve25519, claimed.key); }
         catch (error) { this.lastConnectionFailureCategory = 'prekey-session-lookup-failure'; throw error; }
         await this.modes.write(this.roomId, { sessionId: this.runtime.activeSessionId, remoteAddress: this.remoteAddress });
-        recordFirstMessageDiagnostic('outbound-session-created', true);
         await this.writeSessionAudit('outbound', origin);
         this.lastConnectionFailureCategory = undefined;
+    }
+
+    private async retryJoinIntroduction(): Promise<void> {
+        if (!this.roomId || !this.joinIntroductionPending) return;
+        try {
+            await this.withTabLock(this.roomId, () => this.sendJoinIntroductionUnlocked());
+        } catch {
+            // The persisted encrypted introduction is retried after the next
+            // authenticated peer-presence event or conversation restore.
+        }
+    }
+
+    private async sendJoinIntroductionUnlocked(): Promise<void> {
+        if (!this.joinIntroductionPending || !this.roomId || !this.remoteAddress || !this.capability) return;
+        const transport = this.transport.activeTransport();
+        if (!transport?.peerSupportsFeature?.(JOIN_INTRODUCTION_FEATURE)) return;
+
+        const record = parseJoinIntroductionRecord(await this.storage.read(JOIN_INTRODUCTION_RECORD, this.roomId));
+        if (!record || record.recipientAddress !== this.remoteAddress || record.recipientIdentityCommitment !== this.remoteIdentityCommitment) return;
+        if (!record.envelope) {
+            await this.assertCurrentDeviceTrust();
+            await this.ensureOutboundSession('join');
+            const unsigned: Omit<JoinIntroduction, 'signature'> = {
+                version: 1,
+                type: 'join-introduction',
+                eventId: crypto.randomUUID(),
+                conversationId: this.roomId,
+                senderAddress: this.localAddress!,
+                identityCommitment: this.localIdentityId!,
+                createdAt: Date.now(),
+            };
+            const event: JoinIntroduction = {
+                ...unsigned,
+                signature: await this.runtime.signControlEvent(canonicalJoinIntroduction(unsigned)),
+            };
+            const envelope = await this.runtime.encrypt('message', encodeJoinIntroduction(event));
+            record.envelope = envelope;
+            await this.storage.write(JOIN_INTRODUCTION_RECORD, this.roomId, asBytes(record));
+        }
+        await this.assertCurrentDeviceTrust();
+        await this.transport.sendEnvelope('message', record.envelope, this.remoteAddress);
     }
 
     public async retryPending(): Promise<void> {
@@ -1101,7 +1140,6 @@ export class ModernConversation {
                         await this.testOnlyRecordInboundStage('frame-parsed', senderFingerprint);
                         await this.testOnlyRecordInboundStage('persisted', senderFingerprint);
                         await this.testOnlyRecordInboundStage('acknowledged', senderFingerprint);
-                        recordFirstMessageDiagnostic('receiver-delivery-acknowledged', true);
                         return true;
                     }
                     text = strictMessageDecoder.decode(payload);
@@ -1130,7 +1168,6 @@ export class ModernConversation {
                         await this.testOnlyRecordInboundStage('frame-parsed', senderFingerprint);
                         await this.testOnlyRecordInboundStage('persisted', senderFingerprint);
                         await this.testOnlyRecordInboundStage('acknowledged', senderFingerprint);
-                        recordFirstMessageDiagnostic('receiver-delivery-acknowledged', true);
                         return true;
                     }
                     text = strictMessageDecoder.decode(payload);
@@ -1143,10 +1180,8 @@ export class ModernConversation {
             try { await this.onMessage(text!); }
             catch (error) {
                 this.lastInboundFailureCategory = 'persistence-failure';
-                recordFirstMessageDiagnostic('receiver-message-persisted', false);
                 throw error;
             }
-            recordFirstMessageDiagnostic('receiver-message-persisted', true);
             try { await this.storage.write(SEEN_RECORD, this.roomId, asBytes([...seen.slice(-(MAX_SEEN - 1)), digest])); }
             catch (error) { this.lastInboundFailureCategory = 'persistence-failure'; throw error; }
             await this.testOnlyRecordInboundStage('persisted', senderFingerprint);
