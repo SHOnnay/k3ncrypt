@@ -80,6 +80,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -543,6 +544,11 @@ private fun IdentityAndConversationScreen(
                 if (state == null) "A private space for your people" else if (showNewConversation) "Start a conversation" else "Chats",
                 if (state == null) "Create a secure identity on this device, then connect with someone you trust." else if (showNewConversation) "Share a private invitation or enter one from someone you trust." else "Your conversations stay protected on this device."
             )
+            if (state == null) {
+                OutlinedButton(onClick = { showAdvancedNetwork = !showAdvancedNetwork }) {
+                    Text(if (showAdvancedNetwork) "Hide connection settings" else "Advanced connection settings")
+                }
+            }
             if (selectedTab == "add-contact") {
                 OutlinedButton(onClick = { selectedTab = "contacts"; showNewConversation = false }) { Text("Back to contacts") }
             } else if (showNewConversation && conversation != null) {
@@ -600,7 +606,7 @@ private fun IdentityAndConversationScreen(
             }
         }
 
-        if (!focusedChat && (state == null || showAdvancedVerification)) K3ncryptCard {
+        if (!focusedChat && ((state == null && showAdvancedNetwork) || (state != null && showAdvancedVerification))) K3ncryptCard {
           Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("Connect to your K3NCRYPT service", style = MaterialTheme.typography.titleMedium)
         Text("If your beta invitation included a service address, enter it here. Hosted services should use HTTPS.", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -703,7 +709,7 @@ private fun IdentityAndConversationScreen(
                                     Image(painter = painterResource(R.drawable.k3ncrypt_cluster_white), contentDescription = null, modifier = Modifier.size(27.dp), contentScale = ContentScale.Fit)
                                 }
                                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    Text(saved.label, style = MaterialTheme.typography.titleMedium)
+                                    Text(saved.label, modifier = Modifier.fillMaxWidth(), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
                                     Text(preview?.text?.take(64) ?: "Messages are end-to-end encrypted", maxLines = 1, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                                     Text(if (preview != null) formatChatTime(preview.timestamp) else if (saved.connectionState == "connected") "Secure connection established" else "Saved on this device", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
                                 }
@@ -797,14 +803,14 @@ private fun IdentityAndConversationScreen(
             if (focusedChat) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(savedTrustedConversations.firstOrNull { it.conversationHash == SavedConversationIndex.hash(active.conversationId) }?.label ?: if (SavedConversationIndex.isTrusted(active)) "Trusted contact" else "New contact", style = MaterialTheme.typography.titleMedium)
+                        Text(savedTrustedConversations.firstOrNull { it.conversationHash == SavedConversationIndex.hash(active.conversationId) }?.label ?: if (SavedConversationIndex.isTrusted(active)) "Trusted contact" else "New contact", maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
                         Text(if (SavedConversationIndex.isTrusted(active)) "Secure connection established" else "Identity confirmation required", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     K3ncryptStatus(if (SavedConversationIndex.isTrusted(active)) "Verified" else "Review", positive = SavedConversationIndex.isTrusted(active))
                 }
             } else {
                 Spacer(Modifier.height(8.dp))
-                Text(savedTrustedConversations.firstOrNull { it.conversationHash == SavedConversationIndex.hash(active.conversationId) }?.label ?: if (SavedConversationIndex.isTrusted(active)) "Trusted contact" else "New contact", style = MaterialTheme.typography.titleMedium)
+                Text(savedTrustedConversations.firstOrNull { it.conversationHash == SavedConversationIndex.hash(active.conversationId) }?.label ?: if (SavedConversationIndex.isTrusted(active)) "Trusted contact" else "New contact", maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
             }
             if (outgoingInvite.isNotBlank()) {
                 K3ncryptCard {
@@ -941,8 +947,8 @@ private fun IdentityAndConversationScreen(
                 Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface, tonalElevation = 1.dp) {
                     Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                                Text(saved.label, style = MaterialTheme.typography.titleMedium)
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                Text(saved.label, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
                                 Text(if (saved.connectionState == "connected") "Connected on this device" else "Saved on this device", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                                 if (saved.lastActivityTimestamp > 0L) Text("Last message · ${formatChatTime(saved.lastActivityTimestamp)}", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
                             }
@@ -1212,7 +1218,12 @@ private fun IdentityAndConversationScreen(
                   ) {
                       K3ncryptBrandMark()
                       Text(if (callState.incoming) "Incoming ${callState.mediaMode} call" else "${callState.mediaMode.replaceFirstChar { it.uppercase() }} call", style = MaterialTheme.typography.titleLarge)
-                      Text(conversation?.let { active -> savedTrustedConversations.firstOrNull { it.conversationHash == SavedConversationIndex.hash(active.conversationId) }?.label } ?: "Trusted contact", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                      Text(
+                          conversation?.let { active -> savedTrustedConversations.firstOrNull { it.conversationHash == SavedConversationIndex.hash(active.conversationId) }?.label } ?: "Trusted contact",
+                          color = MaterialTheme.colorScheme.onSurfaceVariant,
+                          maxLines = 2,
+                          overflow = TextOverflow.Ellipsis,
+                      )
                       K3ncryptStatus(callLabel, positive = callState.status in setOf("connected", "completed"))
                       if (callState.status == "connected") {
                           Text("${callElapsedSeconds / 60}:${(callElapsedSeconds % 60).toString().padStart(2, '0')}", style = MaterialTheme.typography.titleMedium)

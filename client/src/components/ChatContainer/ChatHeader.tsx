@@ -85,7 +85,7 @@ const handleDelete = async () => {
       <div className="header-actions">
         {typeof navigator !== 'undefined' && 'share' in navigator && (
           <Button
-            className="btn--icon"
+            className="btn--icon chat-header__share-action"
             variant="secondary"
             onClick={handleShare}
             title="Share Link"

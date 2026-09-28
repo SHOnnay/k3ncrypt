@@ -16,7 +16,7 @@
 .workspace-contact { width: 100%; display: flex; align-items: center; gap: 14px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 17px; color: var(--ink); background: var(--surface); text-align: left; cursor: pointer; box-shadow: var(--shadow-sm); transition: transform var(--motion-fast), border-color var(--motion-fast), background var(--motion-fast); }
 .workspace-contact:hover { transform: translateY(-1px); border-color: var(--border-strong); background: var(--surface-raised); }
 .workspace-contact__copy { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
-.workspace-contact__copy strong { font-size: .86rem; }
+.workspace-contact__copy strong { overflow: hidden; font-size: .86rem; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-contact__copy small { overflow: hidden; color: var(--muted); font-size: .72rem; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-contact__chevron { color: var(--muted); font-size: 1.6rem; line-height: 1; }
 .workspace-empty { min-height: 290px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 36px 24px; border: 1px dashed var(--border-strong); border-radius: 22px; text-align: center; background: color-mix(in srgb, var(--surface) 64%, transparent); }
@@ -38,6 +38,11 @@
 .calls-note p { font-size: .72rem; line-height: 1.55; }
 .calls-note__dot { width: 8px; height: 8px; flex: 0 0 8px; margin-top: 4px; border-radius: 50%; background: var(--success); }
 .workspace-contact:focus-visible { outline: 3px solid color-mix(in srgb, var(--brand) 35%, transparent); outline-offset: 2px; }
+.workspace-page, .workspace-page__header, .call-launch-card { min-width: 0; }
+.workspace-page__header > div { min-width: 0; }
+.workspace-page__header p, .workspace-empty p, .call-launch-card__person small { overflow-wrap: anywhere; }
+.call-launch-card__person > div { min-width: 0; }
+.call-launch-card__person strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-empty { animation: workspace-enter var(--motion-normal) ease both; }
 .call-launch-card { transition: border-color var(--motion-fast), box-shadow var(--motion-fast); }
 .call-launch-card:focus-within { border-color: color-mix(in srgb, var(--brand) 38%, var(--border)); box-shadow: var(--shadow-md); }
