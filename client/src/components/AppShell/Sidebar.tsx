@@ -49,7 +49,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection
 
       <div className="conversation-section">
         <p className="section-label">Conversations</p>
-        {(conversations.length > 0 ? conversations : channelHash ? [{ roomId: channelHash, label: 'Private conversation', updatedAt: latest?.timestamp.getTime() ?? 0 }] : []).map((conversation) => (
+        {conversations.map((conversation) => (
           <button key={conversation.roomId} className={`conversation-row ${!isWelcomeActive && channelHash === conversation.roomId ? 'active' : ''}`} type="button" onClick={() => onOpenConversation(conversation.roomId)}>
             <Avatar label={conversation.label} size="medium" status={isConnected ? 'online' : 'offline'} />
             <span className="conversation-copy">
@@ -58,8 +58,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection
             </span>
           </button>
         ))}
-        {!channelHash && conversations.length === 0 && (
-          <div className="conversation-placeholder"><strong>{copy.empty.title}</strong><span>{copy.empty.description}</span></div>
+        {conversations.length === 0 && (
+          <div className="conversation-placeholder"><strong>{copy.contactsEmpty.title}</strong><span>{copy.contactsEmpty.description}</span></div>
         )}
       </div>
 

@@ -76,7 +76,7 @@ const AppContent: React.FC = () => {
           setShowSetup(false);
         }} isHidden={!showSetup} />
         {activeSection === 'chats' ? <MediaProvider workflow={mediaWorkflow}>
-          <ChatContainer isHidden={showSetup} />
+          <ChatContainer isHidden={showSetup} onNewConversation={() => { setActiveSection('chats'); setShowSetup(true); }} />
         </MediaProvider> : !showSetup && <WorkspaceSection section={activeSection} onNewConversation={() => { setActiveSection('chats'); setShowSetup(true); }} onOpenConversation={(roomId) => {
           setActiveSection('chats');
           openConversation(roomId).catch(() => setError('Could not open this saved conversation. Your stored data was not changed.'));

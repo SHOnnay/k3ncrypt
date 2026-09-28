@@ -75,7 +75,7 @@ export const CallOverlay: React.FC = () => {
   };
 
   const isVideo = callMediaMode === 'video';
-  const callContact = conversations.find((conversation) => conversation.roomId === channelHash)?.label ?? 'Trusted contact';
+  const callContact = conversations.find((conversation) => conversation.roomId === channelHash)?.label ?? 'Contact';
 
   return (
     <div className="blur-overlay">

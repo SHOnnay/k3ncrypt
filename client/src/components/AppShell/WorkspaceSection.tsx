@@ -14,13 +14,14 @@ interface WorkspaceSectionProps {
 export const WorkspaceSection: React.FC<WorkspaceSectionProps> = ({ section, onOpenConversation, onNewConversation }) => {
   const [callMessage, setCallMessage] = useState('');
   const [contactQuery, setContactQuery] = useState('');
-  const { conversations, channelHash, isConnected, sessionHealth, protocolMode, startCall, startVideoCall, callLifecycleState, setContactNickname } = useChat();
+  const { conversations, channelHash, isConnected, sessionHealth, protocolMode, contactIdentity, startCall, startVideoCall, callLifecycleState, setContactNickname } = useChat();
   const filteredConversations = useMemo(() => {
     const query = contactQuery.trim().toLocaleLowerCase();
     return conversations.filter((item) => !query || item.label.toLocaleLowerCase().includes(query));
   }, [contactQuery, conversations]);
   const active = conversations.find((conversation) => conversation.roomId === channelHash)
-    ?? (channelHash ? { roomId: channelHash, label: 'Private conversation' } : undefined);
+    ?? (protocolMode === 'legacy' && channelHash ? { roomId: channelHash, label: 'Private conversation' } : undefined);
+  const activeContactVerified = Boolean(active && active.roomId === channelHash && contactIdentity?.verification === 'verified' && contactIdentity.changeStatus === 'unchanged');
   const callReady = Boolean(active && isConnected && sessionHealth === 'healthy' && callLifecycleState === 'idle');
 
   if (section === 'contacts') {
@@ -43,7 +44,7 @@ export const WorkspaceSection: React.FC<WorkspaceSectionProps> = ({ section, onO
   return <main className="workspace-page">
     <header className="workspace-page__header"><div><span className="eyebrow">Private communication</span><h1>Calls</h1><p>Start a voice or video call from a trusted, connected conversation.</p></div></header>
     {active ? <section className="call-launch-card">
-      <div className="call-launch-card__person"><Avatar label={active.label} size="large" status={isConnected ? 'online' : 'offline'} /><div><strong>{active.label}</strong><small>{sessionHealth === 'healthy' && isConnected ? 'Verified contact · secure connection' : 'Connect and complete any security update before calling'}</small></div></div>
+      <div className="call-launch-card__person"><Avatar label={active.label} size="large" status={isConnected ? 'online' : 'offline'} /><div><strong>{active.label}</strong><small>{activeContactVerified && sessionHealth === 'healthy' && isConnected ? 'Verified contact · secure connection' : sessionHealth === 'healthy' && isConnected ? 'Connection available' : 'Connect and complete any security update before calling'}</small></div></div>
       <div className="call-launch-card__actions"><Button variant="secondary" disabled={!callReady} onClick={() => void startCall().then(() => setCallMessage('Calling…')).catch(() => setCallMessage('Call could not start. Check the secure connection and microphone permission.'))}><PhoneIcon size={18} /> Voice call</Button><Button variant="primary" disabled={!callReady || protocolMode !== 'legacy'} onClick={() => void startVideoCall().then(() => setCallMessage('Calling…')).catch(() => setCallMessage('Video call could not start. Check the secure connection and device permissions.'))}><VideoIcon size={18} /> Video call</Button></div>
       {callMessage && <p className="workspace-feedback" role="status">{callMessage}</p>}
     </section> : <div className="workspace-empty"><span className="workspace-empty__mark"><img src="/branding/k3ncrypt-cluster-white.svg" alt="" /></span><h2>No active conversation</h2><p>Open a saved contact before starting a call. Call authorization remains tied to that conversation.</p></div>}

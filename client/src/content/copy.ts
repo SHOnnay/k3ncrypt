@@ -13,8 +13,12 @@ export const copy = {
     title: 'Confirm connection',
     description: 'A contact is not trusted until you compare fingerprints through another trusted channel and confirm verification. Display names and nicknames help you recognize people; they do not prove identity.',
   },
-  empty: {
-    title: 'Your private space is ready.',
-    description: 'Add someone you trust to start messaging and calling privately.',
+  contactsEmpty: {
+    title: 'No trusted contacts yet',
+    description: 'Create or join an invitation to start a secure conversation. A contact becomes trusted only after you compare fingerprints and confirm verification.',
+  },
+  conversationEmpty: {
+    title: 'Start your conversation',
+    description: 'Your messages will appear here when you send or receive them.',
   },
 } as const;

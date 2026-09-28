@@ -20,7 +20,9 @@ interface ChatHeaderProps {
 export const ChatHeader: React.FC<ChatHeaderProps> = ({ onStartCall, onStartVideoCall, disableStartCall = false }) => {
   const { isConnected, channelHash, deleteChannel, protocolMode, sessionHealth, conversations, contactIdentity } = useChat();
   const [hashCopied, setHashCopied] = useState(false);
-  const contactLabel = conversations.find((conversation) => conversation.roomId === channelHash)?.label ?? 'Trusted contact';
+  const activeConversation = conversations.find((conversation) => conversation.roomId === channelHash)
+    ?? (protocolMode === 'legacy' && channelHash ? { roomId: channelHash, label: 'Private conversation' } : undefined);
+  const contactLabel = activeConversation?.label ?? 'Conversation';
 
   const handleCopyHash = () => {
     navigator.clipboard.writeText(window.location.href);
@@ -60,10 +62,10 @@ const handleDelete = async () => {
       <div className="header-info">
         <div className="title-row">
           <h2 className="channel-title">{contactLabel}</h2>
-          <StatusPill tone="neutral">{protocolMode === 'modern' ? 'Encrypted' : 'Private'}</StatusPill>
-          {protocolMode === 'modern' && contactIdentity && <StatusPill tone={contactIdentity.verification === 'verified' && contactIdentity.changeStatus === 'unchanged' ? 'positive' : 'quiet'}>{contactIdentity.verification === 'verified' && contactIdentity.changeStatus === 'unchanged' ? 'Verified contact' : 'Review identity'}</StatusPill>}
+          {activeConversation && <StatusPill tone="neutral">{protocolMode === 'modern' ? 'Encrypted' : 'Private'}</StatusPill>}
+          {activeConversation && protocolMode === 'modern' && contactIdentity && <StatusPill tone={contactIdentity.verification === 'verified' && contactIdentity.changeStatus === 'unchanged' ? 'positive' : 'quiet'}>{contactIdentity.verification === 'verified' && contactIdentity.changeStatus === 'unchanged' ? 'Verified contact' : 'Review identity'}</StatusPill>}
         </div>
-        {channelHash && protocolMode === 'legacy' && (
+        {activeConversation && protocolMode === 'legacy' && (
           <div className="hash-badge-container">
             <StatusPill tone="quiet">Private conversation</StatusPill>
             <Button
@@ -79,7 +81,7 @@ const handleDelete = async () => {
           </div>
         )}
         <p id="participant-info" className="participant-info">
-          {sessionHealth === 'unhealthy' ? 'Your saved secure connection needs a verified update. Your identity and history are preserved.' : sessionHealth === 'renewal-pending' ? 'Secure connection update is waiting for your contact. Send a message after they are ready.' : isConnected ? 'Secure connection established' : 'Waiting for your contact to connect'}
+          {activeConversation && (sessionHealth === 'unhealthy' ? 'Your saved secure connection needs a verified update. Your identity and history are preserved.' : sessionHealth === 'renewal-pending' ? 'Secure connection update is waiting for your contact. Send a message after they are ready.' : isConnected ? 'Secure connection established' : 'Waiting for your contact to connect')}
         </p>
       </div>
       <div className="header-actions">
@@ -116,7 +118,7 @@ const handleDelete = async () => {
           variant="danger"
           onClick={handleDelete}
           title="Delete Chat"
-          disabled={!channelHash}
+          disabled={!activeConversation}
         >
           <TrashIcon size={20} />
         </Button>
