@@ -84,6 +84,44 @@ const fakeTransport = () => {
     return { transport, sent };
 };
 
+const seedVerifiedContact = async (storage: Storage, contactId: string): Promise<void> => {
+    await storage.write('contact-identity', contactId, new TextEncoder().encode(JSON.stringify({
+        contactId,
+        identityId: await remoteCommitment(),
+        algorithm: 'Olm-Curve25519+Ed25519',
+        publicKey: Buffer.from(JSON.stringify(bundle.identity)).toString('base64url'),
+        verification: 'unverified',
+        changeStatus: 'unchanged',
+    })).buffer as ArrayBuffer);
+};
+
+const verifiedPeerPair = async () => {
+    jest.mocked(publishVodozemacBundle)
+        .mockResolvedValueOnce({ address: localAddress, renewalProof: 'r'.repeat(43) })
+        .mockResolvedValueOnce({ address: remoteAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
+
+    const aliceStorage = new Storage();
+    const bobStorage = new Storage();
+    const aliceTransport = fakeTransport();
+    const bobTransport = fakeTransport();
+    const aliceMessages: string[] = [];
+    const bobMessages: string[] = [];
+    const alice = new ModernConversation(aliceStorage, loader, aliceTransport.transport);
+    const bob = new ModernConversation(bobStorage, loader, bobTransport.transport);
+    await alice.connect(room, key(9), remoteAddress, await remoteCommitment(), (text) => aliceMessages.push(text));
+    await bob.connect(room, key(9), localAddress, await remoteCommitment(), (text) => bobMessages.push(text));
+    await seedVerifiedContact(aliceStorage, remoteAddress);
+    await seedVerifiedContact(bobStorage, localAddress);
+    await Promise.all([alice.verifyContact(true), bob.verifyContact(true)]);
+
+    return { alice, bob, aliceTransport, bobTransport, aliceMessages, bobMessages };
+};
+
+const receiveFirstMessage = (conversation: ModernConversation, envelope: EncryptedEnvelope, senderAddress: string): Promise<boolean> =>
+    (conversation as unknown as { receive: (value: EncryptedEnvelope, sender: string) => Promise<boolean> }).receive(envelope, senderAddress);
+
 beforeEach(() => { jest.clearAllMocks(); outboundSessionCreations = 0; inboundSessionCreations = 0; sessionDecryptions = 0; decryptedBytes = undefined; });
 
 it('registers and removes the existing relay peer-disconnect observer', () => {
@@ -212,6 +250,55 @@ it('creates the browser outbound session only when the browser sends first', asy
     const audit = JSON.parse(new TextDecoder().decode((await storage.read('conversation-session-audit', room))!));
     expect(audit).toMatchObject({ classification: 'active-established', direction: 'outbound', origin: 'first-message' });
     await conversation.close();
+});
+
+it('establishes the first B-to-A message session after both contacts verify', async () => {
+    const pair = await verifiedPeerPair();
+    expect(outboundSessionCreations).toBe(0);
+    expect(inboundSessionCreations).toBe(0);
+
+    await pair.bob.sendWithReceipt('first message from B');
+    expect(outboundSessionCreations).toBe(1);
+    expect(pair.bobTransport.sent).toHaveLength(1);
+    await expect(receiveFirstMessage(pair.alice, pair.bobTransport.sent[0], remoteAddress)).resolves.toBe(true);
+    expect(inboundSessionCreations).toBe(1);
+    expect(pair.aliceMessages).toEqual(['android first message']);
+    expect(sessionDecryptions).toBe(0);
+
+    await pair.alice.close();
+    await pair.bob.close();
+});
+
+it('establishes the first A-to-B message session after both contacts verify', async () => {
+    const pair = await verifiedPeerPair();
+    expect(outboundSessionCreations).toBe(0);
+    expect(inboundSessionCreations).toBe(0);
+
+    await pair.alice.sendWithReceipt('first message from A');
+    expect(outboundSessionCreations).toBe(1);
+    expect(pair.aliceTransport.sent).toHaveLength(1);
+    await expect(receiveFirstMessage(pair.bob, pair.aliceTransport.sent[0], localAddress)).resolves.toBe(true);
+    expect(inboundSessionCreations).toBe(1);
+    expect(pair.bobMessages).toEqual(['android first message']);
+    expect(sessionDecryptions).toBe(0);
+
+    await pair.alice.close();
+    await pair.bob.close();
+});
+
+it('initializes authenticated call support after messaging established the session', async () => {
+    const pair = await verifiedPeerPair();
+    await expect(pair.alice.createAuthenticatedCallComposition()).rejects.toThrow('secure message before starting a call');
+    expect(outboundSessionCreations).toBe(0);
+
+    await pair.bob.sendWithReceipt('establish session for call support');
+    await expect(receiveFirstMessage(pair.alice, pair.bobTransport.sent[0], remoteAddress)).resolves.toBe(true);
+    const callComposition = await pair.alice.createAuthenticatedCallComposition();
+    expect(callComposition.signalTransport).toBeInstanceOf(AuthenticatedCallSignalTransport);
+    expect(outboundSessionCreations).toBe(1);
+
+    await pair.alice.close();
+    await pair.bob.close();
 });
 
 it('preserves an existing established conversation session and decrypts after the audit migration', async () => {
@@ -397,17 +484,25 @@ it('does not lock a shared vault when switching saved conversations', async () =
     expect(lock).toHaveBeenCalledTimes(1);
 });
 
-it('exposes authenticated call composition only after modern identity verification', async () => {
+it('exposes authenticated call composition only after verification and session establishment', async () => {
     jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
     jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
     jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
-    const conversation = new ModernConversation(new Storage(), loader, fakeTransport().transport);
+    const storage = new Storage();
+    const transport = fakeTransport();
+    const conversation = new ModernConversation(storage, loader, transport.transport);
     await conversation.connect(room, key(9), remoteAddress, await remoteCommitment());
     await expect(conversation.createAuthenticatedCallComposition()).rejects.toThrow('Verify this contact');
+    await seedVerifiedContact(storage, remoteAddress);
     await conversation.verifyContact(true);
+    expect(outboundSessionCreations).toBe(0);
+    await expect(conversation.createAuthenticatedCallComposition()).rejects.toThrow('secure message before starting a call');
+    expect(outboundSessionCreations).toBe(0);
+    await conversation.sendWithReceipt('establish session before calling');
     const composition = await conversation.createAuthenticatedCallComposition();
     expect(composition.signalTransport).toBeInstanceOf(AuthenticatedCallSignalTransport);
     expect(composition.service).toBeDefined();
+    expect(outboundSessionCreations).toBe(1);
     const call = await composition.invite();
     expect(call.state).toBe('inviting');
     await conversation.close();

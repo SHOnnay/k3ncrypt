@@ -748,11 +748,15 @@ export class ModernConversation {
         if (!contact || contact.changeStatus !== 'unchanged' || contact.verification !== 'verified') {
             throw new Error('Verify this contact before starting a call.');
         }
-        // Calls use the established session as their encrypted signaling
-        // channel. A call can be the first protected operation, so establish
-        // the outbound session here only after the user explicitly verified
-        // the peer.
-        await this.ensureOutboundSession();
+        // Calls use the established conversation session for encrypted
+        // signaling. Do not create an outbound session just to prepare call
+        // support: both peers may do so independently before the first
+        // message, leaving neither able to decrypt the other's first
+        // pre-key message. Messaging (or an authenticated inbound message)
+        // must establish the shared session first.
+        if (!this.runtime.activeSessionId) {
+            throw new Error('Send or receive a secure message before starting a call.');
+        }
         const localParticipant: CallParticipant = { participantId: this.localAddress, identityId: this.localIdentityId, verification: 'verified' };
         const remoteParticipant: CallParticipant = { participantId: this.remoteAddress, identityId: contact.identityId, verification: contact.verification };
         const identity = new VerifiedCallIdentityVerifier(

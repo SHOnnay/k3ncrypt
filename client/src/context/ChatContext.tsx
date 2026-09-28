@@ -140,6 +140,10 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const installModernCallSupport = async (conversation: ModernConversation): Promise<void> => {
+    // Call signaling uses the conversation's established encrypted session.
+    // Preparing call UI must not create an outbound messaging session before
+    // the first peer message establishes the matching inbound session.
+    if (!conversation.hasEstablishedSession()) return;
     if (callSupportConversation.current === conversation && callNegotiator.current) return;
     if (callSupportInstallation.current) {
       await callSupportInstallation.current;
@@ -222,6 +226,12 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         await writeMessages(secureVault, descriptor.roomId, [...await readMessages(secureVault, descriptor.roomId), message]);
         setMessages((previous) => [...previous, message]);
         deliverNotification({ kind: 'message', conversationId: descriptor.roomId, preview: message.text }, privacyPreferencesRef.current);
+        if (conversation.hasEstablishedSession()) {
+          const contact = await conversation.getContact();
+          if (contact?.verification === 'verified' && contact.changeStatus === 'unchanged') {
+            await installModernCallSupport(conversation).catch(() => setCallError('Call signaling is unavailable for this saved contact.'));
+          }
+        }
       }, setContactIdentity, (event: DeviceControlEvent) => {
         if (event.type === 'enrollment-request') setPendingDeviceEnrollment(event.payload as EnrollmentRequest);
         if (event.type === 'enrollment-approval') setPendingDeviceApproval(event.payload as EnrollmentApprovalPacket);
@@ -340,7 +350,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (!modern) throw new Error('No modern contact is open.');
     await modern.verifyContact(true);
     setContactIdentity(await modern.getContact());
-    await installModernCallSupport(modern);
+    if (modern.hasEstablishedSession()) await installModernCallSupport(modern);
   }, [modern]);
 
   const acceptChangedIdentity = useCallback(async (): Promise<void> => {
@@ -439,6 +449,10 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           const clientId = await modern!.sendWithReceipt(text);
           const accepted = acceptedDeliveries.current.delete(clientId);
           addMessage({ ...outgoing, id: clientId, delivery: accepted ? 'accepted' : 'pending' });
+          const contact = await modern!.getContact();
+          if (modern!.hasEstablishedSession() && contact?.verification === 'verified' && contact.changeStatus === 'unchanged') {
+            await installModernCallSupport(modern!).catch(() => setCallError('Call signaling is unavailable for this saved contact.'));
+          }
           return;
         }
         await chat!.encrypt({ text, image: '' }).send();
