@@ -2,11 +2,11 @@
 #chat-container.hidden { display: none; }
 .chat-empty-page { width: 100%; height: 100%; min-width: 0; display: grid; place-items: center; padding: clamp(20px, 5vw, 56px); overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); }
 .chat-empty-page.hidden { display: none; }
-.chat-empty-card { width: min(100%, 480px); display: flex; flex-direction: column; align-items: center; padding: clamp(26px, 5vw, 48px); border: 1px dashed var(--border-strong); border-radius: 22px; text-align: center; background: color-mix(in srgb, var(--surface) 64%, transparent); animation: workspace-enter var(--motion-normal) ease both; }
-.chat-empty-mark { width: 52px; height: 52px; display: grid; place-items: center; margin-bottom: 18px; border-radius: 16px; background: var(--brand-grad); box-shadow: var(--glow); }
+.chat-empty-card { width: min(100%, 440px); display: flex; flex-direction: column; align-items: center; padding: clamp(22px, 3vw, 34px); border: 1px solid var(--border); border-radius: var(--radius-lg); text-align: center; background: var(--surface); box-shadow: var(--shadow-sm); animation: workspace-enter var(--motion-normal) ease both; }
+.chat-empty-mark { width: 48px; height: 48px; display: grid; place-items: center; margin-bottom: 14px; border-radius: var(--radius-sm); background: var(--brand-grad); box-shadow: var(--glow); }
 .chat-empty-mark img { width: 30px; height: 30px; filter: brightness(0) invert(1); }
 .chat-empty-card h1 { margin-bottom: 8px; color: var(--ink); font-family: var(--font-display); font-size: clamp(1.25rem, 3vw, 1.65rem); font-weight: 600; letter-spacing: -.025em; }
 .chat-empty-card p { max-width: 380px; color: var(--muted); font-size: .8rem; line-height: 1.65; overflow-wrap: anywhere; }
-.chat-empty-card > button { display: inline-flex; align-items: center; gap: 8px; margin-top: 20px; }
+.chat-empty-card > button { display: inline-flex; align-items: center; gap: 8px; margin-top: 16px; }
 .chat-call-error { flex: none; margin: 10px 16px 0; padding: 11px 14px; border: 1px solid color-mix(in srgb, var(--danger) 28%, var(--border)); border-radius: 12px; color: var(--danger); background: var(--danger-soft); font-size: .76rem; line-height: 1.45; animation: notice-in var(--motion-fast) ease-out both; }
 @media (max-width: 620px) { #chat-container, .chat-empty-page { border: 0; border-radius: 0; box-shadow: none; }.chat-empty-page { height: calc(100% - 72px - env(safe-area-inset-bottom)); } }

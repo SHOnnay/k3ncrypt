@@ -72,6 +72,11 @@ object K3ncryptMotion {
     const val slow = 400
 }
 
+fun k3ncryptContactName(label: String?): String = when (label?.trim()?.lowercase()) {
+    null, "", "private contact", "trusted contact", "new contact", "private conversation", "conversation" -> "Contact"
+    else -> label.trim()
+}
+
 @Composable
 fun K3ncryptTheme(darkTheme: Boolean, content: @Composable () -> Unit) {
     MaterialTheme(
@@ -92,7 +97,7 @@ fun K3ncryptTheme(darkTheme: Boolean, content: @Composable () -> Unit) {
 fun K3ncryptTopBar(title: String, subtitle: String, action: (@Composable () -> Unit)? = null) {
     Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 1.dp) {
         Row(
-            modifier = Modifier.fillMaxWidth().heightIn(min = 72.dp).padding(horizontal = 20.dp, vertical = 13.dp),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 72.dp).padding(horizontal = 18.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -130,11 +135,11 @@ fun K3ncryptSectionTitle(kicker: String, title: String, description: String? = n
 fun K3ncryptCard(content: @Composable () -> Unit) {
     Surface(
         modifier = Modifier.fillMaxWidth().animateContentSize(animationSpec = tween(durationMillis = K3ncryptMotion.normal)),
-        shape = RoundedCornerShape(20.dp),
+        shape = MaterialTheme.shapes.large,
         color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.58f)),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.42f)),
         tonalElevation = 1.dp,
-        shadowElevation = 2.dp,
+        shadowElevation = 1.dp,
         content = content,
     )
 }
@@ -189,7 +194,7 @@ fun K3ncryptNotice(text: String, tone: K3ncryptNoticeTone = K3ncryptNoticeTone.N
 @Composable
 fun K3ncryptEmptyState(title: String, description: String) {
     Column(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 30.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(9.dp),
     ) {

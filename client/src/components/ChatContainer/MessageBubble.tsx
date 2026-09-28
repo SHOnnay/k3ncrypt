@@ -45,11 +45,10 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
       {mediaUrl && media?.kind === 'video' && <video className="message-media-preview" controls src={mediaUrl} />}
       {mediaUrl && media && media.kind !== 'image' && media.kind !== 'voice' && media.kind !== 'video' && <a className="message-media-action" href={mediaUrl} download="protected-file">Save protected file</a>}
       <div className="message-meta">
-        <span>{message.type === 'sent' ? 'You' : 'Peer'}</span>
         <span>{formatMessageTime(message.timestamp)}</span>
-        {message.type === 'sent' && message.delivery === 'pending' && <span>Pending delivery</span>}
+        {message.type === 'sent' && message.delivery === 'pending' && <span>Sending…</span>}
         {message.type === 'sent' && message.delivery === 'accepted' && <span>Delivered</span>}
-        {message.type === 'sent' && message.delivery === 'failed' && <button type="button" onClick={() => retryMessage(message.id)}>Retry</button>}
+        {message.type === 'sent' && message.delivery === 'failed' && <button type="button" onClick={() => retryMessage(message.id)}>Not sent · Retry</button>}
       </div>
     </div>
   );

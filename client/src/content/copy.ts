@@ -19,6 +19,13 @@ export const copy = {
   },
   conversationEmpty: {
     title: 'Start your conversation',
-    description: 'Your messages will appear here when you send or receive them.',
+    description: 'Messages are end-to-end encrypted and saved on this device. Your conversation starts when you send or receive a message.',
   },
 } as const;
+
+const genericContactLabels = new Set(['private contact', 'trusted contact', 'new contact', 'private conversation', 'conversation']);
+
+export const contactDisplayName = (label?: string | null): string => {
+  const trimmed = label?.trim();
+  return !trimmed || genericContactLabels.has(trimmed.toLocaleLowerCase()) ? 'Contact' : trimmed;
+};

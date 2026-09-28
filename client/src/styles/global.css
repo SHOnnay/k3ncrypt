@@ -20,8 +20,10 @@ body {
 
 #root, #app { height: 100%; min-width: 0; }
 .hidden { display: none !important; }
-button, input, textarea { font: inherit; }
-button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px solid color-mix(in srgb, var(--brand) 24%, transparent); outline-offset: 2px; }
+button, input, textarea, select { font: inherit; }
+:where(button, input, textarea, select, summary, [tabindex]):focus { outline: none; }
+:where(button, input, textarea, select, summary, [tabindex]):focus-visible { outline: 3px solid var(--focus-outline); outline-offset: 2px; }
+:where(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), textarea, select):focus { border-color: var(--brand); box-shadow: var(--focus-shadow); outline: none; }
 
 ::-webkit-scrollbar { width: 7px; height: 7px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -35,7 +37,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px
 
 ::selection { color: var(--brand-contrast); background: var(--brand); }
 button, [role="button"] { -webkit-tap-highlight-color: transparent; }
-button:focus-visible, input:focus-visible, textarea:focus-visible, video:focus-visible { outline-color: var(--brand); }
+video:focus-visible { outline: 3px solid var(--focus-outline); outline-offset: 2px; }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; } }
 @media (max-width: 900px) { .conversation-workspace { padding: 12px; } }

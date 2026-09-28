@@ -1,12 +1,12 @@
 .overlay { height: 100%; display: grid; place-items: center; padding: 32px; overflow-y: auto; overscroll-behavior: contain; background: radial-gradient(circle at 50% 34%, var(--surface-raised) 0, var(--canvas-soft) 50%, var(--canvas) 100%); animation: setup-enter 260ms ease both; }
 @keyframes setup-enter { from { opacity: 0; } to { opacity: 1; } }
 .overlay.hidden { display: none; }
-.overlay-content { width: min(100%, 500px); padding: clamp(28px, 5vw, 46px); border: 1px solid var(--border); border-radius: var(--radius-xl); text-align: center; background: color-mix(in srgb, var(--surface) 94%, transparent); box-shadow: var(--shadow-md); backdrop-filter: blur(12px); animation: setup-card-enter 320ms cubic-bezier(.2,.75,.25,1) both; }
+.overlay-content { width: min(100%, 500px); padding: clamp(22px, 4vw, 36px); border: 1px solid var(--border); border-radius: var(--radius-lg); text-align: center; background: color-mix(in srgb, var(--surface) 94%, transparent); box-shadow: var(--shadow-md); backdrop-filter: blur(12px); animation: setup-card-enter 320ms cubic-bezier(.2,.75,.25,1) both; }
 @keyframes setup-card-enter { from { opacity: .7; transform: translateY(8px) scale(.99); } to { opacity: 1; transform: translateY(0) scale(1); } }
-.welcome-wordmark { display: block; width: 58px; height: 58px; object-fit: contain; margin: 0 auto 22px; }
+.welcome-wordmark { display: block; width: 54px; height: 54px; object-fit: contain; margin: 0 auto 16px; }
 .welcome-kicker { display: block; margin-bottom: 10px; color: var(--brand); font-size: .65rem; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
 .overlay-content h1 { color: var(--ink); font-family: var(--font-display); font-size: clamp(2rem, 5vw, 2.6rem); font-weight: 500; letter-spacing: -.045em; line-height: 1.05; }
-.overlay-content > p { max-width: 360px; margin: 14px auto 30px; color: var(--muted-strong); font-size: .87rem; line-height: 1.65; }
+.overlay-content > p { max-width: 360px; margin: 12px auto 22px; color: var(--muted-strong); font-size: .87rem; line-height: 1.6; }
 .setup-status { margin-top: 18px; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--brand) 22%, var(--border)); border-radius: 13px; color: var(--brand-strong); background: var(--brand-soft); font-size: .78rem; line-height: 1.5; text-align: left; animation: notice-in 180ms ease-out both; }
 .deleted-state { display: flex; justify-content: center; }
 .invitation-qr { margin: 18px auto; max-width: 330px; }
@@ -14,4 +14,4 @@
 .invitation-qr p { margin: 8px 0 0; color: var(--muted-strong); font-size: .75rem; }
 .invitation-scanner { margin: 12px auto; }
 .invitation-scanner video { display: block; width: 100%; max-height: 300px; margin: 10px 0; border-radius: 12px; background: #111; }
-@media (max-width: 620px) { .overlay { padding: 16px 16px calc(84px + env(safe-area-inset-bottom)); align-items: center; }.overlay-content { padding: 34px 22px; border-radius: 22px; }.overlay-content > p { margin-bottom: 24px; }.welcome-wordmark { margin-bottom: 18px; } }
+@media (max-width: 620px) { .overlay { padding: 16px 16px calc(84px + env(safe-area-inset-bottom)); align-items: center; }.overlay-content { padding: 26px 20px; }.overlay-content > p { margin-bottom: 20px; }.welcome-wordmark { margin-bottom: 14px; } }

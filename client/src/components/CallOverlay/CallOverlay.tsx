@@ -10,6 +10,7 @@ import { EndCallIcon, MicIcon, VideoIcon } from '../common/icons';
 import { Avatar } from '../common/Avatar';
 import { startRingtone, stopRingtone } from '../../utils/ringtone';
 import { attachMediaStream } from './mediaStream';
+import { contactDisplayName } from '../../content/copy';
 import './CallOverlay.css';
 
 export const CallOverlay: React.FC = () => {
@@ -75,7 +76,7 @@ export const CallOverlay: React.FC = () => {
   };
 
   const isVideo = callMediaMode === 'video';
-  const callContact = conversations.find((conversation) => conversation.roomId === channelHash)?.label ?? 'Contact';
+  const callContact = contactDisplayName(conversations.find((conversation) => conversation.roomId === channelHash)?.label);
 
   return (
     <div className="blur-overlay">

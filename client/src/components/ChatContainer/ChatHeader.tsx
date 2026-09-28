@@ -62,8 +62,8 @@ const handleDelete = async () => {
       <div className="header-info">
         <div className="title-row">
           <h2 className="channel-title">{contactLabel}</h2>
-          {activeConversation && <StatusPill tone="neutral">{protocolMode === 'modern' ? 'Encrypted' : 'Private'}</StatusPill>}
-          {activeConversation && protocolMode === 'modern' && contactIdentity && <StatusPill tone={contactIdentity.verification === 'verified' && contactIdentity.changeStatus === 'unchanged' ? 'positive' : 'quiet'}>{contactIdentity.verification === 'verified' && contactIdentity.changeStatus === 'unchanged' ? 'Verified contact' : 'Review identity'}</StatusPill>}
+          {activeConversation && <StatusPill tone="neutral">{protocolMode === 'modern' ? 'Encrypted chat' : 'Private chat'}</StatusPill>}
+          {activeConversation && protocolMode === 'modern' && contactIdentity && <StatusPill tone={contactIdentity.verification === 'verified' && contactIdentity.changeStatus === 'unchanged' ? 'positive' : 'quiet'}>{contactIdentity.verification === 'verified' && contactIdentity.changeStatus === 'unchanged' ? 'Verified contact' : 'Verify contact'}</StatusPill>}
         </div>
         {activeConversation && protocolMode === 'legacy' && (
           <div className="hash-badge-container">
@@ -81,7 +81,7 @@ const handleDelete = async () => {
           </div>
         )}
         <p id="participant-info" className="participant-info">
-          {activeConversation && (sessionHealth === 'unhealthy' ? 'Your saved secure connection needs a verified update. Your identity and history are preserved.' : sessionHealth === 'renewal-pending' ? 'Secure connection update is waiting for your contact. Send a message after they are ready.' : isConnected ? 'Secure connection established' : 'Waiting for your contact to connect')}
+          {activeConversation && (sessionHealth === 'unhealthy' ? 'Review the security update for this conversation before continuing.' : sessionHealth === 'renewal-pending' ? 'Waiting for your contact to review the connection update.' : isConnected ? protocolMode === 'modern' ? 'Messages in this conversation are encrypted.' : 'Conversation connected' : 'Waiting for your contact to connect')}
         </p>
       </div>
       <div className="header-actions">

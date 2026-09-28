@@ -3,7 +3,7 @@
   flex-direction: column;
   gap: 16px;
 }
-.create-hash-view .input-field, .create-hash-view .message-input { min-height: 46px; border-radius: 12px; }
+.create-hash-view .input-field, .create-hash-view .message-input { min-height: 45px; border-radius: var(--radius-sm); }
 .create-hash-view .button-group { margin-top: 4px; }
 
 .copy-feedback {

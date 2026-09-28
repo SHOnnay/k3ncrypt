@@ -3,7 +3,7 @@ import { useChat } from '../../context/ChatContext';
 import { PlusIcon } from '../common/icons';
 import { ApprovedIcon } from '../common/ApprovedIcon';
 import { Avatar } from '../common/Avatar';
-import { copy } from '../../content/copy';
+import { contactDisplayName, copy } from '../../content/copy';
 import './AppShell.css';
 
 interface SidebarProps {
@@ -51,10 +51,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection
         <p className="section-label">Conversations</p>
         {conversations.map((conversation) => (
           <button key={conversation.roomId} className={`conversation-row ${!isWelcomeActive && channelHash === conversation.roomId ? 'active' : ''}`} type="button" onClick={() => onOpenConversation(conversation.roomId)}>
-            <Avatar label={conversation.label} size="medium" status={isConnected ? 'online' : 'offline'} />
+            <Avatar label={contactDisplayName(conversation.label)} size="medium" status={channelHash === conversation.roomId && isConnected ? 'online' : 'offline'} />
             <span className="conversation-copy">
-              <span className="conversation-name-row"><span className="conversation-name">{conversation.label}</span><time>{channelHash === conversation.roomId ? formatSidebarTime(latest?.timestamp) : ''}</time></span>
-              <span className="conversation-preview">{channelHash === conversation.roomId && sessionHealth !== 'healthy' ? 'Security update required' : channelHash === conversation.roomId && latest?.text ? latest.text : syncStatus === 'blocked' ? 'Security update required' : isConnected ? 'Protected session ready' : 'Stored on this device'}</span>
+              <span className="conversation-name-row"><span className="conversation-name">{contactDisplayName(conversation.label)}</span><time>{channelHash === conversation.roomId ? formatSidebarTime(latest?.timestamp) : ''}</time></span>
+              <span className="conversation-preview">{channelHash === conversation.roomId && sessionHealth !== 'healthy' ? 'Review connection' : channelHash === conversation.roomId && latest?.text ? latest.text : syncStatus === 'blocked' ? 'Review connection' : isConnected ? 'Ready to chat' : 'Saved on this device'}</span>
             </span>
           </button>
         ))}

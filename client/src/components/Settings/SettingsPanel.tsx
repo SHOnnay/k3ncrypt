@@ -38,7 +38,7 @@ const viewTitles: Record<SettingsView, string> = {
   calls: 'Calls',
   appearance: 'Appearance',
   network: 'Connection',
-  verification: 'Security identity',
+  verification: 'Security',
 };
 
 export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose }) => {
@@ -90,15 +90,20 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
                 <div><strong>{profileDisplayName}</strong><p>{protocolMode === 'modern' ? 'Your private identity is on this device.' : 'Identity setup is available for modern contacts.'}</p></div>
                 <StatusPill tone="quiet">Local</StatusPill>
               </div>
-              <section className="settings-group" aria-label="Settings sections">
-                <SettingsRow icon={<UserIcon size={18} />} title="Profile" description="Your name on this device" onClick={() => setView('profile')} />
-                <SettingsRow icon={<ShieldIcon size={18} />} title="Security identity" description="This device and verified contacts" onClick={() => setView('verification')} />
-                <SettingsRow icon={<LockIcon size={18} />} title="Devices" description="Review and approve devices" onClick={() => setView('devices')} />
-                <SettingsRow icon={<ShieldIcon size={18} />} title="Privacy" description="Conversation and device privacy" onClick={() => setView('privacy')} />
-                <SettingsRow icon={<NetworkIcon size={18} />} title="Connection" description="How this space reaches others" onClick={() => setView('network')} />
+              <section className="settings-group" aria-label="Personal settings">
+                <p className="settings-group__label">Personal</p>
+                <SettingsRow icon={<UserIcon size={18} />} title="Profile" description="Your name and local contact nicknames" onClick={() => setView('profile')} />
                 <SettingsRow icon={<PaletteIcon size={18} />} title="Appearance" description={theme === 'paper' ? 'Paper & Ink' : 'Slate Dusk'} onClick={() => setView('appearance')} />
               </section>
-              <section className="settings-group" aria-label="More settings">
+              <section className="settings-group" aria-label="Security and devices">
+                <p className="settings-group__label">Security & devices</p>
+                <SettingsRow icon={<ShieldIcon size={18} />} title="Security" description="Your identity and contact verification" onClick={() => setView('verification')} />
+                <SettingsRow icon={<LockIcon size={18} />} title="Devices" description="Review and approve devices" onClick={() => setView('devices')} />
+                <SettingsRow icon={<ShieldIcon size={18} />} title="Privacy" description="Conversation and device privacy" onClick={() => setView('privacy')} />
+                <SettingsRow icon={<NetworkIcon size={18} />} title="Connection" description="Connection status for this conversation" onClick={() => setView('network')} />
+              </section>
+              <section className="settings-group" aria-label="Notifications and about">
+                <p className="settings-group__label">Notifications & about</p>
                 <SettingsRow icon={<BellIcon size={18} />} title="Notifications" description={privacyPreferences.notificationsEnabled ? 'Private alerts are on' : 'Notifications are off'} onClick={() => setView('notifications')} />
                 <SettingsRow icon={<MicIcon size={18} />} title="Calls" description="Ringtone and media permissions" onClick={() => setView('calls')} />
                 <SettingsRow icon={<InfoIcon size={18} />} title="About" description="K3NCRYPT · private communication" status="Private beta" />
@@ -115,7 +120,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
 
           {view === 'profile' && (
             <section className="settings-detail">
-              <div className="detail-intro"><h3>Your profile</h3><p>Your display name is stored only on this device to help you recognize your space. It is not part of your secure identity, is not shared with contacts, and does not prove anyone’s identity.</p></div>
+              <div className="detail-intro"><h3>Your profile</h3><p>Your display name appears in your space on this device. Contact nicknames are also local to this device. Neither name is part of your cryptographic identity or proves who someone is.</p></div>
               <div className="unavailable-card profile-name-card">
                 <label htmlFor="local-profile-name">Display name</label>
                 <input id="local-profile-name" className="message-input" maxLength={40} value={profileNameDraft} disabled={accountState !== 'ready'} onChange={(event) => setProfileNameDraft(event.target.value)} />
@@ -169,7 +174,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
                 <div><strong>{isConnected ? 'Secure conversation connected' : 'Waiting for your contact'}</strong><p>Connection for this conversation</p></div>
                 <StatusPill tone={isConnected ? 'positive' : 'quiet'}>{isConnected ? 'Online' : 'Waiting'}</StatusPill>
               </div>
-              <div className="network-status"><span className={`network-pulse ${syncStatus === 'ready' ? 'online' : ''}`} /><div><strong>Device sync</strong><p>Your approved devices stay in sync</p></div><StatusPill tone={syncStatus === 'ready' ? 'positive' : 'quiet'}>{syncStatus === 'ready' ? 'Ready' : 'Waiting'}</StatusPill></div>
+              <div className="network-status"><span className={`network-pulse ${syncStatus === 'ready' ? 'online' : ''}`} /><div><strong>Service connection</strong><p>Service availability for this device</p></div><StatusPill tone={syncStatus === 'ready' ? 'positive' : 'quiet'}>{syncStatus === 'ready' ? 'Ready' : 'Waiting'}</StatusPill></div>
               <p className="detail-note">This beta uses the configured K3NCRYPT service to connect trusted contacts.</p>
             </section>
           )}
@@ -179,7 +184,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
               <div className="verification-mark"><ShieldIcon size={30} /></div>
               <h3>Security identity</h3>
               <p>{copy.verification.description}</p>
-              {protocolMode === 'modern' && ownFingerprint ? <div className="unavailable-card">
+              {protocolMode === 'modern' && ownFingerprint ? <div className="unavailable-card security-details-card">
                 <strong>This device identity</strong>
                 <p>This identity belongs to this device. It is separate from your profile name.</p>
                 <strong>Your fingerprint</strong><code className="verification-code">{ownFingerprint}</code>
@@ -233,10 +238,10 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
                     </>}
                     {sessionHealth === 'renewal-pending' && <p role="status">Ask your contact to prepare verified session renewal on their device, then send one text message. Calls remain paused until that message is accepted.</p>}
                   </>}
-                </> : <p>Your contact will appear here after the first message.</p>}
+                </> : <p>{channelHash ? 'Identity details are not available for this conversation yet.' : 'Choose a conversation to review its identity and verification status.'}</p>}
                 {recoveryNotice && <p role="status">{recoveryNotice}</p>}
                 {verificationError && <p role="alert">{verificationError}</p>}
-              </div> : <div className="unavailable-card"><StatusPill tone="quiet">Not available in this conversation</StatusPill><p>Verification is available for new modern private contacts.</p></div>}
+              </div> : <div className="unavailable-card"><StatusPill tone="quiet">Not available in this conversation</StatusPill><p>Fingerprint verification is available for contacts added through a supported invitation.</p></div>}
             </section>
           )}
 
@@ -264,11 +269,11 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
                   <input id="device-id-input" className="verification-qr-payload" value={deviceIdInput} onChange={(event) => setDeviceIdInput(event.target.value)} placeholder="Public device identifier" />
                   <label htmlFor="device-identity-input">New public identity reference</label>
                   <input id="device-identity-input" className="verification-qr-payload" value={deviceIdentityInput} onChange={(event) => setDeviceIdentityInput(event.target.value)} placeholder="Public identity reference" />
-                  <button className="btn btn--secondary" type="button" disabled={!deviceIdInput || !deviceIdentityInput} onClick={() => requestDeviceEnrollment(deviceIdInput, deviceIdentityInput, 'Olm-Curve25519+Ed25519').then(() => { setDeviceIdInput(''); setDeviceIdentityInput(''); setRecoveryNotice('Enrollment request sent through the protected session.'); }).catch(() => setVerificationError('Could not send the enrollment request.'))}>Request device approval</button>
+                  <button className="btn btn--secondary" type="button" disabled={!deviceIdInput || !deviceIdentityInput} onClick={() => requestDeviceEnrollment(deviceIdInput, deviceIdentityInput, 'Olm-Curve25519+Ed25519').then(() => { setDeviceIdInput(''); setDeviceIdentityInput(''); setRecoveryNotice('Request sent over the encrypted conversation.'); }).catch(() => setVerificationError('Could not send the enrollment request.'))}>Request device approval</button>
                 </details>
                 {recoveryNotice && <p role="status">{recoveryNotice}</p>}
                 {verificationError && <p role="alert">{verificationError}</p>}
-              </div> : <div className="unavailable-card"><StatusPill tone="quiet">Devices unavailable</StatusPill><p>Device approval is available for modern private contacts.</p></div>}
+              </div> : <div className="unavailable-card"><StatusPill tone="quiet">Devices unavailable</StatusPill><p>Device approval is available for contacts added through a supported invitation.</p></div>}
             </section>
           )}
         </div>

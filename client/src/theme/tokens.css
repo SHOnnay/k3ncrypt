@@ -12,6 +12,8 @@
   --radius-lg: 20px;
   --radius-xl: 28px;
   --radius-round: 999px;
+  --focus-outline: color-mix(in srgb, var(--brand) 42%, transparent);
+  --focus-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 17%, transparent);
   --motion-fast: 120ms;
   --motion-normal: 240ms;
   --motion-slow: 400ms;
