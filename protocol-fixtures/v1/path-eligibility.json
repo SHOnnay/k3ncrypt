@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "purpose": "Proposed future path gate examples; no beta path selection change",
+  "cases": [
+    { "name": "verified healthy peer", "verified": true, "identityUnchanged": true, "deviceAuthorized": true, "freshnessValid": true, "featureNegotiated": true, "eligible": true },
+    { "name": "unverified peer", "verified": false, "identityUnchanged": true, "deviceAuthorized": true, "freshnessValid": true, "featureNegotiated": true, "eligible": false },
+    { "name": "identity changed", "verified": true, "identityUnchanged": false, "deviceAuthorized": true, "freshnessValid": true, "featureNegotiated": true, "eligible": false },
+    { "name": "device revoked", "verified": true, "identityUnchanged": true, "deviceAuthorized": false, "freshnessValid": true, "featureNegotiated": true, "eligible": false },
+    { "name": "offline freshness unknown", "verified": true, "identityUnchanged": true, "deviceAuthorized": true, "freshnessValid": false, "featureNegotiated": true, "eligible": false },
+    { "name": "mixed version without feature", "verified": true, "identityUnchanged": true, "deviceAuthorized": true, "freshnessValid": true, "featureNegotiated": false, "eligible": false }
+  ]
+}
