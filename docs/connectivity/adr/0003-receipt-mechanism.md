@@ -13,3 +13,9 @@ Use a bounded, session-encrypted `receipt` control frame only when both peers ad
 ## Decision needed
 
 Approve or reject ratchet cost, batching, retention and handling when peer receipt is lost. Do not silently equate “stored by mailbox” with “persisted by peer.”
+
+## Phase 1B validation contract
+
+Before any `peer-persisted` transition, validate the authenticated frame under the expected conversation/session or a separately reviewed transcript-bound admitted key; bind the exact stable envelope ID, conversation and expected peer device identity. Reject wrong peer, changed identity, wrong conversation, unknown or retired ID, malformed frame and unsupported version without changing pending work. A duplicate valid receipt is idempotent. Relay transport ACKs, mailbox deletion, and an unauthenticated path receipt are insufficient.
+
+The receiver may emit a receipt only after the approved ADR 0002 durable acceptance boundary, including replay/dedupe state. Both peers must advertise `transport-control-v1`; older clients must never receive the frame. Relay-only behavior and existing outbox cleanup are unchanged. Specify a bounded batch/frame size, receipt expiry, retained pending-ID window, lost-receipt retry behavior and whether receipt control consumes a ratchet step before approving implementation. A receipt proves application persistence at the sending device's claimed boundary, not reading or future data retention. D-R remains undecided.

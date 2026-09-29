@@ -31,6 +31,21 @@
 
 Android-to-Android verified contact; no internet for LAN test; app cold start; same ciphertext via LAN and relay overlap; Wi-Fi client isolation; process death; revocation/freshness change; switch between networks; TURN and blocked UDP. Browser support is recorded separately. Emulator-only success is insufficient for LAN claims.
 
+## Phase 1B specification gates (future tests; not enabled by this document)
+
+| Gate | Evidence required before multipath | Expected result |
+|---|---|---|
+| State evidence | Live relay acceptance, offline `stored:true`, submission timeout, replay-loop completion | Each maps only to the claim in ADR 0006; no adapter/relay result asserts `peer-persisted`; timeout remains unknown |
+| Stable ID | Same validated ciphertext through Web/Android and reordered JSON; changed ciphertext or conversation; legacy seen records | Identical cross-platform ID for identical conversation/ciphertext; distinct for changed inputs; legacy duplicates recognized during migration |
+| Retention | Replay at 1,024 entries and after supported maximum retry/mailbox lifetime | No accepted envelope reaches a second decrypt while it may legitimately be retried; establish an explicit bound before implementation |
+| Sender crashes | Before/after encrypt, before/after outbox write, after submit and after lost ACK | No false completion; a durable pending item retries the same ciphertext after restart; pre-outbox failure is reported accurately |
+| Receiver crashes | After decrypt, during content write, after content write, after dedupe write and before ACK | After restart: one persisted message, recoverable session and dedupe, no positive acceptance before durable commit; use real ratchet/storage boundaries |
+| Duplicate delivery | Live ACK lost then mailbox replay; future path overlap; repeated receipt | One authenticated acceptance/consumer effect; duplicates handled before second decrypt; receipts change state at most once |
+| Forged/stale receipt | Wrong device, conversation, ID, version, changed identity, expired ID, raw relay/path ACK | Rejected without outbox removal or trust/session mutation |
+| Mixed versions | Current/current, current/future, future/current, future/future with feature disabled/enabled | Relay-only remains compatible; no future receipt/control sent to an unadvertised peer |
+
+The Phase 0 fake decryptor does not establish real crash recovery. Run the existing relay, service, client and Android suites as compatibility checks after any later production change; perform disposable-database fault injection before making a durability claim.
+
 ## Phase 0 execution record
 
 - Clean `main` baseline: `3e26ce952ea539ef7aaa9bb5db3d5dea4bf30f7f`; ancestor check passed before branching.
