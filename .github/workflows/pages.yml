@@ -1,5 +1,9 @@
 name: Deploy landing page to GitHub Pages
 
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
 on:
   push:
     branches:
@@ -24,10 +28,15 @@ jobs:
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
 
+      - name: Validate landing page source
+        run: |
+          test -s site/index.html
+          test -s site/styles.css
+
       - name: Upload landing page artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: site/
+          path: ./site/
 
       - name: Deploy to GitHub Pages
         id: deployment
