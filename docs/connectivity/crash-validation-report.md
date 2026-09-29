@@ -1,4 +1,4 @@
-# Phase 1D crash-consistency validation report
+# Crash-consistency validation report (Phases 1D–1E)
 
 Status: current-behavior evidence, not a fix or multipath approval. Branch baseline: `ef904fc` (`connectivity/crash-consistency`). Test source: `service/src/crypto/phase1dCrashValidation.test.ts`; earlier Phase 0 characterization remains in its own tests. No production source changed.
 
@@ -26,9 +26,31 @@ Recommendation: investigate transaction-based Web receiver commit first, but sel
 
 ## Unresolved validation
 
-1. Real WASM Vodozemac state, encrypted IndexedDB vault and browser process kill/restart at R1/R2/R3 and S1/S2.
-2. Android Room process-death fault injection around its inbound transaction.
+1. Browser **OS-process** kill/restart and first-prekey-session crash points at R1/R2/R3; real persisted sender S1/S2. Phase 1E completed real WASM/IndexedDB page-reload probes for existing-session R1/R2/R3.
+2. Android first-prekey-session process-death and physical disk/power-loss timing. Phase 1E completed an existing-session in-transaction process-kill probe.
 3. Disposable relay/database test for live ACK loss, `received` loss, mailbox replay and stale server events.
 4. Cross-platform envelope-ID fixtures and retention bound covering legitimate retry/mailbox lifetime.
 
 ADR 0002 remains undecided. Multipath and `peer-persisted` remain disabled.
+
+## Phase 1E: real persistence and native-session evidence
+
+The new Web Playwright cases use the production WASM bindings, `VodozemacRuntime`, `BrowserSecureStorage` and encrypted IndexedDB. They establish a real inbound Olm session, decrypt a subsequent envelope, reload the page, unlock the same vault, restore the session and redeliver the identical envelope. A page reload reconstructs the JavaScript process state but is **not** an operating-system/browser-process kill. These cases exercise the runtime/vault composition directly, not the full Socket.IO/React receive path.
+
+| Window | Confirmed Web result after reload | Limit |
+|---|---|---|
+| R1/R2: decrypt completed, product write absent | Advanced `vodozemac-session` survives; no `product-messages` or `modern-seen` record; the same ciphertext is rejected by the restored real session. | A crash exactly inside an IndexedDB write was not injected. This proves the after-decrypt/before-product gap, not the probability of hitting it. |
+| R3: product write completed, seen write absent | Session and product message survive; `modern-seen` is absent; real-session redelivery is rejected. | No duplicate product callback occurs in this direct-runtime test. The absent marker still prevents a clean seen-duplicate response in the current composition. |
+
+The new Android instrumentation case uses the actual JNI crypto bridge, a real Olm sender/receiver session, authenticated Keystore encryption and an on-device Room database. It commits a first inbound message, decrypts a second envelope, then injects an exception after the second `commitInbound` body inside an outer Room transaction. It also runs in three external phases: prepare, kill the instrumentation process after the nested inbound write but before the outer transaction commits, then start a new instrumentation process and verify. The kill phase intentionally reports `Process crashed`; the following verification passes.
+
+| Window | Confirmed Android result after force-stop/process death and reopen | Limit |
+|---|---|---|
+| Uncommitted inbound transaction | First message/session remain; second message and digest are absent; restored native session decrypts the second ciphertext on redelivery. | Test targets an existing session and a kill after the inner write returned but before the outer transaction committed. It does not prove every disk/power-loss timing or first-prekey-session crash point. |
+| Committed inbound transaction | First message remains after database close/reopen and process restart. | Existing `AndroidCryptoPersistenceInteropTest` additionally exercises first prekey establishment and a restarted session; neither test is a full app UI/relay run. |
+
+### Platform difference and decision
+
+Web has a **confirmed recoverability gap** at R1/R2: the current real ratchet state can make an unpersisted message undecryptable on redelivery. R3 preserves the message but has no seen marker. Android's current Room transaction gives the tested inbound records an atomic boundary across a real process death. The Android evidence does not transfer to Web. A process death before Web decrypt finishes, a write interrupted mid-IndexedDB transaction, a first inbound prekey crash, multi-tab contention, live relay ACK loss and S1/S2 with real persisted sender state remain untested.
+
+Recommended next design investigation: a Web acceptance transaction that commits ratchet/account state, encrypted product message and dedupe together. If the current storage API cannot provide one shared atomic transaction, specify a recovery record coordinated *before or with* ratchet advancement. Stable envelope-keyed idempotence remains complementary, not a repair for R1. ADR 0002 still does not authorize a production implementation or multipath.

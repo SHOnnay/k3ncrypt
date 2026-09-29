@@ -56,6 +56,17 @@ Candidate acceptance criteria: one persisted message per authenticated envelope 
 
 `service/src/crypto/phase1dCrashValidation.test.ts` adds five current-behavior tests: S1 missing outbox after injected write failure; S2 restart/same-envelope retry and lost `delivered`; R1/R2 failed product write after modeled ratchet persistence; R3 seen-write failure followed by duplicate product write; and duplicate/delayed relay-ID ACKs. These are observation tests, not acceptance tests. The fake ratchet and in-memory store cannot settle real Vodozemac/process-death behavior. See `crash-validation-report.md` for outcomes and outstanding real-state/disposable-database tests.
 
+### Phase 1E execution record
+
+| Probe | Test | Observed | Still open |
+|---|---|---|---|
+| Web R1/R2, existing session | `e2e/real-crash-validation.spec.ts`: real WASM/IndexedDB, decrypt, reload before product write | Session survives, product/seen absent, identical ciphertext rejected on redelivery | OS browser kill, first prekey session, full receive callback |
+| Web R3 | Same Playwright file: persist product, reload before seen write | Product survives, seen absent, identical ciphertext rejected | Seen restoration/idempotent full callback |
+| Android rollback | `AndroidCrashRecoveryValidationTest`: JNI/Keystore/Room, injected outer transaction abort | No second message/digest; previous message retained; ciphertext decrypts from restored session | All physical disk-loss timings |
+| Android process death | Same test, `crashPhase=prepare`, `kill`, `verify` across runner processes | Kill phase intentionally crashes inside uncommitted Room transaction; verify phase confirms atomic rollback and redelivery decrypt | First prekey-session kill, complete app/relay lifecycle |
+
+The Android test requires a disposable unlocked emulator with a secure PIN because the production Keystore key requires device authentication. These are characterization results, not permission to enable multipath. Sender S1/S2 with real persisted state and live ACK-loss remain pending.
+
 ## Phase 0 execution record
 
 - Clean `main` baseline: `3e26ce952ea539ef7aaa9bb5db3d5dea4bf30f7f`; ancestor check passed before branching.
