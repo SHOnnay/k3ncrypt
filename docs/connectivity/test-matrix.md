@@ -52,6 +52,10 @@ Use `crash-acceptance-v1.md` as the sequence reference. With real persisted Web 
 
 Candidate acceptance criteria: one persisted message per authenticated envelope after recovery; no peer receipt or positive receiver callback before durable acceptance; unchanged ciphertext on retry; no unrelated, forged or duplicate receipt clears pending work. Test envelope IDs on Web and Android against exact cross-platform fixture bytes, altered JSON wrapping, different conversations and beyond the supported replay lifetime. Existing characterization tests document current failures and should not be rewritten as passing guarantees before an approved fix.
 
+### Phase 1D execution record
+
+`service/src/crypto/phase1dCrashValidation.test.ts` adds five current-behavior tests: S1 missing outbox after injected write failure; S2 restart/same-envelope retry and lost `delivered`; R1/R2 failed product write after modeled ratchet persistence; R3 seen-write failure followed by duplicate product write; and duplicate/delayed relay-ID ACKs. These are observation tests, not acceptance tests. The fake ratchet and in-memory store cannot settle real Vodozemac/process-death behavior. See `crash-validation-report.md` for outcomes and outstanding real-state/disposable-database tests.
+
 ## Phase 0 execution record
 
 - Clean `main` baseline: `3e26ce952ea539ef7aaa9bb5db3d5dea4bf30f7f`; ancestor check passed before branching.

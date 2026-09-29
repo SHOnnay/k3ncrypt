@@ -29,3 +29,7 @@ Status remains proposed; implementation choice is deferred. `crash-acceptance-v1
 Transaction feasibility must be proved. `SecureStorage.compareAndSwapRecords` and IndexedDB multi-record transactions exist; current call sites do not form a shared acceptance transaction. Android Room `commitInbound` groups its account, session, message and digest, but needs process-death tests. A write-ahead record is viable only if its recovery data is durably coordinated with ratchet mutation inside the existing encrypted vault boundary. Do not journal plaintext or keys.
 
 Choose a design only after proving real Vodozemac restart recovery at R1/R2, inspecting first-session account mutation and concurrent-tab ownership, and approving ADR 0001 identity and retention. No production implementation is approved by this update.
+
+## Phase 1D evidence update
+
+`crash-validation-report.md` records five new fault-injection tests. They reproduce S1 missing outbox, S2 same-envelope restart retry, modeled R1/R2 loss risk, R3 duplicate product persistence under replayable decrypt, and delayed/duplicate relay-ID ACK behavior. In-memory records and fake ratchets/relay establish possible outcomes and call ordering, not real Vodozemac or browser process-death recovery. Investigate transactional Web acceptance first; use a write-ahead record if shared atomic commit proves infeasible, and idempotent envelope-keyed consumption as complementary duplicate control. No option is selected; real-state restart validation remains mandatory.
