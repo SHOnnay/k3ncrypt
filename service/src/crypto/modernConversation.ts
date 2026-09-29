@@ -1,5 +1,5 @@
 import { testDiagnosticsEnabled } from '../utils/testDiagnostics';
-import type { EncryptedEnvelope, SecureStorage, TransportManager } from '../core/contracts';
+import type { EncryptedEnvelope, SecureRecordUpdate, SecureStorage, TransportManager } from '../core/contracts';
 import { VODOZEMAC_ENVELOPE_VERSION, VODOZEMAC_STRATEGY_ID } from '../core/vodozemacCryptoSession';
 import { claimVodozemacOneTimeKey, fetchVodozemacBundle, publishVodozemacBundle, renewVodozemacBundle } from '../api/prekeys';
 import { deleteLink } from '../api/links';
@@ -47,6 +47,7 @@ const SESSION_AUDIT_RECORD = 'conversation-session-audit';
 const SESSION_RENEWAL_RECORD = 'conversation-session-renewal';
 const JOIN_INTRODUCTION_RECORD = 'conversation-join-introduction';
 const JOIN_INTRODUCTION_SEEN_RECORD = 'conversation-join-introduction-seen';
+const ACCEPTED_MESSAGE_RECORD = 'modern-accepted-message';
 const JOIN_INTRODUCTION_MAGIC = new Uint8Array([0x00, 0x4b, 0x33, 0x4e, 0x43, 0x49, 0x01]);
 const MAX_PENDING = 32;
 const MAX_SEEN = 1024;
@@ -74,6 +75,10 @@ type JoinIntroductionRecord = {
     recipientIdentityCommitment: string;
     envelope?: EncryptedEnvelope;
 };
+
+export interface InboundMessageAcceptancePlan {
+    readonly updates: readonly SecureRecordUpdate[];
+}
 const parseSessionRenewal = (bytes: ArrayBuffer | undefined): SessionRenewal | undefined => {
     if (!bytes) return undefined;
     const value: unknown = JSON.parse(decoder.decode(bytes));
@@ -262,7 +267,8 @@ export class ModernConversation {
     private recoveryRuntime?: RecoveryRuntime;
     private durableProofs?: DeviceProofClient;
     private retryTimer?: ReturnType<typeof setInterval>;
-    private onMessage?: (text: string) => unknown;
+    private onMessage?: (text: string, messageId?: string) => unknown;
+    private prepareInboundMessage?: (text: string, messageId: string) => Promise<InboundMessageAcceptancePlan>;
     private onContactChange?: (contact: StoredContactIdentity) => void | Promise<void>;
     private onDeviceControl?: (message: DeviceControlEvent) => void;
     private readonly tabOwnerId = `${Math.random().toString(36).slice(2)}-${Date.now()}`;
@@ -318,7 +324,7 @@ export class ModernConversation {
         this.subscriptions.set('delivered', new Set([(id: string) => { void this.acceptDelivery(id); }]));
     }
 
-    public async connect(roomId: string, capability: string, remoteAddress?: string, remoteIdentityCommitment?: string, onMessage?: (text: string) => unknown, onContactChange?: (contact: StoredContactIdentity) => void | Promise<void>, onDeviceControl?: (message: DeviceControlEvent) => void, options?: { sendJoinIntroduction?: boolean }): Promise<ModernConnectionDetails> {
+    public async connect(roomId: string, capability: string, remoteAddress?: string, remoteIdentityCommitment?: string, onMessage?: (text: string, messageId?: string) => unknown, onContactChange?: (contact: StoredContactIdentity) => void | Promise<void>, onDeviceControl?: (message: DeviceControlEvent) => void, options?: { sendJoinIntroduction?: boolean; prepareInboundMessage?: (text: string, messageId: string) => Promise<InboundMessageAcceptancePlan> }): Promise<ModernConnectionDetails> {
         const details = await this.withTabLock(roomId, async () => {
             this.connecting = true;
             try { return await this.connectUnlocked(roomId, capability, remoteAddress, remoteIdentityCommitment, onMessage, onContactChange, onDeviceControl, options); }
@@ -329,7 +335,7 @@ export class ModernConversation {
         return details;
     }
 
-    private async connectUnlocked(roomId: string, capability: string, remoteAddress?: string, remoteIdentityCommitment?: string, onMessage?: (text: string) => unknown, onContactChange?: (contact: StoredContactIdentity) => void | Promise<void>, onDeviceControl?: (message: DeviceControlEvent) => void, options?: { sendJoinIntroduction?: boolean }): Promise<ModernConnectionDetails> {
+    private async connectUnlocked(roomId: string, capability: string, remoteAddress?: string, remoteIdentityCommitment?: string, onMessage?: (text: string, messageId?: string) => unknown, onContactChange?: (contact: StoredContactIdentity) => void | Promise<void>, onDeviceControl?: (message: DeviceControlEvent) => void, options?: { sendJoinIntroduction?: boolean; prepareInboundMessage?: (text: string, messageId: string) => Promise<InboundMessageAcceptancePlan> }): Promise<ModernConnectionDetails> {
         if (!/^[0-9a-f-]{36}$/i.test(roomId) || !capability) throw new Error('Invalid private conversation invitation.');
         this.roomId = roomId;
         this.sessionHealth = 'healthy';
@@ -346,6 +352,7 @@ export class ModernConversation {
         }
         this.joinIntroductionPending = Boolean(introductionRecord);
         this.onMessage = onMessage;
+        this.prepareInboundMessage = options?.prepareInboundMessage;
         this.onContactChange = onContactChange;
         this.onDeviceControl = onDeviceControl;
         await this.runtime.initialize();
@@ -1106,18 +1113,21 @@ export class ModernConversation {
             let wireText: string;
             try { wireText = firstMessage(envelope); }
             catch (error) { this.lastInboundFailureCategory = 'malformed-envelope'; throw error; }
-            this.lastInboundFailureCategory = undefined;
             await this.testOnlyRecordInboundStage('parsed');
             const digest = await this.digest(envelope);
-            const seen = parseList<string>(await this.storage.read(SEEN_RECORD, this.roomId));
+            const seenBytes = await this.storage.read(SEEN_RECORD, this.roomId);
+            const seen = parseList<string>(seenBytes);
             if (seen.includes(digest)) {
+                await this.flushAcceptedMessage(digest);
                 await this.testOnlyRecordInboundStage('persisted');
                 await this.testOnlyRecordInboundStage('acknowledged');
                 return true;
             }
-            let text: string | undefined;
-            if (!this.runtime.activeSessionId) {
-                let bundle;
+            if (!this.onMessage) { this.lastInboundFailureCategory = 'persistence-failure'; throw new Error('Inbound message consumer is unavailable.'); }
+
+            let bundle: ReturnType<typeof validateVodozemacPublicBundle> | undefined;
+            const firstSession = !this.runtime.activeSessionId;
+            if (firstSession) {
                 try { bundle = validateVodozemacPublicBundle(await fetchVodozemacBundle(this.roomId, this.capability, senderAddress)); }
                 catch (error) { this.lastInboundFailureCategory = 'prekey-session-lookup-failure'; throw error; }
                 const pinned = await this.registry.get(senderAddress);
@@ -1128,69 +1138,76 @@ export class ModernConversation {
                     await this.testOnlyRecordInboundStage('parsed', senderFingerprint, this.lastInboundFailureCategory);
                     return false;
                 }
-                let plaintext: ArrayBuffer;
-                try { plaintext = await this.runtime.establishInboundSession(this.roomId, bundle.identity.curve25519, wireText); }
-                catch (error) { this.lastInboundFailureCategory = 'prekey-session-lookup-failure'; throw error; }
-                await this.testOnlyRecordInboundStage('session-found', senderFingerprint);
-                await this.testOnlyRecordInboundStage('decrypted', senderFingerprint);
-                let payload: Uint8Array;
-                try { payload = unframeFirstMessage(plaintext); }
-                catch (error) { this.lastInboundFailureCategory = 'message-frame-parsing-failure'; throw error; }
-                try {
-                    const introduction = parseJoinIntroduction(payload);
-                    if (introduction) {
-                        await this.acceptJoinIntroduction(introduction, senderAddress, bundle.identity, digest, seen);
-                        await this.testOnlyRecordInboundStage('frame-parsed', senderFingerprint);
-                        await this.testOnlyRecordInboundStage('persisted', senderFingerprint);
-                        await this.testOnlyRecordInboundStage('acknowledged', senderFingerprint);
-                        return true;
-                    }
-                    text = strictMessageDecoder.decode(payload);
-                } catch (error) { this.lastInboundFailureCategory = 'message-frame-parsing-failure'; throw error; }
-                await this.testOnlyRecordInboundStage('frame-parsed', senderFingerprint);
-                // First contact is persisted only after Olm authenticates the
-                // peer identity; subsequent changes still fail closed.
-                await this.observe(senderAddress, bundle.identity, undefined, true);
-                this.remoteAddress = senderAddress;
-                await this.modes.write(this.roomId, { sessionId: this.runtime.activeSessionId, remoteAddress: senderAddress });
-                await this.writeSessionAudit('inbound', 'first-message');
             } else {
                 const contact = this.remoteAddress ? await this.registry.get(this.remoteAddress) : undefined;
                 senderFingerprint = contact?.identityId;
-                await this.testOnlyRecordInboundStage('session-found', senderFingerprint);
-                let plaintext: ArrayBuffer;
-                try { plaintext = await this.runtime.decrypt('message', envelope); }
-                catch (error) { this.lastInboundFailureCategory = 'decryption-failure'; throw error; }
-                await this.testOnlyRecordInboundStage('decrypted', senderFingerprint);
-                try {
-                    const payload = new Uint8Array(plaintext);
-                    const introduction = parseJoinIntroduction(payload);
-                    if (introduction) {
-                        const bundle = validateVodozemacPublicBundle(await fetchVodozemacBundle(this.roomId, this.capability, senderAddress));
-                        await this.acceptJoinIntroduction(introduction, senderAddress, bundle.identity, digest, seen);
-                        await this.testOnlyRecordInboundStage('frame-parsed', senderFingerprint);
-                        await this.testOnlyRecordInboundStage('persisted', senderFingerprint);
-                        await this.testOnlyRecordInboundStage('acknowledged', senderFingerprint);
-                        return true;
-                    }
-                    text = strictMessageDecoder.decode(payload);
-                } catch (error) { this.lastInboundFailureCategory = 'message-frame-parsing-failure'; throw error; }
-                await this.testOnlyRecordInboundStage('frame-parsed', senderFingerprint);
-                // A restored session can authenticate a peer even when the
-                // local contact and route metadata were lost. Repair that
-                // metadata only after decrypt and strict payload validation.
-                await this.restoreContactAfterAuthenticatedMessage(senderAddress);
             }
-            // The consumer must durably accept the message before its replay
-            // marker can make a later mailbox delivery look complete.
-            if (!this.onMessage) { this.lastInboundFailureCategory = 'persistence-failure'; throw new Error('Inbound message consumer is unavailable.'); }
-            try { await this.onMessage(text!); }
-            catch (error) {
-                this.lastInboundFailureCategory = 'persistence-failure';
+            await this.testOnlyRecordInboundStage('session-found', senderFingerprint);
+
+            let messageText: string | undefined;
+            let controlFrame = false;
+            const buildAcceptanceUpdates = async (plaintext: ArrayBuffer): Promise<readonly SecureRecordUpdate[]> => {
+                let payload: Uint8Array;
+                try { payload = firstSession ? unframeFirstMessage(plaintext) : new Uint8Array(plaintext); }
+                catch (error) { this.lastInboundFailureCategory = 'message-frame-parsing-failure'; throw error; }
+                let introduction: JoinIntroduction | undefined;
+                try { introduction = parseJoinIntroduction(payload); }
+                catch (error) { this.lastInboundFailureCategory = 'message-frame-parsing-failure'; throw error; }
+                const updates: SecureRecordUpdate[] = [];
+                if (introduction) {
+                    controlFrame = true;
+                    const peerIdentity = bundle?.identity ?? validateVodozemacPublicBundle(await fetchVodozemacBundle(this.roomId!, this.capability!, senderAddress)).identity;
+                    updates.push(...await this.acceptJoinIntroduction(introduction, senderAddress, peerIdentity));
+                } else {
+                    try { messageText = strictMessageDecoder.decode(payload); }
+                    catch (error) { this.lastInboundFailureCategory = 'message-frame-parsing-failure'; throw error; }
+                    await this.testOnlyRecordInboundStage('frame-parsed', senderFingerprint);
+                    if (firstSession) {
+                        await this.observe(senderAddress, bundle!.identity, undefined, true);
+                        this.remoteAddress = senderAddress;
+                        updates.push(await this.prepareModeUpdate({ sessionId: this.runtime.activeSessionId, remoteAddress: senderAddress }));
+                        updates.push(await this.prepareSessionAuditUpdate('inbound', 'first-message'));
+                    } else {
+                        updates.push(...await this.restoreContactAfterAuthenticatedMessage(senderAddress));
+                    }
+                    const acceptedRecordId = `${this.roomId}:${digest}`;
+                    const pendingRecord = await this.storage.read(ACCEPTED_MESSAGE_RECORD, acceptedRecordId);
+                    const serialized = asBytes({ version: 1, text: messageText });
+                    if (pendingRecord !== undefined) throw new Error('Accepted-message inbox record already exists.');
+                    updates.push({ recordType: ACCEPTED_MESSAGE_RECORD, recordId: acceptedRecordId, expected: undefined, next: serialized });
+                    const plan = await this.prepareInboundMessage?.(messageText, digest);
+                    if (plan) updates.push(...plan.updates);
+                }
+                updates.push({
+                    recordType: SEEN_RECORD,
+                    recordId: this.roomId!,
+                    expected: seenBytes,
+                    next: asBytes([...seen.slice(-(MAX_SEEN - 1)), digest]),
+                });
+                return updates;
+            };
+
+            try {
+                if (firstSession) {
+                    await this.runtime.establishInboundSessionAndCommit(this.roomId, bundle!.identity.curve25519, wireText, buildAcceptanceUpdates);
+                } else {
+                    await this.runtime.decryptAndCommitInbound('message', envelope, buildAcceptanceUpdates);
+                }
+            } catch (error) {
+                this.lastInboundFailureCategory ??= 'persistence-failure';
                 throw error;
             }
-            try { await this.storage.write(SEEN_RECORD, this.roomId, asBytes([...seen.slice(-(MAX_SEEN - 1)), digest])); }
-            catch (error) { this.lastInboundFailureCategory = 'persistence-failure'; throw error; }
+            await this.testOnlyRecordInboundStage('decrypted', senderFingerprint);
+            if (!controlFrame) {
+                await this.testOnlyRecordInboundStage('frame-parsed', senderFingerprint);
+                try {
+                    await this.onMessage(messageText!, digest);
+                    await this.storage.delete(ACCEPTED_MESSAGE_RECORD, `${this.roomId}:${digest}`);
+                } catch (error) {
+                    this.lastInboundFailureCategory = 'persistence-failure';
+                    throw error;
+                }
+            }
             await this.testOnlyRecordInboundStage('persisted', senderFingerprint);
             await this.testOnlyRecordInboundStage('acknowledged', senderFingerprint);
             this.lastInboundFailureCategory = undefined;
@@ -1201,13 +1218,45 @@ export class ModernConversation {
         }
     }
 
+    private async flushAcceptedMessage(digest: string): Promise<void> {
+        if (!this.roomId) throw new Error('Conversation is unavailable.');
+        const recordId = `${this.roomId}:${digest}`;
+        const bytes = await this.storage.read(ACCEPTED_MESSAGE_RECORD, recordId);
+        if (!bytes) return;
+        let value: unknown;
+        try { value = JSON.parse(decoder.decode(bytes)); } catch { throw new Error('Saved inbound acceptance is invalid.'); }
+        if (!value || typeof value !== 'object' || Array.isArray(value) ||
+            Object.keys(value).sort().join(',') !== 'text,version' || (value as { version?: unknown }).version !== 1 ||
+            typeof (value as { text?: unknown }).text !== 'string') throw new Error('Saved inbound acceptance is invalid.');
+        if (!this.onMessage) throw new Error('Inbound message consumer is unavailable.');
+        await this.onMessage((value as { text: string }).text, digest);
+        await this.storage.delete(ACCEPTED_MESSAGE_RECORD, recordId);
+    }
+
+    private async prepareModeUpdate(update: { sessionId?: string; remoteAddress?: string }): Promise<SecureRecordUpdate> {
+        if (!this.roomId) throw new Error('Conversation is unavailable.');
+        const expected = await this.storage.read('conversation-protocol', this.roomId);
+        const current = await this.modes.read(this.roomId);
+        return {
+            recordType: 'conversation-protocol', recordId: this.roomId, expected,
+            next: asBytes({ version: 1, mode: 'modern', ...current, ...update }),
+        };
+    }
+
+    private async prepareSessionAuditUpdate(direction: 'outbound' | 'inbound', origin: 'join' | 'first-message'): Promise<SecureRecordUpdate> {
+        if (!this.roomId) throw new Error('Conversation is unavailable.');
+        return {
+            recordType: SESSION_AUDIT_RECORD, recordId: this.roomId,
+            expected: await this.storage.read(SESSION_AUDIT_RECORD, this.roomId),
+            next: asBytes({ version: 1, classification: 'active-established', direction, origin }),
+        };
+    }
+
     private async acceptJoinIntroduction(
         event: JoinIntroduction,
         senderAddress: string,
         identity: VodozemacPublicIdentity,
-        digest: string,
-        seen: string[],
-    ): Promise<void> {
+    ): Promise<SecureRecordUpdate[]> {
         if (!this.roomId || event.conversationId !== this.roomId || event.senderAddress !== senderAddress ||
             (this.remoteAddress !== undefined && this.remoteAddress !== senderAddress)) {
             throw new Error('Join introduction binding is invalid.');
@@ -1221,7 +1270,6 @@ export class ModernConversation {
         if (!signatureValid) throw new Error('Join introduction authentication failed.');
 
         const acceptedBytes = await this.storage.read(JOIN_INTRODUCTION_SEEN_RECORD, this.roomId);
-        const nextSeen = [...seen.filter((item) => item !== digest), digest];
         if (acceptedBytes) {
             let accepted: unknown;
             try { accepted = JSON.parse(decoder.decode(acceptedBytes)); } catch { throw new Error('Saved join introduction replay state is invalid.'); }
@@ -1232,8 +1280,7 @@ export class ModernConversation {
                 throw new Error('Saved join introduction replay state is invalid.');
             }
             if ((accepted as { eventId: string }).eventId !== event.eventId) throw new Error('Join introduction replay rejected.');
-            await this.storage.write(SEEN_RECORD, this.roomId, asBytes(nextSeen.slice(-MAX_SEEN)));
-            return;
+            return [];
         }
 
         // Route and unverified contact metadata are written only after the
@@ -1241,16 +1288,22 @@ export class ModernConversation {
         // signature have all been validated. observe() preserves any existing
         // verification state and never upgrades trust.
         await this.observe(senderAddress, identity, this.remoteIdentityCommitment, true);
-        await this.modes.write(this.roomId, { sessionId: this.runtime.activeSessionId, remoteAddress: senderAddress });
-        await this.writeSessionAudit('inbound', 'join');
         this.remoteAddress = senderAddress;
         this.remoteIdentityCommitment = fingerprint;
-        await this.storage.write(JOIN_INTRODUCTION_SEEN_RECORD, this.roomId, asBytes({ version: 1, eventId: event.eventId }));
-        await this.storage.write(SEEN_RECORD, this.roomId, asBytes(nextSeen.slice(-MAX_SEEN)));
+        return [
+            await this.prepareModeUpdate({ sessionId: this.runtime.activeSessionId, remoteAddress: senderAddress }),
+            await this.prepareSessionAuditUpdate('inbound', 'join'),
+            {
+                recordType: JOIN_INTRODUCTION_SEEN_RECORD,
+                recordId: this.roomId,
+                expected: acceptedBytes,
+                next: asBytes({ version: 1, eventId: event.eventId }),
+            },
+        ];
     }
 
     /** Repair contact metadata for a message authenticated by a restored session. */
-    private async restoreContactAfterAuthenticatedMessage(senderAddress: string): Promise<void> {
+    private async restoreContactAfterAuthenticatedMessage(senderAddress: string): Promise<SecureRecordUpdate[]> {
         if (!this.roomId || !this.capability) throw new Error('Authenticated sender cannot be associated with this conversation.');
         const contact = await this.getContact();
         if (!this.remoteAddress || !contact) {
@@ -1265,18 +1318,14 @@ export class ModernConversation {
             await this.observe(senderAddress, bundle.identity, this.remoteIdentityCommitment, true);
             this.remoteAddress = senderAddress;
             this.remoteIdentityCommitment ??= fingerprint;
-            await this.modes.write(this.roomId, { sessionId: this.runtime.activeSessionId, remoteAddress: senderAddress });
             // observe() notifies before remoteAddress is assigned. Notify again
             // after route persistence so React can re-read the durable contact.
             const persistedContact = await this.getContact();
             if (persistedContact) await this.onContactChange?.(persistedContact);
-            return;
+            return [await this.prepareModeUpdate({ sessionId: this.runtime.activeSessionId, remoteAddress: senderAddress })];
         }
 
-        const mode = await this.modes.read(this.roomId);
-        if (mode?.remoteAddress !== senderAddress) {
-            await this.modes.write(this.roomId, { sessionId: this.runtime.activeSessionId, remoteAddress: senderAddress });
-        }
+        return [await this.prepareModeUpdate({ sessionId: this.runtime.activeSessionId, remoteAddress: senderAddress })];
     }
 
     private async verifyJoinIntroductionSignature(event: JoinIntroduction, publicKey: string): Promise<boolean> {

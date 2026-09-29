@@ -179,7 +179,7 @@ it('rejects malformed UTF-8 without recording a replay marker', async () => {
     await conversation.close();
 });
 
-it('does not mark a message seen until durable consumer acceptance succeeds', async () => {
+it('commits message and replay state before the consumer callback and retries projection idempotently', async () => {
     jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
     jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
     jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
@@ -192,10 +192,16 @@ it('does not mark a message seen until durable consumer acceptance succeeds', as
     const envelope: EncryptedEnvelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1, olmMessage: JSON.stringify({ version: 1, message_type: 1, ciphertext: 'opaque' }) } };
     const receive = (conversation as unknown as { receive: (value: EncryptedEnvelope, sender: string) => Promise<boolean> }).receive.bind(conversation);
     await expect(receive(envelope, remoteAddress)).rejects.toThrow('persistence unavailable');
-    expect(await storage.read('modern-seen', room)).toBeUndefined();
+    const seenBytes = await storage.read('modern-seen', room);
+    expect(seenBytes).toBeDefined();
+    const seen = JSON.parse(new TextDecoder().decode(seenBytes!)) as string[];
+    expect(seen).toHaveLength(1);
+    const accepted = await storage.read('modern-accepted-message', `${room}:${seen[0]}`);
+    expect(JSON.parse(new TextDecoder().decode(accepted!))).toEqual({ version: 1, text: 'restored established message' });
     fail = false;
     await expect(receive(envelope, remoteAddress)).resolves.toBe(true);
     expect(delivered).toHaveBeenCalledTimes(2);
+    expect(await storage.read('modern-accepted-message', `${room}:${seen[0]}`)).toBeUndefined();
     await expect(receive(envelope, remoteAddress)).resolves.toBe(true);
     expect(delivered).toHaveBeenCalledTimes(2);
     await conversation.close();

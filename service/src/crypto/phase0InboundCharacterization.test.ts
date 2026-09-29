@@ -35,6 +35,17 @@ const harness = (): Harness => {
             if (type === 'modern-seen' && seenWriteFails) throw new Error('injected replay-state failure');
             records.set(`${type}:${id}`, value);
         },
+        delete: async (type: string, id: string) => { records.delete(`${type}:${id}`); },
+        compareAndSwapRecords: async (updates: readonly import('../core/contracts').SecureRecordUpdate[]) => {
+            if (updates.some((item) => item.recordType === 'modern-seen' && seenWriteFails)) throw new Error('injected replay-state failure');
+            for (const item of updates) {
+                const current = records.get(`${item.recordType}:${item.recordId}`);
+                if ((current === undefined) !== (item.expected === undefined) ||
+                    (current && item.expected && !Buffer.from(current).equals(Buffer.from(item.expected)))) return false;
+            }
+            for (const item of updates) records.set(`${item.recordType}:${item.recordId}`, item.next.slice(0));
+            return true;
+        },
     } as SecureStorage;
     const conversation = new ModernConversation(storage, async () => { throw new Error('loader not expected'); }, {} as TransportManager);
     Object.assign(conversation, {
@@ -43,14 +54,16 @@ const harness = (): Harness => {
         remoteAddress: sender,
         runtime: {
             activeSessionId: 'session-test',
-            decrypt: async () => {
+            decryptAndCommitInbound: async (_channel: string, _envelope: EncryptedEnvelope, buildUpdates: (plaintext: ArrayBuffer) => Promise<readonly import('../core/contracts').SecureRecordUpdate[]>) => {
                 decryptCount++;
-                return plaintext.buffer;
+                const updates = await buildUpdates(plaintext.buffer as ArrayBuffer);
+                if (!await storage.compareAndSwapRecords!(updates)) throw new Error('injected acceptance conflict');
+                return plaintext.buffer as ArrayBuffer;
             },
         },
         registry: { get: async () => ({ identityId: 'observed-identity', verification: 'unverified', changeStatus: 'unchanged' }) },
         assertCurrentDeviceTrust: async () => undefined,
-        restoreContactAfterAuthenticatedMessage: async () => undefined,
+        restoreContactAfterAuthenticatedMessage: async () => [],
         onMessage: async (text: string) => {
             received.push(text);
             if (consumerFails) throw new Error('injected consumer failure');
@@ -67,24 +80,25 @@ const harness = (): Harness => {
     };
 };
 
-describe('Phase 0 inbound crash and replay characterization', () => {
-    test('consumer failure prevents replay marker and acceptance', async () => {
+describe('Phase 0 inbound crash and replay characterization against current acceptance boundary', () => {
+    test('consumer failure retains durable acceptance for idempotent projection retry', async () => {
         const flow = harness();
         flow.failConsumer(true);
         await expect(flow.receive(envelope, sender)).rejects.toThrow('injected consumer failure');
-        expect(flow.storage.has(`modern-seen:${room}`)).toBe(false);
+        expect(flow.storage.has(`modern-seen:${room}`)).toBe(true);
         flow.failConsumer(false);
         await expect(flow.receive(envelope, sender)).resolves.toBe(true);
-        expect(flow.decrypts()).toBe(2);
+        expect(flow.decrypts()).toBe(1);
+        expect([...flow.storage.keys()].some((key) => key.startsWith('modern-accepted-message:'))).toBe(false);
     });
 
-    test('seen-write failure after consumer acceptance permits duplicate consumer invocation', async () => {
+    test('replay-marker write failure aborts acceptance before consumer invocation', async () => {
         const flow = harness();
         flow.failSeenWrite(true);
         await expect(flow.receive(envelope, sender)).rejects.toThrow('injected replay-state failure');
         flow.failSeenWrite(false);
         await expect(flow.receive(envelope, sender)).resolves.toBe(true);
-        expect(flow.received).toEqual(['authenticated text', 'authenticated text']);
+        expect(flow.received).toEqual(['authenticated text']);
     });
 
     test('accepted duplicate is acknowledged without decrypting or storing twice', async () => {

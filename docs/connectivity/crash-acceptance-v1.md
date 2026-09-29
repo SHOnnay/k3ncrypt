@@ -1,6 +1,6 @@
 # Phase 1C crash-consistent acceptance specification
 
-Status: design only. No runtime, wire, transport or UI change is authorized. Existing ACK meanings remain in `current-behavior.md` and ADR 0006.
+Status: current receive-acceptance design reference; its Web gap analysis records pre-Phase-1F behavior. The Web acceptance implementation is documented in `web-atomic-acceptance-v1.md`. Existing ACK meanings remain in `current-behavior.md` and ADR 0006.
 
 ## Observed persistence and ACK order
 
@@ -29,6 +29,10 @@ Status: design only. No runtime, wire, transport or UI change is authorized. Exi
 | R5: duplicate by live, mailbox or later path | Different adapter IDs refer to the same ciphertext. | One common durable envelope identity and one authenticated acceptance owner. |
 
 A resolved write promise is the current application boundary; actual disk/process guarantees require platform fault injection. Relay submission, mailbox storage and receiver callbacks are not future authenticated peer receipts.
+
+## Phase 1F update
+
+The Web R1–R3 gap described above is closed for the application receive path by the atomic transaction specified in `web-atomic-acceptance-v1.md`: session (and first-prekey account), encrypted product message, replay marker, and callback recovery inbox are committed together before receive resolves. This does not resolve sender S1, expand seen retention, standardize the digest cross-platform, or change ACK semantics. Android behavior is unchanged.
 
 ## Candidate designs
 

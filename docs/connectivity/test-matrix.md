@@ -78,3 +78,12 @@ The Android test requires a disposable unlocked emulator with a secure PIN becau
 ### Unclosed Phase 0 acceptance items
 
 The fake Web decryptor does not establish real Vodozemac ratchet recovery at CP1/CP2. Android crash-point fault injection and actual network ACK-loss/restart with a disposable database have not been performed. LAN/direct and mixed-version real-device trials are intentionally future-phase work. Security reviewer approval of the Phase 0 specifications is still required before implementation of Phase 1.
+
+## Phase 1F Web atomic acceptance
+
+| Case | Test | Expected/observed invariant |
+|---|---|---|
+| Atomic write failure | `e2e/web-atomic-acceptance.spec.ts` injects an IndexedDB CAS failure during real WASM first-prekey acceptance | Account remains unchanged and no session, message, recovery inbox, or replay marker commits. |
+| Reload and redeliver | Same test reloads/unlocks and replays the original first-prekey ciphertext | One message, account mutation, session, and marker commit; no accepted ciphertext is lost. |
+| Duplicate after commit | Verify the durable replay marker before redelivery; service test exercises `ModernConversation.receive()` duplicate path | Duplicate does not decrypt again or create another product message; pending projection is retried from the encrypted recovery record if needed. |
+| Session usable after restart | Same test restores the sender session fixture and decrypts a subsequent real ciphertext | Restored receiver ratchet remains usable. |

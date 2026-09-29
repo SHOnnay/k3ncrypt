@@ -1,5 +1,5 @@
 import { testDiagnosticsEnabled } from '../utils/testDiagnostics';
-import type { CryptoSession, SecureStorage } from '../core/contracts';
+import type { CryptoSession, SecureRecordUpdate, SecureStorage } from '../core/contracts';
 import { VodozemacCryptoSession, type VodozemacSessionHandle } from '../core/vodozemacCryptoSession';
 import { PersistentVodozemacIdentity, type VodozemacAccountFactory } from '../identity/vodozemacIdentity';
 import { VodozemacSessionStore, type VodozemacSessionFactory } from '../identity/vodozemacSessionStore';
@@ -29,6 +29,7 @@ export interface VodozemacBindings {
 }
 
 export type VodozemacBindingsLoader = () => Promise<VodozemacBindings>;
+export type InboundAcceptanceUpdateBuilder = (plaintext: ArrayBuffer) => Promise<readonly SecureRecordUpdate[]>;
 
 /**
  * Explicit owner for the modern protocol. It deliberately accepts only opaque
@@ -238,6 +239,112 @@ export class VodozemacRuntime {
             if (error instanceof VodozemacBoundaryError) throw error;
             throw new VodozemacBoundaryError('CORRUPTED_SESSION', 'The inbound session could not be persisted.');
         }
+    }
+
+    /** Decrypts and atomically commits an established session with caller-owned acceptance records. */
+    public async decryptAndCommitInbound(
+        channel: 'message' | 'signaling',
+        envelope: Parameters<VodozemacCryptoSession['decrypt']>[1],
+        buildUpdates: InboundAcceptanceUpdateBuilder,
+    ): Promise<void> {
+        return this.sessionMutex.runExclusive(async () => {
+            this.requireState('active', 'persisted');
+            if (!this.session || !this.conversationId || !this.storage.compareAndSwapRecords) {
+                throw new VodozemacBoundaryError('MISSING_SESSION', 'Atomic inbound acceptance is unavailable.');
+            }
+            const conversationId = this.conversationId;
+            let plaintext: ArrayBuffer | undefined;
+            let sessionBytes: Uint8Array | undefined;
+            try {
+                const expected = await this.storage.read('vodozemac-session', conversationId);
+                if (!expected) throw new Error('Persisted session state is unavailable.');
+                plaintext = await this.session.decrypt(channel, envelope);
+                const callerUpdates = await buildUpdates(plaintext);
+                new Uint8Array(plaintext).fill(0);
+                plaintext = undefined;
+                const session = this.session;
+                sessionBytes = session.saveSession();
+                const sessionNext = sessionBytes.buffer.slice(sessionBytes.byteOffset, sessionBytes.byteOffset + sessionBytes.byteLength) as ArrayBuffer;
+                const updates: SecureRecordUpdate[] = [
+                    { recordType: 'vodozemac-session', recordId: conversationId, expected, next: sessionNext },
+                    ...callerUpdates,
+                ];
+                if (new Set(updates.map((item) => `${item.recordType}:${item.recordId}`)).size !== updates.length) {
+                    throw new Error('Inbound acceptance contains duplicate secure records.');
+                }
+                if (!await this.storage.compareAndSwapRecords(updates)) throw new Error('Inbound acceptance conflicted with persisted state.');
+                this.state = 'persisted';
+                return;
+            } catch (error) {
+                if (plaintext) new Uint8Array(plaintext).fill(0);
+                this.quarantineSession();
+                throw error;
+            } finally {
+                sessionBytes?.fill(0);
+            }
+        });
+    }
+
+    /** Establishes the first inbound session and atomically commits account, session and acceptance records. */
+    public async establishInboundSessionAndCommit(
+        conversationId: string,
+        senderIdentityKey: string,
+        preKeyMessage: string,
+        buildUpdates: InboundAcceptanceUpdateBuilder,
+    ): Promise<void> {
+        return this.sessionMutex.runExclusive(async () => {
+            this.requireState('identity-restored', 'persisted');
+            if (!this.identity || !senderIdentityKey || !preKeyMessage || !this.storage.compareAndSwapRecords) {
+                throw new VodozemacBoundaryError('IDENTITY_MISMATCH', 'Atomic inbound session establishment is unavailable.');
+            }
+            const identity = this.identity;
+            let inbound: import('../identity/vodozemacIdentity').VodozemacInboundSessionResult | undefined;
+            let plaintext: ArrayBuffer | undefined;
+            let sessionBytes: Uint8Array | undefined;
+            let accountBytes: ArrayBuffer | undefined;
+            try {
+                const expectedAccount = await this.storage.read('vodozemac-account', 'local');
+                const expectedSession = await this.storage.read('vodozemac-session', conversationId);
+                inbound = await identity.withAccount(async (account) => {
+                    if (!account.createInboundSession) throw new VodozemacBoundaryError('UNSUPPORTED_PROTOCOL', 'Inbound modern sessions are unavailable.');
+                    return account.createInboundSession(senderIdentityKey, preKeyMessage);
+                });
+                const handle = inbound.takeSession();
+                await this.establishSession(conversationId, handle, handle.sessionId());
+                const source = inbound.plaintext();
+                plaintext = source.buffer.slice(source.byteOffset, source.byteOffset + source.byteLength) as ArrayBuffer;
+                source.fill(0);
+                const callerUpdates = await buildUpdates(plaintext);
+                new Uint8Array(plaintext).fill(0);
+                plaintext = undefined;
+                accountBytes = await identity.serializeAccountForCommit();
+                sessionBytes = this.session!.saveSession();
+                const sessionNext = sessionBytes.buffer.slice(sessionBytes.byteOffset, sessionBytes.byteOffset + sessionBytes.byteLength) as ArrayBuffer;
+                const updates: SecureRecordUpdate[] = [
+                    { recordType: 'vodozemac-account', recordId: 'local', expected: expectedAccount, next: accountBytes },
+                    { recordType: 'vodozemac-session', recordId: conversationId, expected: expectedSession, next: sessionNext },
+                    ...callerUpdates,
+                ];
+                if (new Set(updates.map((item) => `${item.recordType}:${item.recordId}`)).size !== updates.length) {
+                    throw new Error('Inbound acceptance contains duplicate secure records.');
+                }
+                if (!await this.storage.compareAndSwapRecords(updates)) throw new Error('Inbound acceptance conflicted with persisted state.');
+                this.state = 'persisted';
+                return;
+            } catch (error) {
+                if (plaintext) new Uint8Array(plaintext).fill(0);
+                this.quarantineSession();
+                identity.lock();
+                this.identity = undefined;
+                throw error;
+            } finally {
+                sessionBytes?.fill(0);
+                if (accountBytes) new Uint8Array(accountBytes).fill(0);
+                if (inbound) {
+                    try { inbound.plaintext().fill(0); } catch { /* consumed plaintext may already be cleared */ }
+                }
+            }
+        });
     }
 
     public testOnlyInboundFailureStage(): string | undefined {

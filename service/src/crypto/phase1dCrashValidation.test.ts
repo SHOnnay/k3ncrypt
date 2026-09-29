@@ -23,6 +23,17 @@ const makeStorage = () => {
             if (type === failingType) throw new Error(`injected ${type} write failure`);
             records.set(`${type}:${id}`, value.slice(0));
         },
+        delete: async (type: string, id: string) => { records.delete(`${type}:${id}`); },
+        compareAndSwapRecords: async (updates: readonly import('../core/contracts').SecureRecordUpdate[]) => {
+            if (updates.some((item) => item.recordType === failingType)) throw new Error(`injected ${failingType} write failure`);
+            for (const item of updates) {
+                const current = records.get(`${item.recordType}:${item.recordId}`);
+                if ((current === undefined) !== (item.expected === undefined) ||
+                    (current && item.expected && !Buffer.from(current).equals(Buffer.from(item.expected)))) return false;
+            }
+            for (const item of updates) records.set(`${item.recordType}:${item.recordId}`, item.next.slice(0));
+            return true;
+        },
     } as SecureStorage;
     return { storage, records, fail: (type?: string) => { failingType = type; } };
 };
@@ -59,16 +70,23 @@ const makeReceiver = (storage: SecureStorage, consumed: string[], rejectAfterDec
         roomId: room, capability: 'test-capability', remoteAddress: peer,
         assertCurrentDeviceTrust: async () => undefined,
         registry: { get: async () => ({ identityId: 'pinned-peer', verification: 'unverified', changeStatus: 'unchanged' }) },
-        restoreContactAfterAuthenticatedMessage: async () => undefined,
-        runtime: { activeSessionId: 'restored-session', decrypt: async () => {
+        restoreContactAfterAuthenticatedMessage: async () => [],
+        runtime: { activeSessionId: 'restored-session', decryptAndCommitInbound: async (_channel: string, _envelope: EncryptedEnvelope, buildUpdates: (plaintext: ArrayBuffer) => Promise<readonly import('../core/contracts').SecureRecordUpdate[]>) => {
             decryptions++;
             if (rejectAfterDecrypt && await storage.read('test-ratchet', room)) throw new Error('replayed ciphertext cannot advance restored ratchet');
-            await storage.write('test-ratchet', room, bytes({ advanced: true }));
-            return new TextEncoder().encode('authenticated text').buffer;
+            const plaintext = new TextEncoder().encode('authenticated text').buffer as ArrayBuffer;
+            const acceptanceUpdates = await buildUpdates(plaintext);
+            const current = await storage.read('test-ratchet', room);
+            const updates = [{ recordType: 'test-ratchet', recordId: room, expected: current, next: bytes({ advanced: true }) }, ...acceptanceUpdates];
+            if (!await storage.compareAndSwapRecords!(updates)) throw new Error('atomic acceptance conflict');
+            return plaintext;
         } },
+        prepareInboundMessage: async (text: string, messageId: string) => {
+            const current = await storage.read('product-messages', room);
+            const existing = parse<string[]>(current) ?? [];
+            return { updates: [{ recordType: 'product-messages', recordId: room, expected: current, next: bytes([...existing, `${messageId}:${text}`]) }] };
+        },
         onMessage: async (text: string) => {
-            const existing = parse<string[]>(await storage.read('product-messages', room)) ?? [];
-            await storage.write('product-messages', room, bytes([...existing, text]));
             consumed.push(text);
         },
     });
@@ -80,7 +98,7 @@ const makeReceiver = (storage: SecureStorage, consumed: string[], rejectAfterDec
     };
 };
 
-describe('Phase 1D current crash and ACK behavior (fault-injection models)', () => {
+describe('Phase 1D sender characterization and Phase 1F atomic receiver behavior', () => {
     test('S1: failure before outbox persistence leaves advanced sender state but no retry item', async () => {
         const state = makeStorage();
         const submissions: EncryptedEnvelope[] = [];
@@ -120,34 +138,36 @@ describe('Phase 1D current crash and ACK behavior (fault-injection models)', () 
         expect(restarted.encryptions()).toBe(0);
     });
 
-    test('R1/R2: persisted ratchet before failed consumer leaves no seen marker; modeled strict replay fails after restart', async () => {
+    test('R1/R2: failed message persistence aborts ratchet and replay state; restart redelivery accepts once', async () => {
         const state = makeStorage();
         const consumed: string[] = [];
         const first = makeReceiver(state.storage, consumed, true);
         state.fail('product-messages');
         await expect(first.receive()).rejects.toThrow('injected product-messages write failure');
-        expect(parse(await state.storage.read('test-ratchet', room))).toEqual({ advanced: true });
+        expect(await state.storage.read('test-ratchet', room)).toBeUndefined();
         expect(await state.storage.read('product-messages', room)).toBeUndefined();
         expect(await state.storage.read('modern-seen', room)).toBeUndefined();
         state.fail();
         const restarted = makeReceiver(state.storage, consumed, true);
-        await expect(restarted.receive()).rejects.toThrow('replayed ciphertext cannot advance restored ratchet');
-        expect(consumed).toHaveLength(0);
+        await expect(restarted.receive()).resolves.toBe(true);
+        await expect(restarted.receive()).resolves.toBe(true);
+        expect(consumed).toHaveLength(1);
         expect(restarted.decryptions()).toBe(1);
     });
 
-    test('R3: a seen-marker failure leaves durable content that can be consumed again after restart', async () => {
+    test('R3: a replay-marker failure aborts content and ratchet; redelivery commits all once', async () => {
         const state = makeStorage();
         const consumed: string[] = [];
         const first = makeReceiver(state.storage, consumed);
         state.fail('modern-seen');
         await expect(first.receive()).rejects.toThrow('injected modern-seen write failure');
-        expect(parse<string[]>(await state.storage.read('product-messages', room))).toEqual(['authenticated text']);
+        expect(await state.storage.read('product-messages', room)).toBeUndefined();
         state.fail();
         const restarted = makeReceiver(state.storage, consumed);
         await expect(restarted.receive()).resolves.toBe(true);
-        expect(parse<string[]>(await state.storage.read('product-messages', room))).toEqual(['authenticated text', 'authenticated text']);
-        expect(consumed).toHaveLength(2);
+        expect(parse<string[]>(await state.storage.read('product-messages', room))).toHaveLength(1);
+        expect(parse(await state.storage.read('test-ratchet', room))).toEqual({ advanced: true });
+        expect(consumed).toHaveLength(1);
     });
 
     test('duplicate and delayed relay ACKs: current relay ID matching is idempotent but an old ID cannot clear a retried item', async () => {

@@ -16,7 +16,7 @@ import { readConversationDescriptors, removeConversationDescriptor, saveConversa
 import { readProfileName, writeProfileName } from '../product/profileStore';
 import { readPrivacyPreferences, writePrivacyPreferences, type PrivacyPreferences } from '../product/preferences';
 import { deliverNotification } from '../product/notifications';
-import { readMessages, writeMessages } from '../product/messageStore';
+import { mergeAndPersistMessages, prepareMessageRecordUpdate, readMessages } from '../product/messageStore';
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
 
@@ -221,10 +221,11 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setMessages((current) => current.map((message) => message.id === clientId ? { ...message, delivery: state } : message));
     });
     try {
-      const details = await conversation.connect(descriptor.roomId, descriptor.controlCapability, descriptor.remoteAddress, descriptor.remoteIdentityCommitment, async (text) => {
-        const message = displayMessage('contact', text, 'received');
-        await writeMessages(secureVault, descriptor.roomId, [...await readMessages(secureVault, descriptor.roomId), message]);
-        setMessages((previous) => [...previous, message]);
+      const details = await conversation.connect(descriptor.roomId, descriptor.controlCapability, descriptor.remoteAddress, descriptor.remoteIdentityCommitment, async (text, messageId) => {
+        const message = { ...displayMessage('contact', text, 'received'), ...(messageId ? { id: messageId } : {}) };
+        setMessages((previous) => previous.some((item) => item.id === message.id)
+          ? previous.map((item) => item.id === message.id ? message : item)
+          : [...previous, message]);
         deliverNotification({ kind: 'message', conversationId: descriptor.roomId, preview: message.text }, privacyPreferencesRef.current);
         if (conversation.hasEstablishedSession()) {
           const contact = await conversation.getContact();
@@ -248,7 +249,13 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }, (event: DeviceControlEvent) => {
         if (event.type === 'enrollment-request') setPendingDeviceEnrollment(event.payload as EnrollmentRequest);
         if (event.type === 'enrollment-approval') setPendingDeviceApproval(event.payload as EnrollmentApprovalPacket);
-      }, { sendJoinIntroduction });
+      }, {
+        sendJoinIntroduction,
+        prepareInboundMessage: async (text, messageId) => {
+          const message = { ...displayMessage('contact', text, 'received'), id: messageId };
+          return { updates: [await prepareMessageRecordUpdate(secureVault, descriptor.roomId, message)] };
+        },
+      });
       setModern(conversation);
       const restoredSessionHealth = conversation.getSessionHealth();
       setSessionHealth(restoredSessionHealth);
@@ -290,7 +297,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   useEffect(() => {
-    if (vault && channelHash && protocolMode === 'modern') void writeMessages(vault, channelHash, messages).catch((error) => debugError('Message history persistence failed', error));
+    if (vault && channelHash && protocolMode === 'modern') void mergeAndPersistMessages(vault, channelHash, messages).catch((error) => debugError('Message history persistence failed', error));
   }, [channelHash, messages, protocolMode, vault]);
 
   const createModernChannel = useCallback(async (passphrase: string): Promise<string> => {

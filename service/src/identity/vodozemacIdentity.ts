@@ -125,6 +125,16 @@ export class PersistentVodozemacIdentity implements IdentityManager<MessagingIde
         });
     }
 
+    /** Serializes the current mutated account without persisting it, for an enclosing secure CAS transaction. */
+    public async serializeAccountForCommit(): Promise<ArrayBuffer> {
+        if (!this.account) throw new Error('Messaging identity is locked.');
+        return this.storage.withVodozemacPickleKey(async (pickleKey) => {
+            const serialized = new TextEncoder().encode(this.account!.saveAccount(pickleKey));
+            try { return serialized.buffer.slice(serialized.byteOffset, serialized.byteOffset + serialized.byteLength) as ArrayBuffer; }
+            finally { serialized.fill(0); }
+        });
+    }
+
     /** Returns authenticated-by-identity public material only. */
     public async getPublicBundle(): Promise<VodozemacPublicBundle> {
         return this.withAccount((account) => createVodozemacPublicBundle(account));

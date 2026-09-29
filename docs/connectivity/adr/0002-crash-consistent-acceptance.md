@@ -1,6 +1,6 @@
 # ADR 0002: Crash-consistent message acceptance
 
-Status: Characterization and options only; no option selected.
+Status: Transactional acceptance selected and implemented for Web inbound message acceptance in Phase 1F. This decision does not change outbound handling, Android, ACK meaning, or transport behavior.
 
 ## Current behavior
 
@@ -38,4 +38,12 @@ Choose a design only after proving real Vodozemac restart recovery at R1/R2, ins
 
 Real WASM Vodozemac plus encrypted IndexedDB confirms an existing-session Web R1/R2 gap across page reload: advanced session persists before product message and seen marker, and identical ciphertext cannot be decrypted after restoration. At R3 the product message persists but seen marker does not; real-session replay is rejected. This narrows the earlier fake-ratchet uncertainty but is not an OS process-kill or full UI/relay proof. Android JNI/Keystore/Room instrumentation confirms that an uncommitted inbound transaction rolls back message and digest after an actual instrumentation-process kill, preserving the earlier session so redelivery decrypts. See `crash-validation-report.md` for exact probes and limits.
 
-Transactional Web acceptance is now the **preferred candidate for feasibility work**, not an approved design: determine whether runtime session/account, encrypted product message and dedupe can commit atomically under one owner, including first prekey session and concurrent tabs. If not, design a journal coordinated with ratchet mutation. Envelope-keyed idempotence is still needed for duplicates but cannot recover Web R1 by itself. Status remains undecided; no production behavior, ACK semantics or multipath gate changes follow from these tests.
+At the Phase 1E decision point, transactional Web acceptance was a preferred candidate pending feasibility proof. Phase 1F below records the completed feasibility proof and implementation decision, superseding that status for Web inbound acceptance.
+
+## Phase 1F decision: Web receive transaction
+
+The Web encrypted vault has a multi-record compare-and-swap backed by one IndexedDB read-write transaction. The decision is to use it as the acceptance boundary: commit the advanced session, encrypted product message, replay marker, and bounded recovery projection record together. For first inbound pre-key messages, include the mutated account and new session in that same commit. Do not introduce a write-ahead journal because the required state already fits the existing transaction and the journal would add recovery states without closing a gap the transaction cannot close.
+
+The conversation owner remains responsible for sender/conversation/frame validation and building the accepted message. The crypto runtime owns ratchet mutation and commits the caller-provided encrypted records with it. Receive resolves successfully only after this commit, preserving the existing ACK order and meaning. A post-commit callback failure leaves a durable message plus replay marker and temporary recovery record; duplicate delivery retries projection without decrypting again. A pre-commit failure aborts the full transaction and quarantines the mutated in-memory runtime; restart reloads the unchanged persisted state for safe redelivery.
+
+No migration is required: existing record formats/addresses remain unchanged; the new recovery record is transient and created only for accepted messages. Existing JSON digest serialization and seen retention are unchanged and remain follow-up risks. Real-WASM/IndexedDB Playwright validation covers injected transaction abort, page reload, redelivery, duplicate handling, and a subsequent message on the restored session. Full relay/mailbox loss and OS-level browser process-kill validation remain outstanding. See `web-atomic-acceptance-v1.md` and the Phase 1F report.
