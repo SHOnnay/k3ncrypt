@@ -19,4 +19,4 @@ An envelope may have several attempts and observations. Do not infer a stronger 
 
 ## Preconditions before implementation
 
-Select the stable identity and legacy migration in ADR 0001, the durable receiver acceptance boundary in ADR 0002, and the authenticated receipt mechanism in ADR 0003. Define retention and recovery for evidence so restart cannot promote or forget an unresolved envelope incorrectly. Keep existing relay outbox cleanup and user-visible statuses unchanged until a separately reviewed migration specifies them.
+Implement and validate the stable identity and legacy migration selected in ADR 0001, the durable receiver acceptance boundary in ADR 0002, and the authenticated receipt mechanism in ADR 0003. Define retention and recovery for evidence so restart cannot promote or forget an unresolved envelope incorrectly. Keep existing relay outbox cleanup and user-visible statuses unchanged until a separately reviewed migration specifies them.

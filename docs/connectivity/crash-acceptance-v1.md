@@ -46,7 +46,7 @@ No candidate is selected. A later decision must prove a single durable acceptanc
 
 ## Stable envelope identity dependency
 
-Web hashes serialized JSON; Android hashes the envelope string. Property order, whitespace, escaping and adapter framing can change these bytes without changing ciphertext. ADR 0001 proposes domain-separated SHA-256 over length-prefixed conversation ID and the exact validated `olmMessage` string. It is a correlation/dedupe key, not authentication. Before using it for an acceptance journal or receipt, approve cross-platform fixture parity, legacy check-both migration, malformed-envelope handling and bounded retention. Server mailbox dedupe stays independent. The Web 1,024-entry seen window cannot be assumed to cover the seven-day mailbox plus all retries; measure the supported lifetime.
+Web hashes serialized JSON; Android hashes the envelope string. Property order, whitespace, escaping and adapter framing can change these bytes without changing ciphertext. ADR 0001 selects domain-separated SHA-256 over length-prefixed conversation ID and the exact validated `olmMessage` string as the v1 correlation/dedupe key. It is not authentication. Before runtime use in an acceptance journal, multipath dedupe or receipt, pass cross-platform fixture parity, legacy dual-read migration, malformed-envelope handling and bounded-retention tests. Server mailbox dedupe stays independent. The Web 1,024-entry seen window cannot be assumed to cover the seven-day mailbox plus all retries; measure the supported lifetime.
 
 ## Gates
 

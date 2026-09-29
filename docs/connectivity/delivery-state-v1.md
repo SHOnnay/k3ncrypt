@@ -10,7 +10,7 @@ Today `chat-message` returns relay `{id,timestamp}` on a live receiver callback 
 
 ## Stable identity and deduplication
 
-The proposed `envelopeId` in ADR 0001 and `envelope-identity-v1.md` hashes domain-separated, length-prefixed conversation ID and the exact validated `olmMessage` string. It is a non-secret correlation/dedupe value, never authentication. All paths must carry the same encrypted envelope bytes after a single encryption. Adapter attempt IDs and relay mailbox IDs remain separate. Receiver dedupe must be common across paths and occur before a second decrypt, using a durable acceptance record; sender correlation must survive restart. Existing TypeScript `SHA-256(JSON.stringify(envelope))` and 1,024-entry seen window are insufficient as an unreviewed cross-platform lifetime contract. The seven-day mailbox expiry and sender retry policy need measurement before a retention bound is selected. Legacy records must remain readable during any later migration.
+The v1 `envelopeId` design is selected in ADR 0001 and specified in `envelope-identity-v1.md`: it hashes a domain-separated, length-prefixed canonical conversation ID and exact validated `olmMessage` string. It is a non-secret correlation/dedupe value, never authentication. All paths must carry the same encrypted envelope bytes after a single encryption. Adapter attempt IDs and relay mailbox IDs remain separate. Receiver dedupe must be common across paths and occur before a second decrypt, using a durable acceptance record; sender correlation must survive restart. Existing TypeScript `SHA-256(JSON.stringify(envelope))` and 1,024-entry seen window remain the beta behavior and are insufficient as an unreviewed cross-platform lifetime contract. The seven-day mailbox expiry and sender retry policy need measurement before a retention bound is selected. Legacy records must remain readable during any later migration. This Phase 1G decision is specification only; no runtime change is authorized by it.
 
 ## Receipt and crash gates
 
@@ -18,7 +18,7 @@ ADR 0003 proposes a capability-gated, authenticated control receipt. It must nam
 
 ## Open decisions
 
-1. Approve the exact cross-platform ID and versioned legacy migration, then choose dedupe retention based on actual longest legitimate replay/retry lifetime.
+1. Implement and validate the selected cross-platform ID and versioned legacy migration, then choose dedupe retention based on the measured longest legitimate replay/retry lifetime.
 2. Select an implementable Web crash-consistency approach after inspecting the concrete vault, session and message transaction boundaries. Characterize sender crash recovery on each platform.
 3. Approve or reject encrypted control receipts, including ratchet cost, batching, expiry and lost-receipt handling. Define peer capability gating and old-client fallback before any frame is sent.
 4. Decide how future evidence metadata is stored and recovered without changing the current relay outbox and user-visible delivery labels.

@@ -30,3 +30,21 @@ Assets: plaintext, Olm session state, device signing keys, contact verification 
 ## Explicit exclusions
 
 No VPN/IP tunnel, federation, helper-node network, account identity migration, offline first-contact pairing, automatic trust, crypto rewrite or weakening of relay authorization.
+
+## Phase 1G: envelope identity and correlation risks
+
+The selected v1 identity is a public deterministic digest, not a MAC or signature. Its conversation binding reduces accidental cross-conversation aliasing; it does not prove that the sender is a member of that conversation. An attacker able to inject or alter transport metadata cannot make a message valid by supplying a matching ID. Receivers must derive the identity from the strictly validated envelope and authenticated conversation context, and must keep trust/session checks authoritative.
+
+| Threat | Impact | Required control / test |
+|---|---|---|
+| JSON canonicalization mismatch | Web and Android disagree on duplicates; cross-path retries may be decrypted twice or incorrectly treated as new | Hash only exact validated `olmMessage` UTF-8 bytes with the canonical conversation ID and fixed domain/length encoding; run shared fixtures in both implementations. |
+| ID substitution or forged ID field | A transport-supplied ID could alias another pending/accepted envelope and suppress delivery or clear outbox state | Recompute locally; do not trust an adapter-provided ID. A future receipt must be authenticated and bind the derived ID, conversation and expected peer device. |
+| Cross-conversation replay/collision | Same ciphertext identifier could suppress or correlate unrelated conversations | Include the exact conversation identifier in the domain-separated construction; test distinct conversation vectors. Existing cryptographic sender/conversation validation remains required. |
+| Cleartext cross-path correlation | Relay, LAN observers, or direct-path observers can correlate the same ID across retries and networks | Keep ID local in v1. Do not place it in cleartext headers, logs, or analytics absent a separate privacy decision. |
+| Replay after marker expiry/eviction | Previously accepted ciphertext is decrypted again after its dedupe record disappears | Bound retry/mailbox lifetime and ID retention together. Do not evict eligible IDs under pressure; expire delivery eligibility before dedupe state. |
+| Legacy/new namespace confusion | Old 64-hex digest may be mistaken for v1 or overwritten, causing duplicate acceptance or permanent suppression | Version new values (`v1:`), dual-read legacy and v1, preserve old formats, and never infer a v1 value from a legacy digest. |
+| Hash collision | Two different envelopes map to one ID, suppressing a legitimate message | Use SHA-256 over domain-separated unambiguous length-prefixed bytes; test encoding and conversation binding. Residual cryptographic collision probability remains negligible but the digest is not a trust primitive. |
+| Receipt replay or stale receipt | Old authenticated receipt could clear a newer pending item or be applied to wrong device/conversation | Bind receipt to version, conversation, expected peer device, exact pending ID and roles; require idempotence and reject unknown/expired IDs. |
+| Resource exhaustion | Huge input or unbounded accepted-ID state consumes CPU/storage | Apply existing strict envelope size limits before hashing; specify ID count/time limits and fail safely rather than evicting live dedupe records. |
+
+An envelope ID is stable only for one exact encrypted envelope. Re-encryption, even for the same plaintext, yields a different ID; sender-assigned logical-message IDs or hybrid identities would require a separate authenticated message-format decision and threat review.

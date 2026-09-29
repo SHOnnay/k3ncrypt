@@ -172,24 +172,24 @@ Every asynchronous operation needs a bounded timeout, cancellation behavior and 
 
 These come from the security review. They are **requirements**, each assigned to a phase. Where a decision belongs to the owner, Codex prepares evidence and does not decide.
 
-### M1. Ciphertext-based message identity (Phase 1)
+### M1. Ciphertext-based message identity (Phase 1; Phase 1G specification accepted)
 
 **Problem.** Today's identity is `SHA-256(JSON.stringify(envelope))`. The same envelope arriving over two paths can serialize with a different key order or escaping, giving a different digest, so deduplication misses and the second decrypt attempt fails.
 
 **Requirement.** Define one path-independent identity:
 
 ```text
-envelopeId = hex( SHA-256(
+envelopeId = "v1:" || lowercaseHex(SHA-256(
     UTF8("k3ncrypt/envelope-id/v1")
     ‖ u32be(len(UTF8(conversationId))) ‖ UTF8(conversationId)
     ‖ u32be(len(UTF8(olmMessage)))     ‖ UTF8(olmMessage) ) )
 ```
 
 - `olmMessage` is the **exact string** from `data.olmMessage`, taken after the existing strict envelope validation. It is never re-serialized.
-- Use `envelopeId` for the seen-set, pending-outbox correlation, receipt correlation, and live-versus-mailbox deduplication.
+- Use `envelopeId` for the seen-set, pending-outbox correlation, receipt correlation, and live-versus-mailbox deduplication. The ID is local correlation metadata by default; do not expose it in cleartext path metadata without a separate privacy decision.
 - Do **not** change the server's own `dedupeKey` or any backend code.
 
-**Compatibility.** Keep reading the legacy `modern-seen` list. On inbound, check both the legacy digest and `envelopeId`. Write new IDs to a new versioned record. Older records load unchanged.
+**Compatibility.** Keep reading the legacy `modern-seen` list. On inbound, check both the platform-local legacy digest and `envelopeId`. Write new IDs to a versioned record. Older records load unchanged. ADR 0001 and `envelope-identity-migration-v1.md` define the selected specification and migration gates; runtime adoption still requires cross-platform fixture, retention, restart, and rollback tests.
 
 **Tests.**
 - New fixture `protocol-fixtures/v1/envelope-identity.json` with vectors that include non-ASCII text, `/`, `\`, `"` and long strings. TypeScript and Kotlin must produce identical IDs.
@@ -699,7 +699,7 @@ must remain relay-only. No non-relay path may be reachable.
 
 Order of work (separate commits; stop for review at the marked gates):
 1. Contracts and relay adapter. Existing relay tests must pass unchanged.
-2. M1: implement envelopeId exactly as specified in HANDOFF M1. Keep reading the
+2. M1: implement envelopeId exactly as specified in ADR 0001 and HANDOFF M1. Keep reading the
    legacy seen-list. Add TypeScript and Kotlin implementations that pass the
    existing fixture protocol-fixtures/v1/envelope-identity.json.
 3. GATE: submit the crash-consistent-acceptance ADR (M2) with options A/B/C,

@@ -46,6 +46,12 @@ Android-to-Android verified contact; no internet for LAN test; app cold start; s
 
 The Phase 0 fake decryptor does not establish real crash recovery. Run the existing relay, service, client and Android suites as compatibility checks after any later production change; perform disposable-database fault injection before making a durability claim.
 
+### Phase 1G stable envelope identity specification tests
+
+`envelope-identity-test-plan-v1.md` defines the acceptance suite before runtime adoption. At minimum, TypeScript and Kotlin must consume the same public fixture file and assert exact identical `v1:` IDs. Cover multibyte UTF-8, JSON metacharacters within `olmMessage`, empty/oversized/invalid Unicode rejection, changed conversation, changed ciphertext, property-order/whitespace changes in the outer JSON wrapper, and identical ciphertext with distinct relay attempt/mailbox IDs.
+
+Migration tests must seed legacy Web and Android markers in their native formats, redeliver the corresponding validated envelope, and prove dual-read prevents a second decrypt while new acceptance atomically writes a v1 marker. Restart, concurrent-tab/process races, marker-capacity pressure, expired delivery, rollback to an old reader, and authenticated receipt mismatch/replay cases are required before multipath or receipts use the ID.
+
 ## Phase 1C crash-acceptance design tests (future work)
 
 Use `crash-acceptance-v1.md` as the sequence reference. With real persisted Web Vodozemac state and an isolated vault, stop/restart at S1, S2, R1, R2 and R3; inject failed writes independently for session, outbox, product message and seen marker. Record which records survived and whether the identical envelope can be retried without content loss or duplicate display. Test first inbound prekey establishment separately from existing-session receive. Repeat R4 with dropped live callback and lost `received` event, followed by mailbox replay; R5 must deliver identical ciphertext over overlapping adapters only after those adapters exist. Android tests must kill/restart around the Room transaction and verify account/session/message/digest remain consistent; do not infer this from a fake storage implementation.
