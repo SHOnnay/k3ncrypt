@@ -23,6 +23,9 @@ Assets: plaintext, Olm session state, device signing keys, contact verification 
 | ACK loss or duplicate live/mailbox attempt | Ambiguous outcome or duplicate decrypt | Treat timeout as unknown; resend identical ciphertext; common pre-decrypt dedupe after successful durable acceptance; duplicate receipts idempotent |
 | Stale/cross-conversation receipt or ID collision | Wrong pending record removed or state falsely promoted | Domain-separated conversation-bound envelope ID; strict pending-set lookup, peer binding, bounded retention and versioning; reject unknown/expired/mismatched receipts |
 | Replay after seen-window eviction | A previously accepted envelope reaches decrypt again | Measure maximum mailbox/retry lifetime against 1,024-entry Web seen set; approve bounded retention/expiry before multipath |
+| Receiver dies after persisted ratchet but before content | Valid ciphertext cannot be reprocessed and message is lost | One durable acceptance/recovery boundary spanning ratchet, message and dedupe; real Vodozemac restart fault test at R1/R2 |
+| Sender dies after ratchet but before outbox | Ciphertext has no durable retry record | Model S1 as unresolved local send; design safe recovery without falsely claiming queued delivery |
+| Acceptance journal ambiguity | Premature dedupe suppresses undelivered content or leaked recovery material | Journal only encrypted bounded records, coordinate with ratchet mutation, define recovery and corruption behavior before choosing write-ahead design |
 
 ## Explicit exclusions
 

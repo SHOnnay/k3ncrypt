@@ -46,6 +46,12 @@ Android-to-Android verified contact; no internet for LAN test; app cold start; s
 
 The Phase 0 fake decryptor does not establish real crash recovery. Run the existing relay, service, client and Android suites as compatibility checks after any later production change; perform disposable-database fault injection before making a durability claim.
 
+## Phase 1C crash-acceptance design tests (future work)
+
+Use `crash-acceptance-v1.md` as the sequence reference. With real persisted Web Vodozemac state and an isolated vault, stop/restart at S1, S2, R1, R2 and R3; inject failed writes independently for session, outbox, product message and seen marker. Record which records survived and whether the identical envelope can be retried without content loss or duplicate display. Test first inbound prekey establishment separately from existing-session receive. Repeat R4 with dropped live callback and lost `received` event, followed by mailbox replay; R5 must deliver identical ciphertext over overlapping adapters only after those adapters exist. Android tests must kill/restart around the Room transaction and verify account/session/message/digest remain consistent; do not infer this from a fake storage implementation.
+
+Candidate acceptance criteria: one persisted message per authenticated envelope after recovery; no peer receipt or positive receiver callback before durable acceptance; unchanged ciphertext on retry; no unrelated, forged or duplicate receipt clears pending work. Test envelope IDs on Web and Android against exact cross-platform fixture bytes, altered JSON wrapping, different conversations and beyond the supported replay lifetime. Existing characterization tests document current failures and should not be rewritten as passing guarantees before an approved fix.
+
 ## Phase 0 execution record
 
 - Clean `main` baseline: `3e26ce952ea539ef7aaa9bb5db3d5dea4bf30f7f`; ancestor check passed before branching.
