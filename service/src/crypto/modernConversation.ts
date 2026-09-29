@@ -38,6 +38,7 @@ import { bootstrapFirstDevice } from '../devices/bootstrap';
 import { signEnrollmentEvent, type EnrollmentEvent } from '../devices/trustProtocol';
 import makeRequest from '../api/client';
 import { fromBase64Url } from './base64url';
+import { RelayDeliveryBoundary } from '../delivery/relayDelivery';
 
 const OUTBOX_RECORD = 'modern-outbox';
 const SEEN_RECORD = 'modern-seen';
@@ -226,6 +227,7 @@ export class ModernConversation {
     private readonly modes: ConversationModeStore;
     private readonly subscriptions: SubscriptionType = new Map();
     private readonly transport: TransportManager;
+    private readonly relayDelivery: RelayDeliveryBoundary;
     private readonly deliveryMutex = new AsyncMutex();
     private readonly receiveMutex = new AsyncMutex();
     private roomId?: string;
@@ -308,6 +310,7 @@ export class ModernConversation {
                     : this.withTabLock(this.roomId ?? 'unknown', () => this.receive(message.envelope, message.senderRoutingId)));
             });
         this.transport = transportManager ?? new DefaultTransportManager(relay!);
+        this.relayDelivery = new RelayDeliveryBoundary(this.transport);
         this.subscriptions.set('on-alice-join', new Set([() => {
             void this.retryPending();
             void this.retryJoinIntroduction();
@@ -769,7 +772,7 @@ export class ModernConversation {
             await this.storage.write(JOIN_INTRODUCTION_RECORD, this.roomId, asBytes(record));
         }
         await this.assertCurrentDeviceTrust();
-        await this.transport.sendEnvelope('message', record.envelope, this.remoteAddress);
+        await this.relayDelivery.submit(record.envelope, this.remoteAddress);
     }
 
     public async retryPending(): Promise<void> {
@@ -779,18 +782,18 @@ export class ModernConversation {
             const pending = await this.readPending();
             const renewal = this.sessionHealth === 'renewal-pending'
                 ? parseSessionRenewal(await this.storage.read(SESSION_RENEWAL_RECORD, this.roomId!)) : undefined;
-            for (const item of pending) {
-                if (this.sessionHealth === 'renewal-pending' && item.clientId !== renewal?.clientId) continue;
-                if (item.relayId && item.sentAt && Date.now() - item.sentAt < 5000) continue;
-                try {
+            await this.relayDelivery.retry({
+                pending,
+                recipientRoutingId: this.remoteAddress,
+                skip: (item) => this.sessionHealth === 'renewal-pending' && item.clientId !== renewal?.clientId,
+                beforeSubmit: async () => {
                     await this.assertCurrentDeviceTrust();
                     testOnlyDeliveryStage('relay-dispatch');
-                    const sent = await this.transport.sendEnvelope('message', item.envelope, this.remoteAddress);
-                    item.relayId = sent.id;
-                    item.sentAt = Date.now();
-                    await this.storage.write(OUTBOX_RECORD, this.roomId!, asBytes(pending));
-                } catch { return; }
-            }
+                },
+                persist: async (updated) => {
+                    await this.storage.write(OUTBOX_RECORD, this.roomId!, asBytes(updated));
+                },
+            });
         });
     }
 
