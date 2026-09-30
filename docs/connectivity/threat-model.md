@@ -31,6 +31,19 @@ Assets: plaintext, Olm session state, device signing keys, contact verification 
 
 No VPN/IP tunnel, federation, helper-node network, account identity migration, offline first-contact pairing, automatic trust, crypto rewrite or weakening of relay authorization.
 
+## Phase 2D: local rendezvous and carrier selection
+
+ADR 0009 selects Android NSD as an **untrusted discovery hint** and a WebRTC DataChannel as the first carrier candidate to validate. Neither is enabled in production. A local rendezvous endpoint, DNS-SD record, successful DTLS connection, or ICE candidate is not contact identity or verification evidence.
+
+| Threat | Impact | Gate before any LAN envelope |
+|---|---|---|
+| Forged or replayed NSD service / substituted rendezvous endpoint | Connection to an attacker or cross-conversation route confusion | Bounded untrusted discovery; reviewed PeerAdmission binds expected device, conversation, roles, fresh nonces, versions and both DTLS certificate fingerprints. No contact/session mutation from a hint. |
+| Raw TCP treated as authenticated after a successful connect | Active substitution after handshake; M5 transport binding absent | Plain TCP remains a spike alternative. Require a separately approved authenticated channel and binding before considering it as a production carrier. |
+| NSD advertising or ICE gathering before privacy consent | Local-network presence or IP disclosure despite relay-only preference | Gate discovery, advertisement, rendezvous and ICE on global/per-contact opt-in and privacy policy **before** starting them; teardown on policy change. Advertising default remains off pending D14. |
+| Offline establishment silently contacts public infrastructure | Failure without internet or unexpected metadata disclosure | Host-only ICE and local-only rendezvous in physically disconnected tests; no public STUN/TURN or relay signaling for offline-LAN acceptance. |
+| DataChannel send/DTLS success promoted to message receipt | Sender discards pending message despite no durable peer acceptance | Adapter reports submission only; validated peer-authenticated receipt after durable acceptance is required for `peer-persisted`. Preserve outbox on ambiguity. |
+| Cached trust used to infer unseen revocation status | Revoked device could continue using LAN while disconnected | Follow ADR 0005 owner decision; missing currently required freshness blocks LAN. No inferred freshness from a signature or cached state. |
+
 ## Phase 1G: envelope identity and correlation risks
 
 The selected v1 identity is a public deterministic digest, not a MAC or signature. Its conversation binding reduces accidental cross-conversation aliasing; it does not prove that the sender is a member of that conversation. An attacker able to inject or alter transport metadata cannot make a message valid by supplying a matching ID. Receivers must derive the identity from the strictly validated envelope and authenticated conversation context, and must keep trust/session checks authoritative.

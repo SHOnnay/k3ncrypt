@@ -31,6 +31,10 @@
 
 Android-to-Android verified contact; no internet for LAN test; app cold start; same ciphertext via LAN and relay overlap; Wi-Fi client isolation; process death; revocation/freshness change; switch between networks; TURN and blocked UDP. Browser support is recorded separately. Emulator-only success is insufficient for LAN claims.
 
+## Phase 2D LAN architecture decision evidence
+
+The [LAN decision test plan](lan-decision-test-plan.md) expands the real-device matrix and is **not** an implemented test suite. ADR 0009 selects hybrid discovery/carrier boundaries for evaluation, while D13, D14 and M6 remain open. Run Android NSD discovery and host-only WebRTC DataChannel cold-start tests on three physical devices plus desktop with internet unavailable; compare a separately reviewed authenticated TCP alternative, browser/desktop limits, privacy exposure, permissions, battery/background behavior and M5 admission negatives. The current spike's same-host and emulator results are insufficient for a production go. No non-relay adapter can be enabled from this document.
+
 ## Phase 1B specification gates (future tests; not enabled by this document)
 
 | Gate | Evidence required before multipath | Expected result |
