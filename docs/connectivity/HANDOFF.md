@@ -238,7 +238,7 @@ Android must keep the serialized receive → persist → ACK behavior of `Inboun
 
 **Tests.** A simulated old client (strict decoder from current `main`) never receives control frames. New↔new works. New→old through the relay is unaffected. Mixed-version matrix documented and tested. Fixtures for the frame shapes.
 
-### M4. Authenticated receipts (Phase 1 framework, Phase 3 use)
+### M4. Authenticated receipts (Phase 1 framework, Phase 3 use; Phase 1H semantics specified)
 
 **Problem.** A transport ack or relay ack is not proof the peer persisted anything, and a LAN attacker or relay could forge one.
 
@@ -251,7 +251,7 @@ Android must keep the serialized receive → persist → ACK behavior of `Inboun
 6. is sent only after durable acceptance (M2);
 7. is gated by M3.
 
-**Default mechanism (decision D-R, owner to confirm in the Phase 0 ADR):** session-encrypted `receipt` control frames, batched, used only in conversations where both peers advertise `transport-control-v1` and multipath is enabled. Relay-only conversations keep today's acknowledgement behavior unchanged. The ADR must state the cost (extra ratchet traffic) and the batching limits.
+**Preferred mechanism (wire/rollout still requires approval):** session-authenticated `receipt` control frames, optionally batched, used only where both peers advertise the supported `transport-control-v1` and the feature is explicitly enabled. This may spend ratchet messages. Relay-only conversations keep today's acknowledgement behavior unchanged. ADR 0007 specifies lifecycle semantics, sender observability, current relay event limitations, cryptographic binding, freshness/replay requirements, and unresolved wire/batching/retention decisions. Do not implement or emit a receipt in this documentation phase.
 
 **Tests.** Forged receipt from a relay or LAN attacker rejected. Receipt for an unknown ID ignored. Wrong conversation or wrong peer rejected. Duplicate receipt idempotent. Fault-injection property test: no receipt is ever emitted before durable acceptance.
 

@@ -52,6 +52,10 @@ The Phase 0 fake decryptor does not establish real crash recovery. Run the exist
 
 Migration tests must seed legacy Web and Android markers in their native formats, redeliver the corresponding validated envelope, and prove dual-read prevents a second decrypt while new acceptance atomically writes a v1 marker. Restart, concurrent-tab/process races, marker-capacity pressure, expired delivery, rollback to an old reader, and authenticated receipt mismatch/replay cases are required before multipath or receipts use the ID.
 
+### Phase 1H authenticated receipt specification tests
+
+`receipt-test-plan-v1.md` defines the acceptance matrix. Verify each sender-visible evidence source separately (`submitted`, explicit relay `stored:true`, relay-mediated receiver callback, and future authenticated receipt). Prove that current `received`/`delivered` events, live ACKs, and mailbox deletion never establish `peer-persisted`. For a future receipt implementation, test authentication and exact conversation/envelope/device/role binding, nonce freshness, replay and duplicate idempotence, delayed receipts after relay outbox cleanup, acceptance-before-receipt ordering, crash/restart receipt retry, expiry, storage pressure, and old-client capability gating.
+
 ## Phase 1C crash-acceptance design tests (future work)
 
 Use `crash-acceptance-v1.md` as the sequence reference. With real persisted Web Vodozemac state and an isolated vault, stop/restart at S1, S2, R1, R2 and R3; inject failed writes independently for session, outbox, product message and seen marker. Record which records survived and whether the identical envelope can be retried without content loss or duplicate display. Test first inbound prekey establishment separately from existing-session receive. Repeat R4 with dropped live callback and lost `received` event, followed by mailbox replay; R5 must deliver identical ciphertext over overlapping adapters only after those adapters exist. Android tests must kill/restart around the Room transaction and verify account/session/message/digest remain consistent; do not infer this from a fake storage implementation.

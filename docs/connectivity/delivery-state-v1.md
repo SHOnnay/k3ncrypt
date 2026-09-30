@@ -1,26 +1,36 @@
-# Phase 1B delivery-state specification
+# Delivery evidence and receipt lifecycle
 
-Status: design only. Phase 1A relay submission remains the running implementation. No new transport, frame, storage migration or UI state is enabled.
+Status: specification. Current beta behavior is unchanged. The evidence model is defined in ADR 0006; Phase 1H receipt requirements are in ADR 0007. Evidence labels below are not UI copy and are not a promise that the current client can observe every state.
 
-## Evidence, ownership and current mapping
+## Lifecycle/evidence model
 
-ADR 0006 defines four separate pieces of evidence: `submitted`, `mailbox-stored`, `receiver-accepted` and future `peer-persisted`. They are not a monotone four-step pipeline. Conversation ownership retains encryption, trust, authenticated acceptance and durable message storage. RelayDeliveryBoundary submits already encrypted envelopes, preserves the existing five-second retry skip and passes persistence back to the conversation owner. The relay decides live forwarding versus offline mailbox storage. A future coordinator may correlate attempts, but cannot authenticate peers or promote relay evidence into peer persistence.
+These are independent observations associated with an envelope and one or more attempts. They are not a guaranteed linear state machine: relay mailbox storage can happen without a live receiver, and live receiver acceptance can happen without mailbox storage. A timeout means unknown outcome, never rejection.
 
-Today `chat-message` returns relay `{id,timestamp}` on a live receiver callback and `{id,timestamp,stored:true}` on mailbox retention. The service transport type exposes only `id`/`timestamp`, so Phase 1A does not expose `stored` as a distinct client-side result. The receiver transport emits `received` on handler success; the relay deletes a matching mailbox row and emits `delivered`. `ModernConversation.acceptDelivery()` removes matching outbox work on that relay event. This is existing beta behavior, not a future peer receipt. See `current-behavior.md` and ADR 0006; do not relabel it.
+| Evidence | What it proves | What it does not prove | Sender observability today |
+|---|---|---|---|
+| `submitted` | A local encrypted outbox record exists and the selected adapter reports a successful submission attempt. Record adapter and attempt ID separately. | Relay persistence, recipient handling, decryption, peer persistence, or reading. | Local outbox and adapter result; timeout leaves result unknown. |
+| `relay-stored` (also called mailbox-stored) | The authorized relay explicitly returned `stored:true` after inserting/reusing an opaque offline mailbox row. Preserve relay ID and expiry as relay metadata. | Recipient online, decryption, acceptance, durable peer storage, or indefinite retention. | Relay `chat-message` response with `stored:true`. |
+| `receiver-accepted` | The receiver's application handler returned success for this attempt after its platform acceptance path completed. | End-to-end authenticated proof to the sender, human display/read, or future retention. | Immediate live `{id,timestamp}` response and/or later relay `delivered` event. Both are relay-mediated observations. |
+| `peer-persisted` | The expected peer device produced a valid authenticated receipt after durable acceptance of that envelope at the receiver. | Human reading, every other peer device's state, or retention forever. | Not available in the current beta; future receipt requirements are specified by ADR 0007. |
 
-## Stable identity and deduplication
+Do not promote an observation based on its name. `submitted` cannot infer `relay-stored`; `relay-stored` cannot infer `receiver-accepted`; neither relay reports nor receiver handler callbacks can establish `peer-persisted`. Keep envelope identity, relay mailbox ID, and per-attempt ID in separate fields.
 
-The v1 `envelopeId` design is selected in ADR 0001 and specified in `envelope-identity-v1.md`: it hashes a domain-separated, length-prefixed canonical conversation ID and exact validated `olmMessage` string. It is a non-secret correlation/dedupe value, never authentication. All paths must carry the same encrypted envelope bytes after a single encryption. Adapter attempt IDs and relay mailbox IDs remain separate. Receiver dedupe must be common across paths and occur before a second decrypt, using a durable acceptance record; sender correlation must survive restart. Existing TypeScript `SHA-256(JSON.stringify(envelope))` and 1,024-entry seen window remain the beta behavior and are insufficient as an unreviewed cross-platform lifetime contract. The seven-day mailbox expiry and sender retry policy need measurement before a retention bound is selected. Legacy records must remain readable during any later migration. This Phase 1G decision is specification only; no runtime change is authorized by it.
+## Current beta mapping
 
-## Receipt and crash gates
+`chat-message` live `{id,timestamp}` is a relay-mediated report that the recipient Socket.IO delivery callback returned `accepted:true`. `{id,timestamp,stored:true}` is the relay's report that it stored/reused a mailbox row. After the recipient handler succeeds, the client emits `received` with a relay ID; the server checks active socket/device binding, deletes a matching mailbox row when present, then forwards `delivered` to the sender. The sender currently uses that relay ID to remove matching outbox work.
 
-ADR 0003 proposes a capability-gated, authenticated control receipt. It must name the exact pending envelope and conversation, come from the expected peer device, and be idempotent. It is emitted after the approved durable acceptance boundary only. Missing or timed-out receipts leave an unresolved outcome; they do not imply failure. Existing relay-only ACK and outbox semantics stay unchanged. ADR 0002 remains open on the Web persistence strategy, particularly ratchet advancement before consumer/seen writes. Android's inbound transaction does not eliminate Web crash risk. The CP1–CP6 matrix and the Phase 1B tests in `test-matrix.md` are acceptance gates, not assertions that current code passes them.
+These events do not qualify as authenticated peer receipts: they are relay-controlled, use relay IDs rather than the v1 envelope identity, and do not cryptographically bind the sender, receiver, conversation, envelope, and fresh receipt instance together. Active device binding is relay authorization, not end-to-end receipt authentication. Full event semantics are in `current-behavior.md`; do not rename or change them in this specification phase.
 
-## Open decisions
+## Future authenticated receipt requirements
 
-1. Implement and validate the selected cross-platform ID and versioned legacy migration, then choose dedupe retention based on the measured longest legitimate replay/retry lifetime.
-2. Select an implementable Web crash-consistency approach after inspecting the concrete vault, session and message transaction boundaries. Characterize sender crash recovery on each platform.
-3. Approve or reject encrypted control receipts, including ratchet cost, batching, expiry and lost-receipt handling. Define peer capability gating and old-client fallback before any frame is sent.
-4. Decide how future evidence metadata is stored and recovered without changing the current relay outbox and user-visible delivery labels.
+Only a separately approved, version-gated receipt meeting ADR 0007 may establish `peer-persisted`. It must authenticate the expected peer device through the conversation session, bind the canonical conversation and stable v1 envelope ID, bind sender/receiver device identities and roles, include freshness/replay protection, and be emitted after ADR 0002 durable acceptance. Receipt duplicates are idempotent; unknown/mismatched/expired receipts have no state effect. A sender needs a durable completion/correlation record that outlives current relay outbox cleanup for the defined receipt horizon.
 
-Multipath remains blocked until these decisions, implementation and fault-injection tests are complete.
+Existing relay outbox and UI status behavior stays unchanged. No receipt frame, protocol change, or transport is enabled by this document.
+
+## Identity, retry and retention constraints
+
+ADR 0001 selects the v1 conversation-scoped digest over exact validated `olmMessage` bytes as a design; it is not yet used by beta runtime. All future paths must carry the exact same encrypted envelope after a single encryption. Retry must resend the saved ciphertext and keep the same envelope ID; adapter attempt and relay mailbox identifiers remain separate.
+
+Existing Web `SHA-256(JSON.stringify(envelope))`, its 1,024-entry `modern-seen` limit, and Android's raw serialized-envelope digest remain the current platform-local behavior. The seven-day mailbox expiry does not by itself set a safe dedupe horizon; measure retry, offline, replay, and delayed-receipt lifetimes before choosing retention. Legacy records must remain readable during migration as specified in `envelope-identity-migration-v1.md`.
+
+Multipath and `peer-persisted` remain blocked until stable ID parity/migration, receipt authentication, crash recovery, retention, replay, and mixed-version tests pass.
