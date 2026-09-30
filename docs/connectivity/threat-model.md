@@ -1,5 +1,7 @@
 # Connectivity overlay threat model
 
+Future QR invitation and SAS verification threats are specified in [the invitation threat model](../invitations/threat-model.md). That proposed ceremony does not alter the connectivity rule that discovery, transport connection, relay admission, and invitation parsing never establish contact trust. No SAS runtime or invitation protocol change is authorized by this cross-reference.
+
 ## Assets and boundaries
 
 Assets: plaintext, Olm session state, device signing keys, contact verification records, route associations, lifecycle freshness, encrypted outbox/mailbox, and user network-address privacy. The relay is authorized for its own room/mailbox operations; it is not an authority for human contact trust. Paths carry ciphertext and metadata; an admitted transport does not replace E2EE.
