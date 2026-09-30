@@ -38,7 +38,8 @@ import { bootstrapFirstDevice } from '../devices/bootstrap';
 import { signEnrollmentEvent, type EnrollmentEvent } from '../devices/trustProtocol';
 import makeRequest from '../api/client';
 import { fromBase64Url } from './base64url';
-import { RelayDeliveryBoundary } from '../delivery/relayDelivery';
+import { DeliveryCoordinator } from '../delivery/deliveryCoordinator';
+import { RelayPathAdapter } from '../transports/relayPathAdapter';
 
 const OUTBOX_RECORD = 'modern-outbox';
 const SEEN_RECORD = 'modern-seen';
@@ -232,7 +233,7 @@ export class ModernConversation {
     private readonly modes: ConversationModeStore;
     private readonly subscriptions: SubscriptionType = new Map();
     private readonly transport: TransportManager;
-    private readonly relayDelivery: RelayDeliveryBoundary;
+    private readonly deliveryCoordinator: DeliveryCoordinator;
     private readonly deliveryMutex = new AsyncMutex();
     private readonly receiveMutex = new AsyncMutex();
     private roomId?: string;
@@ -316,7 +317,7 @@ export class ModernConversation {
                     : this.withTabLock(this.roomId ?? 'unknown', () => this.receive(message.envelope, message.senderRoutingId)));
             });
         this.transport = transportManager ?? new DefaultTransportManager(relay!);
-        this.relayDelivery = new RelayDeliveryBoundary(this.transport);
+        this.deliveryCoordinator = new DeliveryCoordinator([new RelayPathAdapter(this.transport)]);
         this.subscriptions.set('on-alice-join', new Set([() => {
             void this.retryPending();
             void this.retryJoinIntroduction();
@@ -779,7 +780,7 @@ export class ModernConversation {
             await this.storage.write(JOIN_INTRODUCTION_RECORD, this.roomId, asBytes(record));
         }
         await this.assertCurrentDeviceTrust();
-        await this.relayDelivery.submit(record.envelope, this.remoteAddress);
+        await this.deliveryCoordinator.submit(record.envelope, this.remoteAddress);
     }
 
     public async retryPending(): Promise<void> {
@@ -789,7 +790,7 @@ export class ModernConversation {
             const pending = await this.readPending();
             const renewal = this.sessionHealth === 'renewal-pending'
                 ? parseSessionRenewal(await this.storage.read(SESSION_RENEWAL_RECORD, this.roomId!)) : undefined;
-            await this.relayDelivery.retry({
+            await this.deliveryCoordinator.retry({
                 pending,
                 recipientRoutingId: this.remoteAddress,
                 skip: (item) => this.sessionHealth === 'renewal-pending' && item.clientId !== renewal?.clientId,
