@@ -114,4 +114,171 @@ describe('relay-only delivery coordinator', () => {
 
         expect(sendEnvelope).not.toHaveBeenCalled();
     });
+
+    test('does not invoke an unavailable future candidate and continues through relay', async () => {
+        const { relay, sendEnvelope } = relayHarness();
+        const unavailableLan = nonRelayAdapter('lan', jest.fn().mockRejectedValue(new Error('unavailable')));
+        const coordinator = new DeliveryCoordinator([unavailableLan, relay]);
+
+        await coordinator.submit(envelope, 'recipient-route');
+
+        expect(sendEnvelope).toHaveBeenCalledWith('message', envelope, 'recipient-route');
+        expect(unavailableLan.submit).not.toHaveBeenCalled();
+    });
+
+    test('ignores a capability-mismatched future candidate and preserves relay baseline', async () => {
+        const { relay, sendEnvelope } = relayHarness();
+        const incompatibleLan: DeliveryPathAdapter = {
+            capabilities: { path: 'lan', encryptedEnvelopes: false, messageDelivery: true, offlineMailbox: false },
+            submit: jest.fn(),
+        };
+        const coordinator = new DeliveryCoordinator([incompatibleLan, relay]);
+
+        await coordinator.submit(envelope);
+
+        expect(incompatibleLan.submit).not.toHaveBeenCalled();
+        expect(sendEnvelope).toHaveBeenCalledWith('message', envelope, undefined);
+    });
+
+    test('relay-only privacy behavior never initializes fake LAN or direct candidates', async () => {
+        const { relay, sendEnvelope } = relayHarness();
+        const lanSubmit = jest.fn();
+        const directSubmit = jest.fn();
+        const coordinator = new DeliveryCoordinator([
+            nonRelayAdapter('lan', lanSubmit), nonRelayAdapter('direct', directSubmit), relay,
+        ]);
+
+        await coordinator.submit(envelope);
+
+        expect(lanSubmit).not.toHaveBeenCalled();
+        expect(directSubmit).not.toHaveBeenCalled();
+        expect(sendEnvelope).toHaveBeenCalledTimes(1);
+    });
+});
+
+/**
+ * Test-only model of the future policy contract. This deliberately does not
+ * call or alter the production coordinator: non-relay paths remain disabled.
+ */
+describe('future transport-policy contract (fake adapters only)', () => {
+    type FakeCandidate = {
+        path: 'relay' | 'lan' | 'direct';
+        locallyImplemented: boolean;
+        peerCapabilityAuthenticated: boolean;
+        peerSupports: boolean;
+        verifiedUnchangedContact: boolean;
+        explicitlyEnabled: boolean;
+        privacyAllows: boolean;
+        healthy: boolean;
+        submit: (value: EncryptedEnvelope) => Promise<void>;
+    };
+
+    const eligibleInOrder = (candidates: FakeCandidate[], preference: 'relay-only' | 'prefer-nearby' | 'prefer-direct') => {
+        const eligible = candidates.filter((candidate) => candidate.path === 'relay' || preference !== 'relay-only' && (
+            candidate.locallyImplemented && candidate.peerCapabilityAuthenticated && candidate.peerSupports &&
+            candidate.verifiedUnchangedContact && candidate.explicitlyEnabled && candidate.privacyAllows && candidate.healthy
+        ));
+        const order = preference === 'prefer-nearby' ? ['lan', 'direct', 'relay']
+            : preference === 'prefer-direct' ? ['direct', 'lan', 'relay'] : ['relay'];
+        return eligible.sort((left, right) => order.indexOf(left.path) - order.indexOf(right.path));
+    };
+
+    const submitWithFallback = async (
+        candidates: FakeCandidate[], value: EncryptedEnvelope,
+        preference: 'relay-only' | 'prefer-nearby' | 'prefer-direct' = 'relay-only',
+    ) => {
+        for (const candidate of eligibleInOrder(candidates, preference)) {
+            try {
+                await candidate.submit(value);
+                return candidate.path;
+            } catch {
+                // Contract model only: caller retains the same saved envelope.
+            }
+        }
+        return undefined;
+    };
+
+    test('skips unavailable or ineligible candidates and chooses relay', async () => {
+        const lanSubmit = jest.fn();
+        const relaySubmit = jest.fn().mockResolvedValue(undefined);
+        const selected = await submitWithFallback([
+            { path: 'lan', locallyImplemented: false, peerCapabilityAuthenticated: true, peerSupports: true,
+                verifiedUnchangedContact: true, explicitlyEnabled: true, privacyAllows: true, healthy: true, submit: lanSubmit },
+            { path: 'relay', locallyImplemented: true, peerCapabilityAuthenticated: true, peerSupports: true,
+                verifiedUnchangedContact: false, explicitlyEnabled: false, privacyAllows: true, healthy: true, submit: relaySubmit },
+        ], envelope, 'prefer-nearby');
+
+        expect(selected).toBe('relay');
+        expect(lanSubmit).not.toHaveBeenCalled();
+        expect(relaySubmit).toHaveBeenCalledWith(envelope);
+    });
+
+    test('falls back after a failed preferred candidate using the exact same envelope', async () => {
+        const lanSubmit = jest.fn().mockRejectedValue(new Error('definite pre-acceptance failure'));
+        const relaySubmit = jest.fn().mockResolvedValue(undefined);
+        const selected = await submitWithFallback([
+            { path: 'lan', locallyImplemented: true, peerCapabilityAuthenticated: true, peerSupports: true,
+                verifiedUnchangedContact: true, explicitlyEnabled: true, privacyAllows: true, healthy: true, submit: lanSubmit },
+            { path: 'relay', locallyImplemented: true, peerCapabilityAuthenticated: true, peerSupports: true,
+                verifiedUnchangedContact: false, explicitlyEnabled: false, privacyAllows: true, healthy: true, submit: relaySubmit },
+        ], envelope, 'prefer-nearby');
+
+        expect(selected).toBe('relay');
+        expect(lanSubmit).toHaveBeenCalledWith(envelope);
+        expect(relaySubmit).toHaveBeenCalledWith(envelope);
+        expect(lanSubmit.mock.calls[0][0]).toBe(relaySubmit.mock.calls[0][0]);
+    });
+
+    test('ranks only eligible candidates according to explicit local preference', async () => {
+        const paths: string[] = [];
+        const submit = (path: string) => jest.fn(async (_value: EncryptedEnvelope) => { paths.push(path); });
+        const lanSubmit = submit('lan');
+        const directSubmit = submit('direct');
+        const relaySubmit = submit('relay');
+        const candidates: FakeCandidate[] = [
+            { path: 'relay', locallyImplemented: true, peerCapabilityAuthenticated: true, peerSupports: true,
+                verifiedUnchangedContact: false, explicitlyEnabled: false, privacyAllows: true, healthy: true, submit: relaySubmit },
+            { path: 'direct', locallyImplemented: true, peerCapabilityAuthenticated: true, peerSupports: true,
+                verifiedUnchangedContact: true, explicitlyEnabled: true, privacyAllows: true, healthy: true, submit: directSubmit },
+            { path: 'lan', locallyImplemented: true, peerCapabilityAuthenticated: true, peerSupports: true,
+                verifiedUnchangedContact: true, explicitlyEnabled: true, privacyAllows: true, healthy: true, submit: lanSubmit },
+        ];
+
+        await submitWithFallback(candidates, envelope, 'prefer-nearby');
+        expect(paths).toEqual(['lan']);
+        paths.length = 0;
+        await submitWithFallback(candidates, envelope, 'prefer-direct');
+        expect(paths).toEqual(['direct']);
+        paths.length = 0;
+        await submitWithFallback(candidates, envelope, 'relay-only');
+        expect(paths).toEqual(['relay']);
+    });
+
+    test('rejects unauthenticated or mismatched capabilities before attempting the candidate', async () => {
+        const directSubmit = jest.fn();
+        const selected = await submitWithFallback([
+            { path: 'direct', locallyImplemented: true, peerCapabilityAuthenticated: false, peerSupports: true,
+                verifiedUnchangedContact: true, explicitlyEnabled: true, privacyAllows: true, healthy: true, submit: directSubmit },
+            { path: 'direct', locallyImplemented: true, peerCapabilityAuthenticated: true, peerSupports: false,
+                verifiedUnchangedContact: true, explicitlyEnabled: true, privacyAllows: true, healthy: true, submit: directSubmit },
+        ], envelope, 'prefer-nearby');
+
+        expect(selected).toBeUndefined();
+        expect(directSubmit).not.toHaveBeenCalled();
+    });
+
+    test('privacy restriction excludes optional candidates before submission', async () => {
+        const optionalSubmit = jest.fn();
+        const relaySubmit = jest.fn().mockResolvedValue(undefined);
+        const selected = await submitWithFallback([
+            { path: 'direct', locallyImplemented: true, peerCapabilityAuthenticated: true, peerSupports: true,
+                verifiedUnchangedContact: true, explicitlyEnabled: true, privacyAllows: false, healthy: true, submit: optionalSubmit },
+            { path: 'relay', locallyImplemented: true, peerCapabilityAuthenticated: true, peerSupports: true,
+                verifiedUnchangedContact: false, explicitlyEnabled: false, privacyAllows: true, healthy: true, submit: relaySubmit },
+        ], envelope, 'prefer-direct');
+
+        expect(selected).toBe('relay');
+        expect(optionalSubmit).not.toHaveBeenCalled();
+        expect(relaySubmit).toHaveBeenCalledWith(envelope);
+    });
 });
