@@ -2,6 +2,14 @@
 
 Status: specification. Current beta behavior is unchanged. The evidence model is defined in ADR 0006; Phase 1H receipt requirements are in ADR 0007. Evidence labels below are not UI copy and are not a promise that the current client can observe every state.
 
+## Capability negotiation boundary (Phase 1I)
+
+Capability negotiation describes possible protocol operations; it is not delivery evidence. A peer advertising receipt support does not prove that any envelope was submitted, stored, accepted, or persisted. A selected receipt capability only permits a separately specified receipt exchange; `peer-persisted` still requires successful validation of an authenticated, conversation- and envelope-bound receipt after durable acceptance (ADR 0002 and ADR 0007).
+
+Likewise, advertised LAN or direct/WebRTC data-channel support does not mean that a path is reachable, selected, authorized, or healthy. Path eligibility still depends on local policy, current trust/freshness requirements, platform support, and the approved admission procedure. The relay remains the compatibility baseline; missing or unusable optional capabilities leave existing relay delivery and its current ACK meanings unchanged.
+
+Current `join-introduction-v1` metadata is only a transient, exact-match compatibility hint. It is not a negotiated authenticated capability, delivery receipt, contact identity, or trust fact. The existing relay `delivered` event and mailbox storage response remain exactly as described below, regardless of any future peer capability claims.
+
 ## Lifecycle/evidence model
 
 These are independent observations associated with an envelope and one or more attempts. They are not a guaranteed linear state machine: relay mailbox storage can happen without a live receiver, and live receiver acceptance can happen without mailbox storage. A timeout means unknown outcome, never rejection.

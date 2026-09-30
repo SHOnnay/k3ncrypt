@@ -1,6 +1,6 @@
 # K3NCRYPT Connectivity: Developer Handoff for Codex
 
-**Status:** approved architecture, ready for implementation · **Audience:** Codex (implementer) and the human reviewer
+**Status:** approved architecture with Phase 1I capability-negotiation specification; runtime implementation gates remain open · **Audience:** Codex (implementer) and the human reviewer
 **Reviewed baseline:** `3e26ce952ea539ef7aaa9bb5db3d5dea4bf30f7f`, as stated in the approved specification. The source ZIP I analyzed has no `.git` directory, so I could not confirm this commit. Task 0.1 makes Codex verify it.
 **Code references:** file and line numbers come from the reviewed ZIP. If `main` has moved, locate by symbol name instead.
 
@@ -230,13 +230,17 @@ Android must keep the serialized receive → persist → ACK behavior of `Inboun
 **Problem.** Decoding is strict and fails closed. A new control message sent to an old client could be rejected in a way that damages the session.
 
 **Requirement.**
-- Add feature id `transport-control-v1`, advertised through the **existing** `setProtocolFeatures` / `peerSupportsFeature` mechanism, only while the connectivity flag is on.
+- `transport-control-v1` is a future capability name, not currently advertised by runtime. Do not use the existing `setProtocolFeatures` / `peerSupportsFeature` hint alone to authorize controls: the current relay-join feature list is transient peer-asserted metadata and is not bound to the device authorization proof or an end-to-end transcript. Before implementation, follow ADR 0008: define an additive, bounded offer; bind both complete offers and the selected version to a fresh authenticated conversation/admission transcript; keep service capabilities distinct from peer capabilities; and define a relay-compatible rollout. The current relay rejects unknown feature IDs, so a client-only addition can break joins.
+- When that negotiation is approved and implemented, advertise/use this capability only while the connectivity flag is on. Until then, no new control frames are sent.
 - Control frames (for example `path-offer`, `path-answer`, `receipt`) are Olm-encrypted frames carrying `{v:1, type, …}`.
 - **Never send a control frame unless the peer advertised support.** Offline, the LAN handshake carries a `controlVersions` list bound into the transcript (M5); a cached capability hint is only a hint and is revalidated there.
 - Receiving an unknown control type must: not display as chat text, not change verification or persisted conversation mode, not mark the session unhealthy, and log only a bounded reason code.
+- If the optional capability is absent, stale, malformed, stripped, or cannot be authenticated, use the existing authorized relay behavior without changing ACK meanings, trust, identity, or session state. A future operation declared mandatory must fail as that operation; it must not silently weaken its security requirements.
 - Phase 0 first characterizes how **current** TypeScript and Kotlin decoders treat an unknown frame type.
 
 **Tests.** A simulated old client (strict decoder from current `main`) never receives control frames. New↔new works. New→old through the relay is unaffected. Mixed-version matrix documented and tested. Fixtures for the frame shapes.
+
+**Phase 1I specification:** `adr/0008-capability-negotiation.md` and `capability-test-plan-v1.md` define current behavior, future capability classes, downgrade rules, rollout constraints, and tests. Their open decisions block any capability wire-format or runtime negotiation work.
 
 ### M4. Authenticated receipts (Phase 1 framework, Phase 3 use; Phase 1H semantics specified)
 
@@ -709,9 +713,12 @@ Order of work (separate commits; stop for review at the marked gates):
 4. Delivery Coordinator with the state model in HANDOFF 1.3; secure outbox
    representation preserved; no re-encryption on retry.
 5. M4: receipt validator and receipt frames on test adapters only.
-6. M3: the transport-control-v1 feature id, advertised only when the
-   connectivity flag is on (default off), with unknown-type rejection that
-   never degrades session health.
+6. M3: only after ADR 0008's open wire/authentication/rollout decisions are
+   approved, implement capability-bound `transport-control-v1`, advertised
+   only when the connectivity flag is on (default off), with unknown-type
+   rejection that never degrades session health. Existing
+   `setProtocolFeatures` / `peerSupportsFeature` metadata alone is not an
+   authenticated negotiation.
 7. M7: the pure pathEligibility function plus Kotlin mirror, both passing
    protocol-fixtures/v1/path-eligibility.json.
 8. Rollback test: flag off restores previous behavior with records intact.

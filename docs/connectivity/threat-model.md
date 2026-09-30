@@ -48,3 +48,20 @@ The selected v1 identity is a public deterministic digest, not a MAC or signatur
 | Resource exhaustion | Huge input or unbounded accepted-ID state consumes CPU/storage | Apply existing strict envelope size limits before hashing; specify ID count/time limits and fail safely rather than evicting live dedupe records. |
 
 An envelope ID is stable only for one exact encrypted envelope. Re-encryption, even for the same plaintext, yields a different ID; sender-assigned logical-message IDs or hybrid identities would require a separate authenticated message-format decision and threat review.
+
+## Phase 1I: capability negotiation risks
+
+Capabilities describe declared implementation support and possible protocol operations. They do not authenticate a device, establish trust, authorize relay access, prove path reachability, or provide delivery evidence. See ADR 0008 for the model and unresolved wire decisions.
+
+| Threat | Impact | Required control / test |
+|---|---|---|
+| Relay strips or rewrites an optional offer | Forced fallback, mismatched control parsing, or attempted downgrade | Bind both complete offers and the selected intersection to a fresh authenticated transcript before relying on it; unauthenticated metadata can only disable an optional feature, never select a weaker security mode. Test stripping and alteration. |
+| Malicious peer overclaims support | Unsupported control frame could damage session processing, or a fake receipt/path feature could be treated as evidence | Treat claims as untrusted even after peer authentication; send only after authenticated selection and local policy approval; parse failures affect only the optional feature and must not mutate trust/session state. Test an authenticated peer that lies. |
+| Old relay rejects a newly advertised ID | Client cannot join, causing availability failure during rolling deployment | Define server-first or versioned-envelope rollout and test old/new client × old/new relay combinations before registering a wire ID. Current relay rejects unknown join feature IDs. |
+| Missing, unknown, malformed, or duplicate capability | Peers disagree on controls or accidentally infer support | Missing means relay baseline only; reject unknown/malformed/conflicting optional negotiation under fail-closed parsing and fall back to the authorized relay baseline; keep bounded parsing and explicit versioning. Test each form. |
+| Stale/replayed capability selection | A past device/session capability is reused after reconnect, revocation, identity change, or version change | Bind offers and selection to the current conversation, expected peer device, fresh context, and session; invalidate on reconnect/session replacement and identity/trust lifecycle changes. Test replay and invalidation. |
+| Peer capability confused with relay capability | Peer data could alter mailbox or room authorization | Keep service capabilities under a distinct relay identity and authorization channel. Peer offers never affect relay proofs, room membership, or mailbox rules. Test that the authorization path is unchanged. |
+| Capability inventory leaks platform/version data | Enables fingerprinting or unnecessary disclosure of local features | Advertise only bounded necessary identifiers; do not include addresses, candidates, names, keys, or device inventory; defer user-opt-in and privacy-sensitive disclosure decisions. Review logs and serialized metadata. |
+| Voice WebRTC mistaken for direct data transport | Product or policy may assume a nonexistent envelope path | Model voice-call support, data-channel implementation, ICE reachability, and path health as separate facts. Test that call capability alone never enables direct message delivery. |
+
+Downgrade rule: optional negotiation failure returns to the already-authorized relay baseline without changing identity, verification, encryption, session state, message acceptance, or ACK semantics. If a future operation explicitly requires an optional capability, reject that operation rather than silently changing its security properties. No capability negotiation implementation is authorized by Phase 1I.
