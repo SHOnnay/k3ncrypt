@@ -66,11 +66,11 @@ internal object SavedConversationIndex {
     fun hash(conversationId: String): String = MessageDigest.getInstance("SHA-256").digest(conversationId.encodeToByteArray())
         .joinToString("") { "%02x".format(it) }
 
-    fun isTrusted(invitation: ConversationInvitation): Boolean =
+    fun hasPinnedPeer(invitation: ConversationInvitation): Boolean =
         invitation.peerRoutingId.isNotEmpty() && invitation.peerIdentityReference.isNotEmpty()
 
-    fun selectTrusted(targetHash: String, invitations: List<ConversationInvitation>): ConversationInvitation? =
-        invitations.firstOrNull { isTrusted(it) && hash(it.conversationId) == targetHash }
+    fun selectPinned(targetHash: String, invitations: List<ConversationInvitation>): ConversationInvitation? =
+        invitations.firstOrNull { hasPinnedPeer(it) && hash(it.conversationId) == targetHash }
 }
 
 data class AndroidChatMessage(val id: String, val conversationId: String, val senderRoutingId: String, val text: String, val timestamp: Long)
@@ -90,6 +90,7 @@ class AndroidMessagingRepository(
     private val callRelayAdmissionMutex = Mutex()
     private val relayReconnectTracker = RelayPresenceReconnectTracker()
     private val sessions = NativeSessionRegistry(crypto, stateStore)
+    private val contactVerification = ContactVerification(stateStore)
     @Volatile private var conversation: ConversationInvitation? = null
     private var observer: ((AndroidChatMessage) -> Unit)? = null
     private var peerIdentityObserver: ((String, String) -> Unit)? = null
@@ -129,7 +130,7 @@ class AndroidMessagingRepository(
                     if (BuildConfig.DEBUG) DebugInspectionStore.setConnectionStage("relay_socket_connected")
                     return@collect
                 }
-                val binding = conversation?.takeIf(SavedConversationIndex::isTrusted) ?: return@collect
+                val binding = conversation?.takeIf(SavedConversationIndex::hasPinnedPeer) ?: return@collect
                 if (BuildConfig.DEBUG) DebugInspectionStore.setConnectionStage("relay_rejoin_started")
                 runCatching { ensureCallRelayJoined(binding) }
                     .onSuccess { if (BuildConfig.DEBUG) DebugInspectionStore.setConnectionStage("relay_rejoined") }
@@ -157,11 +158,25 @@ class AndroidMessagingRepository(
     }
 
     fun observeCallSignals(observer: (String) -> Unit) { callSignalObserver = observer }
-    suspend fun activeConversation(): ConversationInvitation = mutex.withLock { conversation?.takeIf(SavedConversationIndex::isTrusted) ?: error("A verified conversation is required for calls") }
+    suspend fun activeConversation(): ConversationInvitation = mutex.withLock {
+        val binding = conversation?.takeIf(SavedConversationIndex::hasPinnedPeer) ?: error("A verified conversation is required for calls")
+        require(contactVerification.state(binding) == ContactVerificationState.VERIFIED) { "A verified conversation is required for calls" }
+        binding
+    }
+
+    internal suspend fun activeContactVerification(): ContactVerificationState = mutex.withLock {
+        conversation?.let { contactVerification.state(it) } ?: ContactVerificationState.CONTACT_CREATED
+    }
+
+    suspend fun verifyActiveContact(confirmedFingerprint: String) = mutex.withLock {
+        val binding = conversation ?: error("Contact is unavailable")
+        contactVerification.markVerified(binding, confirmedFingerprint)
+    }
 
     /** Explicitly arms one replacement pre-key message after out-of-band comparison with the pinned peer. */
     suspend fun armVerifiedSessionRenewal(confirmedPeerFingerprint: String) = mutex.withLock {
-        val binding = conversation?.takeIf(SavedConversationIndex::isTrusted) ?: error("A verified conversation is required")
+        val binding = conversation?.takeIf(SavedConversationIndex::hasPinnedPeer) ?: error("A verified conversation is required")
+        require(contactVerification.state(binding) == ContactVerificationState.VERIFIED) { "A verified conversation is required" }
         require(confirmedPeerFingerprint == binding.peerIdentityReference) { "Peer identity confirmation did not match" }
         require(sessions.existing(binding.peerRoutingId) != null) { "There is no established session to renew" }
         VodozemacBundleCodec.parse(api.fetchPrekeys(binding.conversationId, binding.controlCapability, binding.peerRoutingId), confirmedPeerFingerprint)
@@ -180,7 +195,7 @@ class AndroidMessagingRepository(
 
     /** Reasserts the existing proof-backed channel registration when the app resumes. */
     suspend fun ensureActiveRelayRegistration() {
-        val binding = conversation?.takeIf(SavedConversationIndex::isTrusted) ?: return
+        val binding = conversation?.takeIf(SavedConversationIndex::hasPinnedPeer) ?: return
         ensureCallRelayJoined(binding)
     }
 
@@ -200,7 +215,8 @@ class AndroidMessagingRepository(
     private suspend fun sendCallSignalOnce(plaintext: String, expectedConversationId: String) = mutex.withLock {
         val binding = conversation ?: error("Call conversation is unavailable")
         require(binding.conversationId == expectedConversationId) { "Call conversation changed while reconnecting" }
-        require(binding.peerRoutingId.isNotEmpty() && binding.peerIdentityReference.startsWith("K3 ")) { "Verified contact is required for calls" }
+        require(binding.peerRoutingId.isNotEmpty() && binding.peerIdentityReference.startsWith("K3 ") &&
+            contactVerification.state(binding) == ContactVerificationState.VERIFIED) { "Verified contact is required for calls" }
         require(plaintext.toByteArray(Charsets.UTF_8).size in 1..65_536) { "Call signal is malformed" }
         val local = identity.activeState()
         val account = identity.activeAccount()
@@ -236,7 +252,8 @@ class AndroidMessagingRepository(
 
     private suspend fun receiveCallSignal(signal: RelayCallSignal) = mutex.withLock {
         val binding = conversation ?: return@withLock
-        if (binding.conversationId != signal.conversationId || binding.peerRoutingId.isEmpty()) return@withLock
+        if (binding.conversationId != signal.conversationId || binding.peerRoutingId.isEmpty() ||
+            contactVerification.state(binding) != ContactVerificationState.VERIFIED) return@withLock
         val current = identity.activeState()
         val account = identity.activeAccount()
         var session: SessionHandle? = null
@@ -352,7 +369,7 @@ class AndroidMessagingRepository(
     }
 
     /** Lists saved records without exposing routing IDs, capabilities, proofs, or fingerprints to the UI. */
-    suspend fun savedTrustedConversations(): List<SavedConversationSummary> {
+    suspend fun savedConversations(): List<SavedConversationSummary> {
         val activeId = stateStore.read("conversation-active", "selected")?.let { bytes ->
             try { bytes.decodeToString() } finally { bytes.fill(0) }
         }
@@ -360,13 +377,13 @@ class AndroidMessagingRepository(
             .mapValues { (_, messages) -> messages.maxOfOrNull { it.receivedAt } ?: 0L }
         return stateStore.list("conversation").mapNotNull { (_, bytes) ->
             val invitation = try { parseInvitation(bytes.decodeToString()) } finally { bytes.fill(0) }
-            if (!SavedConversationIndex.isTrusted(invitation)) return@mapNotNull null
+            if (!SavedConversationIndex.hasPinnedPeer(invitation)) return@mapNotNull null
             SavedConversationSummary(
                 conversationHash = SavedConversationIndex.hash(invitation.conversationId),
                 label = stateStore.read("contact-nickname", SavedConversationIndex.hash(invitation.conversationId))?.let { bytes ->
                     try { bytes.decodeToString() } finally { bytes.fill(0) }
-                }?.takeIf(String::isNotBlank) ?: "Trusted contact",
-                trustState = "verified",
+                }?.takeIf(String::isNotBlank) ?: "Contact",
+                trustState = if (contactVerification.state(invitation) == ContactVerificationState.VERIFIED) "verified" else "unverified",
                 connectionState = if (invitation.conversationId == activeId && relay.connected.value) "connected" else "saved",
                 deliveryState = if (lastActivityByConversation[invitation.conversationId]?.let { it > 0L } == true) "has_messages" else "empty",
                 lastActivityTimestamp = lastActivityByConversation[invitation.conversationId] ?: 0L,
@@ -374,8 +391,8 @@ class AndroidMessagingRepository(
         }.sortedWith(compareByDescending<SavedConversationSummary> { it.lastActivityTimestamp }.thenBy { it.conversationHash })
     }
 
-    /** Reopens only a persisted, identity-pinned conversation selected by its non-secret stable hash. */
-    suspend fun selectSavedTrustedConversation(
+    /** Reopens a persisted, identity-pinned conversation; verification remains a separate local decision. */
+    suspend fun selectSavedConversation(
         conversationHash: String,
         onMessage: (AndroidChatMessage) -> Unit,
         onPeerIdentityPending: (String, String) -> Unit,
@@ -383,8 +400,8 @@ class AndroidMessagingRepository(
         val saved = stateStore.list("conversation").map { (_, bytes) ->
             try { parseInvitation(bytes.decodeToString()) } finally { bytes.fill(0) }
         }
-        val invitation = SavedConversationIndex.selectTrusted(conversationHash, saved)
-            ?: error("Saved trusted conversation is unavailable")
+        val invitation = SavedConversationIndex.selectPinned(conversationHash, saved)
+            ?: error("Saved conversation is unavailable")
         connect(invitation, invitation.peerIdentityReference, onMessage, onPeerIdentityPending)
         return invitation
     }

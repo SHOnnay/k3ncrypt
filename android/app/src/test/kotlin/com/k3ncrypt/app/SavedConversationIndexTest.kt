@@ -8,14 +8,14 @@ import org.junit.Test
 
 class SavedConversationIndexTest {
     @Test
-    fun selectsOnlyTheTrustedConversationMatchingItsStableHash() {
-        val trusted = invitation("trusted-room", "peer-route", "K3 verified-peer")
+    fun selectsOnlyThePinnedConversationMatchingItsStableHash() {
+        val pinned = invitation("pinned-room", "peer-route", "K3 observed-peer")
         val pending = invitation("pending-room", "", "")
-        val otherTrusted = invitation("other-room", "other-route", "K3 other-peer")
+        val otherPinned = invitation("other-room", "other-route", "K3 other-peer")
 
-        val hash = SavedConversationIndex.hash(trusted.conversationId)
-        assertEquals(trusted, SavedConversationIndex.selectTrusted(hash, listOf(pending, otherTrusted, trusted)))
-        assertNull(SavedConversationIndex.selectTrusted(SavedConversationIndex.hash(pending.conversationId), listOf(pending)))
+        val hash = SavedConversationIndex.hash(pinned.conversationId)
+        assertEquals(pinned, SavedConversationIndex.selectPinned(hash, listOf(pending, otherPinned, pinned)))
+        assertNull(SavedConversationIndex.selectPinned(SavedConversationIndex.hash(pending.conversationId), listOf(pending)))
     }
 
     @Test

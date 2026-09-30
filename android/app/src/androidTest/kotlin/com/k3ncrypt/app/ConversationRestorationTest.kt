@@ -43,13 +43,13 @@ class ConversationRestorationTest {
             val invitations = restored.list("conversation").map { (_, bytes) ->
                 try { decode(bytes.decodeToString()) } finally { bytes.fill(0) }
             }
-            val selected = SavedConversationIndex.selectTrusted(
+            val selected = SavedConversationIndex.selectPinned(
                 SavedConversationIndex.hash(trusted.conversationId),
                 invitations,
             )
 
             assertEquals(trusted, selected)
-            assertNull(SavedConversationIndex.selectTrusted(SavedConversationIndex.hash(pending.conversationId), invitations))
+            assertNull(SavedConversationIndex.selectPinned(SavedConversationIndex.hash(pending.conversationId), invitations))
             assertEquals(pending.conversationId, restored.read("conversation-active", "selected")!!.decodeToString())
             val savedSession = requireNotNull(restored.read("session", trusted.peerRoutingId))
             try { assertTrue(savedSession.isNotEmpty()) } finally { savedSession.fill(0) }
