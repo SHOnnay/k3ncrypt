@@ -2,6 +2,8 @@
 
 **Scope:** future design. Existing beta behavior and verification rules are unchanged.
 
+The detailed recommended ceremony and security gates are in [verification ceremony design](verification-ceremony-design.md).
+
 ```mermaid
 stateDiagram-v2
   [*] --> InviteReady: creator publishes room and pre-keys
