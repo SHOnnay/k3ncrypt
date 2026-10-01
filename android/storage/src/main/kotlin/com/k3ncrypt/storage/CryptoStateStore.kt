@@ -7,6 +7,7 @@ data class SessionState(val sessionId: String, val pickle: ByteArray)
 data class LifecycleMetadata(val accountReference: String, val deviceId: String, val identityReference: String, val epoch: Long, val state: String)
 data class StoredMessage(val deliveryId: String, val conversationId: String, val senderRoutingId: String, val text: String, val receivedAt: Long)
 data class StoredOutboundMessage(val clientMessageId: String, val conversationId: String, val senderRoutingId: String, val peerRoutingId: String, val text: String, val createdAt: Long)
+data class SecureStateWrite(val namespace: String, val recordId: String, val bytes: ByteArray, val expected: ByteArray? = null)
 enum class InboundCommitResult { STORED, DUPLICATE }
 
 /** Encrypted Room adapter. Security state, message bytes, and dedupe markers commit together. */
@@ -88,6 +89,51 @@ class CryptoStateStore(private val database: K3ncryptSecureDatabase, private val
         InboundCommitResult.STORED
     }
 
+    /**
+     * Atomically accepts an authenticated non-chat control frame with its ratchet,
+     * envelope replay marker, peer metadata and control-event replay marker.
+     */
+    suspend fun commitInboundControl(
+        accountId: String,
+        accountPickle: String,
+        session: SessionState,
+        digest: String,
+        deliveryId: String,
+        writes: List<SecureStateWrite>,
+        replayNamespace: String,
+        replayRecordId: String,
+        replayValue: ByteArray,
+    ): InboundCommitResult = database.withTransaction {
+        val records = database.records()
+        if (records.get("inbound-digest", digest) != null) return@withTransaction InboundCommitResult.DUPLICATE
+        val priorDelivery = records.get("inbound-delivery", deliveryId)
+        check(priorDelivery == null) { "Mailbox delivery identifier conflicts with stored state" }
+        val replay = records.get(replayNamespace, replayRecordId)
+        if (replay != null) {
+            val previous = open(replay)
+            try {
+                if (previous.contentEquals(replayValue)) return@withTransaction InboundCommitResult.DUPLICATE
+            } finally { previous.fill(0) }
+            error("Control frame replay rejected")
+        }
+        for (write in writes) {
+            val currentRecord = records.get(write.namespace, write.recordId)
+            val current = currentRecord?.let(::open)
+            try {
+                check(if (write.expected == null) currentRecord == null else current?.contentEquals(write.expected) == true) {
+                    "Control metadata changed before acceptance"
+                }
+            } finally { current?.fill(0) }
+        }
+        records.put(seal("account", accountId, accountPickle.encodeToByteArray()))
+        records.put(seal("session", session.sessionId, session.pickle))
+        records.put(seal("inbound-digest", digest, deliveryId.encodeToByteArray()))
+        records.put(seal("inbound-delivery", deliveryId, digest.encodeToByteArray()))
+        writes.forEach { records.put(seal(it.namespace, it.recordId, it.bytes)) }
+        records.put(seal(replayNamespace, replayRecordId, replayValue))
+        InboundCommitResult.STORED
+    }
+
     suspend fun commitOutbound(accountId: String, accountPickle: String, session: SessionState, clientMessageId: String, encryptedEnvelope: String, message: StoredOutboundMessage) {
         database.withTransaction {
             val records = database.records()
@@ -96,6 +142,23 @@ class CryptoStateStore(private val database: K3ncryptSecureDatabase, private val
             records.put(seal("session", session.sessionId, session.pickle))
             records.put(seal("outbox", clientMessageId, JSONObject().put("conversationId", message.conversationId).put("peerRoutingId", message.peerRoutingId).put("envelope", encryptedEnvelope).toString().encodeToByteArray()))
             records.put(seal("outbound-message", clientMessageId, JSONObject().put("clientMessageId", clientMessageId).put("conversationId", message.conversationId).put("senderRoutingId", message.senderRoutingId).put("peerRoutingId", message.peerRoutingId).put("text", message.text).put("createdAt", message.createdAt).toString().encodeToByteArray()))
+        }
+    }
+
+    suspend fun commitControlOutbound(accountId: String, accountPickle: String, session: SessionState, conversationId: String, serializedEnvelope: ByteArray) {
+        database.withTransaction {
+            val records = database.records()
+            records.put(seal("account", accountId, accountPickle.encodeToByteArray()))
+            records.put(seal("session", session.sessionId, session.pickle))
+            records.put(seal("join-introduction-outbox", conversationId, serializedEnvelope))
+        }
+    }
+
+    suspend fun finishControlOutbound(conversationId: String) {
+        database.withTransaction {
+            val records = database.records()
+            records.remove("join-introduction-outbox", conversationId)
+            records.remove("join-introduction-pending", conversationId)
         }
     }
 

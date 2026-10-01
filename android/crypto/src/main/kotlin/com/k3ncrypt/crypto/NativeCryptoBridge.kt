@@ -17,6 +17,7 @@ class NativeCryptoBridge : CryptoPort {
     private external fun nativeSaveAccount(account: Long, pickleKey: ByteArray): String
     private external fun nativeIdentityKeys(account: Long): String
     private external fun nativeSignControlEvent(account: Long, payload: ByteArray): String
+    private external fun nativeVerifyIdentitySignature(publicKey: String, payload: ByteArray, signature: String): Boolean
     private external fun nativeGenerateOneTimeKeys(account: Long, count: Int)
     private external fun nativeOneTimeKeys(account: Long): String
     private external fun nativeGenerateFallbackKey(account: Long)
@@ -36,6 +37,12 @@ class NativeCryptoBridge : CryptoPort {
     override fun saveAccount(account: AccountHandle, pickleKey: ByteArray) = nativeSaveAccount(account.value, pickleKey)
     override fun identityKeys(account: AccountHandle): PublicIdentity = JSONObject(nativeIdentityKeys(account.value)).let { PublicIdentity(it.getString("curve25519"), it.getString("ed25519")) }
     override fun signControlEvent(account: AccountHandle, canonicalPayload: ByteArray) = nativeSignControlEvent(account.value, canonicalPayload)
+    override fun verifyIdentitySignature(ed25519PublicKey: String, canonicalPayload: ByteArray, signature: String): Boolean {
+        require(canonicalPayload.size <= 16 * 1024) { "Signature payload is too large" }
+        val key = toNativeBase64(ed25519PublicKey, expectedBytes = 32)
+        val encodedSignature = toNativeBase64(signature, expectedBytes = 64)
+        return nativeVerifyIdentitySignature(key, canonicalPayload, encodedSignature)
+    }
     override fun generateOneTimeKeys(account: AccountHandle, count: Int) = nativeGenerateOneTimeKeys(account.value, count)
     override fun oneTimeKeys(account: AccountHandle): List<String> = JSONArray(nativeOneTimeKeys(account.value)).let { values -> List(values.length()) { values.getString(it) } }
     override fun generateFallbackKey(account: AccountHandle) = nativeGenerateFallbackKey(account.value)
@@ -52,4 +59,20 @@ class NativeCryptoBridge : CryptoPort {
     override fun loadSession(serialized: ByteArray) = SessionHandle(nativeLoadSession(serialized))
     override fun closeAccount(account: AccountHandle) = nativeCloseAccount(account.value)
     override fun closeSession(session: SessionHandle) = nativeCloseSession(session.value)
+
+    private fun toNativeBase64(value: String, expectedBytes: Int): String {
+        require(value.isNotEmpty() && value.length <= 90 && value.matches(Regex("[A-Za-z0-9_+/=-]+"))) { "Invalid signature encoding" }
+        val unpadded = value.trimEnd('=')
+        val padding = value.length - unpadded.length
+        require(padding <= 2 && '=' !in unpadded) { "Invalid signature encoding" }
+        require(!(("+" in unpadded || "/" in unpadded) && ("-" in unpadded || "_" in unpadded))) { "Invalid signature encoding" }
+        val expectedPadding = when (expectedBytes % 3) { 1 -> 2; 2 -> 1; else -> 0 }
+        require(padding == 0 || padding == expectedPadding) { "Invalid signature encoding" }
+        val urlSafe = unpadded.replace('+', '-').replace('/', '_')
+        val bytes = android.util.Base64.decode(urlSafe, android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP or android.util.Base64.NO_PADDING)
+        require(bytes.size == expectedBytes && android.util.Base64.encodeToString(bytes, android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP or android.util.Base64.NO_PADDING) == urlSafe) {
+            "Invalid signature encoding"
+        }
+        return android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP or android.util.Base64.NO_PADDING)
+    }
 }

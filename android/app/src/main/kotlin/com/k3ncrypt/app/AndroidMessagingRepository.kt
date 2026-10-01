@@ -7,6 +7,10 @@ import com.k3ncrypt.messaging.ConversationSessionStore
 import com.k3ncrypt.messaging.DeliveryAcceptance
 import com.k3ncrypt.messaging.DeviceTrustVerifier
 import com.k3ncrypt.messaging.InboundMessageProcessor
+import com.k3ncrypt.messaging.AuthenticatedControlFrameHandler
+import com.k3ncrypt.messaging.InboundControlAcceptance
+import com.k3ncrypt.messaging.JoinIntroduction
+import com.k3ncrypt.messaging.JoinIntroductionFrame
 import com.k3ncrypt.messaging.MailboxDelivery
 import com.k3ncrypt.messaging.MessageFrame
 import com.k3ncrypt.messaging.PickleKeyProvider
@@ -28,6 +32,7 @@ import com.k3ncrypt.security.ProofResource
 import com.k3ncrypt.storage.CryptoStateStore
 import com.k3ncrypt.storage.PickleKeyVault
 import com.k3ncrypt.storage.SessionState
+import com.k3ncrypt.storage.SecureStateWrite
 import com.k3ncrypt.storage.StoredOutboundMessage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -95,7 +100,6 @@ class AndroidMessagingRepository(
     private var observer: ((AndroidChatMessage) -> Unit)? = null
     private var peerIdentityObserver: ((String, String) -> Unit)? = null
     @Volatile private var callSignalObserver: ((String) -> Unit)? = null
-    private val firstContactCandidates = ConcurrentHashMap<String, String>()
 
     suspend fun profileDisplayName(): String = stateStore.read("profile", "display-name")?.let { bytes ->
         try { bytes.decodeToString() } finally { bytes.fill(0) }
@@ -132,7 +136,10 @@ class AndroidMessagingRepository(
                 }
                 val binding = conversation?.takeIf(SavedConversationIndex::hasPinnedPeer) ?: return@collect
                 if (BuildConfig.DEBUG) DebugInspectionStore.setConnectionStage("relay_rejoin_started")
-                runCatching { ensureCallRelayJoined(binding) }
+                runCatching {
+                    ensureCallRelayJoined(binding)
+                    sendPendingJoinIntroduction(binding)
+                }
                     .onSuccess { if (BuildConfig.DEBUG) DebugInspectionStore.setConnectionStage("relay_rejoined") }
                     .onFailure { if (BuildConfig.DEBUG) DebugInspectionStore.setConnectionStage("relay_rejoin_failed") }
             }
@@ -190,7 +197,7 @@ class AndroidMessagingRepository(
         if (relay.isJoinedTo(binding.conversationId)) return@withLock
         val local = identity.activeState()
         val proof = proofs.acquire(identity.activeAccount(), local.toProofIdentity(), "relay:message", ProofResource(conversationId = binding.conversationId))
-        relay.joinAndReplay(RelayJoin(binding.localRoutingId, binding.conversationId, binding.controlCapability, binding.routingProof, proof))
+        relay.joinAndReplay(RelayJoin(binding.localRoutingId, binding.conversationId, binding.controlCapability, binding.routingProof, proof, listOf("join-introduction-v1")))
     }
 
     /** Reasserts the existing proof-backed channel registration when the app resumes. */
@@ -282,21 +289,19 @@ class AndroidMessagingRepository(
         } finally { plaintext?.fill(0) }
     }
 
-    /** Creates a local conversation only from an existing authenticated invitation and pinned peer identity. */
-    suspend fun createConversation(invitation: ConversationInvitation, userConfirmedPeerFingerprint: String?): ConversationInvitation {
+    /** Creates a local conversation from a validated invitation; the peer route may arrive in its signed introduction. */
+    suspend fun createConversation(invitation: ConversationInvitation): ConversationInvitation {
         validateInvitation(invitation)
         if (invitation.peerRoutingId.isNotEmpty()) {
-            require(userConfirmedPeerFingerprint == invitation.peerIdentityReference) { "Peer identity confirmation did not match" }
-            VodozemacBundleCodec.parse(api.fetchPrekeys(invitation.conversationId, invitation.controlCapability, invitation.peerRoutingId), userConfirmedPeerFingerprint)
-        } else require(userConfirmedPeerFingerprint == null && invitation.peerIdentityReference.isEmpty())
+            VodozemacBundleCodec.parse(api.fetchPrekeys(invitation.conversationId, invitation.controlCapability, invitation.peerRoutingId), invitation.peerIdentityReference)
+        } else require(invitation.peerIdentityReference.isEmpty())
         val existing = stateStore.read("conversation", invitation.conversationId)
         if (existing != null) {
             val restored = parseInvitation(existing.decodeToString())
-            val isExplicitFirstContactPin = restored.peerRoutingId.isEmpty() && invitation.peerRoutingId.isNotEmpty() &&
-                restored.copy(peerRoutingId = invitation.peerRoutingId, peerIdentityReference = invitation.peerIdentityReference) == invitation &&
-                firstContactCandidates[invitation.peerRoutingId] == invitation.peerIdentityReference
-            require(restored == invitation || isExplicitFirstContactPin) { "Conversation identity or routing changed" }
-            if (isExplicitFirstContactPin) {
+            val isInvitationRouteMerge = restored.peerRoutingId.isEmpty() && invitation.peerRoutingId.isNotEmpty() &&
+                restored.copy(peerRoutingId = invitation.peerRoutingId, peerIdentityReference = invitation.peerIdentityReference) == invitation
+            require(restored == invitation || isInvitationRouteMerge) { "Conversation identity or routing changed" }
+            if (isInvitationRouteMerge) {
                 stateStore.write("conversation", invitation.conversationId, invitationJson(invitation).toString().encodeToByteArray())
                 selectActiveConversation(invitation.conversationId)
                 return invitation
@@ -310,14 +315,14 @@ class AndroidMessagingRepository(
     }
 
     /** Authenticates relay admission, installs the receive handler, then asks for mailbox replay. */
-    suspend fun connect(invitation: ConversationInvitation, userConfirmedPeerFingerprint: String?, onMessage: (AndroidChatMessage) -> Unit, onPeerIdentityPending: (String, String) -> Unit = { _, _ -> }) {
+    suspend fun connect(invitation: ConversationInvitation, onMessage: (AndroidChatMessage) -> Unit, onPeerIdentityPending: (String, String) -> Unit = { _, _ -> }) {
         var stage = "publish_prekeys"
         DebugInspectionStore.setConnectionStage(stage)
         try {
             val localPublication = identity.publishPrekeys(invitation.conversationId, invitation.controlCapability)
             require(localPublication.getString("address") == invitation.localRoutingId) { "Local routing identity does not match this device's published pre-key bundle" }
             stage = "conversation_validation"; DebugInspectionStore.setConnectionStage(stage)
-            val binding = createConversation(invitation, userConfirmedPeerFingerprint)
+            val binding = createConversation(invitation)
             mutex.withLock { conversation = binding; observer = onMessage; peerIdentityObserver = onPeerIdentityPending }
             stage = "relay_connect"; DebugInspectionStore.setConnectionStage(stage)
             if (!relay.connected.value) relay.connect()
@@ -328,6 +333,7 @@ class AndroidMessagingRepository(
             ensureCallRelayJoined(binding)
             stage = "joined"; DebugInspectionStore.setConnectionStage(stage)
             mutex.withLock { retryPending(binding) }
+            sendPendingJoinIntroduction(binding)
         } catch (error: Throwable) {
             val category = when {
                 error.message?.startsWith("request-rejected-") == true -> "http_rejected"
@@ -340,7 +346,7 @@ class AndroidMessagingRepository(
         }
     }
 
-    /** Creates a private room invitation. First-contact message acceptance stays blocked until the user confirms its fingerprint. */
+    /** Creates a private room invitation. A joined peer remains unverified until explicit fingerprint confirmation. */
     suspend fun createNewConversation(onMessage: (AndroidChatMessage) -> Unit, onPeerIdentityPending: (String, String) -> Unit): ConversationInvitation {
         val randomCapability = ByteArray(32).also(SecureRandom()::nextBytes)
         val capability = Base64.getUrlEncoder().withoutPadding().encodeToString(randomCapability)
@@ -349,8 +355,13 @@ class AndroidMessagingRepository(
         val conversationId = api.createChatLink(capabilityHash).getString("hash")
         val local = identity.publishPrekeys(conversationId, capability)
         val invitation = ConversationInvitation(conversationId, local.getString("address"), "", "", capability, local.getString("renewalProof"))
-        connect(invitation, null, onMessage, onPeerIdentityPending)
+        connect(invitation, onMessage, onPeerIdentityPending)
         return invitation
+    }
+
+    suspend fun prepareInvitationJoin(invitation: ConversationInvitation) {
+        require(invitation.peerRoutingId.isNotBlank() && invitation.peerIdentityReference.isNotBlank())
+        stateStore.write("join-introduction-pending", invitation.conversationId, byteArrayOf(1))
     }
 
     suspend fun restoreConversation(): ConversationInvitation? {
@@ -402,16 +413,8 @@ class AndroidMessagingRepository(
         }
         val invitation = SavedConversationIndex.selectPinned(conversationHash, saved)
             ?: error("Saved conversation is unavailable")
-        connect(invitation, invitation.peerIdentityReference, onMessage, onPeerIdentityPending)
+        connect(invitation, onMessage, onPeerIdentityPending)
         return invitation
-    }
-
-    suspend fun confirmFirstContact(route: String, fingerprint: String, onMessage: (AndroidChatMessage) -> Unit, onPeerIdentityPending: (String, String) -> Unit) {
-        require(firstContactCandidates[route] == fingerprint) { "Peer identity confirmation did not match the observed key" }
-        val current = conversation ?: error("No conversation is active")
-        require(current.peerRoutingId.isEmpty()) { "Conversation already has a pinned peer" }
-        connect(current.copy(peerRoutingId = route, peerIdentityReference = fingerprint), fingerprint, onMessage, onPeerIdentityPending)
-        firstContactCandidates.remove(route)
     }
 
     suspend fun sendText(text: String): String {
@@ -427,7 +430,7 @@ class AndroidMessagingRepository(
 
     private suspend fun sendTextInternal(text: String, setStage: (String) -> Unit): String = mutex.withLock {
         val binding = conversation ?: error("Conversation is not connected")
-        require(binding.peerRoutingId.isNotEmpty()) { "Confirm the peer identity before sending" }
+        require(binding.peerRoutingId.isNotEmpty()) { "The contact route is not available yet" }
         require(text.isNotBlank() && text.toByteArray(Charsets.UTF_8).size <= 64 * 1024) { "Message is empty or too large" }
         val local = identity.activeState()
         val account = identity.activeAccount()
@@ -486,28 +489,73 @@ class AndroidMessagingRepository(
         }
     }
 
+    /** Sends only the existing signed/encrypted join-introduction frame; it never changes local trust. */
+    private suspend fun sendPendingJoinIntroduction(binding: ConversationInvitation) = mutex.withLock {
+        if (binding.peerRoutingId.isBlank() || !relay.peerSupportsFeature("join-introduction-v1")) return@withLock
+        val pending = stateStore.read("join-introduction-pending", binding.conversationId)
+        val storedOutbox = stateStore.read("join-introduction-outbox", binding.conversationId)
+        if (pending == null && storedOutbox == null) return@withLock
+        var serialized = storedOutbox
+        if (serialized == null) {
+            val local = identity.activeState()
+            val account = identity.activeAccount()
+            val identityKeys = crypto.identityKeys(account)
+            val eventId = UUID.randomUUID().toString()
+            val unsigned = JoinIntroduction(1, eventId, binding.conversationId, binding.localRoutingId, local.deviceIdentityReference, System.currentTimeMillis(), "")
+            val signature = crypto.signControlEvent(account, JoinIntroductionFrame.canonicalPayload(unsigned))
+            val signatureUrl = Base64.getUrlEncoder().withoutPadding().encodeToString(Base64.getDecoder().decode(signature))
+            val event = unsigned.copy(signature = signatureUrl)
+            require(IdentityFingerprint.generate(identityKeys) == local.deviceIdentityReference)
+            val frame = MessageFrame.encodeControl(JoinIntroductionFrame.encode(event))
+            var mutated = false
+            try {
+                val session = sessions.existing(binding.peerRoutingId) ?: newOutboundSession(binding)
+                val olm = crypto.encrypt(session, frame)
+                mutated = true
+                val envelope = JSONObject().put("version", 2).put("strategy", "vodozemac-olm-v1")
+                    .put("data", JSONObject().put("version", 1).put("olmMessage", olm)).toString()
+                val outbox = JSONObject().put("eventId", eventId).put("envelope", envelope).toString().encodeToByteArray()
+                val pickleKey = pickleKeys.load(local.deviceIdentityReference)
+                try {
+                    val accountPickle = crypto.saveAccount(account, pickleKey)
+                    val sessionPickle = crypto.saveSession(session)
+                    try { stateStore.commitControlOutbound(local.deviceIdentityReference, accountPickle, SessionState(binding.peerRoutingId, sessionPickle), binding.conversationId, outbox) }
+                    finally { sessionPickle.fill(0); outbox.fill(0) }
+                } finally { pickleKey.fill(0) }
+                sessions.remember(binding.peerRoutingId, session)
+                serialized = stateStore.read("join-introduction-outbox", binding.conversationId)
+            } catch (error: Throwable) {
+                if (mutated && stateStore.read("join-introduction-outbox", binding.conversationId) == null) invalidateAfterMutation()
+                throw error
+            } finally { frame.fill(0) }
+        }
+        val payload = try { JSONObject(serialized!!.decodeToString()) } finally { serialized?.fill(0) }
+        val local = identity.activeState()
+        val proof = proofs.acquire(identity.activeAccount(), local.toProofIdentity(), "relay:message", ProofResource(conversationId = binding.conversationId))
+        relay.sendEnvelopeAwait(payload.getString("envelope"), binding.peerRoutingId, proof)
+        stateStore.finishControlOutbound(binding.conversationId)
+        pending?.fill(0)
+    }
+
     private suspend fun receive(binding: ConversationInvitation, item: com.k3ncrypt.network.RelayDelivery): Boolean = mutex.withLock {
         try {
-            if (binding.peerRoutingId.isEmpty()) {
-                if (BuildConfig.DEBUG) DebugInspectionStore.setDeliveryStage("trust-check")
-                require(item.sender.matches(Regex("[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")))
-                val candidate = VodozemacBundleCodec.parse(api.fetchPrekeys(binding.conversationId, binding.controlCapability, item.sender), null)
-                val fingerprint = IdentityFingerprint.generate(candidate.identity)
-                firstContactCandidates[item.sender] = fingerprint
-                peerIdentityObserver?.invoke(item.sender, fingerprint)
-                return@withLock false
-            }
+            val unpinnedConversation = binding.peerRoutingId.isEmpty()
+            require(!unpinnedConversation || item.sender.matches(Regex("[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")))
             val current = identity.activeState()
             val account = identity.activeAccount()
             val resolver = SenderBundleResolver { sender ->
-                require(sender == binding.peerRoutingId) { "Unknown conversation sender" }
-                val remote = VodozemacBundleCodec.parse(api.fetchPrekeys(binding.conversationId, binding.controlCapability, sender), binding.peerIdentityReference)
-                SenderBundle(remote.identity.curve25519)
+                require(unpinnedConversation || sender == binding.peerRoutingId) { "Unknown conversation sender" }
+                val remote = VodozemacBundleCodec.parse(api.fetchPrekeys(binding.conversationId, binding.controlCapability, sender), binding.peerIdentityReference.takeIf(String::isNotEmpty))
+                SenderBundle(remote.identity.curve25519, remote.identity.ed25519)
             }
             val trust = DeviceTrustVerifier { sender, senderIdentity ->
-                require(sender == binding.peerRoutingId) { "Unknown sender route" }
-                val remote = VodozemacBundleCodec.parse(api.fetchPrekeys(binding.conversationId, binding.controlCapability, sender), binding.peerIdentityReference)
-                require(remote.identity.curve25519 == senderIdentity && IdentityFingerprint.generate(remote.identity) == binding.peerIdentityReference) { "Sender identity mismatch" }
+                if (unpinnedConversation) {
+                    require(sender == item.sender && senderIdentity.isNotBlank()) { "Introduction sender is invalid" }
+                } else {
+                    require(sender == binding.peerRoutingId) { "Unknown sender route" }
+                    val remote = VodozemacBundleCodec.parse(api.fetchPrekeys(binding.conversationId, binding.controlCapability, sender), binding.peerIdentityReference)
+                    require(remote.identity.curve25519 == senderIdentity && IdentityFingerprint.generate(remote.identity) == binding.peerIdentityReference) { "Sender identity mismatch" }
+                }
             }
             val processor = InboundMessageProcessor(
                 account = account,
@@ -519,11 +567,38 @@ class AndroidMessagingRepository(
                 sessions = sessions,
                 pickleKeys = PickleKeyProvider { pickleKeys.load(current.deviceIdentityReference) },
                 invalidator = VolatileCryptoStateInvalidator { invalidateAfterMutation() },
+                controlFrameHandler = AuthenticatedControlFrameHandler { delivery, payload, senderBundle ->
+                    val event = JoinIntroductionFrame.parse(payload) ?: return@AuthenticatedControlFrameHandler null
+                    require(unpinnedConversation) { "A pinned conversation cannot be rebound by an introduction" }
+                    require(delivery.conversationId == binding.conversationId && event.conversationId == binding.conversationId && event.senderAddress == delivery.senderRoutingId)
+                    val remote = VodozemacBundleCodec.parse(api.fetchPrekeys(binding.conversationId, binding.controlCapability, delivery.senderRoutingId), null)
+                    require(remote.identity.curve25519 == senderBundle.senderIdentityKey && remote.identity.ed25519 == senderBundle.senderEd25519Key)
+                    val fingerprint = IdentityFingerprint.generate(remote.identity)
+                    require(event.identityCommitment == fingerprint)
+                    require(crypto.verifyIdentitySignature(remote.identity.ed25519, JoinIntroductionFrame.canonicalPayload(event), event.signature))
+                    val existingBytes = stateStore.read("conversation", binding.conversationId) ?: error("Invitation conversation is missing")
+                    val restored = parseInvitation(existingBytes.decodeToString())
+                    require(restored == binding && restored.peerRoutingId.isEmpty() && restored.peerIdentityReference.isEmpty()) { "Conversation was already associated with another identity" }
+                    val discovered = restored.copy(peerRoutingId = delivery.senderRoutingId, peerIdentityReference = fingerprint)
+                    InboundControlAcceptance(
+                        writes = listOf(SecureStateWrite("conversation", binding.conversationId, invitationJson(discovered).toString().encodeToByteArray(), existingBytes)),
+                        replayNamespace = "join-introduction-seen",
+                        replayRecordId = binding.conversationId,
+                        replayValue = event.eventId.encodeToByteArray(),
+                    )
+                },
+                requireControlFrame = unpinnedConversation,
                 diagnosticStage = { stage -> if (BuildConfig.DEBUG) DebugInspectionStore.setDeliveryStage(stage) },
             )
             when (val result = processor.receive(MailboxDelivery(item.id, item.sender, item.envelope, item.conversationId))) {
                 DeliveryAcceptance.Accepted -> {
                     if (BuildConfig.DEBUG) DebugInspectionStore.setInboundMessageResultCategory("accepted")
+                    if (unpinnedConversation) {
+                        val bytes = stateStore.read("conversation", binding.conversationId) ?: error("Accepted contact metadata is missing")
+                        val discovered = try { parseInvitation(bytes.decodeToString()) } finally { bytes.fill(0) }
+                        conversation = discovered
+                        peerIdentityObserver?.invoke(discovered.peerRoutingId, discovered.peerIdentityReference)
+                    }
                     stateStore.messages().lastOrNull { it.deliveryId == item.id }?.let { observer?.invoke(AndroidChatMessage(it.deliveryId, it.conversationId, it.senderRoutingId, it.text, it.receivedAt)) }
                     true
                 }

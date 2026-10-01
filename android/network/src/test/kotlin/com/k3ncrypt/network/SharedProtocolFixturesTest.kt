@@ -77,6 +77,26 @@ class SharedProtocolFixturesTest {
         }
     }
 
+    @Test fun `readiness fixture fixes identity commitment and join introduction bytes without SAS`() {
+        val fixture = sharedFixture("verification-readiness.json")
+        val identity = fixture.getJSONObject("identity")
+        assertEquals(identity.getString("fingerprint"), com.k3ncrypt.crypto.IdentityFingerprint.generate(
+            com.k3ncrypt.crypto.PublicIdentity(identity.getString("curve25519"), identity.getString("ed25519")),
+        ))
+        val vector = fixture.getJSONObject("signatureVector")
+        val canonicalFromEvent = vector.getString("eventJson").replace(Regex(",\"signature\":\"[A-Za-z0-9_-]{86}\"}$"), "}")
+        assertEquals(vector.getString("canonicalPayload"), canonicalFromEvent)
+        assertTrue(verify(identity.getString("ed25519"), vector.getString("signatureBase64Url"), vector.getString("canonicalPayload")))
+        assertFalse(verify(identity.getString("ed25519"), vector.getString("signatureBase64Url"), vector.getString("canonicalPayload") + "!"))
+        assertFalse(fixture.getBoolean("sasProtocolImplemented"))
+        assertFalse(fixture.getJSONObject("capabilities").getJSONObject("currentRelayHint").getBoolean("authenticated"))
+        val pairings = fixture.getJSONArray("pairings")
+        assertEquals(4, pairings.length())
+        assertEquals(setOf("Web→Web", "Android→Android", "Web→Android", "Android→Web"),
+            (0 until pairings.length()).map { pairings.getJSONObject(it).getString("sender") + "→" + pairings.getJSONObject(it).getString("receiver") }.toSet())
+        (0 until pairings.length()).forEach { assertTrue(pairings.getJSONObject(it).isNull("sasExpected")) }
+    }
+
     private fun verify(publicKey: String, signature: String, payload: String): Boolean {
         val prefix = byteArrayOf(0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00)
         val rawKey = Base64.getUrlDecoder().decode(publicKey)

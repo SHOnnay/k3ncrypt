@@ -13,6 +13,8 @@ interface CryptoPort {
     fun saveAccount(account: AccountHandle, pickleKey: ByteArray): String
     fun identityKeys(account: AccountHandle): PublicIdentity
     fun signControlEvent(account: AccountHandle, canonicalPayload: ByteArray): String
+    /** Verify an Ed25519 identity signature without relying on Android provider availability. */
+    fun verifyIdentitySignature(ed25519PublicKey: String, canonicalPayload: ByteArray, signature: String): Boolean
     fun generateOneTimeKeys(account: AccountHandle, count: Int)
     fun oneTimeKeys(account: AccountHandle): List<String>
     fun generateFallbackKey(account: AccountHandle)

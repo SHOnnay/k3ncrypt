@@ -8,7 +8,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD_NO_PAD};
 use jni::{
     JNIEnv,
     objects::{JByteArray, JClass, JString},
-    sys::{jbyteArray, jlong, jstring},
+    sys::{jboolean, jbyteArray, jlong, jstring, JNI_FALSE, JNI_TRUE},
 };
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
@@ -20,7 +20,7 @@ use std::{
     },
 };
 use vodozemac::{
-    Curve25519PublicKey, base64_decode, base64_encode,
+    Curve25519PublicKey, Ed25519PublicKey, Ed25519Signature, base64_decode, base64_encode,
     olm::{Account, AccountPickle, OlmMessage, Session, SessionConfig, SessionPickle},
 };
 use zeroize::Zeroize;
@@ -255,6 +255,34 @@ pub extern "system" fn Java_com_k3ncrypt_crypto_NativeCryptoBridge_nativeSignCon
             .map(|value| value.sign(&payload).to_base64())
     })();
     java_string(&mut env, result)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_k3ncrypt_crypto_NativeCryptoBridge_nativeVerifyIdentitySignature(
+    mut env: JNIEnv,
+    _: JClass,
+    public_key: JString,
+    payload: JByteArray,
+    signature: JString,
+) -> jboolean {
+    let verified: Result<bool, String> = (|| {
+        let public_key = string(&mut env, public_key)?;
+        let payload = bytes(&mut env, payload)?;
+        let signature = string(&mut env, signature)?;
+        if payload.len() > 16 * 1024 || public_key.len() > 128 || signature.len() > 128 {
+            return Ok(false);
+        }
+        let key = Ed25519PublicKey::from_base64(&public_key);
+        let signature = Ed25519Signature::from_base64(&signature);
+        Ok(match (key, signature) {
+            (Ok(key), Ok(signature)) => key.verify(&payload, &signature).is_ok(),
+            _ => false,
+        })
+    })();
+    match verified {
+        Ok(true) => JNI_TRUE,
+        Ok(false) | Err(_) => JNI_FALSE,
+    }
 }
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_k3ncrypt_crypto_NativeCryptoBridge_nativeGenerateOneTimeKeys(
@@ -606,5 +634,30 @@ mod tests {
             alice_session.decrypt(&parse_wire(&reply).unwrap()).unwrap(),
             b"browser reply"
         );
+    }
+
+    #[test]
+    fn identity_signature_verifier_accepts_shared_vector_and_rejects_modified_bytes() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!("../../../protocol-fixtures/v1/verification-readiness.json")).unwrap();
+        let identity = &fixture["identity"];
+        let vector = &fixture["signatureVector"];
+        let normalize = |value: &str| {
+            let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(value).unwrap();
+            base64::engine::general_purpose::STANDARD_NO_PAD.encode(bytes)
+        };
+        let public_key = normalize(identity["ed25519"].as_str().unwrap());
+        let signature = normalize(vector["signatureBase64Url"].as_str().unwrap());
+        let payload = vector["canonicalPayload"].as_str().unwrap().as_bytes();
+        assert!(Ed25519PublicKey::from_base64(&public_key).unwrap().verify(payload, &Ed25519Signature::from_base64(&signature).unwrap()).is_ok());
+        assert!(Ed25519PublicKey::from_base64(&public_key).unwrap().verify(b"modified", &Ed25519Signature::from_base64(&signature).unwrap()).is_err());
+    }
+
+    #[test]
+    fn vodozemac_production_signer_output_verifies_through_identity_api_primitive() {
+        let account = Account::new();
+        let payload = b"K3NCRYPT/identity-signature-test/v1\0fixture";
+        let signature = account.sign(payload);
+        assert!(account.ed25519_key().verify(payload, &signature).is_ok());
+        assert!(account.ed25519_key().verify(b"altered", &signature).is_err());
     }
 }

@@ -48,6 +48,7 @@ android {
 
     buildFeatures { compose = true; buildConfig = true }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
+    sourceSets.getByName("androidTest").assets.srcDir(rootProject.projectDir.parentFile.resolve("protocol-fixtures/v1"))
 }
 
 dependencies {

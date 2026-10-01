@@ -1,4 +1,6 @@
 import { generateKeyPairSync, sign as ed25519Sign, webcrypto } from 'crypto';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
 import type { SecureStorage, TransportManager, EncryptedEnvelope } from '../core/contracts';
 import type { VodozemacAccountHandle } from '../identity/vodozemacIdentity';
 import type { VodozemacSessionHandle } from '../core/vodozemacCryptoSession';
@@ -150,6 +152,23 @@ const receiveFirstMessage = (conversation: ModernConversation, envelope: Encrypt
     (conversation as unknown as { receive: (value: EncryptedEnvelope, sender: string) => Promise<boolean> }).receive(envelope, senderAddress);
 
 beforeEach(() => { jest.clearAllMocks(); outboundSessionCreations = 0; inboundSessionCreations = 0; sessionDecryptions = 0; decryptedBytes = undefined; });
+
+it('verifies the shared readiness signature vector through the Web join-introduction verifier', async () => {
+    const fixture = JSON.parse(readFileSync(resolve(__dirname, '../../../protocol-fixtures/v1/verification-readiness.json'), 'utf8')) as {
+        identity: { ed25519: string };
+        signatureVector: { canonicalPayload: string; eventJson: string };
+    };
+    const event = JSON.parse(fixture.signatureVector.eventJson) as {
+        version: 1; type: 'join-introduction'; eventId: string; conversationId: string; senderAddress: string;
+        identityCommitment: string; createdAt: number; signature: string;
+    };
+    const verifier = new ModernConversation(new Storage(), loader, fakeTransport().transport) as unknown as {
+        verifyJoinIntroductionSignature: (value: typeof event, publicKey: string) => Promise<boolean>;
+    };
+
+    await expect(verifier.verifyJoinIntroductionSignature(event, fixture.identity.ed25519)).resolves.toBe(true);
+    await expect(verifier.verifyJoinIntroductionSignature({ ...event, createdAt: event.createdAt + 1 }, fixture.identity.ed25519)).resolves.toBe(false);
+});
 
 it('registers and removes the existing relay peer-disconnect observer', () => {
     const conversation = new ModernConversation(new Storage(), loader, fakeTransport().transport);

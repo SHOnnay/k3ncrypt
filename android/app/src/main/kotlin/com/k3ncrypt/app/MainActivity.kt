@@ -363,8 +363,6 @@ private fun IdentityAndConversationScreen(
     var savedConversations by remember { mutableStateOf<List<SavedConversationSummary>>(emptyList()) }
     val allStoredMessages = remember { mutableStateListOf<AndroidChatMessage>() }
     var outgoingInvite by remember { mutableStateOf("") }
-    var pendingPeer by remember { mutableStateOf<Pair<String, String>?>(null) }
-    var showPeerComparison by remember { mutableStateOf(false) }
     var draft by remember { mutableStateOf("") }
     val chatMessages = remember { mutableStateListOf<AndroidChatMessage>() }
     var messageStatus by remember { mutableStateOf("") }
@@ -375,7 +373,7 @@ private fun IdentityAndConversationScreen(
             invitationInput = scanned
             selectedTab = "add-contact"
             showNewConversation = true
-            status = "Invitation scanned. Compare the security code before joining."
+            status = "Invitation scanned. Joining adds an unverified contact; you can verify them afterward."
         } else {
             status = "This QR code is not a valid K3NCRYPT invitation."
         }
@@ -435,7 +433,7 @@ private fun IdentityAndConversationScreen(
         }
     }
 
-    LaunchedEffect(conversation?.conversationId, conversation?.peerIdentityReference, conversation?.peerRoutingId, pendingPeer?.second, status, messageStatus, chatMessages.size) {
+    LaunchedEffect(conversation?.conversationId, conversation?.peerIdentityReference, conversation?.peerRoutingId, status, messageStatus, chatMessages.size) {
         val bindingAtRead = conversation
         val verificationAtRead = runCatching { messaging.activeContactVerification() }.getOrDefault(ContactVerificationState.CONTACT_CREATED)
         if (conversation == bindingAtRead) {
@@ -463,9 +461,13 @@ private fun IdentityAndConversationScreen(
     }
     fun onPeerPending(route: String, fingerprint: String) {
         scope.launch {
-            pendingPeer = route to fingerprint
-            showPeerComparison = false
-            status = "A new contact is waiting. Compare the security code with them through another trusted channel before confirming."
+            val active = conversation
+            if (active != null && active.peerRoutingId.isEmpty()) {
+                conversation = active.copy(peerRoutingId = route, peerIdentityReference = fingerprint)
+                contactVerificationState = ContactVerificationState.CONTACT_CREATED
+                verifiedBinding = null
+                status = "Contact added. Verify their identity before trusting them."
+            }
         }
     }
 
@@ -494,7 +496,7 @@ private fun IdentityAndConversationScreen(
                     runCatching {
                         conversation = saved
                         showConversationList = true
-                        messaging.connect(saved, saved.peerIdentityReference.ifBlank { null }, ::onMessage, ::onPeerPending)
+                        messaging.connect(saved, ::onMessage, ::onPeerPending)
                         appendUniqueChatMessages(chatMessages, messaging.messages().filter { it.conversationId == saved.conversationId })
                     }.onSuccess {
                         if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("conversation-restored")
@@ -583,38 +585,6 @@ private fun IdentityAndConversationScreen(
             }
         }
 
-        if (!showNewConversation) conversation?.let { active ->
-            pendingPeer?.let { (route, fingerprint) ->
-                K3ncryptCard {
-                    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        K3ncryptSectionTitle("Contact request", "Review before connecting", "A contact is not trusted until you compare fingerprints through a separate trusted channel and confirm. Messages stay on hold until then. Names and nicknames do not prove identity.")
-                        Button(enabled = !busy, onClick = { showPeerComparison = !showPeerComparison }) {
-                            Text(if (showPeerComparison) "Hide security code" else "View security code")
-                        }
-                        if (showPeerComparison) {
-                            Text(fingerprint, style = MaterialTheme.typography.bodySmall)
-                            OutlinedTextField(fingerprintConfirmation, { fingerprintConfirmation = it }, label = { Text("Enter the code shown by your contact") }, modifier = Modifier.fillMaxWidth())
-                            Button(enabled = !busy && fingerprintConfirmation.trim() == fingerprint, onClick = {
-                                scope.launch {
-                                    busy = true
-                                    runCatching { messaging.confirmFirstContact(route, fingerprintConfirmation.trim(), ::onMessage, ::onPeerPending) }
-                                        .onSuccess {
-                                            conversation = active.copy(peerRoutingId = route, peerIdentityReference = fingerprint)
-                                            pendingPeer = null
-                                            showPeerComparison = false
-                                            fingerprintConfirmation = ""
-                                            status = "Conversation connected."
-                                        }
-                                        .onFailure { status = "Could not confirm this contact. Messages remain safely on hold." }
-                                    busy = false
-                                }
-                            }) { Text("Confirm and add contact") }
-                        }
-                    }
-                }
-            }
-        }
-
         if (!focusedChat && ((state == null && showAdvancedNetwork) || (state != null && showAdvancedVerification))) K3ncryptCard {
           Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("Connect to your K3NCRYPT service", style = MaterialTheme.typography.titleMedium)
@@ -673,7 +643,7 @@ private fun IdentityAndConversationScreen(
                             selectedTab = "chats"
                             outgoingInvite = "#modern=${Uri.encode(created.conversationId)}&control=${Uri.encode(created.controlCapability)}&address=${Uri.encode(created.localRoutingId)}&identity=${Uri.encode(identity.deviceIdentityReference)}"
                             chatMessages.clear()
-                            status = "Invitation ready. Share it privately; you’ll confirm the contact before messages are accepted."
+                            status = "Invitation ready. Share it privately; your contact will be unverified until you verify their identity."
                         }.onFailure { status = "Conversation could not be created. Check the connection and retry." }
                         busy = false
                     }
@@ -694,8 +664,6 @@ private fun IdentityAndConversationScreen(
                                     runCatching {
                                         val selected = messaging.selectSavedConversation(saved.conversationHash, ::onMessage, ::onPeerPending)
                                         conversation = selected
-                                        pendingPeer = null
-                                        showPeerComparison = false
                                         outgoingInvite = ""
                                         showConversationList = false
                                         chatMessages.clear()
@@ -742,33 +710,17 @@ private fun IdentityAndConversationScreen(
                     maxLines = 4,
                 )
                 OutlinedButton(enabled = !busy, onClick = ::scanInvitation) { Text("Scan invitation QR") }
-                val invitationFingerprint = runCatching { parseModernInvitation(invitationInput.trim()).peerFingerprint }.getOrNull()
-                if (invitationFingerprint != null) {
-                    K3ncryptNotice("Before trusting this contact, compare fingerprints through a separate trusted channel and confirm verification. Names and nicknames are only for recognition.", K3ncryptNoticeTone.Attention)
-                    K3ncryptCard {
-                        Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text("Security code to compare", style = MaterialTheme.typography.labelLarge)
-                            Text(invitationFingerprint, style = MaterialTheme.typography.bodySmall)
-                        }
-                    }
-                    OutlinedTextField(
-                        fingerprintConfirmation,
-                        { fingerprintConfirmation = it },
-                        label = { Text("Enter the code shown by your contact") },
-                        supportingText = { Text("Only continue after comparing with your contact.") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                    )
-                }
-                Button(enabled = !busy && endpoint.isNotBlank() && invitationFingerprint != null && fingerprintConfirmation.isNotBlank(), onClick = {
+                val parsedInvitation = runCatching { parseModernInvitation(invitationInput.trim()) }.getOrNull()
+                if (parsedInvitation != null) K3ncryptNotice("Joining creates an unverified contact. You can compare fingerprints and verify the contact afterward.", K3ncryptNoticeTone.Attention)
+                Button(enabled = !busy && endpoint.isNotBlank() && parsedInvitation != null, onClick = {
                     scope.launch {
                         busy = true
                         runCatching {
                             val parsed = parseModernInvitation(invitationInput)
-                            require(fingerprintConfirmation.trim() == parsed.peerFingerprint) { "Peer fingerprint confirmation did not match the invitation." }
                             val local = identities.publishPrekeys(parsed.conversationId, parsed.controlCapability)
                             val joined = ConversationInvitation(parsed.conversationId, local.getString("address"), parsed.peerRoutingId, parsed.peerFingerprint, parsed.controlCapability, local.getString("renewalProof"))
-                            messaging.connect(joined, fingerprintConfirmation.trim(), ::onMessage, ::onPeerPending)
+                            messaging.prepareInvitationJoin(joined)
+                            messaging.connect(joined, ::onMessage, ::onPeerPending)
                             conversation = joined
                             showConversationList = false
                             showNewConversation = false
@@ -779,7 +731,7 @@ private fun IdentityAndConversationScreen(
                         }.onFailure { status = "Invitation could not be joined. Verify it and check connectivity." }
                         busy = false
                     }
-                }) { Text("Continue after comparison") }
+                }) { Text("Join invitation") }
               }
             }
         } ?: run {
@@ -955,16 +907,6 @@ private fun IdentityAndConversationScreen(
                 OutlinedButton(onClick = ::scanInvitation) { Text("Scan QR") }
             }
             OutlinedButton(onClick = { selectedTab = "chats"; showNewConversation = true; showConversationList = true; outgoingInvite = "" }) { Text("Create invitation QR") }
-            pendingPeer?.let {
-                K3ncryptCard {
-                    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                        K3ncryptStatus("Needs review")
-                        Text("New contact request", style = MaterialTheme.typography.titleMedium)
-                        Text("Compare the security code in your conversation before confirming this contact.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
-                        Button(onClick = { selectedTab = "chats"; showNewConversation = false; showConversationList = false }) { Text("Review request") }
-                    }
-                }
-            }
             if (savedConversations.isEmpty()) {
                 Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
                     K3ncryptEmptyState("Your contacts will appear here", "Create or join an invitation to connect. Verify the contact’s fingerprint before trusting them.")
@@ -1003,8 +945,6 @@ private fun IdentityAndConversationScreen(
                                 runCatching {
                                     val selected = messaging.selectSavedConversation(saved.conversationHash, ::onMessage, ::onPeerPending)
                                     conversation = selected
-                                    pendingPeer = null
-                                    showPeerComparison = false
                                     outgoingInvite = ""
                                     chatMessages.clear()
                                     appendUniqueChatMessages(chatMessages, messaging.messages().filter { it.conversationId == selected.conversationId })

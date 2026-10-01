@@ -8,9 +8,13 @@ import com.k3ncrypt.storage.CryptoStateStore
 import com.k3ncrypt.storage.K3ncryptSecureDatabase
 import com.k3ncrypt.storage.KeystoreAead
 import com.k3ncrypt.storage.LocalVaultGate
+import com.k3ncrypt.storage.SecureStateWrite
+import com.k3ncrypt.storage.SessionState
+import com.k3ncrypt.storage.InboundCommitResult
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.util.UUID
@@ -56,6 +60,42 @@ class ContactVerificationPersistenceTest {
             db = Room.databaseBuilder(context, K3ncryptSecureDatabase::class.java, name).build()
             assertEquals(ContactVerificationState.VERIFIED, ContactVerification(CryptoStateStore(db, aead)).state(binding))
         } finally { db.close(); context.deleteDatabase(name) }
+    }
+
+    @Test fun joinIntroductionDescriptorAndReplayMarkerCommitWithoutCreatingChatMessage() = runBlocking {
+        withStore { state ->
+            val room = UUID.randomUUID().toString()
+            val oldDescriptor = JSONObject().put("conversationId", room).put("localRoutingId", UUID.randomUUID().toString())
+                .put("peerRoutingId", "").put("peerIdentityReference", "").put("controlCapability", "capability")
+                .put("routingProof", "proof").toString().encodeToByteArray()
+            state.write("conversation", room, oldDescriptor)
+            val newDescriptor = JSONObject(oldDescriptor.decodeToString())
+                .put("peerRoutingId", UUID.randomUUID().toString()).put("peerIdentityReference", "K3 unverified identity")
+                .toString().encodeToByteArray()
+            val replay = "event-1".encodeToByteArray()
+            val result = state.commitInboundControl(
+                accountId = "account",
+                accountPickle = "account-pickle",
+                session = SessionState("peer", byteArrayOf(1, 2, 3)),
+                digest = "digest-1",
+                deliveryId = "delivery-1",
+                writes = listOf(SecureStateWrite("conversation", room, newDescriptor, oldDescriptor)),
+                replayNamespace = "join-introduction-seen",
+                replayRecordId = room,
+                replayValue = replay,
+            )
+            assertEquals(InboundCommitResult.STORED, result)
+            assertEquals(newDescriptor.decodeToString(), state.read("conversation", room)?.decodeToString())
+            assertTrue(state.hasInboundDigest("digest-1"))
+            assertTrue(state.messages().isEmpty())
+            val discovered = ConversationInvitation(room, UUID.randomUUID().toString(), UUID.randomUUID().toString(), "K3 unverified identity", "capability", "proof")
+            assertEquals(ContactVerificationState.CONTACT_CREATED, ContactVerification(state).state(discovered))
+            assertEquals(
+                InboundCommitResult.DUPLICATE,
+                state.commitInboundControl("account", "different-account-pickle", SessionState("peer", byteArrayOf(4)), "digest-2", "delivery-2", emptyList(), "join-introduction-seen", room, replay),
+            )
+            assertEquals(newDescriptor.decodeToString(), state.read("conversation", room)?.decodeToString())
+        }
     }
 
     private suspend fun withStore(block: suspend (CryptoStateStore) -> Unit) {

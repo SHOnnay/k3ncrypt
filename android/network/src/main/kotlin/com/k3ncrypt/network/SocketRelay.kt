@@ -7,7 +7,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.json.JSONObject
 
-data class RelayJoin(val routingId: String, val conversationId: String, val controlCapability: String, val routingProof: String, val proof: ProofCarrier)
+data class RelayJoin(val routingId: String, val conversationId: String, val controlCapability: String, val routingProof: String, val proof: ProofCarrier, val protocolFeatures: List<String> = emptyList())
 data class RelayDelivery(val id: String, val timestamp: Long, val sender: String, val envelope: String, val conversationId: String)
 data class RelaySendReceipt(val id: String, val timestamp: Long)
 data class RelayCallSignal(val envelope: String, val conversationId: String)
@@ -20,6 +20,7 @@ class SocketRelay(url: String, private val allowEmulatorHttp: Boolean = false) {
     @Volatile private var joined = false
     @Volatile private var lastJoinFailureCategory: String? = null
     @Volatile private var lastCallSignalResultCategory: String? = null
+    @Volatile private var peerProtocolFeatures: Set<String> = emptySet()
     private val pendingDeliveryListeners = java.util.concurrent.CopyOnWriteArrayList<(RelayDelivery, (Boolean) -> Unit) -> Unit>()
     private val pendingCallSignalListeners = java.util.concurrent.CopyOnWriteArrayList<(RelayCallSignal) -> Unit>()
     val connected: StateFlow<Boolean> = _connected
@@ -39,23 +40,29 @@ class SocketRelay(url: String, private val allowEmulatorHttp: Boolean = false) {
         socket?.let { it.off(); it.disconnect() }
         val created = IO.socket(normalized)
         created.on(Socket.EVENT_CONNECT, io.socket.emitter.Emitter.Listener { joined = false; _connected.value = true })
-        created.on(Socket.EVENT_DISCONNECT, io.socket.emitter.Emitter.Listener { joined = false; _connected.value = false })
+        created.on(Socket.EVENT_DISCONNECT, io.socket.emitter.Emitter.Listener { joined = false; peerProtocolFeatures = emptySet(); _connected.value = false })
         socket = created
         pendingDeliveryListeners.forEach { attachDeliveryListener(created, it) }
         pendingCallSignalListeners.forEach { attachCallSignalListener(created, it) }
     }
     fun connect() = (socket ?: error("backend_endpoint_unconfigured")).connect()
-    fun close() { activeConversationId = null; joined = false; _connected.value = false; socket?.disconnect() }
+    fun close() { activeConversationId = null; joined = false; peerProtocolFeatures = emptySet(); _connected.value = false; socket?.disconnect() }
+    /** Relay-reported compatibility hint only. This is not authenticated identity or trust evidence. */
+    fun peerSupportsFeature(feature: String): Boolean = feature in peerProtocolFeatures
     fun join(value: RelayJoin, ack: (Boolean) -> Unit) {
         require(value.proof.deviceAuthorizationProof.resource?.conversationId == value.conversationId)
         activeConversationId = value.conversationId
         joined = false
         val payload = JSONObject().put("userID", value.routingId).put("channelID", value.conversationId).put("controlCapability", value.controlCapability).put("routingProof", value.routingProof)
             .put("deviceAuthorizationProof", proofJson(value.proof)).put("proofNonce", value.proof.proofNonce)
+        if (value.protocolFeatures.isNotEmpty()) payload.put("protocolFeatures", org.json.JSONArray(value.protocolFeatures))
         (socket ?: error("backend_endpoint_unconfigured")).emit("chat-join", payload, io.socket.client.Ack { response ->
             val result = response.firstOrNull() as? JSONObject
             val accepted = result?.optString("status") == "accepted"
             joined = accepted
+            peerProtocolFeatures = if (accepted) result?.optJSONArray("peerFeatures")?.let { features ->
+                (0 until features.length()).mapNotNull { features.optString(it).takeIf(String::isNotBlank) }.filter { it == "join-introduction-v1" }.toSet()
+            }.orEmpty() else emptySet()
             lastJoinFailureCategory = if (accepted) null else result?.optString("code")?.takeIf { it.isNotBlank() } ?: "join-rejected"
             ack(accepted)
         })

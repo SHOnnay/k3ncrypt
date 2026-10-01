@@ -7,12 +7,22 @@ import com.k3ncrypt.storage.CryptoStateStore
 import com.k3ncrypt.storage.InboundCommitResult
 import com.k3ncrypt.storage.SessionState
 import com.k3ncrypt.storage.StoredMessage
+import com.k3ncrypt.storage.SecureStateWrite
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.security.MessageDigest
 
 data class MailboxDelivery(val id: String, val senderRoutingId: String, val envelope: String, val conversationId: String = "")
-data class SenderBundle(val senderIdentityKey: String)
+data class SenderBundle(val senderIdentityKey: String, val senderEd25519Key: String = "")
+data class InboundControlAcceptance(
+    val writes: List<SecureStateWrite>,
+    val replayNamespace: String,
+    val replayRecordId: String,
+    val replayValue: ByteArray,
+)
+fun interface AuthenticatedControlFrameHandler {
+    suspend fun accept(delivery: MailboxDelivery, payload: ByteArray, bundle: SenderBundle): InboundControlAcceptance?
+}
 
 fun interface SenderBundleResolver { suspend fun resolve(senderRoutingId: String): SenderBundle }
 fun interface DeviceTrustVerifier { suspend fun requireTrustedSender(senderRoutingId: String, senderIdentityKey: String) }
@@ -33,6 +43,8 @@ class InboundMessageProcessor(
     private val sessions: ConversationSessionStore,
     private val pickleKeys: PickleKeyProvider,
     private val invalidator: VolatileCryptoStateInvalidator,
+    private val controlFrameHandler: AuthenticatedControlFrameHandler? = null,
+    private val requireControlFrame: Boolean = false,
     private val diagnosticStage: (String) -> Unit = {},
     private val now: () -> Long = { System.currentTimeMillis() },
 ) {
@@ -42,6 +54,7 @@ class InboundMessageProcessor(
         var cryptoMutated = false
         var inboundSession: SessionHandle? = null
         var plaintext: ByteArray? = null
+        var payload: ByteArray? = null
         try {
             require(delivery.id.isNotBlank() && delivery.senderRoutingId.isNotBlank() && delivery.conversationId.isNotBlank())
             val envelope = EncryptedEnvelopeParser.parse(delivery.envelope)
@@ -68,8 +81,37 @@ class InboundMessageProcessor(
                 inboundSession = current
             }
 
-            val body = MessageFrame.decodeText(plaintext!!)
+            payload = MessageFrame.decodePayload(plaintext!!)
             diagnosticStage("decrypted")
+            val control = controlFrameHandler?.accept(delivery, payload!!, bundle)
+            if (control != null) {
+                val pickleKey = pickleKeys.currentPickleKey()
+                val outcome = try {
+                    val accountPickle = crypto.saveAccount(account, pickleKey)
+                    val sessionPickle = crypto.saveSession(inboundSession!!)
+                    try {
+                        commitAndRememberSession(
+                            commit = {
+                                cryptoState.commitInboundControl(
+                                    accountId, accountPickle, SessionState(delivery.senderRoutingId, sessionPickle), digest,
+                                    delivery.id, control.writes, control.replayNamespace, control.replayRecordId, control.replayValue,
+                                )
+                            },
+                            remember = { sessions.remember(delivery.senderRoutingId, inboundSession!!) },
+                        )
+                    } finally { sessionPickle.fill(0) }
+                } finally { pickleKey.fill(0) }
+                if (outcome == InboundCommitResult.DUPLICATE) {
+                    inboundSession?.let { runCatching { crypto.closeSession(it) } }
+                    invalidator.invalidateAfterUncommittedMutation()
+                    return@withLock DeliveryAcceptance.Duplicate
+                }
+                diagnosticStage("room-commit")
+                cryptoMutated = false
+                return@withLock DeliveryAcceptance.Accepted
+            }
+            if (requireControlFrame) throw SecurityException("Unpinned conversation accepts only its authenticated introduction frame")
+            val body = MessageFrame.decodeText(plaintext!!)
             val pickleKey = pickleKeys.currentPickleKey()
             val outcome = try {
                 val accountPickle = crypto.saveAccount(account, pickleKey)
@@ -108,7 +150,7 @@ class InboundMessageProcessor(
         } catch (_: Exception) {
             if (cryptoMutated) { inboundSession?.let { runCatching { crypto.closeSession(it) } }; runCatching { invalidator.invalidateAfterUncommittedMutation() } }
             DeliveryAcceptance.Rejected("runtime-or-persistence")
-        } finally { plaintext?.fill(0) }
+        } finally { payload?.fill(0); plaintext?.fill(0) }
     }
 
     private fun digest(envelope: String): String = MessageDigest.getInstance("SHA-256")
