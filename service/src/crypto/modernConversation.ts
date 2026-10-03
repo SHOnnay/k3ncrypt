@@ -1253,7 +1253,7 @@ export class ModernConversation {
         if (!this.remoteAddress || !contact) {
             const bundle = validateVodozemacPublicBundle(await fetchVodozemacBundle(this.roomId, this.capability, senderAddress));
             const fingerprint = await fingerprintVodozemacIdentity(bundle.identity);
-            if (this.remoteIdentityCommitment && this.remoteIdentityCommitment !== fingerprint) {
+            if (!this.remoteIdentityCommitment || this.remoteIdentityCommitment !== fingerprint) {
                 throw new Error('The authenticated sender identity does not match the saved invitation.');
             }
             // The established Olm session authenticated this message. Observe
@@ -1477,7 +1477,14 @@ export class ModernConversation {
             this.fallbackLeaseKey = key;
         }
         try {
-            const result = locks ? await locks.request(`k3ncrypt-modern:${conversationId}`, operation) : await operation();
+            // Recheck after waiting: the lease may have changed while queued.
+            const guarded = async () => {
+                if (!browser.localStorage!.getItem(key)?.startsWith(`${this.tabOwnerId}:`)) {
+                    throw new Error('This secure conversation is active in another tab.');
+                }
+                return operation();
+            };
+            const result = locks ? await locks.request(`k3ncrypt-modern:${conversationId}`, guarded) : await guarded();
             if (persistLease) {
                 if (this.fallbackLeaseTimer) clearInterval(this.fallbackLeaseTimer);
                 this.fallbackLeaseTimer = setInterval(() => this.refreshFallbackLease(browser.localStorage!, key), TAB_LEASE_MS / 3);
@@ -1490,7 +1497,10 @@ export class ModernConversation {
     }
 
     private refreshFallbackLease(storage: Storage, key: string): void {
-        if (this.fallbackLeaseKey === key) storage.setItem(key, `${this.tabOwnerId}:${Date.now() + TAB_LEASE_MS}`);
+        // A resumed timer must never reclaim a lease acquired by another tab.
+        if (this.fallbackLeaseKey === key && storage.getItem(key)?.startsWith(`${this.tabOwnerId}:`)) {
+            storage.setItem(key, `${this.tabOwnerId}:${Date.now() + TAB_LEASE_MS}`);
+        }
     }
 
     private releaseFallbackLease(): void {

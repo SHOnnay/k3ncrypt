@@ -39,6 +39,15 @@ class SavedConversationIndexTest {
         assertEquals(listOf("delivery-1", "delivery-2"), messages.map { it.id })
     }
 
+    @Test
+    fun stage0MainlineRestorationHasNoExplicitVerificationBit() {
+        // Characterization of main, NOT the desired trust contract. ed02b49 fixes this on another branch.
+        val routeOnly = invitation("room", "peer", "")
+        val pinned = routeOnly.copy(peerIdentityReference = "synthetic-fingerprint")
+        assertNull(SavedConversationIndex.selectTrusted(SavedConversationIndex.hash("room"), listOf(routeOnly)))
+        assertEquals(pinned, SavedConversationIndex.selectTrusted(SavedConversationIndex.hash("room"), listOf(pinned.copy())))
+    }
+
     private fun invitation(id: String, peerRoute: String, peerIdentity: String) = ConversationInvitation(
         conversationId = id,
         localRoutingId = "local-route",

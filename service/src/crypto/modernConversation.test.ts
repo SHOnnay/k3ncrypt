@@ -474,7 +474,7 @@ it('restores missing contact and route state after an existing session authentic
     const received: string[] = [];
     const onContactChange = jest.fn();
     const restored = new ModernConversation(storage, loader, fakeTransport().transport);
-    await restored.connect(room, key(9), undefined, undefined, (text) => received.push(text), onContactChange);
+    await restored.connect(room, key(9), undefined, await remoteCommitment(), (text) => received.push(text), onContactChange);
     decryptedBytes = new Uint8Array([1, 1, ...new TextEncoder().encode('authenticated peer message')]);
     const envelope: EncryptedEnvelope = {
         version: 2,
@@ -748,4 +748,212 @@ it('rejects a server-substituted first-contact bundle that does not match the in
     const conversation = new ModernConversation(new Storage(), loader, fakeTransport().transport);
     await expect(conversation.connect(room, key(9), remoteAddress, await remoteCommitment())).rejects.toThrow('identity commitment');
     await conversation.close();
+});
+
+// Stage 0: these fakes exercise orchestration, not native cryptographic proof.
+// Real WASM/IndexedDB crash probes live in e2e/stage0-boundaries.spec.ts.
+describe('Stage 0 identity authorization and delivery boundaries', () => {
+    const envelope = (label: string): EncryptedEnvelope => ({ version: 2, strategy: 'vodozemac-olm-v1', data: {
+        version: 1, olmMessage: JSON.stringify({ version: 1, message_type: 1, ciphertext: label }),
+    } });
+    const setup = async () => {
+        jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+        jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+        jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
+        const storage = new Storage();
+        const transport = fakeTransport();
+        const received = jest.fn();
+        const conversation = new ModernConversation(storage, loader, transport.transport);
+        await conversation.connect(room, key(9), remoteAddress, await remoteCommitment(), received);
+        await conversation.send('synthetic stage0 setup');
+        return { storage, transport, received, conversation };
+    };
+
+    it.each(['missing-commitment', 'wrong-descriptor', 'changed-key'])('%s cannot attach identity after successful decrypt', async (scenario) => {
+        const { storage, conversation } = await setup();
+        await conversation.close();
+        const mode = JSON.parse(new TextDecoder().decode((await storage.read('conversation-protocol', room))!));
+        delete mode.remoteAddress;
+        await storage.write('conversation-protocol', room, new TextEncoder().encode(JSON.stringify(mode)).buffer as ArrayBuffer);
+        await storage.delete('contact-identity', remoteAddress);
+        const observed = jest.fn();
+        const received = jest.fn();
+        const restored = new ModernConversation(storage, loader, fakeTransport().transport);
+        await restored.connect(room, key(9), undefined, scenario === 'missing-commitment' ? undefined : await remoteCommitment(), received, observed);
+        const wrong = { ...bundle, identity: scenario === 'changed-key' ? { ...bundle.identity, ed25519: key(22) } : { ...bundle.identity, curve25519: key(22) } };
+        if (scenario !== 'missing-commitment') jest.mocked(fetchVodozemacBundle).mockResolvedValue(wrong);
+        const before = sessionDecryptions;
+        await expect(receiveFirstMessage(restored, envelope(scenario), remoteAddress)).rejects.toThrow('does not match the saved invitation');
+        expect(sessionDecryptions).toBe(before + 1); // decrypt success is NOT descriptor authorization
+        expect(await storage.read('contact-identity', remoteAddress)).toBeUndefined();
+        expect(await storage.read('modern-seen', room)).toBeUndefined();
+        expect(observed).not.toHaveBeenCalled();
+        expect(received).not.toHaveBeenCalled();
+        await restored.close();
+    });
+
+    it('identity replacement while bundle lookup is pending cannot be accepted', async () => {
+        const { storage, conversation } = await setup();
+        await storage.delete('contact-identity', remoteAddress);
+        let release!: (value: typeof bundle) => void;
+        let entered!: () => void;
+        const lookingUp = new Promise<void>((resolve) => { entered = resolve; });
+        jest.mocked(fetchVodozemacBundle).mockImplementationOnce(() => { entered(); return new Promise((resolve) => { release = resolve; }); });
+        const pending = receiveFirstMessage(conversation, envelope('identity-race'), remoteAddress);
+        const rejected = expect(pending).rejects.toThrow('does not match the saved invitation');
+        await lookingUp;
+        (conversation as unknown as { remoteIdentityCommitment: string }).remoteIdentityCommitment = key(23);
+        release(bundle);
+        await rejected;
+        expect(await storage.read('contact-identity', remoteAddress)).toBeUndefined();
+        expect(await storage.read('modern-seen', room)).toBeUndefined();
+        await conversation.close();
+    });
+
+    it('simultaneous outgoing messages are serialized by one conversation owner', async () => {
+        const { conversation, storage } = await setup();
+        await conversation.acceptDelivery('relay-1');
+        const before = encryptions;
+        await Promise.all([conversation.send('synthetic one'), conversation.send('synthetic two')]);
+        expect(encryptions).toBe(before + 2);
+        const records = JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!));
+        expect(records).toHaveLength(2);
+        expect(new Set(records.map((record: { clientId: string }) => record.clientId)).size).toBe(2);
+        await conversation.close();
+    });
+
+    it('delayed old relay ID cannot complete a retried envelope after ID replacement (known gap)', async () => {
+        const { conversation, storage } = await setup();
+        const pending = JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!));
+        pending[0].sentAt = 0;
+        await storage.write('modern-outbox', room, new TextEncoder().encode(JSON.stringify(pending)).buffer as ArrayBuffer);
+        await conversation.retryPending();
+        await conversation.acceptDelivery('relay-1');
+        expect(JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!))).toHaveLength(1);
+        await conversation.acceptDelivery('relay-2');
+        expect(JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!))).toEqual([]);
+        await conversation.close();
+    });
+
+    it.each(['dddddddd-dddd-4ddd-8ddd-dddddddddddd', localAddress])('changed/stale route %s is rejected before decrypt', async (route) => {
+        const { conversation, received } = await setup();
+        const before = sessionDecryptions;
+        expect(await receiveFirstMessage(conversation, envelope('wrong-route'), route)).toBe(false);
+        expect(sessionDecryptions).toBe(before);
+        expect(received).not.toHaveBeenCalled();
+        await conversation.close();
+    });
+
+    it('accepted duplicate does not decrypt, observe, or deliver twice and never verifies', async () => {
+        const { conversation, received } = await setup();
+        const wire = envelope('duplicate');
+        const before = sessionDecryptions;
+        expect(await receiveFirstMessage(conversation, wire, remoteAddress)).toBe(true);
+        expect(await receiveFirstMessage(conversation, wire, remoteAddress)).toBe(true);
+        expect(sessionDecryptions).toBe(before + 1);
+        expect(received).toHaveBeenCalledTimes(1);
+        expect((await conversation.getContact())?.verification).toBe('unverified');
+        await conversation.close();
+    });
+
+    it('outbox failure after encryption leaves persisted session but loses this envelope (known gap)', async () => {
+        const { conversation, storage } = await setup();
+        await conversation.acceptDelivery('relay-1');
+        const write = storage.write.bind(storage);
+        jest.spyOn(storage, 'write').mockImplementation(async (type, id, bytes) => {
+            if (type === 'modern-outbox') throw new Error('injected outbox failure');
+            return write(type, id, bytes);
+        });
+        const before = encryptions;
+        await expect(conversation.send('synthetic lost work')).rejects.toThrow('injected outbox failure');
+        expect(encryptions).toBe(before + 1);
+        expect(await storage.read('vodozemac-session', room)).toBeDefined();
+        expect(await storage.read('vodozemac-commit', 'local')).toBeUndefined();
+        expect(JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!))).toEqual([]);
+        jest.restoreAllMocks();
+        await conversation.close();
+    });
+
+    it('relay submission is not completion; restart retries unchanged envelope without encrypting', async () => {
+        const { conversation, storage, transport } = await setup();
+        const wire = JSON.stringify(transport.sent[0]);
+        const pending = JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!));
+        expect(pending).toHaveLength(1);
+        await conversation.close();
+        pending[0].sentAt = 0;
+        await storage.write('modern-outbox', room, new TextEncoder().encode(JSON.stringify(pending)).buffer as ArrayBuffer);
+        const retry = fakeTransport();
+        const before = encryptions;
+        const restored = new ModernConversation(storage, loader, retry.transport);
+        await restored.connect(room, key(9), remoteAddress, await remoteCommitment());
+        await restored.retryPending();
+        expect(encryptions).toBe(before);
+        expect(retry.sent.map((item) => JSON.stringify(item))).toContain(wire);
+        await restored.acceptDelivery('unknown-relay-id');
+        expect(JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!))).toHaveLength(1);
+        await restored.acceptDelivery('relay-1');
+        await restored.acceptDelivery('relay-1');
+        expect(JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!))).toEqual([]);
+        expect((await restored.getContact())?.verification).toBe('unverified');
+        await restored.close();
+    });
+});
+
+describe('Stage 0 tab lease boundaries', () => {
+    type LeaseProbe = {
+        tabOwnerId: string; fallbackLeaseKey?: string;
+        withTabLock<T>(id: string, operation: () => Promise<T>): Promise<T>;
+        refreshFallbackLease(storage: globalThis.Storage, key: string): void;
+    };
+    const leaseKey = `k3ncrypt-tab-lease:${room}`;
+    let storage: globalThis.Storage;
+    const priorStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+    const priorNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+    beforeEach(() => {
+        const records = new Map<string, string>();
+        storage = { getItem: (key: string) => records.get(key) ?? null, setItem: (key: string, value: string) => { records.set(key, value); }, removeItem: (key: string) => { records.delete(key); } } as globalThis.Storage;
+        Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage });
+        Object.defineProperty(globalThis, 'navigator', { configurable: true, value: {} });
+    });
+    afterEach(() => {
+        if (priorStorage) Object.defineProperty(globalThis, 'localStorage', priorStorage); else Reflect.deleteProperty(globalThis, 'localStorage');
+        if (priorNavigator) Object.defineProperty(globalThis, 'navigator', priorNavigator); else Reflect.deleteProperty(globalThis, 'navigator');
+    });
+    const owner = () => new ModernConversation(new Storage(), loader, fakeTransport().transport) as unknown as LeaseProbe;
+
+    it('second owner is rejected while first lease is live', async () => {
+        const a = owner(); const b = owner(); const effect = jest.fn(async () => undefined);
+        await a.withTabLock(room, async () => undefined);
+        await expect(b.withTabLock(room, effect)).rejects.toThrow('another tab');
+        expect(effect).not.toHaveBeenCalled();
+    });
+    it('resumed stale heartbeat cannot reclaim a newer owner lease', async () => {
+        const a = owner(); const b = owner();
+        await a.withTabLock(room, async () => undefined);
+        storage.setItem(leaseKey, `${a.tabOwnerId}:0`);
+        await b.withTabLock(room, async () => undefined);
+        const current = storage.getItem(leaseKey);
+        a.refreshFallbackLease(storage, leaseKey);
+        expect(storage.getItem(leaseKey)).toBe(current);
+    });
+    it('queued operation rechecks owner after acquiring Web Lock', async () => {
+        const a = owner(); const effect = jest.fn(async () => undefined);
+        Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { locks: { request: async (_name: string, callback: () => Promise<unknown>) => {
+            storage.setItem(leaseKey, `new-owner:${Date.now() + 30000}`);
+            return callback();
+        } } } });
+        await expect(a.withTabLock(room, effect)).rejects.toThrow('another tab');
+        expect(effect).not.toHaveBeenCalled();
+    });
+    it('documents that an already-running callback is not fenced by lease takeover', async () => {
+        const a = owner(); const b = owner(); const effects: string[] = [];
+        let release!: () => void;
+        const paused = new Promise<void>((resolve) => { release = resolve; });
+        const first = a.withTabLock(room, async () => { await paused; effects.push('stale'); });
+        storage.setItem(leaseKey, `${a.tabOwnerId}:0`);
+        await b.withTabLock(room, async () => { effects.push('new'); });
+        release(); await first;
+        expect(effects).toEqual(['new', 'stale']); // known gap; not a fencing guarantee
+        expect(storage.getItem(leaseKey)?.startsWith(`${b.tabOwnerId}:`)).toBe(true);
+    });
 });

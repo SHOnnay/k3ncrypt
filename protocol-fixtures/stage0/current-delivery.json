@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "baseline": "3e26ce952ea539ef7aaa9bb5db3d5dea4bf30f7f",
+  "scope": "Characterization only; no authenticated receipt protocol",
+  "pairings": [
+    "Web->Web",
+    "Web->Android",
+    "Android->Web",
+    "Android->Android"
+  ],
+  "observations": [
+    {
+      "event": "adapter-submit",
+      "state": "SUBMITTED",
+      "wire": null,
+      "peerPersistence": false,
+      "authenticatedPeerEvidence": false
+    },
+    {
+      "event": "chat-message-mailbox-ack",
+      "state": "RELAY_STORED",
+      "wire": {
+        "id": "synthetic-relay-id",
+        "timestamp": 1,
+        "stored": true
+      },
+      "peerPersistence": false,
+      "authenticatedPeerEvidence": false
+    },
+    {
+      "event": "chat-message-live-ack",
+      "state": "RELAY_DELIVERED",
+      "wire": {
+        "id": "synthetic-relay-id",
+        "timestamp": 1
+      },
+      "peerPersistence": false,
+      "authenticatedPeerEvidence": false
+    },
+    {
+      "event": "receiver-local-callback",
+      "state": "PEER_ACCEPTED",
+      "wire": {
+        "accepted": true
+      },
+      "peerPersistence": false,
+      "authenticatedPeerEvidence": false
+    },
+    {
+      "event": "delivered",
+      "state": "RELAY_DELIVERED",
+      "wire": "synthetic-relay-id",
+      "peerPersistence": false,
+      "authenticatedPeerEvidence": false
+    }
+  ],
+  "completion": {
+    "Web": "relay-delivered-event",
+    "Android": "relay-submission-response"
+  },
+  "authenticatedPeerPersistedImplemented": false
+}

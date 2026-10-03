@@ -158,3 +158,80 @@ describe('VodozemacRuntime', () => {
         expect(runtime.lifecycle).toBe('error');
     });
 });
+
+describe('Stage 0 mutation crash and concurrency characterization', () => {
+    it.each(['before-encrypt', 'session-write', 'marker-delete'])('restart at %s never silently reuses an interrupted session', async (point) => {
+        const storage = new MemoryStorage();
+        let mutations = 0;
+        const handle = { ...session(), encrypt: () => { mutations++; return 'opaque'; } };
+        const runtime = new VodozemacRuntime(storage, async () => bindings);
+        await runtime.initialize(); await runtime.restoreOrCreateIdentity();
+        await runtime.establishSession('conversation-1', handle, 'session-1');
+        await runtime.persistSession();
+        const write = storage.write.bind(storage); const remove = storage.delete.bind(storage);
+        jest.spyOn(storage, 'write').mockImplementation(async (type, id, bytes) => {
+            if ((point === 'before-encrypt' && type === 'vodozemac-commit') || (point === 'session-write' && type === 'vodozemac-session')) throw new Error('injected');
+            return write(type, id, bytes);
+        });
+        jest.spyOn(storage, 'delete').mockImplementation(async (type, id) => {
+            if (point === 'marker-delete' && type === 'vodozemac-commit') throw new Error('injected');
+            return remove(type, id);
+        });
+        await expect(runtime.encrypt('message', new ArrayBuffer(0))).rejects.toThrow();
+        expect(mutations).toBe(point === 'before-encrypt' ? 0 : 1);
+        jest.restoreAllMocks();
+        runtime.close();
+        const restarted = new VodozemacRuntime(storage, async () => bindings);
+        await restarted.initialize();
+        expect(storage.has('vodozemac-session', 'conversation-1')).toBe(point === 'before-encrypt');
+        expect(storage.has('vodozemac-commit', 'local')).toBe(false);
+        restarted.close();
+    });
+
+    it('message and call/control facade mutations serialize within one runtime', async () => {
+        const storage = new MemoryStorage();
+        const runtime = new VodozemacRuntime(storage, async () => bindings);
+        await runtime.initialize(); await runtime.restoreOrCreateIdentity();
+        let counter = 0;
+        await runtime.establishSession('conversation-1', { ...session(), encrypt: () => String(++counter) }, 'session-1');
+        const writes: string[] = [];
+        const write = storage.write.bind(storage);
+        jest.spyOn(storage, 'write').mockImplementation(async (type, id, bytes) => { writes.push(type); await Promise.resolve(); return write(type, id, bytes); });
+        await Promise.all([runtime.encrypt('message', new ArrayBuffer(0)), runtime.getAuthenticatedSession().encrypt('signaling', new ArrayBuffer(0))]);
+        expect(counter).toBe(2);
+        expect(writes).toEqual(['vodozemac-commit', 'vodozemac-session', 'vodozemac-commit', 'vodozemac-session']);
+        runtime.close(); jest.restoreAllMocks();
+    });
+
+    it('two restored runtimes can overwrite a newer session snapshot (known gap)', async () => {
+        const storage = new MemoryStorage();
+        const counterSession = (value = 0): VodozemacSessionHandle => ({ ...session(), encrypt: () => String(++value), saveSession: () => new Uint8Array([value]) });
+        const counterBindings = { ...bindings, sessionFactory: { loadSession: (bytes: Uint8Array) => counterSession(bytes[0]) } };
+        const a = new VodozemacRuntime(storage, async () => counterBindings);
+        await a.initialize(); await a.restoreOrCreateIdentity();
+        await a.establishSession('conversation-1', counterSession(), 'session-1'); await a.persistSession();
+        const b = new VodozemacRuntime(storage, async () => counterBindings);
+        await b.initialize(); await b.restoreOrCreateIdentity(); await b.restoreSession('conversation-1', 'session-1');
+        await a.encrypt('message', new ArrayBuffer(0)); await a.encrypt('message', new ArrayBuffer(0));
+        expect(new Uint8Array((await storage.read('vodozemac-session', 'conversation-1'))!)[0]).toBe(2);
+        await b.encrypt('signaling', new ArrayBuffer(0));
+        expect(new Uint8Array((await storage.read('vodozemac-session', 'conversation-1'))!)[0]).toBe(1);
+        a.close(); b.close();
+    });
+
+    it('identity-wide interrupted marker is shared by conversations (known gap)', async () => {
+        const storage = new MemoryStorage();
+        const a = new VodozemacRuntime(storage, async () => bindings);
+        const b = new VodozemacRuntime(storage, async () => bindings);
+        for (const runtime of [a, b]) { await runtime.initialize(); await runtime.restoreOrCreateIdentity(); }
+        await a.establishSession('a', session(), 'session-1'); await a.persistSession();
+        await b.establishSession('b', session(), 'session-1'); await b.persistSession();
+        const write = storage.write.bind(storage);
+        jest.spyOn(storage, 'write').mockImplementation(async (type, id, bytes) => { if (type === 'vodozemac-session' && id === 'a') throw new Error('injected'); return write(type, id, bytes); });
+        await expect(a.encrypt('message', new ArrayBuffer(0))).rejects.toThrow();
+        expect(storage.has('vodozemac-commit', 'local')).toBe(true);
+        await b.encrypt('signaling', new ArrayBuffer(0));
+        expect(storage.has('vodozemac-commit', 'local')).toBe(false); // b erased a's interruption evidence
+        a.close(); b.close(); jest.restoreAllMocks();
+    });
+});
