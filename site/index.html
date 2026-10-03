@@ -1,371 +1,420 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta
-      name="description"
-      content="K3NCRYPT is an open-source privacy-first messenger with end-to-end encrypted conversations and explicit contact verification.">
-    <meta name="theme-color" content="#f4f3ef">
-    <link rel="icon" type="image/svg+xml" href="./assets/k3ncrypt-mark.svg">
-    <link rel="stylesheet" href="./styles.css">
-    <title>K3NCRYPT — Private communication without surveillance</title>
-  </head>
-  <body>
-    <a class="skip-link" href="#main">Skip to content</a>
-    <header class="site-header">
-      <a class="brand" href="#top" aria-label="K3NCRYPT home">
-        <img src="./assets/k3ncrypt-lockup.svg" alt="K3NCRYPT">
-      </a>
-      <nav class="desktop-nav" aria-label="Main navigation">
-        <a href="#features">Features</a>
-        <a href="#security">Security</a>
-        <a href="#download">Get the beta</a>
-      </nav>
-      <a
-        class="button button-small button-outline header-cta"
-        href="https://k3ncrypt.onrender.com"
-        target="_blank"
-        rel="noreferrer"
-      >
-        Open web app <span aria-hidden="true">↗</span>
-      </a>
-    </header>
+<head>
+<meta charset="utf-8">
+<!-- Approved K3NCRYPT chapter-based landing page. -->
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>K3ncrypt: private messages for exactly two people</title>
+<meta name="description" content="K3ncrypt is an experimental, open-source two-person messenger (beta). You invite one person, check it is really them, and talk.">
+<meta property="og:title" content="K3ncrypt: private messages for exactly two people">
+<meta property="og:description" content="A name is easy to fake. See why checking matters.">
+<meta name="twitter:card" content="summary">
+<meta name="theme-color" content="#1f2fd8">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%231f2fd8'/%3E%3Ccircle cx='9' cy='16' r='4' fill='%23f1eee4'/%3E%3Ccircle cx='23' cy='16' r='4' fill='%23f1eee4'/%3E%3Cpath d='M13 16h6' stroke='%23f1eee4' stroke-width='2'/%3E%3C/svg%3E">
+<style>
+:root{--tr:16vw;--cobalt:#1f2fd8;--cream:#f1eee4;--ink:#0b1035;--alert:#ff5a3c;
+ --ease:cubic-bezier(.2,.8,.2,1);--dur:320ms;
+ --display:"Bricolage Grotesque","Helvetica Neue",Arial,sans-serif;--mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+ --big:clamp(3rem,15vw,19rem);--h2:clamp(2rem,1rem + 5vw,5rem);--body:clamp(1rem,.95rem + .3vw,1.2rem)}
+@media (max-width:600px){:root{--tr:9vw}}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--cobalt);color:var(--cream);font:400 var(--body)/1.55 var(--display)}
+a{color:inherit;text-underline-offset:.2em}
+:focus-visible{outline:3px solid var(--cream);outline-offset:3px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+.bar{position:fixed;inset:0 0 auto 0;z-index:9;display:flex;justify-content:space-between;padding:1rem clamp(1rem,3vw,2rem);mix-blend-mode:difference;color:var(--cream);font-weight:700}
+.bar a{text-decoration:none}
+.seam{position:fixed;left:0;top:0;bottom:0;width:4px;z-index:10;background:rgba(255,255,255,.12)}
+.seam i{position:absolute;inset:0;background:var(--cream);transform-origin:top;transform:scaleY(var(--sp,0));mix-blend-mode:difference}
+h1,h2{font-weight:800;letter-spacing:-.05em;line-height:.88;margin:0}
+/* Chapter 0 */
+.c0{height:300vh;position:relative}
+.c0 .pin{position:sticky;top:0;height:100vh;height:100svh;overflow:hidden;display:grid;place-items:center}
+.halves{opacity:var(--rv,1);position:relative;z-index:3;pointer-events:none;display:flex;font-size:var(--big);font-weight:800;letter-spacing:-.06em;line-height:.8}
+.halves span{display:block;will-change:transform}
+.halves .l{transform:translate3d(calc(var(--p0,0)*var(--tr)*-1),0,0)}
+.halves .r{transform:translate3d(calc(var(--p0,0)*var(--tr)),0,0)}
+.thread{opacity:var(--th,1);z-index:3;pointer-events:none;position:absolute;left:50%;top:50%;width:0;height:0}
+.thread i{position:absolute;top:-.5rem;width:1rem;height:1rem;border-radius:50%;background:var(--cream)}
+.thread .da{left:calc(var(--p0,0)*var(--tr)*-1 - .5rem)}
+.thread .db{left:calc(var(--p0,0)*var(--tr) - .5rem)}
+.thread b{position:absolute;top:-1px;left:calc(var(--p0,0)*var(--tr)*-1);width:calc(var(--p0,0)*var(--tr)*2);height:2px;background:var(--cream)}
+.tag{opacity:var(--lg,0);z-index:3;pointer-events:none;position:absolute;bottom:clamp(1rem,4vw,3rem);left:clamp(1rem,4vw,3rem);max-width:30ch;font-size:clamp(1.1rem,1rem + .8vw,1.6rem);line-height:1.25;font-weight:500}
+/* Chapter 0: one composition, two halves. Nothing slides away. The colours converge and the words become the mark. */
+.open{position:absolute;inset:0;z-index:2;display:grid;grid-template-columns:1fr 1fr;gap:4px;pointer-events:none}
+.pn{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:1rem}
+.pc{flex:1;width:100%;display:flex;flex-direction:column;justify-content:center;align-items:inherit;opacity:calc(1 - var(--hk,0)*2.6)}
+.pnl{background:var(--cream);color:var(--ink);transform:translate3d(calc(var(--cu,0)*-101%),0,0)}.pnr{background:var(--ink);color:var(--cream);align-items:flex-start;padding-left:14%;transform:translate3d(calc(var(--cu,0)*101%),0,0)}
+.pnl .nm{transform:translate3d(calc(var(--hk,0)*13vw),0,0) scale(calc(1 - var(--hk,0)*.25))}
+.pnr .hbx,.pnr .lone{transform:translate3d(calc(var(--hk,0)*-13vw),0,0)}
+.c0.moved .nm{pointer-events:none}
+.nm{pointer-events:auto;font:800 var(--nm,12vw)/1 var(--display);letter-spacing:-.06em;text-align:center;background:none;border:0;color:inherit;width:100%;caret-color:var(--cobalt);padding:0}
+.nm:focus{outline:none}.nm:focus-visible{outline:3px solid var(--cobalt);outline-offset:.1em;border-radius:.1em}
+.lab{position:absolute;left:clamp(1rem,3vw,2rem);right:1rem;bottom:clamp(1rem,3vw,2rem);font:600 .85rem/1.35 var(--mono)}
+.pnr .lab{opacity:.75}
+.hbx{display:grid;justify-items:start}.hbx>*{grid-area:1/1}
+.bub{background:var(--cream);color:var(--ink);font-weight:800;line-height:1;letter-spacing:-.04em;padding:.3em .65em;border-radius:.55em .55em .55em .12em;font-size:clamp(1.9rem,.8rem + 4.2vw,4.6rem);margin:0}
+.typ{display:flex;gap:.18em;font-size:2.2rem;padding:.5em .75em}.typ i{width:.3em;height:.3em;border-radius:50%;background:var(--ink);animation:bl 1s infinite}.typ i:nth-child(2){animation-delay:.15s}.typ i:nth-child(3){animation-delay:.3s}
+.lone{font-size:1.3rem;margin-top:.9rem;align-self:flex-start;opacity:0}
+.open [data-d]{opacity:0;transition:opacity 600ms var(--ease),transform 700ms var(--ease)}
+.open .bub[data-d]:not(.lone){transform:translateX(60px)}
+.open [data-d].on,.open .bub[data-d].on:not(.lone){opacity:1;transform:none}.open [data-d].off{opacity:0;visibility:hidden;transition:opacity .2s,visibility 0s .2s}.open .lone.on{opacity:.5}
+.ping{animation:ping 650ms var(--ease)}@keyframes ping{from{opacity:0;transform:translateX(60px)}}
+@media (max-width:700px){.pnr{align-items:center;padding-left:1rem}.open{grid-template-columns:1fr;grid-template-rows:1fr 1fr}
+ .pnl{transform:translate3d(0,calc(var(--cu,0)*-101%),0)}.pnr{transform:translate3d(0,calc(var(--cu,0)*101%),0)}
+ .pnl .nm{transform:translate3d(0,calc(var(--hk,0)*16svh),0) scale(calc(1 - var(--hk,0)*.25))}.pnr .hbx,.pnr .lone{transform:translate3d(0,calc(var(--hk,0)*-16svh),0)}
+ .open .bub[data-d]:not(.lone){transform:translateY(50px)}@keyframes ping{from{opacity:0;transform:translateY(50px)}}.hbx{justify-items:center}.lone{align-self:center}}
+/* The mark lives on the split: K3NC in ink on the cream half, RYPT in cream on the dark half. */
+.c0{--tr:10vw}
+.c0 .halves{width:100%;justify-content:center}
+.c0 .halves span{flex:0 0 50%}
+.c0 .halves .l{text-align:right;color:color-mix(in srgb,var(--ink),var(--cream) min(100%,calc(var(--cu,0)*220%)))}.c0 .halves .r{text-align:left;color:var(--cream)}
+.c0 .thread b{background:var(--cream)}
+.c0 .tag{color:var(--cream)}
+@media (max-width:700px){
+ .c0{--tr:9svh}
+ .c0 .halves{flex-direction:column;font-size:27vw}
+ .c0 .halves span{flex:0 0 auto;width:100%;text-align:center;line-height:.8}
+ .c0 .halves .l,.c0 .halves .r{text-align:center}
+ .c0 .halves .l{transform:translate3d(0,calc(var(--p0,0)*var(--tr)*-1),0)}.c0 .halves .r{transform:translate3d(0,calc(var(--p0,0)*var(--tr)),0)}
+ .c0 .thread b{left:-1px;top:calc(var(--p0,0)*var(--tr)*-1);width:2px;height:calc(var(--p0,0)*var(--tr)*2);background:var(--cream)}
+ .c0 .thread .da{left:-.5rem;top:calc(var(--p0,0)*var(--tr)*-1 - .5rem)}.c0 .thread .db{left:-.5rem;top:calc(var(--p0,0)*var(--tr) - .5rem)}
+ .c0 .tag{color:var(--cream)}
+}
+/* Claim, doubt, and the question that Chapter 1 answers */
+/* Opening: dialogue across the seam. Both voices hug the cobalt spine; the question is the climax. */
+.open{--q:clamp(2.6rem,min(11.2vw,19.5vh),13rem);--lh:clamp(2.6rem,calc(var(--q)*.3),4.2rem)}
+.pnl{align-items:flex-end;padding:1rem clamp(1.2rem,4vw,4.5rem) 1rem 1rem;text-align:right}
+.pnr{align-items:flex-start;padding:1rem 1rem 1rem clamp(1.2rem,4vw,4.5rem)}
+.pnl .pc,.pnr .pc{justify-content:center}
+.grp{transform:translate3d(calc(var(--hk,0)*7vw),0,0)}.pnr .grp{transform:translate3d(calc(var(--hk,0)*-7vw),0,0)}
+.snd,.you{display:flex;align-items:center;height:var(--lh);margin:0;font:700 max(16px,clamp(.9rem,.75rem + .5vw,1.25rem))/1 var(--mono);letter-spacing:.14em;text-transform:uppercase}
+.snd{justify-content:flex-end}.you{opacity:.7}
+.pnl .snd .nm{font:inherit;letter-spacing:inherit;text-transform:inherit;text-align:right;color:inherit;transform:none;width:calc(var(--n,11)*(1ch + .14em) + 1em);max-width:100%;padding:.7em .1em;margin:-.7em 0;text-decoration:underline dotted;text-decoration-thickness:1px;text-underline-offset:.5em;text-decoration-color:rgba(11,16,53,.45);caret-color:var(--cobalt)}
+.pnl .snd .nm:focus,.pnl .snd .nm:focus-visible{outline:none;border-radius:0;text-decoration-style:solid;text-decoration-color:var(--cobalt);text-decoration-thickness:2px}
+.nm::placeholder{color:inherit;opacity:.45}
+.wd,.q{margin:0;font-family:var(--display);font-weight:800;letter-spacing:-.045em}
+.wd{font-size:calc(var(--q)*.6)}.q{font-size:var(--q)}
+.ln{display:flex;box-sizing:border-box;overflow:hidden;align-items:flex-end;height:calc(var(--q)*1.14);margin-bottom:calc(var(--q)*-.16);padding:0 .08em calc(var(--q)*.16)}
+.wd .ln{justify-content:flex-end}
+.ln>i{display:block;font-style:normal;line-height:.86;transition:transform .9s var(--ease)}
+.js .ln:not(.on)>i{transform:translateY(160%)}
+.sm{position:absolute;z-index:5;left:50%;top:0;bottom:0;width:clamp(10px,1.1vw,16px);margin-left:calc(clamp(10px,1.1vw,16px)/-2);background:var(--cobalt);opacity:calc(1 - var(--hk,0)*3)}
+@media (max-width:700px){
+ .open{--q:clamp(3.2rem,min(25vw,13.5vh),7rem)}
+ .pnl,.pnr{align-items:flex-start;text-align:left;padding:1rem 1.5rem}
+ .pnl .pc{padding-top:3rem}.snd{justify-content:flex-start}.pnl .snd .nm{text-align:left}
+ .wd .ln{justify-content:flex-start;height:calc(var(--q)*.74);margin-bottom:calc(var(--q)*-.1);padding-bottom:calc(var(--q)*.1)}.ln.gap{display:none}
+ .grp{transform:translate3d(0,calc(var(--hk,0)*10svh),0)}.pnr .grp{transform:translate3d(0,calc(var(--hk,0)*-10svh),0)}
+ .sm{left:0;right:0;top:50%;bottom:auto;width:auto;height:10px;margin:-5px 0 0}}
+.thread em{position:absolute;top:1.3rem;transform:translateX(-50%);font:700 1.15rem/1 var(--mono);font-style:normal;color:var(--cream);white-space:nowrap;opacity:calc(var(--p0,0)*2 - 1)}
+.thread .ta{left:calc(var(--p0,0)*var(--tr)*-1 + .7rem);transform:none}.thread .tb{left:calc(var(--p0,0)*var(--tr) - .7rem);transform:translateX(-100%)}
+@media (max-width:700px){.c0 .thread em{left:1.1rem;transform:translateY(-50%);top:auto}.c0 .thread .ta{top:calc(var(--p0,0)*var(--tr)*-1 + 1.5rem)}.c0 .thread .tb{top:calc(var(--p0,0)*var(--tr) - 1.5rem)}}
+/* Chapter 1: a short film in DOM. The phone is the set. */
+.c1{height:400vh;position:relative;background:var(--ink)}
+.c1 .pin{position:sticky;top:0;height:100vh;height:100svh;overflow:hidden;--rl:0}
+.relief{position:absolute;inset:0;background:var(--cobalt);opacity:var(--rl)}
+.c1 .pin:before{content:"";position:absolute;inset:0;background:radial-gradient(ellipse at 50% 45%,transparent 25%,rgba(0,0,0,.65));opacity:calc(1 - var(--rl));pointer-events:none}
+.say{position:absolute;top:clamp(3.6rem,8svh,4.6rem);left:0;right:0;text-align:center;font:italic 500 clamp(1.1rem,1rem + 1vw,1.7rem)/1.2 var(--display);min-height:1.3em;z-index:2;padding:0 1rem}
+.film{position:absolute;inset:clamp(8.2rem,16svh,10rem) 0 clamp(12.5rem,34svh,17rem);display:flex;align-items:center;justify-content:center}
+.ph{--pw:min(72vw,290px);width:var(--pw);height:min(calc(var(--pw)*1.75),100%);font-size:calc(var(--pw)/18);background:#151b4a;border:2px solid rgba(255,255,255,.25);border-radius:calc(var(--pw)*.12);overflow:hidden;display:flex;flex-direction:column;flex:none;position:relative;transition:width var(--dur) var(--ease),margin var(--dur) var(--ease),opacity var(--dur)}
+[data-ph="1"] .ph{--pw:min(43vw,270px)}
+.pb{width:0;opacity:0;border-width:0}
+[data-ph="1"] .pb{width:var(--pw);opacity:1;border-width:2px;margin-left:clamp(.8rem,3vw,3rem)}
+.hd{display:flex;align-items:center;gap:.7em;padding:.9em 1em;border-bottom:1px solid rgba(255,255,255,.14);white-space:nowrap}
+.av{width:2.4em;height:2.4em;border-radius:50%;background:#5a64c9;display:grid;place-items:center;font-weight:800;position:relative;flex:none}
+.av.v:after{content:"\2713";position:absolute;right:-.3em;bottom:-.3em;width:1.2em;height:1.2em;border-radius:50%;background:var(--cream);color:var(--ink);font-size:.8em;display:grid;place-items:center}
+.hd b{display:block;line-height:1.1}
+.tg{font:600 .75em var(--mono);color:rgba(241,238,228,.65);transition:color var(--dur)}
+.tg.v{color:var(--cream)}
+.chat{flex:1;padding:1em;display:flex;flex-direction:column;gap:.6em;justify-content:flex-start}
+.b{margin:0;max-width:86%;padding:.55em .8em;border-radius:1em 1em 1em .25em;background:var(--cream);color:var(--ink);font-weight:600;line-height:1.3;opacity:0;transform:translateY(10px);transition:opacity var(--dur) var(--ease),transform var(--dur) var(--ease)}
+.b.out{align-self:flex-end;background:#4d5cff;color:#fff;border-radius:1em 1em .25em 1em}
+.b.on{opacity:1;transform:none}
+.dots{display:flex;gap:.3em;width:4em}.dots i{width:.6em;height:.6em;border-radius:50%;background:var(--ink);animation:bl 1s infinite}.dots i:nth-child(2){animation-delay:.15s}.dots i:nth-child(3){animation-delay:.3s}
+@keyframes bl{50%{opacity:.25}}
+.chk{display:none;flex:1;flex-direction:column;justify-content:center;align-items:center;gap:.5em;text-align:center}
+[data-ph="1"] .chat{display:none}[data-ph="1"] .chk{display:flex}
+.chk small{font:600 .7em var(--mono);opacity:.75}
+.cd{display:flex;flex-direction:column;gap:.4em;font:700 1.7em var(--mono)}
+.cd span{padding:.1em .5em;border-radius:.4em;opacity:.12;transition:opacity var(--dur),background var(--dur),color var(--dur)}
+.cd span.on{opacity:1}.cd span.ok{background:var(--cream);color:var(--ink)}
+.caps{position:absolute;left:clamp(1rem,4vw,3rem);right:1rem;bottom:clamp(1rem,4vw,3rem);z-index:2;display:grid}
+.caps div{grid-area:1/1;opacity:0;transform:translateY(10px);transition:opacity var(--dur) var(--ease),transform var(--dur) var(--ease)}
+.caps div.on{opacity:1;transform:none}
+.caps h2{font-size:clamp(1.6rem,1rem + 2.6vw,3rem)}
+.caps p{margin:.6rem 0 0;max-width:40ch}
+.caps .warn{color:var(--alert)}
+/* Chapter 2 */
+.c2{background:var(--cream);color:var(--ink);padding:clamp(4rem,12vw,10rem) clamp(1rem,4vw,3rem);min-height:100vh}
+.c2 h2{font-size:var(--h2);max-width:11ch;margin-bottom:2rem}
+.search{display:flex;align-items:center;gap:.8rem;border:3px solid var(--ink);border-radius:99px;padding:.8rem 1.2rem;max-width:30rem;font:600 1.2rem var(--mono)}
+.search:focus-within{border-color:var(--cobalt)}
+.search input{flex:1;min-width:0;border:0;background:none;font:inherit;color:inherit}
+.search input:focus{outline:none}
+.res{min-height:4.5em;max-width:34ch;margin:1.2rem 0;font-weight:600;opacity:0;transform:translateY(8px);transition:opacity var(--dur) var(--ease),transform var(--dur) var(--ease)}
+.res.on{opacity:1;transform:none}
+.invite{max-width:26rem;border:3px solid var(--cobalt);border-radius:16px;padding:1.2rem;background:var(--cobalt);color:var(--cream);opacity:0;transform:translateY(30px) rotate(-2deg);transition:opacity var(--dur) var(--ease),transform 600ms var(--ease)}
+.invite.on{opacity:1;transform:none}
+.invite code{display:block;font:600 1.1rem var(--mono);letter-spacing:.05em;margin:.6rem 0;word-break:break-all}
+.invite small{font:400 .8rem var(--mono);opacity:.85}
+.c5{height:450vh;position:relative;background:var(--cream);color:var(--ink)}
+.c5 .pin,.c6a .pin{position:sticky;top:0;height:100vh;height:100svh;overflow:hidden}
+.c5 .film{inset:clamp(4.5rem,9svh,6rem) 0 clamp(12rem,34svh,17rem)}
+.c5 .ph{--pw:min(72vw,290px);border-color:var(--ink)}
+.sc{position:absolute;inset:0;background:#151b4a;color:var(--cream);clip-path:inset(0 50% 0 50%);transition:clip-path 650ms var(--ease);display:flex;flex-direction:column}
+.sc.on,.sc:first-child{clip-path:inset(0)}
+.sc .b{opacity:1;transform:none}
+.sc .chat{justify-content:center}
+.ct{display:flex;align-items:center;gap:.7em;padding:1em;border-bottom:1px solid rgba(255,255,255,.14)}
+.ct small{display:block;font:600 .75em var(--mono);opacity:.75}.ct .ok{color:var(--cream);opacity:1}
+.call{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1.2em;text-align:center}
+.call .av{width:5em;height:5em;font-size:1em}
+.wave{display:flex;gap:.3em;align-items:center;height:3em}.wave i{width:.35em;height:100%;background:var(--cream);border-radius:9em;animation:wv 1.1s ease-in-out infinite;transform:scaleY(.3)}
+.wave i:nth-child(2n){animation-delay:.2s}.wave i:nth-child(3n){animation-delay:.45s}.wave i:nth-child(5n){animation-delay:.7s}
+@keyframes wv{50%{transform:scaleY(1)}}
+.dots5{display:flex;gap:.6em}.dots5 i{width:.9em;height:.9em;border-radius:50%;background:var(--cream)}.dots5 i:nth-child(n+5){opacity:.25}
+.src{font:600 1.05em/1.8 var(--mono);text-align:center;margin:auto;padding:1em}
+.c6a{height:220vh;position:relative;background:var(--cobalt)}
+.c6a .pin{display:grid;place-items:center}
+.c6a .thread{opacity:min(1,calc(var(--p0,0)*4))}
+.c6b{background:var(--cobalt);padding:clamp(3rem,8vw,7rem) clamp(1rem,4vw,3rem)}
+.c6b h2{font-size:var(--h2);max-width:12ch;margin-bottom:1.5rem}
+.dl{display:inline-block;background:var(--cream);color:var(--ink);font-weight:800;font-size:clamp(1.3rem,1rem + 1.5vw,2rem);letter-spacing:-.03em;padding:1rem 1.8rem;border-radius:99px;text-decoration:none;transition:transform var(--dur) var(--ease)}
+.dl:hover,.dl:focus-visible{transform:translateY(-3px)}
+.meta{font:500 .8rem/1.6 var(--mono);opacity:.85;max-width:62ch;margin:.8rem 0 2rem}.alt{display:inline-block;border:2px solid var(--cream);color:var(--cream);font-weight:800;font-size:1.1rem;padding:.7rem 1.3rem;border-radius:99px;text-decoration:none;margin:0 .8rem .8rem 0;transition:background var(--dur),color var(--dur)}.alt:hover,.alt:focus-visible{background:var(--cream);color:var(--blue,#1f2fd8)}
+.steps3{max-width:60ch;padding-left:1.2rem}.steps3 li{margin-bottom:.8rem}
+.cred{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,18rem),1fr));gap:2rem;max-width:70rem;margin-top:3rem;padding-top:2rem;border-top:2px solid rgba(241,238,228,.4)}
+.cred h3{margin:0 0 .5rem;font-size:1.3rem;letter-spacing:-.02em}.cred p{margin:0 0 .6rem;max-width:44ch}
+.c3{background:var(--ink);color:var(--cream);padding:clamp(4rem,10vw,8rem) clamp(1rem,4vw,3rem)}
+.c3 h2{font-size:var(--h2);max-width:14ch;margin-bottom:1.5rem}.lead{max-width:48ch;margin:0 0 2rem}
+.demo{display:grid;grid-template-columns:1fr 1.3fr 1fr;gap:1rem;max-width:72rem}
+.bx{border:2px solid rgba(241,238,228,.3);border-radius:18px;padding:1rem;min-width:0;display:flex;flex-direction:column;gap:.6rem}
+.bx input{font:600 1rem var(--display);padding:.6rem .8rem;border:2px solid rgba(241,238,228,.4);border-radius:99px;background:transparent;color:inherit;min-width:0}
+.bx input:focus{border-color:var(--cream);outline:none}
+button{font:700 1rem var(--display);padding:.7rem 1.2rem;border-radius:99px;border:2px solid var(--cream);background:var(--cream);color:var(--ink);cursor:pointer;transition:transform var(--dur) var(--ease)}
+button:active{transform:scale(.96)}
+.mitm{margin-top:1.2rem;background:transparent;color:var(--cream)}.mitm[aria-pressed=true]{background:var(--alert);border-color:var(--alert);color:var(--ink)}
+.wire code{font:500 .8rem/1.4 var(--mono);word-break:break-all;opacity:.85}.wire small{font:600 .8rem var(--mono);color:var(--alert);min-height:1.2em}
+.rcv{margin:0;font-weight:700;font-size:1.2rem}
+.codes{display:flex;gap:2rem;flex-wrap:wrap;margin-top:2rem}.codes small{display:block;font:600 .75rem var(--mono);opacity:.7}.codes code{font:700 1.6rem var(--mono)}
+.verdict{font-weight:800;font-size:clamp(1.4rem,1rem + 2vw,2.4rem);letter-spacing:-.03em;margin:1rem 0 .5rem;min-height:1.2em}.verdict.bad{color:var(--alert)}
+.note{font-size:.85rem;opacity:.75;max-width:60ch}
+@media (max-width:760px){.demo{grid-template-columns:1fr}}
+.honest{background:var(--ink);color:var(--cream);padding:1.5rem clamp(1rem,4vw,3rem);font-size:.95rem}
+.honest p{margin:0;max-width:70ch}
+@media (prefers-reduced-motion:reduce){
+ html{scroll-behavior:auto}*{transition:none!important;animation:none!important}
+ .c0{height:auto}.c0{height:auto;--rv:1;--lg:1;--hk:0;--cu:0;--th:1;--p0:0}.c0 .halves .l{color:var(--cream)}.c0 .pin{position:static;height:auto;display:block}.open{position:relative;height:100svh;inset:auto;width:100%;margin:0}.halves{justify-content:center;margin:6rem 0 2rem}.tag{position:static;padding:0 1rem 4rem}.thread{display:none}
+}
+</style>
+</head>
+<body>
+<noscript><style>.open [data-d]{opacity:1!important;transform:none!important}#typ{display:none}.c0{height:100svh}.halves,.thread,.tag{display:none}</style></noscript>
+<a class="sr" href="#c2">Skip to the invitation</a>
+<div class="bar"><span>K3ncrypt</span><a href="#get">Get the beta</a></div>
+<div class="seam" aria-hidden="true"><i></i></div>
 
-    <main id="main">
-      <section class="hero" id="top" aria-labelledby="hero-title">
-        <div class="hero-grid" aria-hidden="true"></div>
-        <div class="hero-copy">
-          <p class="eyebrow"><span class="status-dot"></span> OPEN-SOURCE · EXPERIMENTAL BETA</p>
-          <h1 id="hero-title">Private communication<br><span>without surveillance.</span></h1>
-          <p class="hero-description">
-            A messenger built around encrypted conversations, device-held identity, and the choice
-            to verify who you talk to.
-          </p>
-          <div class="hero-actions">
-            <a
-              class="button button-primary"
-              href="https://k3ncrypt.onrender.com"
-              target="_blank"
-              rel="noreferrer"
-            >
-              Open web app <span aria-hidden="true">↗</span>
-            </a>
-            <a
-              class="button button-light"
-              href="https://github.com/SHOnnay/k3ncrypt/releases/download/v0.1.0-beta.2/K3NCRYPT-v0.1.0-beta.2.apk"
-              target="_blank"
-              rel="noreferrer"
-            >
-              Download Android APK <span aria-hidden="true">↓</span>
-            </a>
-          </div>
-          <p class="hero-note">
-            Experimental beta. Android v0.1.0-beta.2 is available from the official GitHub release.
-          </p>
-        </div>
-        <div class="hero-art" aria-hidden="true">
-          <div class="orbit orbit-one"></div>
-          <div class="orbit orbit-two"></div>
-          <div class="orbit orbit-three"></div>
-          <div class="art-core"><img src="./assets/k3ncrypt-mark.svg" alt=""></div>
-          <span class="orbit-node node-one"></span>
-          <span class="orbit-node node-two"></span>
-          <span class="orbit-node node-three"></span>
-          <span class="orbit-node node-four"></span>
-          <span class="art-label label-one">DEVICE HELD</span>
-          <span class="art-label label-two">VERIFIED</span>
-          <span class="art-label label-three">ENCRYPTED</span>
-        </div>
-        <div class="hero-bottom" aria-hidden="true">
-          <span>01 / PRIVATE BY DESIGN</span><span>SCROLL TO EXPLORE ↓</span>
-        </div>
-      </section>
+<main>
+<script>document.documentElement.classList.add("js")</script>
+<section class="c0" id="c0" aria-label="Title">
+  <div class="pin">
+    <div class="open">
+      <div class="pn pnl"><div class="pc"><div class="grp"><div class="snd"><label class="sr" for="nm">Name of the person writing to you</label><input class="nm" id="nm" value="Your friend" placeholder="Your friend" maxlength="16" autocomplete="off" autocapitalize="words" spellcheck="false"></div><p class="wd"><span class="ln" id="l1"><i>hey.</i></span><span class="ln" id="l2"><i>it's me.</i></span><span class="ln gap" aria-hidden="true"></span></p></div></div></div>
+      <div class="pn pnr" aria-hidden="true"><div class="pc"><div class="grp"><p class="you">you</p><p class="q"><span class="ln" id="q1"><i>how do</i></span><span class="ln" id="q2"><i>you</i></span><span class="ln" id="q3"><i>know?</i></span></p></div></div></div>
+      <i class="sm" aria-hidden="true"></i>
+    </div>
+    <p class="sr">Opening scene: someone who says they are your friend writes "hey." and "it's me." You answer: "how do you know?"</p>
+    <h1 class="halves"><span class="l">K3NC</span><span class="r">RYPT</span></h1>
+    <div class="thread" aria-hidden="true"><b></b><i class="da"></i><i class="db"></i><em class="ta">you</em><em class="tb"><span data-n="c">Your friend</span>?</em></div>
+    <p class="tag">Private messages for exactly two people. Open source. Beta.</p>
+  </div>
+</section>
 
-      <section class="intro section-wrap" aria-labelledby="intro-title">
-        <p class="eyebrow eyebrow-blue">A DIFFERENT KIND OF MESSENGER</p>
-        <div class="intro-row">
-          <h2 id="intro-title">Your conversations<br>belong to you.</h2>
-          <p>
-            K3NCRYPT puts the tools for private communication in your hands. Messages are encrypted
-            on your device. You decide which contacts to verify. The service helps deliver data
-            without needing to read your conversations.
-          </p>
+<section class="c1" id="c1" aria-labelledby="c1t">
+  <h2 class="sr" id="c1t">Someone says they're your friend. How do you know?</h2>
+  <div class="pin" id="pin" data-ph="0">
+    <div class="relief" aria-hidden="true"></div>
+    <p class="say" id="say" aria-hidden="true"></p>
+    <div class="film" aria-hidden="true">
+      <div class="ph">
+        <div class="hd"><span class="av" id="av" data-ni>F</span><span><b><span data-n>your friend</span></b><small class="tg" id="tg">not verified</small></span></div>
+        <div class="chat">
+          <p class="b" data-t=".05">hey it's me! new phone</p>
+          <p class="b" data-t=".13">can you send me the address?</p>
+          <p class="b" data-t=".21">I'm locked out, quick</p>
+          <p class="b" data-t=".27" data-u=".36"><span class="dots"><i></i><i></i><i></i></span></p>
+          <p class="b out" data-t=".86">sending it now</p>
+          <p class="b" data-t=".92">thank you!</p>
         </div>
-      </section>
-
-      <section class="features section-wrap" id="features" aria-labelledby="features-title">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow eyebrow-blue">BUILT FOR PRIVATE CONVERSATION</p>
-            <h2 id="features-title">Less exposure.<br>More control.</h2>
-          </div>
-          <p class="section-aside">
-            The essentials for staying in touch, designed with privacy at the center.
-          </p>
-        </div>
-        <div class="feature-grid">
-          <article class="feature-card feature-large">
-            <div class="feature-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24">
-                <path d="M6 10V7a6 6 0 0 1 12 0v3M5 10h14v11H5z" />
-                <path d="M12 14v3" />
-              </svg>
-            </div>
-            <p class="feature-index">01 — PRIVATE BY DEFAULT</p>
-            <h3>End-to-end encryption</h3>
-            <p>
-              Your message is encrypted on your device before it is sent. The service relays
-              encrypted data and does not normally have access to message plaintext.
-            </p>
-          </article>
-          <article class="feature-card feature-blue">
-            <div class="feature-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24">
-                <circle cx="12" cy="12" r="9" />
-                <path d="m8 12 2.5 2.5L16.5 9" />
-              </svg>
-            </div>
-            <p class="feature-index">02 — YOUR CHOICE</p>
-            <h3>Identity verification</h3>
-            <p>
-              Compare a contact’s fingerprint through another trusted channel, then confirm it
-              yourself. Scanning an invitation QR creates a contact; it never verifies one.
-            </p>
-          </article>
-          <article class="feature-card">
-            <div class="feature-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24">
-                <path d="M4 5h16v11H8l-4 4z" />
-                <path d="M8 9h8M8 12h5" />
-              </svg>
-            </div>
-            <p class="feature-index">03 — EVERYDAY MESSAGING</p>
-            <h3>Encrypted messaging</h3>
-            <p>
-              Have one-to-one conversations with encrypted, relay-based delivery. Set up contacts
-              by sharing or scanning an invitation QR, then verify identity separately.
-            </p>
-          </article>
-          <article class="feature-card">
-            <div class="feature-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24">
-                <path
-                  d="M5 4h4l2 5-3 2a15 15 0 0 0 5 5l2-3 5 2v4a2 2 0 0 1-2 2C10 21 3 14 3 6a2 2 0 0 1 2-2z"
-                />
-              </svg>
-            </div>
-            <p class="feature-index">04 — FACE TO VOICE</p>
-            <h3>Voice calls · experimental</h3>
-            <p>
-              Voice calling is present in the Web and Android beta for verified contacts. Availability
-              depends on network and device conditions; video calling is not available.
-            </p>
-          </article>
-          <article class="feature-card feature-wide">
-            <div class="feature-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24">
-                <path d="M12 3 4 6v5c0 5 3.4 8.3 8 10 4.6-1.7 8-5 8-10V6z" />
-                <path d="m9 12 2 2 4-4" />
-              </svg>
-            </div>
-            <p class="feature-index">05 — OPEN TO INSPECTION</p>
-            <h3>Open source</h3>
-            <p>
-              Review the code, follow development, and understand how the application is put
-              together.
-            </p>
-            <a
-              class="text-link"
-              href="https://github.com/SHOnnay/k3ncrypt"
-              target="_blank"
-              rel="noreferrer"
-              >Explore the repository <span aria-hidden="true">↗</span></a
-            >
-          </article>
-        </div>
-      </section>
-
-      <section class="security-band" id="security" aria-labelledby="security-title">
-        <div class="security-inner">
-          <div class="security-heading">
-            <p class="eyebrow">A CLEARER SECURITY MODEL</p>
-            <h2 id="security-title">Privacy you can<br>understand.</h2>
-            <p>No mysterious badges. No automatic trust. Just a few clear boundaries.</p>
-          </div>
-          <div class="security-list">
-            <article>
-              <span class="security-number">01</span>
-              <div>
-                <h3>Encryption happens on your devices</h3>
-                <p>
-                  Your client encrypts message content before delivery. The relay carries encrypted
-                  envelopes and needed routing information. Relay acknowledgements do not prove that a
-                  contact persisted or viewed a message.
-                </p>
-              </div>
-            </article>
-            <article>
-              <span class="security-number">02</span>
-              <div>
-                <h3>The relay is not your reader</h3>
-                <p>
-                  The service supports delivery and availability. It is designed not to read message
-                  plaintext, though it can observe operational metadata such as connection timing
-                  and routing information.
-                </p>
-              </div>
-            </article>
-            <article>
-              <span class="security-number">03</span>
-              <div>
-                <h3>Verification is explicit</h3>
-                <p>
-                  Compare fingerprints with your contact using a separate trusted channel. This
-                  helps detect an unexpected identity; it is not a guarantee against every threat.
-                </p>
-              </div>
-            </article>
-          </div>
-          <a
-            class="security-doc-link"
-            href="https://github.com/SHOnnay/k3ncrypt/blob/main/docs/K3NCRYPT_ENGINEERING_DOCUMENTATION.md"
-            target="_blank"
-            rel="noreferrer"
-            >Read the engineering documentation <span aria-hidden="true">↗</span></a
-          >
-        </div>
-      </section>
-
-      <section class="download section-wrap" id="download" aria-labelledby="download-title">
-        <div class="download-heading">
-          <p class="eyebrow eyebrow-blue">START WITH THE BETA</p>
-          <h2 id="download-title">A quieter place<br>to talk.</h2>
-          <p>
-            K3NCRYPT is in experimental beta. Try the web app or install the current Android beta.
-          </p>
-        </div>
-        <div class="download-options">
-          <article class="download-card download-featured">
-            <div class="download-card-top">
-              <span class="download-symbol" aria-hidden="true">↗</span
-              ><span class="availability">AVAILABLE</span>
-            </div>
-            <h3>Web app</h3>
-            <p>
-              Open K3NCRYPT in a supported browser. A secure connection is required for microphone
-              access and calls.
-            </p>
-            <a
-              class="button button-primary"
-              href="https://k3ncrypt.onrender.com"
-              target="_blank"
-              rel="noreferrer"
-              >Open web app <span aria-hidden="true">↗</span></a
-            >
-          </article>
-          <article class="download-card">
-            <div class="download-card-top">
-              <span class="download-symbol" aria-hidden="true">↓</span
-              ><span class="availability">AVAILABLE · v0.1.0-beta.2</span>
-            </div>
-            <h3>Android</h3>
-            <p>
-              Install the Android beta APK from the official GitHub release. This is experimental
-              software; notifications and network-dependent calling may be limited.
-            </p>
-            <a
-              class="button button-outline"
-              href="https://github.com/SHOnnay/k3ncrypt/releases/download/v0.1.0-beta.2/K3NCRYPT-v0.1.0-beta.2.apk"
-              target="_blank"
-              rel="noreferrer"
-              >Download Android APK <span aria-hidden="true">↓</span></a
-            >
-          </article>
-          <article class="download-card download-muted">
-            <div class="download-card-top">
-              <span class="download-symbol" aria-hidden="true">⌘</span
-              ><span class="availability availability-future">PLANNED</span>
-            </div>
-            <h3>Desktop</h3>
-            <p>
-              A dedicated desktop app is a future direction. For now, use the web app in your
-              browser.
-            </p>
-            <span class="future-label">On the roadmap</span>
-          </article>
-        </div>
-      </section>
-
-      <section class="developers" id="developers" aria-labelledby="developers-title">
-        <div class="developers-inner">
-          <div>
-            <p class="eyebrow">FOR BUILDERS &amp; CURIOUS MINDS</p>
-            <h2 id="developers-title">Open code.<br>Open questions.</h2>
-            <p>
-              K3NCRYPT is open source. Read the architecture and security model, or follow the work
-              in progress.
-            </p>
-          </div>
-          <div class="developer-links">
-            <a href="https://github.com/SHOnnay/k3ncrypt" target="_blank" rel="noreferrer"
-              ><span>01</span><span>GitHub repository</span><b aria-hidden="true">↗</b></a
-            >
-            <a
-              href="https://github.com/SHOnnay/k3ncrypt/blob/main/docs/K3NCRYPT_ENGINEERING_DOCUMENTATION.md"
-              target="_blank"
-              rel="noreferrer"
-              ><span>02</span><span>Engineering documentation</span><b aria-hidden="true">↗</b></a
-            >
-            <a
-              href="https://github.com/SHOnnay/k3ncrypt/blob/main/docs/ARCHITECTURE.md"
-              target="_blank"
-              rel="noreferrer"
-              ><span>03</span><span>Architecture overview</span><b aria-hidden="true">↗</b></a
-            >
-            <a
-              href="https://github.com/SHOnnay/k3ncrypt/blob/main/SECURITY.md"
-              target="_blank"
-              rel="noreferrer"
-              ><span>04</span><span>Security policy</span><b aria-hidden="true">↗</b></a
-            >
-          </div>
-        </div>
-      </section>
-
-      <section class="about section-wrap" aria-labelledby="about-title">
-        <div class="about-mark"><img src="./assets/k3ncrypt-mark.svg" alt=""></div>
-        <div>
-          <p class="eyebrow eyebrow-blue">WHY K3NCRYPT EXISTS</p>
-          <h2 id="about-title">Private should be<br>a practical choice.</h2>
-        </div>
-        <p>
-          Our conversations carry the parts of life we do not want broadcast, profiled, or casually
-          exposed. K3NCRYPT exists to make private communication more understandable and
-          user-controlled—while keeping the code open for people to examine.
-        </p>
-      </section>
-    </main>
-
-    <footer class="site-footer">
-      <a class="footer-brand" href="#top"
-        ><img src="./assets/k3ncrypt-lockup.svg" alt="K3NCRYPT"></a>
-      <p>Private communication without surveillance.</p>
-      <div class="footer-links">
-        <a href="https://github.com/SHOnnay/k3ncrypt" target="_blank" rel="noreferrer">Source</a
-        ><a
-          href="https://github.com/SHOnnay/k3ncrypt/blob/main/docs/K3NCRYPT_ENGINEERING_DOCUMENTATION.md"
-          target="_blank"
-          rel="noreferrer"
-          >Documentation</a
-        ><a href="https://github.com/SHOnnay/k3ncrypt/security" target="_blank" rel="noreferrer"
-          >Security</a
-        >
+        <div class="chk"><small>YOUR CODE (EXAMPLE)</small><div class="cd"><span data-t=".44">4821</span><span data-t=".54">9057</span><span data-t=".64">3316</span></div></div>
       </div>
-      <small
-        >K3NCRYPT is beta software. No security tool can promise protection from every
-        threat.</small
-      >
-    </footer>
-  </body>
+      <div class="ph pb">
+        <div class="hd"><span><span data-n>your friend</span>'s phone</span></div>
+        <div class="chk"><small><span data-n="u">YOUR FRIEND</span>'S CODE (EXAMPLE)</small><div class="cd"><span data-t=".45">4821</span><span data-t=".55">9057</span><span data-t=".65">3316</span></div></div>
+      </div>
+    </div>
+    <div class="caps" id="caps" aria-live="polite">
+      <div><h2>Someone says they're <span data-n>your friend</span>.</h2><p>New phone, new number: it happens to everyone. Same name, same photo. But a name alone isn't enough.</p></div>
+      <div><h2>So you check with them directly.</h2><p>You're together, or on a call you trust. Each phone shows a short code. You compare them out loud.</p></div>
+      <div><h2><span data-n="c">Your friend</span> is verified.</h2><p>You checked with them yourself, and the codes match. Your phone remembers that you checked.</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="c2" id="c2" aria-labelledby="c2t">
+  <h2 id="c2t">No feeds. No groups. No strangers.</h2>
+  <label class="sr" for="q">Search for a person</label>
+  <div class="search"><span aria-hidden="true">&#9906;</span><input id="q" value="" placeholder="search for a name" autocomplete="off"></div>
+  <p class="res" id="res" aria-live="polite">No results. You can't search for people here. You can only invite them.</p>
+  <div class="invite" id="inv"><small>ILLUSTRATION, NOT A REAL INVITE</small><code>k3n-invite-&#9618;&#9618;&#9618;&#9618;&#9618;&#9618;&#9618;&#9618;</code>
+    <small>An invitation connects two people. It does not prove who they are.</small></div>
+</section>
+</main>
+<section class="c3" id="c3" aria-labelledby="c3t">
+  <h2 id="c3t">Private isn't enough. You need to know who's there.</h2>
+  <p class="lead">Your message is scrambled on your phone before it leaves. The relay in the middle only carries the scrambled version. Type something, then try putting someone in the middle.</p>
+  <div class="demo">
+    <div class="bx"><b>You</b><label class="sr" for="t3">Message</label><input id="t3" value="meet at 7?" maxlength="40" autocomplete="off"><button id="s3" type="button">Send</button></div>
+    <div class="bx wire"><b>What the relay sees</b><code id="w3">(nothing sent yet)</code><small id="e3"></small></div>
+    <div class="bx"><b><span data-n>your friend</span></b><p id="r3" class="rcv">...</p></div>
+  </div>
+  <button id="m3" class="mitm" type="button" aria-pressed="false">Put someone in the middle</button>
+  <div class="codes"><div><small>YOUR CODE</small><code id="cy">----</code></div><div><small><span data-n="u">YOUR FRIEND</span>'S CODE</small><code id="cm">----</code></div></div>
+  <p class="verdict" id="v3" aria-live="polite"></p>
+  <p class="note">Illustration using your browser's built-in Web Crypto. It is not K3ncrypt's own code, and the codes here are examples.</p>
+</section>
+<section class="c5" id="c5" aria-labelledby="c5t">
+  <h2 class="sr" id="c5t">What you can do once you trust someone</h2>
+  <div class="pin" id="pin5">
+    <div class="film" aria-hidden="true"><div class="ph">
+      <div class="sc"><div class="hd"><span class="av v" data-ni>F</span><span><b><span data-n>your friend</span></b><small class="tg v">verified</small></span></div><div class="chat"><p class="b">see you at 7</p><p class="b out">bringing the keys</p><p class="b">perfect</p></div></div>
+      <div class="sc"><div class="hd"><b>Contacts</b></div><div class="ct"><span class="av v" data-ni>F</span><span><b><span data-n>your friend</span></b><small class="ok">verified</small></span></div><div class="ct"><span class="av">?</span><span><b>New invitation</b><small>not checked yet</small></span></div></div>
+      <div class="sc"><div class="call"><span class="av v" data-ni>F</span><b><span data-n>your friend</span></b><div class="wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><small class="tg v">voice call</small></div></div>
+      <div class="sc"><div class="call"><b>K3ncrypt</b><div class="dots5"><i></i><i></i><i></i><i></i><i></i><i></i></div><small class="tg v">unlock on this phone</small></div></div>
+      <div class="sc"><p class="src">SHOnnay/k3ncrypt<br>open source<br>Apache-2.0</p></div>
+    </div></div>
+    <div class="caps" id="caps5" aria-live="polite">
+      <div><h2>Now you can just talk.</h2><p>Messages are encrypted on your phone before they leave. The relay delivers them, and that is all it does with the content.</p></div>
+      <div><h2>The people you checked stay checked.</h2><p>An invitation connects you. It doesn't prove who someone is. Checking does, and your phone remembers.</p></div>
+      <div><h2>Then you can call them.</h2><p>Voice calls with verified contacts. How well they work depends on your network and device.</p></div>
+      <div><h2>Your phone stays yours.</h2><p>The app unlocks on your phone with your device passphrase. Keep it private: a compromised phone can expose what's on it.</p></div>
+      <div><h2>Nothing hidden.</h2><p>K3ncrypt is open source under Apache-2.0. Read it, run it, question it.</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="c6a" id="c6a" aria-label="Two halves become one"><div class="pin" id="pin6">
+  <div class="halves" aria-hidden="true"><span class="l">K3NC</span><span class="r">RYPT</span></div>
+  <div class="thread" aria-hidden="true"><b></b><i class="da"></i><i class="db"></i></div>
+</div></section>
+
+<section class="c6b" id="get" aria-labelledby="c6t">
+  <h2 id="c6t">Can I try it? Yes. It's a beta.</h2>
+  <a class="dl" href="https://github.com/SHOnnay/k3ncrypt/releases/download/v0.1.0-beta.2/K3NCRYPT-v0.1.0-beta.2.apk">Download the Android beta</a>
+  <p class="meta">K3NCRYPT-v0.1.0-beta.2.apk, from the official GitHub release.</p>
+  <p><a class="alt" href="https://k3ncrypt.onrender.com/">Open the web version</a><a class="alt" href="https://github.com/SHOnnay/k3ncrypt">Read the source</a></p>
+  <p class="meta">Desktop apps for Linux and Mac are coming. They aren't available yet.</p>
+  <ol class="steps3">
+    <li>Open the downloaded APK on your Android phone.</li>
+    <li>If Android asks, allow your browser or file manager to install it, then continue.</li>
+    <li>Open K3ncrypt and follow the setup. Keep your device passphrase private.</li>
+  </ol>
+  <p class="meta">Install only the APK attached to the official release. Android may show an unfamiliar-source warning because this beta is distributed directly, not through an app store.</p>
+  <div class="cred">
+    <div><h3>Where it stands</h3><p>This is a private beta, still being tested. Notifications may be limited, and call quality depends on your network and device.</p><p>The service delivers messages and can see routing and connection timing. A compromised phone can expose information while it's in use. No independent audit is claimed.</p></div>
+    <div><h3>Where it comes from</h3><p>K3ncrypt grows out of <a href="https://github.com/muke1908/chat-e2ee">muke1908/chat-e2ee</a> and keeps that project's history and required notices.</p><p>Open source under Apache-2.0. <a href="https://github.com/SHOnnay/k3ncrypt">Read the source</a>.</p></div>
+  </div>
+</section>
+<div class="honest"><p>No fonts, scripts or trackers load from other servers, and this page sets no cookies.</p></div>
+
+<script>
+/* Scroll position picks a beat; CSS does the moving. */
+(()=>{
+'use strict';
+const RM=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const CFG={phases:[.36,.8],relief:[.74,.92],verifiedAt:.8,
+ beats:[[0,'{N}?'],[.1,'could be them.'],[.3,'new phone, maybe?'],[.38,'\u201cRead me your code.\u201d'],[.44,'\u201c4821.\u201d  \u201cSame.\u201d'],[.54,'\u201c9057.\u201d  \u201cSame.\u201d'],[.64,'\u201c3316.\u201d  \u201cSame.\u201d'],[.8,''],[.93,'\u2713 {N} is verified.']]};
+const $=s=>document.querySelector(s),cl=v=>Math.min(1,Math.max(0,v));
+const ease=t=>t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2,seg=(p,[a,b])=>ease(cl((p-a)/(b-a)));
+const root=document.documentElement,c0=$('#c0'),c1=$('#c1'),pin=$('#pin'),say=$('#say'),tg=$('#tg'),av=$('#av');
+const timed=[...c1.querySelectorAll('[data-t]')],caps=[...document.querySelectorAll('#caps>div')];
+const prog=el=>{const r=el.getBoundingClientRect();return cl(-r.top/(el.offsetHeight-innerHeight))};
+let who='your friend';const up=t=>t.charAt(0).toUpperCase()+t.slice(1);let ix5=-1,ph=-1,cap=-1,beat=-1,buzzed=false,queued=false;
+function apply(){
+  queued=false;
+  const q0=cl((prog(c0)-.08)/.92);root.style.setProperty('--p0',seg(q0,[.5,1]).toFixed(4));const hk=seg(q0,[.03,.3]);root.style.setProperty('--hk',hk.toFixed(3));root.style.setProperty('--rv',seg(q0,[.14,.3]).toFixed(3));root.style.setProperty('--cu',seg(q0,[.36,.64]).toFixed(3));root.style.setProperty('--th',seg(q0,[.4,.56]).toFixed(3));root.style.setProperty('--lg',seg(q0,[.64,.82]).toFixed(3));c0.classList.toggle('moved',hk>.04);
+  root.style.setProperty('--sp',(scrollY/(root.scrollHeight-innerHeight)).toFixed(4));
+  const sc=[...document.querySelectorAll('.sc')],c5=$('#c5'),caps5=[...document.querySelectorAll('#caps5>div')];
+  const i5=Math.min(4,Math.floor(prog(c5)*5));
+  if(i5!==ix5){ix5=i5;sc.forEach((x,k)=>x.classList.toggle('on',k<=i5));caps5.forEach((x,k)=>x.classList.toggle('on',k===i5))}
+  $('#pin6').style.setProperty('--p0',(1-seg(prog($('#c6a')),[.05,.6])).toFixed(3));
+  const p=prog(c1),r=c1.getBoundingClientRect();
+  if(r.top>innerHeight||r.bottom<0)return;
+  const P=p<CFG.phases[0]?0:p<CFG.phases[1]?1:2;
+  if(P!==ph){ph=P;pin.dataset.ph=P;caps.forEach((c,k)=>c.classList.toggle('on',k===P))}
+  pin.style.setProperty('--rl',seg(p,CFG.relief).toFixed(3));
+  timed.forEach(el=>{const t=+el.dataset.t,u=+(el.dataset.u||9);el.classList.toggle('on',p>=t&&p<u);el.classList.toggle('ok',p>=t+.05)});
+  let b=0;CFG.beats.forEach((x,i)=>{if(p>=x[0])b=i});
+  if(b!==beat){beat=b;say.textContent=CFG.beats[b][1].replace('{N}',up(who))}
+  const v=p>=CFG.verifiedAt;tg.textContent=v?'verified':'not verified';tg.classList.toggle('v',v);av.classList.toggle('v',v);
+  if(v&&!buzzed){buzzed=true;navigator.vibrate&&navigator.vibrate(20)}if(p<.7)buzzed=false;
+}
+const queue=()=>{if(!queued){queued=true;requestAnimationFrame(apply)}};
+addEventListener('scroll',queue,{passive:true});addEventListener('resize',queue);
+/* Chapter 2: typing is triggered once, not scrubbed */
+const q=$('#q'),res=$('#res'),inv=$('#inv');
+const show=()=>{res.classList.add('on');setTimeout(()=>inv.classList.add('on'),RM?0:700)};
+new IntersectionObserver((e,o)=>{if(!e[0].isIntersecting)return;o.disconnect();
+  if(RM){q.value=who;show();return}
+  let i=0;const w=who,tick=()=>{q.value=w.slice(0,++i);i<w.length?setTimeout(tick,160):setTimeout(show,400)};setTimeout(tick,300)},{threshold:.5}).observe($('#c2'));
+q.addEventListener('input',()=>{res.classList.add('on');inv.classList.add('on')});
+/* Chapter 3: a real browser-side demo with Web Crypto. Illustration only. */
+const D={mitm:false},te=new TextEncoder(),td=new TextDecoder(),$i=id=>document.getElementById(id);
+const hx=b=>[...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('');
+const HAS=!!(window.crypto&&crypto.subtle);
+const gen=()=>crypto.subtle.generateKey({name:'ECDH',namedCurve:'P-256'},true,['deriveKey']);
+const der=(a,b)=>crypto.subtle.deriveKey({name:'ECDH',public:b.publicKey},a.privateKey,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
+const pub=async k=>hx(await crypto.subtle.exportKey('raw',k.publicKey));
+async function code(a,b){const [x,y]=(await Promise.all([pub(a),pub(b)])).sort();const h=new Uint8Array(await crypto.subtle.digest('SHA-256',te.encode(x+y)));
+  return [0,2,4].map(i=>String(((h[i]<<8)|h[i+1])%10000).padStart(4,'0')).join(' ')}
+async function session(){
+  const you=await gen(),maya=await gen(),eve=D.mitm?await gen():null,yv=eve||maya,mv=eve||you;
+  D.send=await der(you,yv);D.recv=await der(maya,mv);
+  if(eve){D.eveIn=await der(eve,you);D.eveOut=await der(eve,maya)}
+  const a=await code(you,yv),b=await code(maya,mv);
+  $i('cy').textContent=a;$i('cm').textContent=b;const v=$i('v3'),ok=a===b;
+  v.classList.toggle('bad',!ok);v.textContent=ok?'The codes match. '+up(who)+' is verified.':"The codes don't match. Someone is in the middle.";
+  $i('e3').textContent='';
+}
+async function send(){
+  if(!D.send)await session();
+  const text=$i('t3').value.trim()||'hi',iv=crypto.getRandomValues(new Uint8Array(12));
+  const ct=await crypto.subtle.encrypt({name:'AES-GCM',iv},D.send,te.encode(text));
+  const w=hx(iv)+hx(ct);$i('w3').textContent=w.length>110?w.slice(0,110)+'...':w;
+  let oiv=iv,oct=ct;
+  if(D.mitm){const pt=await crypto.subtle.decrypt({name:'AES-GCM',iv},D.eveIn,ct);$i('e3').textContent='The person in the middle read: "'+td.decode(pt)+'"';
+    oiv=crypto.getRandomValues(new Uint8Array(12));oct=await crypto.subtle.encrypt({name:'AES-GCM',iv:oiv},D.eveOut,pt)}
+  $i('r3').textContent=td.decode(await crypto.subtle.decrypt({name:'AES-GCM',iv:oiv},D.recv,oct));
+}
+if(!HAS){$i('v3').textContent="This browser can't run the demo here. The idea still holds: encryption alone doesn't tell you who is on the other end.";$i('s3').disabled=$i('m3').disabled=true}
+else{$i('s3').onclick=send;$i('t3').addEventListener('keydown',e=>{if(e.key==='Enter')send()});
+  $i('m3').onclick=async e=>{D.mitm=!D.mitm;e.currentTarget.setAttribute('aria-pressed',D.mitm);e.currentTarget.textContent=D.mitm?'Take them out':'Put someone in the middle';
+    D.send=null;await session();$i('r3').textContent='...';$i('w3').textContent='(send a message)';navigator.vibrate&&D.mitm&&navigator.vibrate(30)};
+  new IntersectionObserver((e,o)=>{if(e[0].isIntersecting){o.disconnect();session()}}).observe($i('c3'))}
+/* Chapter 0: dialogue across the seam. The name is typography you can edit. */
+const nm=$('#nm'),L=['#l1','#l2','#q1','#q2','#q3'].map(x=>$(x)),sleep=ms=>new Promise(r=>setTimeout(r,ms));let skip=false;
+const size=()=>nm.style.setProperty('--n',Math.max(4,nm.value.length||11));
+const applyNames=()=>{const v=nm.value.trim();who=v&&!['your friend','a friend'].includes(v.toLowerCase())?v:'your friend';document.querySelectorAll('[data-n]').forEach(e=>{const m=e.dataset.n;e.textContent=m==='c'?up(who):m==='u'?who.toUpperCase():who});document.querySelectorAll('[data-ni]').forEach(e=>e.textContent=(who==='your friend'?'F':who[0]).toUpperCase())};
+function final(){skip=true;L.forEach(e=>e.classList.add('on'))}
+async function film(){for(const [i,ms] of [[0,300],[1,420],[2,700],[3,150],[4,150]]){await sleep(ms);if(skip)return;L[i].classList.add('on')}}
+nm.addEventListener('input',()=>{size();applyNames();apply()});
+nm.addEventListener('focus',()=>setTimeout(()=>{if(nm.value==='Your friend')nm.select()},0));
+addEventListener('scroll',()=>{if(!skip&&prog(c0)>.04)final()},{passive:true});
+size();applyNames();RM?final():film();
+apply();
+})();
+</script>
+</body>
 </html>
