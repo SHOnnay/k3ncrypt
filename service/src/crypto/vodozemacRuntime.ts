@@ -37,6 +37,8 @@ export interface VodozemacBindings {
 
 export type VodozemacBindingsLoader = () => Promise<VodozemacBindings>;
 
+export type InboundAcceptanceUpdateBuilder = (plaintext: ArrayBuffer) => Promise<readonly SecureRecordUpdate[]> | readonly SecureRecordUpdate[];
+
 /**
  * Explicit owner for the modern protocol. It deliberately accepts only opaque
  * factories and handles; UI code cannot access account keys or pickles.
@@ -250,6 +252,157 @@ export class VodozemacRuntime {
         }
     }
 
+    /** Atomically advances an established session with caller-owned durable acceptance records. */
+    public async decryptAndCommitInbound(
+        channel: 'message' | 'signaling',
+        envelope: Parameters<VodozemacCryptoSession['decrypt']>[1],
+        buildUpdates: InboundAcceptanceUpdateBuilder,
+    ): Promise<void> {
+        return this.sessionMutex.runExclusive(async () => {
+            this.requireState('active', 'persisted');
+            if (!this.session || !this.conversationId || !this.persistedSessionSnapshot || !this.storage.compareAndSwapRecords) {
+                throw new VodozemacBoundaryError('CORRUPTED_SESSION', 'The inbound message could not be safely accepted.');
+            }
+            const conversationId = this.conversationId;
+            const sessionId = this.session.sessionId();
+            const expectedSession = this.persistedSessionSnapshot.slice(0);
+            let plaintext: ArrayBuffer | undefined;
+            let nextSession: ArrayBuffer | undefined;
+            let acceptanceUpdates: readonly SecureRecordUpdate[] = [];
+            let updates: readonly SecureRecordUpdate[] = [];
+            let acceptanceBuildFailed = false;
+            let acceptanceBuildError: unknown;
+            try {
+                const durableSession = await this.storage.read('vodozemac-session', conversationId);
+                if (!equalBytes(durableSession, expectedSession)) throw new Error('Persisted inbound session changed.');
+                if (durableSession) new Uint8Array(durableSession).fill(0);
+                try { plaintext = await this.session.decrypt(channel, envelope); }
+                catch { throw new VodozemacBoundaryError('INVALID_CIPHERTEXT', 'The message could not be decrypted.'); }
+                let additional: readonly SecureRecordUpdate[];
+                try { additional = await buildUpdates(plaintext); acceptanceUpdates = additional; }
+                catch (error) { acceptanceBuildFailed = true; acceptanceBuildError = error; throw error; }
+                nextSession = this.serializeCurrentSession();
+                updates = [
+                    { recordType: 'vodozemac-session', recordId: conversationId, expected: expectedSession, next: nextSession },
+                    ...additional,
+                ];
+                const addresses = updates.map((item) => `${item.recordType}:${item.recordId}`);
+                if (new Set(addresses).size !== addresses.length) throw new Error('Inbound acceptance contains duplicate records.');
+                new Uint8Array(plaintext).fill(0);
+                plaintext = undefined;
+                if (!await this.storage.compareAndSwapRecords(updates)) throw new Error('Inbound acceptance transaction conflicted.');
+                this.replacePersistedSessionSnapshot(nextSession.slice(0));
+                this.state = 'active';
+            } catch (error) {
+                if (plaintext) new Uint8Array(plaintext).fill(0);
+                // Resolve an uncertain IndexedDB completion from the exact transaction records.
+                // A committed transaction is accepted; an unchanged session can safely be restored
+                // so relay redelivery retries the same ciphertext without advancing the ratchet.
+                let durableValues: (ArrayBuffer | undefined)[] = [];
+                try {
+                    durableValues = await Promise.all(updates.map((item) => this.storage.read(item.recordType, item.recordId)));
+                    if (updates.length > 0 && updates.every((item, index) => equalBytes(durableValues[index], item.next))) {
+                        if (nextSession) this.replacePersistedSessionSnapshot(nextSession.slice(0));
+                        this.state = 'active';
+                        return;
+                    }
+                    const durableSession = updates.length > 0 ? durableValues[0] : await this.storage.read('vodozemac-session', conversationId);
+                    if (equalBytes(durableSession, expectedSession)) await this.restoreSessionSnapshot(expectedSession, sessionId);
+                    else this.quarantineSession();
+                } catch { this.quarantineSession(); }
+                finally { durableValues.forEach((value) => { if (value) new Uint8Array(value).fill(0); }); }
+                if (acceptanceBuildFailed) throw acceptanceBuildError;
+                throw error instanceof VodozemacBoundaryError ? error : new VodozemacBoundaryError('CORRUPTED_SESSION', 'The inbound message could not be safely accepted.');
+            } finally {
+                new Uint8Array(expectedSession).fill(0);
+                if (nextSession) new Uint8Array(nextSession).fill(0);
+                for (const update of updates.length > 0 ? updates : acceptanceUpdates) {
+                    if (update.recordType === 'vodozemac-session') continue;
+                    if (update.expected) new Uint8Array(update.expected).fill(0);
+                    new Uint8Array(update.next).fill(0);
+                }
+            }
+        });
+    }
+
+    /** Creates the first inbound session and commits account, session and acceptance in one secure CAS. */
+    public async establishInboundSessionAndCommit(
+        conversationId: string,
+        senderIdentityKey: string,
+        preKeyMessage: string,
+        buildUpdates: InboundAcceptanceUpdateBuilder,
+    ): Promise<void> {
+        return this.sessionMutex.runExclusive(async () => {
+            this.requireState('identity-restored', 'persisted');
+            if (!this.identity || !senderIdentityKey || !preKeyMessage || !this.storage.compareAndSwapRecords) {
+                throw new VodozemacBoundaryError('IDENTITY_MISMATCH', 'The inbound session could not be safely accepted.');
+            }
+            const identity = this.identity;
+            let inbound: import('../identity/vodozemacIdentity').VodozemacInboundSessionResult | undefined;
+            let plaintext: ArrayBuffer | undefined;
+            let accountBytes: ArrayBuffer | undefined;
+            let sessionBytes: Uint8Array | undefined;
+            let sessionNext: ArrayBuffer | undefined;
+            let expectedAccount: ArrayBuffer | undefined;
+            let expectedSession: ArrayBuffer | undefined;
+            let acceptanceUpdates: readonly SecureRecordUpdate[] = [];
+            let updates: SecureRecordUpdate[] = [];
+            let acceptanceBuildFailed = false;
+            let acceptanceBuildError: unknown;
+            try {
+                expectedAccount = await this.storage.read('vodozemac-account', 'local');
+                expectedSession = await this.storage.read('vodozemac-session', conversationId);
+                inbound = await identity.withAccount(async (account) => {
+                    if (!account.createInboundSession) throw new VodozemacBoundaryError('UNSUPPORTED_PROTOCOL', 'Inbound modern sessions are unavailable.');
+                    return account.createInboundSession(senderIdentityKey, preKeyMessage);
+                });
+                const handle = inbound.takeSession();
+                await this.establishSession(conversationId, handle, handle.sessionId());
+                const source = inbound.plaintext();
+                plaintext = source.buffer.slice(source.byteOffset, source.byteOffset + source.byteLength) as ArrayBuffer;
+                source.fill(0);
+                let additional: readonly SecureRecordUpdate[];
+                try { additional = await buildUpdates(plaintext); acceptanceUpdates = additional; }
+                catch (error) { acceptanceBuildFailed = true; acceptanceBuildError = error; throw error; }
+                new Uint8Array(plaintext).fill(0);
+                plaintext = undefined;
+                accountBytes = await identity.serializeAccountForCommit();
+                sessionBytes = this.session!.saveSession();
+                sessionNext = sessionBytes.buffer.slice(sessionBytes.byteOffset, sessionBytes.byteOffset + sessionBytes.byteLength) as ArrayBuffer;
+                updates = [
+                    { recordType: 'vodozemac-account', recordId: 'local', expected: expectedAccount, next: accountBytes },
+                    { recordType: 'vodozemac-session', recordId: conversationId, expected: expectedSession, next: sessionNext },
+                    ...additional,
+                ];
+                const addresses = updates.map((item) => `${item.recordType}:${item.recordId}`);
+                if (new Set(addresses).size !== addresses.length) throw new Error('Inbound acceptance contains duplicate records.');
+                if (!await this.storage.compareAndSwapRecords(updates)) throw new Error('Inbound acceptance transaction conflicted.');
+                this.replacePersistedSessionSnapshot(sessionNext.slice(0));
+                this.state = 'active';
+            } catch (error) {
+                if (plaintext) new Uint8Array(plaintext).fill(0);
+                this.quarantineSession();
+                identity.lock();
+                this.identity = undefined;
+                this.state = 'error';
+                if (acceptanceBuildFailed) throw acceptanceBuildError;
+                throw error instanceof VodozemacBoundaryError ? error : new VodozemacBoundaryError('CORRUPTED_SESSION', 'The inbound message could not be safely accepted.');
+            } finally {
+                sessionBytes?.fill(0);
+                if (accountBytes) new Uint8Array(accountBytes).fill(0);
+                if (sessionNext) new Uint8Array(sessionNext).fill(0);
+                if (expectedAccount) new Uint8Array(expectedAccount).fill(0);
+                if (expectedSession) new Uint8Array(expectedSession).fill(0);
+                for (const update of updates.length > 0 ? updates : acceptanceUpdates) {
+                    if (update.recordType === 'vodozemac-account' || update.recordType === 'vodozemac-session') continue;
+                    if (update.expected) new Uint8Array(update.expected).fill(0);
+                    new Uint8Array(update.next).fill(0);
+                }
+                if (inbound) { try { inbound.plaintext().fill(0); } catch { /* already cleared */ } }
+            }
+        });
+    }
+
     public testOnlyInboundFailureStage(): string | undefined {
         if (!testDiagnosticsEnabled()) throw new Error('Test-only diagnostics are disabled.');
         return this.lastInboundFailureStage;
@@ -316,7 +469,7 @@ export class VodozemacRuntime {
      */
     public async encryptMessageWithAtomicRecords(
         plaintext: ArrayBuffer,
-        buildAdditionalUpdates: (envelope: EncryptedEnvelope) => readonly SecureRecordUpdate[],
+        buildAdditionalUpdates: (envelope: EncryptedEnvelope) => readonly SecureRecordUpdate[] | Promise<readonly SecureRecordUpdate[]>,
         assertCanCommit?: () => void,
     ): Promise<EncryptedEnvelope> {
         return this.sessionMutex.runExclusive(async () => {
@@ -342,7 +495,7 @@ export class VodozemacRuntime {
             let recoveryHandled = false;
             try {
                 nextSession = this.serializeCurrentSession();
-                const additional = buildAdditionalUpdates(envelope);
+                const additional = await buildAdditionalUpdates(envelope);
                 updates = [
                     { recordType: 'vodozemac-session', recordId: conversationId, expected: expectedSession, next: nextSession },
                     ...additional,
@@ -391,7 +544,7 @@ export class VodozemacRuntime {
                             const additionalCommitted = updates.slice(1).every((item, index) => equalBytes(durableAdditional[index], item.next));
                             durableAdditional.forEach((value) => { if (value) new Uint8Array(value).fill(0); });
                             if (additionalCommitted) {
-                                this.replacePersistedSessionSnapshot(nextSession.slice(0));
+                                this.replacePersistedSessionSnapshot(nextSession!.slice(0));
                                 this.state = 'active';
                                 return envelope;
                             }

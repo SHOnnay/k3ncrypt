@@ -237,6 +237,68 @@ describe('Stage 0 mutation crash and concurrency characterization', () => {
         a.close(); b.close();
     });
 
+    it('commits an established-session receive with content and replay records atomically, and restores on abort', async () => {
+        class AbortOnceStorage extends MemoryStorage {
+            public abort = true;
+            public async compareAndSwapRecords(updates: readonly import('../core/contracts').SecureRecordUpdate[]): Promise<boolean> {
+                if (this.abort) { this.abort = false; return false; }
+                return super.compareAndSwapRecords(updates);
+            }
+        }
+        const storage = new AbortOnceStorage();
+        let decryptions = 0;
+        const handle = { ...session(), decrypt: () => { decryptions++; return new Uint8Array([1, 1, ...new TextEncoder().encode('accepted-message')]); } };
+        const inboundBindings = { ...bindings, sessionFactory: { loadSession: (): VodozemacSessionHandle => ({
+            ...session(),
+            decrypt: (wire: string) => { decryptions++; return new Uint8Array(Buffer.from(wire, 'base64')); },
+        }) } };
+        const runtime = new VodozemacRuntime(storage, async () => inboundBindings);
+        await runtime.initialize(); await runtime.restoreOrCreateIdentity();
+        await runtime.establishSession('conversation-1', handle, 'session-1'); await runtime.persistSession();
+        const beforeSession = await storage.read('vodozemac-session', 'conversation-1');
+        const validFramedWire = Buffer.from(new Uint8Array([1, 1, ...new TextEncoder().encode('accepted-message')])).toString('base64');
+        const update = (recordType: string, value: string) => ({ recordType, recordId: 'conversation-1', expected: undefined,
+            next: new TextEncoder().encode(value).buffer as ArrayBuffer });
+        const build = () => [update('product-messages', 'message'), update('modern-seen', 'legacy'), update('modern-seen-v1', 'stable')];
+        await expect(runtime.decryptAndCommitInbound('message', { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1, olmMessage: validFramedWire } }, build))
+            .rejects.toMatchObject({ code: 'CORRUPTED_SESSION' });
+        expect(sameBytes(await storage.read('vodozemac-session', 'conversation-1'), beforeSession)).toBe(true);
+        expect(await storage.read('product-messages', 'conversation-1')).toBeUndefined();
+        expect(await storage.read('modern-seen-v1', 'conversation-1')).toBeUndefined();
+        expect(runtime.lifecycle).toBe('active');
+        await runtime.decryptAndCommitInbound('message', { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1, olmMessage: validFramedWire } }, build);
+        expect(decryptions).toBe(2);
+        expect(new TextDecoder().decode(await storage.read('product-messages', 'conversation-1'))).toBe('message');
+        expect(new TextDecoder().decode(await storage.read('modern-seen', 'conversation-1'))).toBe('legacy');
+        expect(new TextDecoder().decode(await storage.read('modern-seen-v1', 'conversation-1'))).toBe('stable');
+        runtime.close();
+    });
+
+    it('commits first inbound account, session, message and replay state together', async () => {
+        const storage = new MemoryStorage();
+        const plaintext = new TextEncoder().encode('first accepted message');
+        const inboundAccount = (): VodozemacAccountHandle => ({
+            ...account(),
+            createInboundSession: () => ({ takeSession: () => session(), plaintext: () => plaintext.slice() }),
+        });
+        const inboundBindings = { ...bindings, accountFactory: { createAccount: inboundAccount, loadAccount: inboundAccount } };
+        const runtime = new VodozemacRuntime(storage, async () => inboundBindings);
+        await runtime.initialize(); await runtime.restoreOrCreateIdentity();
+        const extra: import('../core/contracts').SecureRecordUpdate[] = [
+            { recordType: 'product-messages', recordId: 'conversation-1', expected: undefined, next: new TextEncoder().encode('message').buffer as ArrayBuffer },
+            { recordType: 'modern-seen', recordId: 'conversation-1', expected: undefined, next: new TextEncoder().encode('legacy').buffer as ArrayBuffer },
+            { recordType: 'modern-seen-v1', recordId: 'conversation-1', expected: undefined, next: new TextEncoder().encode('stable').buffer as ArrayBuffer },
+        ];
+        await runtime.establishInboundSessionAndCommit('conversation-1', 'peer-identity', 'prekey-message', () => extra);
+        expect(storage.has('vodozemac-account', 'local')).toBe(true);
+        expect(storage.has('vodozemac-session', 'conversation-1')).toBe(true);
+        expect(storage.has('product-messages', 'conversation-1')).toBe(true);
+        expect(storage.has('modern-seen', 'conversation-1')).toBe(true);
+        expect(storage.has('modern-seen-v1', 'conversation-1')).toBe(true);
+        expect(runtime.lifecycle).toBe('active');
+        runtime.close();
+    });
+
     it('atomic message commit abort restores the original in-memory session for retry', async () => {
         class OneAbortStorage extends MemoryStorage {
             public fail = true;

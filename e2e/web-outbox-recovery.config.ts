@@ -2,7 +2,7 @@ import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
     testDir: '.',
-    testMatch: /web-outbox-recovery\.spec\.ts/,
+    testMatch: /web-(outbox-recovery|inbound-acceptance)\.spec\.ts/,
     timeout: 90_000,
     expect: { timeout: 15_000 },
     workers: 1,

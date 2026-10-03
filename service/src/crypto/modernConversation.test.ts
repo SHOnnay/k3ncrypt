@@ -7,6 +7,7 @@ import { publishVodozemacBundle, fetchVodozemacBundle, claimVodozemacOneTimeKey,
 import { AuthenticatedCallSignalTransport } from '../calls/authenticatedTransport';
 import { SecureStorageDeviceLifecyclePersistence } from '../devices/runtime';
 import { fingerprintVodozemacIdentity } from '../identity/vodozemacIdentity';
+import { envelopeIdForEnvelope } from '../delivery/envelopeIdentity';
 
 jest.mock('../api/prekeys', () => ({
     publishVodozemacBundle: jest.fn(), fetchVodozemacBundle: jest.fn(), claimVodozemacOneTimeKey: jest.fn(), renewVodozemacBundle: jest.fn(),
@@ -34,7 +35,9 @@ const bundle = { version: 1 as const, protocol: 'vodozemac-olm-v1' as const,
 const remoteCommitment = async (): Promise<string> => fingerprintVodozemacIdentity(bundle.identity);
 
 class Storage implements SecureStorage {
+    public failNextCompareAndSwap = false;
     async compareAndSwapRecords(updates: readonly import('../core/contracts').SecureRecordUpdate[]): Promise<boolean> {
+        if (this.failNextCompareAndSwap) { this.failNextCompareAndSwap = false; return false; }
         if (updates.some((item) => { const old = this.values.get(`${item.recordType}:${item.recordId}`); return old === undefined ? item.expected !== undefined : item.expected === undefined || !Buffer.from(old).equals(Buffer.from(item.expected)); })) return false;
         for (const item of updates) this.values.set(`${item.recordType}:${item.recordId}`, item.next.slice(0));
         return true;
@@ -137,8 +140,8 @@ const verifiedPeerPair = async () => {
     const bobMessages: string[] = [];
     const alice = new ModernConversation(aliceStorage, loader, aliceTransport.transport);
     const bob = new ModernConversation(bobStorage, loader, bobTransport.transport);
-    await alice.connect(room, key(9), remoteAddress, await remoteCommitment(), (text) => aliceMessages.push(text));
-    await bob.connect(room, key(9), localAddress, await remoteCommitment(), (text) => bobMessages.push(text));
+    await alice.connect(room, key(9), remoteAddress, await remoteCommitment(), (text) => { aliceMessages.push(text); return { updates: [] }; });
+    await bob.connect(room, key(9), localAddress, await remoteCommitment(), (text) => { bobMessages.push(text); return { updates: [] }; });
     await seedVerifiedContact(aliceStorage, remoteAddress);
     await seedVerifiedContact(bobStorage, localAddress);
     await Promise.all([alice.verifyContact(true), bob.verifyContact(true)]);
@@ -186,7 +189,7 @@ it('does not mark a message seen until durable consumer acceptance succeeds', as
     const storage = new Storage();
     const conversation = new ModernConversation(storage, loader, fakeTransport().transport);
     let fail = true;
-    const delivered = jest.fn(async () => { if (fail) throw new Error('persistence unavailable'); });
+    const delivered = jest.fn(async () => { if (fail) throw new Error('persistence unavailable'); return { updates: [] }; });
     await conversation.connect(room, key(9), remoteAddress, await remoteCommitment(), delivered);
     await conversation.send('establish session');
     const envelope: EncryptedEnvelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1, olmMessage: JSON.stringify({ version: 1, message_type: 1, ciphertext: 'opaque' }) } };
@@ -243,7 +246,7 @@ it('accepts the peer first-message pre-key after joining without creating a comp
     const transport = fakeTransport();
     const received: string[] = [];
     const conversation = new ModernConversation(storage, loader, transport.transport);
-    await conversation.connect(room, key(9), remoteAddress, await remoteCommitment(), (text) => received.push(text));
+    await conversation.connect(room, key(9), remoteAddress, await remoteCommitment(), (text) => { received.push(text); return { updates: [] }; });
     expect(outboundSessionCreations).toBe(0);
     expect(claimVodozemacOneTimeKey).not.toHaveBeenCalled();
 
@@ -314,6 +317,34 @@ it('keeps legacy peers on the existing first-message route when they do not adve
     expect(JSON.parse(new TextDecoder().decode((await storage.read('conversation-join-introduction', room))!)))
         .toMatchObject({ version: 1, recipientAddress: remoteAddress });
     await conversation.close();
+});
+
+it('commits join-introduction route, identity and replay state only with the inbound session', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    const storage = new Storage();
+    const conversation = new ModernConversation(storage, loader, fakeTransport().transport);
+    await conversation.connect(room, key(9), undefined, undefined, async () => ({ updates: [] }));
+    storage.failNextCompareAndSwap = true;
+    decryptedBytes = await signedJoinIntroductionPlaintext();
+    const envelope: EncryptedEnvelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1, olmMessage: JSON.stringify({ version: 1, message_type: 0, ciphertext: 'atomic-introduction' }) } };
+
+    await expect(receiveFirstMessage(conversation, envelope, remoteAddress)).rejects.toThrow();
+    expect(await conversation.getContact()).toBeUndefined();
+    expect(await storage.read('vodozemac-session', room)).toBeUndefined();
+    expect(await storage.read('conversation-join-introduction-seen', room)).toBeUndefined();
+    expect(await storage.read('modern-seen-v1', room)).toBeUndefined();
+    expect(JSON.parse(new TextDecoder().decode((await storage.read('conversation-protocol', room))!)).remoteAddress).toBeUndefined();
+    await conversation.close();
+
+    const retry = new ModernConversation(storage, loader, fakeTransport().transport);
+    await retry.connect(room, key(9), undefined, undefined, async () => ({ updates: [] }));
+    decryptedBytes = await signedJoinIntroductionPlaintext();
+    await expect(receiveFirstMessage(retry, envelope, remoteAddress)).resolves.toBe(true);
+    expect(await retry.getContact()).toMatchObject({ contactId: remoteAddress, verification: 'unverified', changeStatus: 'unchanged' });
+    expect(await storage.read('conversation-join-introduction-seen', room)).toBeDefined();
+    expect(await storage.read('modern-seen-v1', room)).toBeDefined();
+    await retry.close();
 });
 
 it('accepts an authenticated join introduction without creating a chat message or trust state', async () => {
@@ -438,7 +469,7 @@ it('preserves an existing established conversation session and decrypts after th
     ])).buffer as ArrayBuffer);
     const received: string[] = [];
     const restored = new ModernConversation(storage, loader, fakeTransport().transport);
-    await restored.connect(room, key(9), remoteAddress, await remoteCommitment(), (text) => received.push(text));
+    await restored.connect(room, key(9), remoteAddress, await remoteCommitment(), (text) => { received.push(text); return { updates: [] }; });
     const envelope: EncryptedEnvelope = {
         version: 2,
         strategy: 'vodozemac-olm-v1',
@@ -474,7 +505,7 @@ it('restores missing contact and route state after an existing session authentic
     const received: string[] = [];
     const onContactChange = jest.fn();
     const restored = new ModernConversation(storage, loader, fakeTransport().transport);
-    await restored.connect(room, key(9), undefined, await remoteCommitment(), (text) => received.push(text), onContactChange);
+    await restored.connect(room, key(9), undefined, await remoteCommitment(), (text) => { received.push(text); return { updates: [] }; }, onContactChange);
     decryptedBytes = new Uint8Array([1, 1, ...new TextEncoder().encode('authenticated peer message')]);
     const envelope: EncryptedEnvelope = {
         version: 2,
@@ -762,7 +793,7 @@ describe('Stage 0 identity authorization and delivery boundaries', () => {
         jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
         const storage = new Storage();
         const transport = fakeTransport();
-        const received = jest.fn();
+        const received = jest.fn(async () => ({ updates: [] }));
         const conversation = new ModernConversation(storage, loader, transport.transport);
         await conversation.connect(room, key(9), remoteAddress, await remoteCommitment(), received);
         await conversation.send('synthetic stage0 setup');
@@ -777,7 +808,7 @@ describe('Stage 0 identity authorization and delivery boundaries', () => {
         await storage.write('conversation-protocol', room, new TextEncoder().encode(JSON.stringify(mode)).buffer as ArrayBuffer);
         await storage.delete('contact-identity', remoteAddress);
         const observed = jest.fn();
-        const received = jest.fn();
+        const received = jest.fn(async () => ({ updates: [] }));
         const restored = new ModernConversation(storage, loader, fakeTransport().transport);
         await restored.connect(room, key(9), undefined, scenario === 'missing-commitment' ? undefined : await remoteCommitment(), received, observed);
         const wrong = { ...bundle, identity: scenario === 'changed-key' ? { ...bundle.identity, ed25519: key(22) } : { ...bundle.identity, curve25519: key(22) } };
@@ -844,6 +875,20 @@ describe('Stage 0 identity authorization and delivery boundaries', () => {
         await conversation.close();
     });
 
+    it('deduplicates the same envelope from two logical paths despite JSON key ordering changes', async () => {
+        const { conversation, received, storage } = await setup();
+        const canonical = envelope('multi-path-duplicate');
+        const reordered = { data: canonical.data, strategy: canonical.strategy, version: canonical.version } as EncryptedEnvelope;
+        expect(JSON.stringify(canonical)).not.toBe(JSON.stringify(reordered));
+        const before = sessionDecryptions;
+        expect(await receiveFirstMessage(conversation, canonical, remoteAddress)).toBe(true);
+        expect(await receiveFirstMessage(conversation, reordered, remoteAddress)).toBe(true);
+        expect(sessionDecryptions).toBe(before + 1);
+        expect(received).toHaveBeenCalledTimes(1);
+        expect(JSON.parse(new TextDecoder().decode((await storage.read('modern-seen-v1', room))!)).ids).toHaveLength(1);
+        await conversation.close();
+    });
+
     it('accepted duplicate does not decrypt, observe, or deliver twice and never verifies', async () => {
         const { conversation, received } = await setup();
         const wire = envelope('duplicate');
@@ -882,8 +927,10 @@ describe('Stage 0 identity authorization and delivery boundaries', () => {
         const wire = JSON.stringify(transport.sent[0]);
         const pending = JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!));
         expect(pending).toHaveLength(1);
+        expect(pending[0].envelopeId).toBe(await envelopeIdForEnvelope(room, pending[0].envelope));
         await conversation.close();
         pending[0].sentAt = 0;
+        delete pending[0].envelopeId; // legacy outbox records remain readable during M1 adoption.
         await storage.write('modern-outbox', room, new TextEncoder().encode(JSON.stringify(pending)).buffer as ArrayBuffer);
         const retry = fakeTransport();
         const before = encryptions;
@@ -892,6 +939,8 @@ describe('Stage 0 identity authorization and delivery boundaries', () => {
         await restored.retryPending();
         expect(encryptions).toBe(before);
         expect(retry.sent.map((item) => JSON.stringify(item))).toContain(wire);
+        const upgradedPending = JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!));
+        expect(upgradedPending[0].envelopeId).toBe(await envelopeIdForEnvelope(room, upgradedPending[0].envelope));
         await restored.acceptDelivery('unknown-relay-id');
         expect(JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!))).toHaveLength(1);
         await restored.acceptDelivery('relay-1');

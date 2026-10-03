@@ -113,6 +113,16 @@ export class PersistentVodozemacIdentity implements IdentityManager<MessagingIde
         return operation(this.account!);
     }
 
+    /** Serializes an in-memory account mutation for a larger encrypted storage transaction. */
+    public async serializeAccountForCommit(): Promise<ArrayBuffer> {
+        if (!this.account) throw new Error('Messaging identity is locked.');
+        return this.storage.withVodozemacPickleKey(async (pickleKey) => {
+            const serialized = new TextEncoder().encode(this.account!.saveAccount(pickleKey));
+            try { return serialized.buffer.slice(serialized.byteOffset, serialized.byteOffset + serialized.byteLength) as ArrayBuffer; }
+            finally { serialized.fill(0); }
+        });
+    }
+
     /** Persists account mutations (for example consumed/generated pre-keys) through both encryption layers. */
     public async persistAccount(): Promise<void> {
         if (!this.account) {
