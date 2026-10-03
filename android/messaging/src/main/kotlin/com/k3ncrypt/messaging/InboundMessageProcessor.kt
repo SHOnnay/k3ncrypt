@@ -46,7 +46,8 @@ class InboundMessageProcessor(
             require(delivery.id.isNotBlank() && delivery.senderRoutingId.isNotBlank() && delivery.conversationId.isNotBlank())
             val envelope = EncryptedEnvelopeParser.parse(delivery.envelope)
             val digest = digest(delivery.envelope)
-            if (cryptoState.hasInboundDigest(digest)) return@withLock DeliveryAcceptance.Duplicate
+            val envelopeId = EnvelopeIdentity.create(delivery.conversationId, envelope.olmMessage)
+            if (cryptoState.hasInboundDigest(digest) || cryptoState.hasInboundEnvelopeId(envelopeId)) return@withLock DeliveryAcceptance.Duplicate
 
             val bundle = bundles.resolve(delivery.senderRoutingId)
             trust.requireTrustedSender(delivery.senderRoutingId, bundle.senderIdentityKey)
@@ -84,6 +85,7 @@ class InboundMessageProcessor(
                                 digest,
                                 StoredMessage(delivery.id, delivery.conversationId, delivery.senderRoutingId, body, now()),
                                 if (replacingSession) delivery.senderRoutingId else null,
+                                envelopeId,
                             )
                         },
                         remember = { sessions.remember(delivery.senderRoutingId, inboundSession!!) },

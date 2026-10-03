@@ -28,7 +28,7 @@ class Stage0StorageBoundaryTest {
             try {
                 db.withTransaction {
                     store.commitOutbound("account", "after", SessionState("session", byteArrayOf(2)), "message", "synthetic-envelope",
-                        StoredOutboundMessage("message", "room", "local", "peer", "test", 1))
+                        StoredOutboundMessage("message", "room", "local", "peer", "test", 1), "v1:" + "a".repeat(64))
                     error("injected crash before outer commit")
                 }
             } catch (_: IllegalStateException) { aborted = true }
@@ -41,12 +41,13 @@ class Stage0StorageBoundaryTest {
             assertTrue(store.pendingOutbox().isEmpty())
             assertTrue(store.messages().isEmpty())
             store.commitOutbound("account", "after", SessionState("session", byteArrayOf(2)), "message", "synthetic-envelope",
-                StoredOutboundMessage("message", "room", "local", "peer", "test", 1))
+                StoredOutboundMessage("message", "room", "local", "peer", "test", 1), "v1:" + "a".repeat(64))
             val pending = store.pendingOutbox()
             db.close()
             db = Room.databaseBuilder(context, K3ncryptSecureDatabase::class.java, name).build()
             store = CryptoStateStore(db, aead)
             assertEquals(pending, store.pendingOutbox()) // exact serialized envelope survives repository/storage restart
+            assertEquals("v1:" + "a".repeat(64), org.json.JSONObject(pending.single().second).getString("envelopeId"))
             store.acknowledgeOutbound("unknown")
             assertEquals(pending, store.pendingOutbox())
             store.acknowledgeOutbound("message"); store.acknowledgeOutbound("message")
@@ -54,14 +55,16 @@ class Stage0StorageBoundaryTest {
             assertEquals(1, store.messages().size) // cleanup is not user-message deletion or peer-persistence proof
             try {
                 db.withTransaction {
-                    store.commitInbound("account", "received", SessionState("session", byteArrayOf(3)), "digest", StoredMessage("delivery", "room", "peer", "test", 2))
+                    store.commitInbound("account", "received", SessionState("session", byteArrayOf(3)), "digest", StoredMessage("delivery", "room", "peer", "test", 2), envelopeId = "v1:" + "b".repeat(64))
                     error("injected receive interruption")
                 }
             } catch (_: IllegalStateException) { /* rollback expected */ }
             assertFalse(store.hasInboundDigest("digest"))
+            assertFalse(store.hasInboundEnvelopeId("v1:" + "b".repeat(64)))
             assertArrayEquals(byteArrayOf(2), store.read("session", "session"))
-            assertEquals(InboundCommitResult.STORED, store.commitInbound("account", "received", SessionState("session", byteArrayOf(3)), "digest", StoredMessage("delivery", "room", "peer", "test", 2)))
-            assertEquals(InboundCommitResult.DUPLICATE, store.commitInbound("account", "must-not-write", SessionState("session", byteArrayOf(99)), "digest", StoredMessage("other-delivery", "room", "peer", "duplicate", 3)))
+            assertEquals(InboundCommitResult.STORED, store.commitInbound("account", "received", SessionState("session", byteArrayOf(3)), "digest", StoredMessage("delivery", "room", "peer", "test", 2), envelopeId = "v1:" + "b".repeat(64)))
+            assertTrue(store.hasInboundEnvelopeId("v1:" + "b".repeat(64)))
+            assertEquals(InboundCommitResult.DUPLICATE, store.commitInbound("account", "must-not-write", SessionState("session", byteArrayOf(99)), "different-serialized-digest", StoredMessage("other-delivery", "room", "peer", "duplicate", 3), envelopeId = "v1:" + "b".repeat(64)))
             assertArrayEquals(byteArrayOf(3), store.read("session", "session"))
             assertEquals(2, store.messages().size)
         } finally { db.close(); context.deleteDatabase(name) }

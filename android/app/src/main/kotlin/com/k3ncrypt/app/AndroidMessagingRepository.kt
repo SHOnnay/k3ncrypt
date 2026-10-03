@@ -7,6 +7,7 @@ import com.k3ncrypt.messaging.ConversationSessionStore
 import com.k3ncrypt.messaging.DeliveryAcceptance
 import com.k3ncrypt.messaging.DeviceTrustVerifier
 import com.k3ncrypt.messaging.InboundMessageProcessor
+import com.k3ncrypt.messaging.EnvelopeIdentity
 import com.k3ncrypt.messaging.MailboxDelivery
 import com.k3ncrypt.messaging.MessageFrame
 import com.k3ncrypt.messaging.PickleKeyProvider
@@ -425,6 +426,7 @@ class AndroidMessagingRepository(
         try {
             val olm = crypto.encrypt(session, frame)
             mutated = true
+            val envelopeId = EnvelopeIdentity.create(binding.conversationId, olm)
             val envelope = JSONObject().put("version", 2).put("strategy", "vodozemac-olm-v1")
                 .put("data", JSONObject().put("version", 1).put("olmMessage", olm)).toString()
             val pickleKey = pickleKeys.load(local.deviceIdentityReference)
@@ -437,6 +439,7 @@ class AndroidMessagingRepository(
                     local.deviceIdentityReference, accountPickle,
                     SessionState(binding.peerRoutingId, sessionPickle), clientId, envelope,
                     StoredOutboundMessage(clientId, binding.conversationId, binding.localRoutingId, binding.peerRoutingId, text, System.currentTimeMillis()),
+                    envelopeId,
                 )
                 } finally { sessionPickle.fill(0) }
             } finally { pickleKey.fill(0) }

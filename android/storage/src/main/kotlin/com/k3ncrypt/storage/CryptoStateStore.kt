@@ -19,6 +19,7 @@ class CryptoStateStore(private val database: K3ncryptSecureDatabase, private val
     suspend fun list(namespace: String): List<Pair<String, ByteArray>> = database.records().list(namespace).map { it.recordId to open(it) }
     suspend fun write(namespace: String, id: String, bytes: ByteArray) { database.records().put(seal(namespace, id, bytes)) }
     suspend fun hasInboundDigest(digest: String): Boolean = database.records().get("inbound-digest", digest) != null
+    suspend fun hasInboundEnvelopeId(envelopeId: String): Boolean = database.records().get("inbound-envelope-id-v1", envelopeId) != null
 
     /** Local user approval for a new Olm pre-key session from an already pinned peer. */
     suspend fun armSessionRenewal(peerRoutingId: String, expiresAt: Long) {
@@ -55,10 +56,11 @@ class CryptoStateStore(private val database: K3ncryptSecureDatabase, private val
     suspend fun readIdentityCheckpoint(): ByteArray? = read("identity-checkpoint", "local")
 
     /** Returns DUPLICATE without ratchet/state writes when the same envelope was committed before. */
-    suspend fun commitInbound(accountId: String, accountPickle: String, session: SessionState, digest: String, message: StoredMessage, renewalSenderRoute: String? = null): InboundCommitResult = database.withTransaction {
+    suspend fun commitInbound(accountId: String, accountPickle: String, session: SessionState, digest: String, message: StoredMessage, renewalSenderRoute: String? = null, envelopeId: String? = null): InboundCommitResult = database.withTransaction {
         val records = database.records()
         val prior = records.get("inbound-digest", digest)
-        if (prior != null) return@withTransaction InboundCommitResult.DUPLICATE
+        val stablePrior = envelopeId?.let { records.get("inbound-envelope-id-v1", it) }
+        if (prior != null || stablePrior != null) return@withTransaction InboundCommitResult.DUPLICATE
         val deliveryPrior = records.get("inbound-delivery", message.deliveryId)
         check(deliveryPrior == null) { "Mailbox delivery identifier conflicts with stored state" }
         if (renewalSenderRoute != null) {
@@ -84,17 +86,18 @@ class CryptoStateStore(private val database: K3ncryptSecureDatabase, private val
         records.put(seal("session", session.sessionId, session.pickle))
         records.put(seal("message", message.deliveryId, encodedMessage))
         records.put(seal("inbound-digest", digest, message.deliveryId.encodeToByteArray()))
+        if (envelopeId != null) records.put(seal("inbound-envelope-id-v1", envelopeId, message.deliveryId.encodeToByteArray()))
         records.put(seal("inbound-delivery", message.deliveryId, digest.encodeToByteArray()))
         InboundCommitResult.STORED
     }
 
-    suspend fun commitOutbound(accountId: String, accountPickle: String, session: SessionState, clientMessageId: String, encryptedEnvelope: String, message: StoredOutboundMessage) {
+    suspend fun commitOutbound(accountId: String, accountPickle: String, session: SessionState, clientMessageId: String, encryptedEnvelope: String, message: StoredOutboundMessage, envelopeId: String? = null) {
         database.withTransaction {
             val records = database.records()
             check(records.get("outbox", clientMessageId) == null) { "Duplicate outbound message identifier" }
             records.put(seal("account", accountId, accountPickle.encodeToByteArray()))
             records.put(seal("session", session.sessionId, session.pickle))
-            records.put(seal("outbox", clientMessageId, JSONObject().put("conversationId", message.conversationId).put("peerRoutingId", message.peerRoutingId).put("envelope", encryptedEnvelope).toString().encodeToByteArray()))
+            records.put(seal("outbox", clientMessageId, JSONObject().put("conversationId", message.conversationId).put("peerRoutingId", message.peerRoutingId).put("envelope", encryptedEnvelope).apply { if (envelopeId != null) put("envelopeId", envelopeId) }.toString().encodeToByteArray()))
             records.put(seal("outbound-message", clientMessageId, JSONObject().put("clientMessageId", clientMessageId).put("conversationId", message.conversationId).put("senderRoutingId", message.senderRoutingId).put("peerRoutingId", message.peerRoutingId).put("text", message.text).put("createdAt", message.createdAt).toString().encodeToByteArray()))
         }
     }

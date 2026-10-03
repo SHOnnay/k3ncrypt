@@ -6,6 +6,8 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.k3ncrypt.crypto.NativeCryptoBridge
 import com.k3ncrypt.messaging.MessageFrame
+import com.k3ncrypt.messaging.EncryptedEnvelopeParser
+import com.k3ncrypt.messaging.EnvelopeIdentity
 import com.k3ncrypt.storage.CryptoStateStore
 import com.k3ncrypt.storage.InboundCommitResult
 import com.k3ncrypt.storage.K3ncryptSecureDatabase
@@ -53,6 +55,7 @@ class AndroidCryptoPersistenceInteropTest {
             val inboundSessionPickle = crypto.saveSession(inbound.session)
             val digest = MessageDigest.getInstance("SHA-256").digest(firstEnvelope.encodeToByteArray())
                 .joinToString("") { "%02x".format(it) }
+            val envelopeId = EnvelopeIdentity.create("interop-conversation", EncryptedEnvelopeParser.parse(firstEnvelope).olmMessage)
             assertEquals(
                 InboundCommitResult.STORED,
                 state.commitInbound(
@@ -61,6 +64,7 @@ class AndroidCryptoPersistenceInteropTest {
                     SessionState("interop-session", inboundSessionPickle),
                     digest,
                     StoredMessage("delivery-one", "interop-conversation", "sender-route", "interop-frame-one", 1L),
+                    envelopeId = envelopeId,
                 ),
             )
             assertEquals(InboundCommitResult.DUPLICATE, state.commitInbound(
@@ -69,6 +73,7 @@ class AndroidCryptoPersistenceInteropTest {
                 SessionState("interop-session", inboundSessionPickle),
                 digest,
                 StoredMessage("delivery-one", "interop-conversation", "sender-route", "interop-frame-one", 1L),
+                envelopeId = envelopeId,
             ))
 
             // Simulate process death: release native handles and close Room, then reconstruct all state.
@@ -82,6 +87,12 @@ class AndroidCryptoPersistenceInteropTest {
                 val restoredState = CryptoStateStore(reopened, aead)
                 val restoredAccountPickle = requireNotNull(restoredState.read("account", "interop-account")).decodeToString()
                 val restoredSessionPickle = requireNotNull(restoredState.read("session", "interop-session"))
+                assertTrue(restoredState.hasInboundEnvelopeId(envelopeId))
+                assertEquals(InboundCommitResult.DUPLICATE, restoredState.commitInbound(
+                    "interop-account", restoredAccountPickle, SessionState("interop-session", restoredSessionPickle),
+                    "different-json-serialization-digest", StoredMessage("delivery-two", "interop-conversation", "sender-route", "duplicate", 2L),
+                    envelopeId = envelopeId,
+                ))
                 val restoredAccount = crypto.loadAccount(restoredAccountPickle, key)
                 val restoredSession = crypto.loadSession(restoredSessionPickle)
                 try {
