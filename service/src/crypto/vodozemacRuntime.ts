@@ -1,5 +1,5 @@
 import { testDiagnosticsEnabled } from '../utils/testDiagnostics';
-import type { CryptoSession, SecureStorage } from '../core/contracts';
+import type { CryptoSession, EncryptedEnvelope, SecureRecordUpdate, SecureStorage } from '../core/contracts';
 import { VodozemacCryptoSession, type VodozemacSessionHandle } from '../core/vodozemacCryptoSession';
 import { PersistentVodozemacIdentity, type VodozemacAccountFactory } from '../identity/vodozemacIdentity';
 import { VodozemacSessionStore, type VodozemacSessionFactory } from '../identity/vodozemacSessionStore';
@@ -11,6 +11,13 @@ import type { VodozemacPublicBundle } from '../identity/vodozemacBundle';
 const TRANSACTION_RECORD_TYPE = 'vodozemac-commit';
 type CommitPhase = 'prepared' | 'account-written' | 'committed';
 interface CommitMarker { version: 1; conversationId: string; sessionId: string; phase: CommitPhase; }
+const equalBytes = (left: ArrayBuffer | undefined, right: ArrayBuffer | undefined): boolean => {
+    if (left === undefined || right === undefined) return left === right;
+    if (left.byteLength !== right.byteLength) return false;
+    const a = new Uint8Array(left);
+    const b = new Uint8Array(right);
+    return a.every((byte, index) => byte === b[index]);
+};
 
 export type VodozemacLifecycleState =
     | 'uninitialized'
@@ -44,6 +51,8 @@ export class VodozemacRuntime {
     private session?: VodozemacCryptoSession;
     private conversationId?: string;
     private sessionStore?: VodozemacSessionStore;
+    /** Exact plaintext pickle that was last durably written for this runtime's session. */
+    private persistedSessionSnapshot?: ArrayBuffer;
     private readonly sessionMutex = new AsyncMutex();
 
     constructor(
@@ -160,6 +169,7 @@ export class VodozemacRuntime {
         try {
             const session = new VodozemacCryptoSession(handle);
             await session.initialize(expectedSessionId);
+            this.clearPersistedSessionSnapshot();
             this.session = session;
             this.conversationId = conversationId;
             this.state = 'active';
@@ -258,11 +268,16 @@ export class VodozemacRuntime {
         this.requireState('identity-restored', 'persisted');
         if (!this.sessionStore) throw new VodozemacBoundaryError('WASM_INIT_FAILED', 'Modern crypto is unavailable.');
         let stage: 'session-load' | 'session-bind' = 'session-load';
+        let loadedSnapshot: ArrayBuffer | undefined;
         try {
-            const handle = await this.sessionStore.load(conversationId);
+            const { handle, snapshot } = await this.sessionStore.loadWithSnapshot(conversationId);
+            loadedSnapshot = snapshot;
             stage = 'session-bind';
             await this.establishSession(conversationId, handle, expectedSessionId);
+            this.persistedSessionSnapshot = snapshot;
+            loadedSnapshot = undefined;
         } catch (error) {
+            if (loadedSnapshot) new Uint8Array(loadedSnapshot).fill(0);
             if (error instanceof VodozemacBoundaryError) throw error;
             const missingRecord = stage === 'session-load' && error instanceof Error && error.message === 'Vodozemac session state is missing.';
             this.state = missingRecord ? 'identity-restored' : 'error';
@@ -274,6 +289,7 @@ export class VodozemacRuntime {
         }
     }
 
+    /** Persists a session mutation alone; ModernConversation user messages must use the atomic outbox operation below. */
     public async encrypt(channel: 'message' | 'signaling', plaintext: ArrayBuffer) {
         return this.sessionMutex.runExclusive(async () => {
             this.requireState('active', 'persisted');
@@ -289,6 +305,114 @@ export class VodozemacRuntime {
             } catch {
                 this.quarantineSession();
                 throw new VodozemacBoundaryError('CORRUPTED_SESSION', 'The message could not be safely persisted.');
+            }
+        });
+    }
+
+    /**
+     * Encrypts a user-message envelope and atomically persists the advanced
+     * session pickle with its caller-owned recovery records (normally outbox).
+     * This operation deliberately does not alter signaling or receive paths.
+     */
+    public async encryptMessageWithAtomicRecords(
+        plaintext: ArrayBuffer,
+        buildAdditionalUpdates: (envelope: EncryptedEnvelope) => readonly SecureRecordUpdate[],
+        assertCanCommit?: () => void,
+    ): Promise<EncryptedEnvelope> {
+        return this.sessionMutex.runExclusive(async () => {
+            this.requireState('active', 'persisted');
+            if (!this.session || !this.conversationId || !this.persistedSessionSnapshot || !this.storage.compareAndSwapRecords) {
+                throw new VodozemacBoundaryError('CORRUPTED_SESSION', 'The message could not be safely persisted.');
+            }
+
+            const conversationId = this.conversationId;
+            const sessionId = this.session.sessionId();
+            const expectedSession = this.persistedSessionSnapshot.slice(0);
+            let envelope: EncryptedEnvelope;
+            try {
+                envelope = await this.session.encrypt('message', plaintext);
+            } catch {
+                this.quarantineSession();
+                new Uint8Array(expectedSession).fill(0);
+                throw new VodozemacBoundaryError('INVALID_CIPHERTEXT', 'The message could not be encrypted.');
+            }
+
+            let nextSession: ArrayBuffer | undefined;
+            let updates: readonly SecureRecordUpdate[] = [];
+            let recoveryHandled = false;
+            try {
+                nextSession = this.serializeCurrentSession();
+                const additional = buildAdditionalUpdates(envelope);
+                updates = [
+                    { recordType: 'vodozemac-session', recordId: conversationId, expected: expectedSession, next: nextSession },
+                    ...additional,
+                ];
+                const addresses = updates.map((item) => `${item.recordType}:${item.recordId}`);
+                if (new Set(addresses).size !== addresses.length) throw new Error('Atomic message update contains duplicate records.');
+
+                assertCanCommit?.();
+                const committed = await this.storage.compareAndSwapRecords(updates);
+                if (committed) {
+                    this.replacePersistedSessionSnapshot(nextSession.slice(0));
+                    this.state = 'active';
+                    return envelope;
+                }
+
+                // A transaction may have committed immediately before the page
+                // was interrupted. Read back all written values to distinguish
+                // that case from a pre-commit conflict.
+                const durableValues = await Promise.all(updates.map((item) => this.storage.read(item.recordType, item.recordId)));
+                const committedDespiteError = updates.every((item, index) => equalBytes(durableValues[index], item.next));
+                const sessionUnchanged = equalBytes(durableValues[0], expectedSession);
+                durableValues.forEach((value) => { if (value) new Uint8Array(value).fill(0); });
+                if (committedDespiteError) {
+                    this.replacePersistedSessionSnapshot(nextSession.slice(0));
+                    this.state = 'active';
+                    return envelope;
+                }
+                if (sessionUnchanged) {
+                    await this.restoreSessionSnapshot(expectedSession, sessionId);
+                } else {
+                    this.quarantineSession();
+                }
+                recoveryHandled = true;
+                throw new VodozemacBoundaryError('CORRUPTED_SESSION', 'The message could not be safely persisted.');
+            } catch (error) {
+                if (!recoveryHandled) {
+                    // Storage can reject after a transaction commit while the
+                    // browser is closing. Resolve that ambiguity from durable
+                    // state; never roll back a session that another tab advanced.
+                    try {
+                        const durableSession = await this.storage.read('vodozemac-session', conversationId);
+                        const sessionWasAdvanced = !!nextSession && equalBytes(durableSession, nextSession);
+                        if (sessionWasAdvanced) {
+                            if (durableSession) new Uint8Array(durableSession).fill(0);
+                            const durableAdditional = await Promise.all(updates.slice(1).map((item) => this.storage.read(item.recordType, item.recordId)));
+                            const additionalCommitted = updates.slice(1).every((item, index) => equalBytes(durableAdditional[index], item.next));
+                            durableAdditional.forEach((value) => { if (value) new Uint8Array(value).fill(0); });
+                            if (additionalCommitted) {
+                                this.replacePersistedSessionSnapshot(nextSession.slice(0));
+                                this.state = 'active';
+                                return envelope;
+                            }
+                        } else if (equalBytes(durableSession, expectedSession)) await this.restoreSessionSnapshot(expectedSession, sessionId);
+                        else this.quarantineSession();
+                        if (durableSession) new Uint8Array(durableSession).fill(0);
+                    } catch {
+                        this.quarantineSession();
+                    }
+                    throw new VodozemacBoundaryError('CORRUPTED_SESSION', 'The message could not be safely persisted.');
+                }
+                throw error;
+            } finally {
+                new Uint8Array(expectedSession).fill(0);
+                if (nextSession) new Uint8Array(nextSession).fill(0);
+                for (const update of updates) {
+                    if (update.recordType !== 'vodozemac-session') {
+                        if (update.expected) new Uint8Array(update.expected).fill(0);
+                        new Uint8Array(update.next).fill(0);
+                    }
+                }
             }
         });
     }
@@ -326,6 +450,7 @@ export class VodozemacRuntime {
         this.session?.destroy();
         this.identity?.lock();
         this.session = undefined;
+        this.clearPersistedSessionSnapshot();
         this.identity = undefined;
         this.bindings = undefined;
         this.state = 'closed';
@@ -336,7 +461,7 @@ export class VodozemacRuntime {
         if (!this.session || !this.conversationId || !this.sessionStore) {
             throw new VodozemacBoundaryError('MISSING_SESSION', 'No active conversation session.');
         }
-        await this.sessionStore.save(this.conversationId, this.session);
+        this.replacePersistedSessionSnapshot(await this.sessionStore.save(this.conversationId, this.session));
         this.state = keepPersisted ? 'persisted' : 'active';
     }
 
@@ -388,7 +513,45 @@ export class VodozemacRuntime {
     private quarantineSession(): void {
         this.session?.destroy();
         this.session = undefined;
+        this.clearPersistedSessionSnapshot();
         this.state = 'error';
+    }
+
+    private serializeCurrentSession(): ArrayBuffer {
+        if (!this.session) throw new Error('Session unavailable.');
+        const serialized = this.session.saveSession();
+        try { return serialized.buffer.slice(serialized.byteOffset, serialized.byteOffset + serialized.byteLength) as ArrayBuffer; }
+        finally { serialized.fill(0); }
+    }
+
+    private async restoreSessionSnapshot(snapshot: ArrayBuffer, sessionId: string): Promise<void> {
+        const factory = this.bindings?.sessionFactory;
+        if (!factory) { this.quarantineSession(); throw new Error('Session recovery unavailable.'); }
+        const bytes = new Uint8Array(snapshot.slice(0));
+        let recovered: VodozemacSessionHandle | undefined;
+        try {
+            recovered = factory.loadSession(bytes);
+            const replacement = new VodozemacCryptoSession(recovered);
+            await replacement.initialize(sessionId);
+            this.session?.destroy();
+            this.session = replacement;
+            this.replacePersistedSessionSnapshot(snapshot.slice(0));
+            this.state = 'active';
+        } catch (error) {
+            recovered?.free?.();
+            this.quarantineSession();
+            throw error;
+        } finally { bytes.fill(0); }
+    }
+
+    private replacePersistedSessionSnapshot(next: ArrayBuffer): void {
+        this.clearPersistedSessionSnapshot();
+        this.persistedSessionSnapshot = next;
+    }
+
+    private clearPersistedSessionSnapshot(): void {
+        if (this.persistedSessionSnapshot) new Uint8Array(this.persistedSessionSnapshot).fill(0);
+        this.persistedSessionSnapshot = undefined;
     }
 
     private requireState(...allowed: VodozemacLifecycleState[]): void {

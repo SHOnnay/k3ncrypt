@@ -11,24 +11,32 @@ export interface VodozemacSessionFactory {
 export class VodozemacSessionStore {
     constructor(private readonly storage: SecureStorage, private readonly factory: VodozemacSessionFactory) {}
 
-    public async save(conversationId: string, session: Pick<VodozemacSessionHandle, 'saveSession'>): Promise<void> {
+    public async save(conversationId: string, session: Pick<VodozemacSessionHandle, 'saveSession'>): Promise<ArrayBuffer> {
         const serialized = session.saveSession();
         try {
             const bytes = serialized.buffer.slice(serialized.byteOffset, serialized.byteOffset + serialized.byteLength) as ArrayBuffer;
             await this.storage.write(SESSION_RECORD_TYPE, conversationId, bytes);
+            return bytes;
         } finally {
             serialized.fill(0);
         }
     }
 
     public async load(conversationId: string): Promise<VodozemacSessionHandle> {
+        const loaded = await this.loadWithSnapshot(conversationId);
+        new Uint8Array(loaded.snapshot).fill(0);
+        return loaded.handle;
+    }
+
+    public async loadWithSnapshot(conversationId: string): Promise<{ handle: VodozemacSessionHandle; snapshot: ArrayBuffer }> {
         const serialized = await this.storage.read(SESSION_RECORD_TYPE, conversationId);
         if (!serialized) {
             throw new Error('Vodozemac session state is missing.');
         }
         const bytes = new Uint8Array(serialized);
+        const snapshot = serialized.slice(0);
         try {
-            return this.factory.loadSession(bytes);
+            return { handle: this.factory.loadSession(bytes), snapshot };
         } finally {
             bytes.fill(0);
         }

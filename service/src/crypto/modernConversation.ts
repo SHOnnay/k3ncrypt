@@ -1,5 +1,5 @@
 import { testDiagnosticsEnabled } from '../utils/testDiagnostics';
-import type { EncryptedEnvelope, SecureStorage, TransportManager } from '../core/contracts';
+import type { EncryptedEnvelope, SecureRecordUpdate, SecureStorage, TransportManager } from '../core/contracts';
 import { VODOZEMAC_ENVELOPE_VERSION, VODOZEMAC_STRATEGY_ID } from '../core/vodozemacCryptoSession';
 import { claimVodozemacOneTimeKey, fetchVodozemacBundle, publishVodozemacBundle, renewVodozemacBundle } from '../api/prekeys';
 import { deleteLink } from '../api/links';
@@ -686,20 +686,36 @@ export class ModernConversation {
         if (contact?.changeStatus !== 'unchanged') throw new Error('Review this contact’s changed identity before sending.');
         await this.ensureOutboundSession();
         const clientId = crypto.randomUUID();
+        let renewalBytes: ArrayBuffer | undefined;
+        let renewal: SessionRenewal | undefined;
         if (this.sessionHealth === 'renewal-pending') {
-            const renewal = parseSessionRenewal(await this.storage.read(SESSION_RENEWAL_RECORD, this.roomId));
+            renewalBytes = await this.storage.read(SESSION_RENEWAL_RECORD, this.roomId);
+            renewal = parseSessionRenewal(renewalBytes);
             if (!renewal) throw new Error('Verified renewal state is unavailable.');
-            await this.storage.write(SESSION_RENEWAL_RECORD, this.roomId, asBytes({ ...renewal, clientId } satisfies SessionRenewal));
         }
         await this.deliveryMutex.runExclusive(async () => {
-            const pending = await this.readPending();
+            const { pending, raw } = await this.readPendingSnapshot();
             if (pending.length >= MAX_PENDING) throw new Error('Too many messages are waiting to send.');
-            const envelope = await this.runtime.encrypt('message', encoder.encode(text).buffer as ArrayBuffer);
+            const plaintext = encoder.encode(text);
+            const plaintextBuffer = plaintext.buffer.slice(plaintext.byteOffset, plaintext.byteOffset + plaintext.byteLength) as ArrayBuffer;
+            try {
+                await this.runtime.encryptMessageWithAtomicRecords(
+                    plaintextBuffer,
+                    (encrypted) => {
+                        pending.push({ envelope: encrypted, clientId });
+                        const updates: SecureRecordUpdate[] = [
+                            { recordType: OUTBOX_RECORD, recordId: this.roomId!, expected: raw, next: asBytes(pending) },
+                        ];
+                        if (renewal && renewalBytes) updates.push({ recordType: SESSION_RENEWAL_RECORD, recordId: this.roomId!, expected: renewalBytes,
+                            next: asBytes({ ...renewal, clientId } satisfies SessionRenewal) });
+                        return updates;
+                    },
+                    () => this.assertCurrentTabOwnership(this.roomId!),
+                );
+            } finally { plaintext.fill(0); new Uint8Array(plaintextBuffer).fill(0); }
             testOnlyDeliveryStage('envelope-created');
-            pending.push({ envelope, clientId });
-            await this.storage.write(OUTBOX_RECORD, this.roomId!, asBytes(pending));
         });
-        await this.retryPending();
+        await this.retryPendingUnlocked();
         return clientId;
     }
 
@@ -746,7 +762,8 @@ export class ModernConversation {
         const transport = this.transport.activeTransport();
         if (!transport?.peerSupportsFeature?.(JOIN_INTRODUCTION_FEATURE)) return;
 
-        const record = parseJoinIntroductionRecord(await this.storage.read(JOIN_INTRODUCTION_RECORD, this.roomId));
+        const introductionBytes = await this.storage.read(JOIN_INTRODUCTION_RECORD, this.roomId);
+        const record = parseJoinIntroductionRecord(introductionBytes);
         if (!record || record.recipientAddress !== this.remoteAddress || record.recipientIdentityCommitment !== this.remoteIdentityCommitment) return;
         if (!record.envelope) {
             await this.assertCurrentDeviceTrust();
@@ -764,19 +781,34 @@ export class ModernConversation {
                 ...unsigned,
                 signature: await this.runtime.signControlEvent(canonicalJoinIntroduction(unsigned)),
             };
-            const envelope = await this.runtime.encrypt('message', encodeJoinIntroduction(event));
-            record.envelope = envelope;
-            await this.storage.write(JOIN_INTRODUCTION_RECORD, this.roomId, asBytes(record));
+            const plaintext = encodeJoinIntroduction(event);
+            const plaintextBuffer = plaintext.slice(0);
+            const plaintextBytes = new Uint8Array(plaintext);
+            try {
+                const envelope = await this.runtime.encryptMessageWithAtomicRecords(plaintextBuffer, (encrypted) => {
+                    this.assertCurrentTabOwnership(this.roomId!);
+                    const next = { ...record, envelope: encrypted };
+                    return [{ recordType: JOIN_INTRODUCTION_RECORD, recordId: this.roomId!, expected: introductionBytes, next: asBytes(next) }];
+                }, () => this.assertCurrentTabOwnership(this.roomId!));
+                record.envelope = envelope;
+            } finally { plaintextBytes.fill(0); new Uint8Array(plaintextBuffer).fill(0); }
         }
         await this.assertCurrentDeviceTrust();
+        this.assertCurrentTabOwnership(this.roomId);
         await this.transport.sendEnvelope('message', record.envelope, this.remoteAddress);
     }
 
     public async retryPending(): Promise<void> {
+        if (!this.roomId) return;
+        await this.withTabLock(this.roomId, () => this.retryPendingUnlocked());
+    }
+
+    private async retryPendingUnlocked(): Promise<void> {
         if (this.sessionHealth === 'unhealthy') return;
         if (!this.roomId) return;
         await this.deliveryMutex.runExclusive(async () => {
-            const pending = await this.readPending();
+            const { pending, raw } = await this.readPendingSnapshot();
+            let expected = raw;
             const renewal = this.sessionHealth === 'renewal-pending'
                 ? parseSessionRenewal(await this.storage.read(SESSION_RENEWAL_RECORD, this.roomId!)) : undefined;
             for (const item of pending) {
@@ -784,11 +816,16 @@ export class ModernConversation {
                 if (item.relayId && item.sentAt && Date.now() - item.sentAt < 5000) continue;
                 try {
                     await this.assertCurrentDeviceTrust();
+                    this.assertCurrentTabOwnership(this.roomId);
                     testOnlyDeliveryStage('relay-dispatch');
                     const sent = await this.transport.sendEnvelope('message', item.envelope, this.remoteAddress);
                     item.relayId = sent.id;
                     item.sentAt = Date.now();
-                    await this.storage.write(OUTBOX_RECORD, this.roomId!, asBytes(pending));
+                    const next = asBytes(pending);
+                    if (!this.storage.compareAndSwapRecords || !await this.storage.compareAndSwapRecords([
+                        { recordType: OUTBOX_RECORD, recordId: this.roomId, expected, next },
+                    ])) return;
+                    expected = next;
                 } catch { return; }
             }
         });
@@ -796,11 +833,20 @@ export class ModernConversation {
 
     public async acceptDelivery(relayId: string): Promise<void> {
         if (!this.roomId) return;
+        await this.withTabLock(this.roomId, () => this.acceptDeliveryUnlocked(relayId));
+    }
+
+    private async acceptDeliveryUnlocked(relayId: string): Promise<void> {
+        if (!this.roomId) return;
         await this.deliveryMutex.runExclusive(async () => {
-            const pending = await this.readPending();
+            const { pending, raw } = await this.readPendingSnapshot();
             const accepted = pending.find((item) => item.relayId === relayId);
             const next = pending.filter((item) => item.relayId !== relayId);
-            if (next.length !== pending.length) await this.storage.write(OUTBOX_RECORD, this.roomId!, asBytes(next));
+            if (next.length !== pending.length) {
+                if (!this.storage.compareAndSwapRecords || !await this.storage.compareAndSwapRecords([
+                    { recordType: OUTBOX_RECORD, recordId: this.roomId, expected: raw, next: asBytes(next) },
+                ])) return;
+            }
             const renewal = parseSessionRenewal(await this.storage.read(SESSION_RENEWAL_RECORD, this.roomId!));
             if (accepted?.clientId && renewal?.clientId === accepted.clientId) {
                 await this.storage.delete(SESSION_RENEWAL_RECORD, this.roomId!);
@@ -1496,6 +1542,16 @@ export class ModernConversation {
         }
     }
 
+    private assertCurrentTabOwnership(conversationId: string): void {
+        const browser = globalThis as typeof globalThis & { window?: unknown; localStorage?: Storage };
+        if (typeof browser.window === 'undefined') return;
+        if (!browser.localStorage && typeof process !== 'undefined' && process.env.NODE_ENV === 'test') return;
+        const key = `k3ncrypt-tab-lease:${conversationId}`;
+        if (!browser.localStorage?.getItem(key)?.startsWith(`${this.tabOwnerId}:`)) {
+            throw new Error('This secure conversation is active in another tab.');
+        }
+    }
+
     private refreshFallbackLease(storage: Storage, key: string): void {
         // A resumed timer must never reclaim a lease acquired by another tab.
         if (this.fallbackLeaseKey === key && storage.getItem(key)?.startsWith(`${this.tabOwnerId}:`)) {
@@ -1531,12 +1587,13 @@ export class ModernConversation {
         }
     }
 
-    private async readPending(): Promise<PendingEnvelope[]> {
-        const values = parseList<PendingEnvelope>(await this.storage.read(OUTBOX_RECORD, this.roomId!));
+    private async readPendingSnapshot(): Promise<{ pending: PendingEnvelope[]; raw?: ArrayBuffer }> {
+        const raw = await this.storage.read(OUTBOX_RECORD, this.roomId!);
+        const values = parseList<PendingEnvelope>(raw);
         if (values.length > MAX_PENDING || values.some((item) => !item || firstMessage(item.envelope) === undefined)) {
             throw new Error('Modern pending delivery state is invalid.');
         }
-        return values;
+        return { pending: values, raw };
     }
 
     private async digest(envelope: EncryptedEnvelope): Promise<string> {

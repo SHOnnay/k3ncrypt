@@ -11,12 +11,17 @@ Object.assign(globalThis, { window: { btoa: (value: string) => Buffer.from(value
 class MemoryStorage implements SecureStorage {
     private readonly records = new Map<string, ArrayBuffer>();
     private locked = false;
+    public async compareAndSwapRecords(updates: readonly import('../core/contracts').SecureRecordUpdate[]): Promise<boolean> {
+        if (updates.some((item) => !sameBytes(this.records.get(`${item.recordType}:${item.recordId}`), item.expected))) return false;
+        for (const item of updates) this.records.set(`${item.recordType}:${item.recordId}`, item.next.slice(0));
+        return true;
+    }
     public async initializeWithPassphrase(): Promise<void> { this.locked = false; }
     public async unlock(): Promise<void> { this.locked = false; }
     public lock(): void { this.locked = true; }
     public async changeUnlockSecret(): Promise<void> {}
     public isLocked(): boolean { return this.locked; }
-    public async read(type: string, id: string): Promise<ArrayBuffer | undefined> { return this.records.get(`${type}:${id}`); }
+    public async read(type: string, id: string): Promise<ArrayBuffer | undefined> { return this.records.get(`${type}:${id}`)?.slice(0); }
     public async write(type: string, id: string, value: ArrayBuffer): Promise<void> { this.records.set(`${type}:${id}`, value.slice(0)); }
     public async delete(type: string, id: string): Promise<void> { this.records.delete(`${type}:${id}`); }
     public async withVodozemacPickleKey<T>(operation: (key: Uint8Array) => Promise<T>): Promise<T> {
@@ -28,6 +33,11 @@ class MemoryStorage implements SecureStorage {
     }
     public has(type: string, id: string): boolean { return this.records.has(`${type}:${id}`); }
 }
+
+const sameBytes = (left: ArrayBuffer | undefined, right: ArrayBuffer | undefined): boolean => {
+    if (left === undefined || right === undefined) return left === right;
+    return Buffer.from(left).equals(Buffer.from(right));
+};
 
 const account = (): VodozemacAccountHandle => ({
     identityKeys: () => JSON.stringify({ curve25519: 'c'.repeat(44), ed25519: 'e'.repeat(44) }),
@@ -203,7 +213,7 @@ describe('Stage 0 mutation crash and concurrency characterization', () => {
         runtime.close(); jest.restoreAllMocks();
     });
 
-    it('two restored runtimes can overwrite a newer session snapshot (known gap)', async () => {
+    it('atomic message commit rejects a stale restored runtime without overwriting the newer outbox/session', async () => {
         const storage = new MemoryStorage();
         const counterSession = (value = 0): VodozemacSessionHandle => ({ ...session(), encrypt: () => String(++value), saveSession: () => new Uint8Array([value]) });
         const counterBindings = { ...bindings, sessionFactory: { loadSession: (bytes: Uint8Array) => counterSession(bytes[0]) } };
@@ -212,11 +222,62 @@ describe('Stage 0 mutation crash and concurrency characterization', () => {
         await a.establishSession('conversation-1', counterSession(), 'session-1'); await a.persistSession();
         const b = new VodozemacRuntime(storage, async () => counterBindings);
         await b.initialize(); await b.restoreOrCreateIdentity(); await b.restoreSession('conversation-1', 'session-1');
-        await a.encrypt('message', new ArrayBuffer(0)); await a.encrypt('message', new ArrayBuffer(0));
-        expect(new Uint8Array((await storage.read('vodozemac-session', 'conversation-1'))!)[0]).toBe(2);
-        await b.encrypt('signaling', new ArrayBuffer(0));
-        expect(new Uint8Array((await storage.read('vodozemac-session', 'conversation-1'))!)[0]).toBe(1);
+        const outboxExpected = new TextEncoder().encode('[]').buffer as ArrayBuffer;
+        await storage.write('modern-outbox', 'conversation-1', outboxExpected);
+        const nextOutbox = (envelope: unknown, clientId: string) => new TextEncoder().encode(JSON.stringify([{ envelope, clientId }])).buffer as ArrayBuffer;
+        await a.encryptMessageWithAtomicRecords(new ArrayBuffer(0), (envelope) => [{ recordType: 'modern-outbox', recordId: 'conversation-1', expected: outboxExpected, next: nextOutbox(envelope, 'first') }]);
+        const committedSession = await storage.read('vodozemac-session', 'conversation-1');
+        const committedOutbox = await storage.read('modern-outbox', 'conversation-1');
+        expect(new Uint8Array(committedSession!)[0]).toBe(1);
+        await expect(b.encryptMessageWithAtomicRecords(new ArrayBuffer(0), (envelope) => [{ recordType: 'modern-outbox', recordId: 'conversation-1', expected: outboxExpected, next: nextOutbox(envelope, 'stale') }]))
+            .rejects.toMatchObject({ code: 'CORRUPTED_SESSION' });
+        expect(b.lifecycle).toBe('error');
+        expect(sameBytes(await storage.read('vodozemac-session', 'conversation-1'), committedSession)).toBe(true);
+        expect(sameBytes(await storage.read('modern-outbox', 'conversation-1'), committedOutbox)).toBe(true);
         a.close(); b.close();
+    });
+
+    it('atomic message commit abort restores the original in-memory session for retry', async () => {
+        class OneAbortStorage extends MemoryStorage {
+            public fail = true;
+            public async compareAndSwapRecords(updates: readonly import('../core/contracts').SecureRecordUpdate[]): Promise<boolean> {
+                if (this.fail) { this.fail = false; return false; }
+                return super.compareAndSwapRecords(updates);
+            }
+        }
+        const storage = new OneAbortStorage();
+        const counterSession = (value = 0): VodozemacSessionHandle => ({ ...session(), encrypt: () => `wire-${++value}`, saveSession: () => new Uint8Array([value]) });
+        const counterBindings = { ...bindings, sessionFactory: { loadSession: (bytes: Uint8Array) => counterSession(bytes[0]) } };
+        const runtime = new VodozemacRuntime(storage, async () => counterBindings);
+        await runtime.initialize(); await runtime.restoreOrCreateIdentity();
+        await runtime.establishSession('conversation-1', counterSession(), 'session-1'); await runtime.persistSession();
+        const before = await storage.read('vodozemac-session', 'conversation-1');
+        const additional = (envelope: unknown) => [{ recordType: 'modern-outbox', recordId: 'conversation-1', expected: undefined,
+            next: new TextEncoder().encode(JSON.stringify([{ envelope, clientId: 'retry' }])).buffer as ArrayBuffer }];
+        await expect(runtime.encryptMessageWithAtomicRecords(new ArrayBuffer(0), additional)).rejects.toMatchObject({ code: 'CORRUPTED_SESSION' });
+        expect(sameBytes(await storage.read('vodozemac-session', 'conversation-1'), before)).toBe(true);
+        expect(await storage.read('modern-outbox', 'conversation-1')).toBeUndefined();
+        expect(runtime.lifecycle).toBe('active');
+        await runtime.encryptMessageWithAtomicRecords(new ArrayBuffer(0), additional);
+        expect(new Uint8Array((await storage.read('vodozemac-session', 'conversation-1'))!)[0]).toBe(1);
+        expect(JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', 'conversation-1'))!))[0].envelope.data.olmMessage).toBe('wire-1');
+        runtime.close();
+    });
+
+    it('keeps the existing standalone signaling mutation path outside outbound outbox atomicity', async () => {
+        const storage = new MemoryStorage();
+        const counterSession = (value = 0): VodozemacSessionHandle => ({ ...session(), encrypt: () => `signal-${++value}`, saveSession: () => new Uint8Array([value]) });
+        const counterBindings = { ...bindings, sessionFactory: { loadSession: (bytes: Uint8Array) => counterSession(bytes[0]) } };
+        const first = new VodozemacRuntime(storage, async () => counterBindings);
+        await first.initialize(); await first.restoreOrCreateIdentity();
+        await first.establishSession('conversation-1', counterSession(), 'session-1'); await first.persistSession();
+        const stale = new VodozemacRuntime(storage, async () => counterBindings);
+        await stale.initialize(); await stale.restoreOrCreateIdentity(); await stale.restoreSession('conversation-1', 'session-1');
+        await first.encrypt('signaling', new ArrayBuffer(0));
+        await first.encrypt('signaling', new ArrayBuffer(0));
+        await stale.encrypt('signaling', new ArrayBuffer(0));
+        expect(new Uint8Array((await storage.read('vodozemac-session', 'conversation-1'))!)[0]).toBe(1);
+        first.close(); stale.close();
     });
 
     it('identity-wide interrupted marker is shared by conversations (known gap)', async () => {

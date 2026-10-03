@@ -856,21 +856,24 @@ describe('Stage 0 identity authorization and delivery boundaries', () => {
         await conversation.close();
     });
 
-    it('outbox failure after encryption leaves persisted session but loses this envelope (known gap)', async () => {
+    it('atomic outbox persistence failure leaves the ratchet unchanged and retryable', async () => {
         const { conversation, storage } = await setup();
         await conversation.acceptDelivery('relay-1');
-        const write = storage.write.bind(storage);
-        jest.spyOn(storage, 'write').mockImplementation(async (type, id, bytes) => {
-            if (type === 'modern-outbox') throw new Error('injected outbox failure');
-            return write(type, id, bytes);
+        const beforeSession = await storage.read('vodozemac-session', room);
+        const compareAndSwap = storage.compareAndSwapRecords.bind(storage);
+        jest.spyOn(storage, 'compareAndSwapRecords').mockImplementation(async (updates) => {
+            if (updates.some((item) => item.recordType === 'modern-outbox')) return false;
+            return compareAndSwap(updates);
         });
         const before = encryptions;
-        await expect(conversation.send('synthetic lost work')).rejects.toThrow('injected outbox failure');
+        await expect(conversation.send('synthetic recoverable work')).rejects.toThrow('safely persisted');
         expect(encryptions).toBe(before + 1);
-        expect(await storage.read('vodozemac-session', room)).toBeDefined();
+        expect(Buffer.from(await storage.read('vodozemac-session', room)!).equals(Buffer.from(beforeSession!))).toBe(true);
         expect(await storage.read('vodozemac-commit', 'local')).toBeUndefined();
         expect(JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!))).toEqual([]);
         jest.restoreAllMocks();
+        await expect(conversation.send('retry after atomic abort')).resolves.toBe('pending');
+        expect(JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!))).toHaveLength(1);
         await conversation.close();
     });
 
