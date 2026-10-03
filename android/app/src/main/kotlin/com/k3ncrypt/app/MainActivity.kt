@@ -446,7 +446,7 @@ private fun IdentityAndConversationScreen(
                 return@launch
             }
             messageStatus = if (message.senderRoutingId == conversation?.localRoutingId) {
-                "Message delivered."
+                "Relay acknowledged the message."
             } else {
                 "New message received."
             }
@@ -876,7 +876,7 @@ private fun IdentityAndConversationScreen(
                         busy = true
                         messageStatus = "Encrypting and sending…"
                         runCatching { messaging.sendText(text) }
-                            .onSuccess { draft = ""; messageStatus = "Message delivered." }
+                            .onSuccess { draft = ""; messageStatus = "Relay accepted the message." }
                             .onFailure { messageStatus = "Message not sent. It is saved on this device and can be sent when the connection returns." }
                         busy = false
                     }

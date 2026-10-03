@@ -16,7 +16,7 @@ import { readConversationDescriptors, removeConversationDescriptor, saveConversa
 import { readProfileName, writeProfileName } from '../product/profileStore';
 import { readPrivacyPreferences, writePrivacyPreferences, type PrivacyPreferences } from '../product/preferences';
 import { deliverNotification } from '../product/notifications';
-import { prepareMessageAcceptance, readMessages, writeMessages } from '../product/messageStore';
+import { prepareMessageAcceptance, prepareMessageDeliveryUpdate, readMessages, writeMessages } from '../product/messageStore';
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
 
@@ -219,7 +219,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     conversation.onDeliveryUpdate((clientId, state) => {
       acceptedDeliveries.current.add(clientId);
       setMessages((current) => current.map((message) => message.id === clientId ? { ...message, delivery: state } : message));
-    });
+    }, (clientId, state) => prepareMessageDeliveryUpdate(secureVault, descriptor.roomId, clientId, state));
     try {
       const details = await conversation.connect(descriptor.roomId, descriptor.controlCapability, descriptor.remoteAddress, descriptor.remoteIdentityCommitment, async (text, envelopeId) => {
         const message = { ...displayMessage('contact', text, 'received'), id: envelopeId };
@@ -464,7 +464,10 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const outgoing = { ...displayMessage(userId, text, 'sent'), delivery: 'pending' as const };
       try {
         if (protocolMode === 'modern') {
-          const clientId = await modern!.sendWithReceipt(text);
+          const clientId = await modern!.sendWithReceipt(text, async (acceptedClientId) => {
+            const acceptedMessage = { ...outgoing, id: acceptedClientId };
+            return [await prepareMessageAcceptance(vault!, channelHash, acceptedMessage)];
+          });
           const accepted = acceptedDeliveries.current.delete(clientId);
           addMessage({ ...outgoing, id: clientId, delivery: accepted ? 'accepted' : 'pending' });
           const contact = await modern!.getContact();
@@ -481,7 +484,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         throw err;
       }
     },
-    [chat, modern, protocolMode, userId]
+    [chat, channelHash, modern, protocolMode, userId, vault]
   );
 
   const retryMessage = useCallback(async (messageId: string): Promise<void> => {

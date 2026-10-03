@@ -1,6 +1,6 @@
 import type { Message } from '../types';
 import type { ProductSecureStorage } from './sessionStore';
-import { prepareMessageAcceptance, readMessages, writeMessages } from './messageStore';
+import { prepareMessageAcceptance, prepareMessageDeliveryUpdate, readMessages, writeMessages } from './messageStore';
 interface SecureRecordUpdate { recordType: string; recordId: string; expected: ArrayBuffer | undefined; next: ArrayBuffer; }
 
 class MemoryProductStorage implements ProductSecureStorage {
@@ -48,5 +48,19 @@ describe('atomic product message acceptance', () => {
     await writeMessages(storage, 'room-a', [message('outbound', 'hello', 'accepted')]);
     await writeMessages(storage, 'room-a', [message('outbound', 'hello', 'pending')]);
     expect((await readMessages(storage, 'room-a'))[0].delivery).toBe('accepted');
+  });
+
+  it('persists accepted delivery monotonically and leaves missing history untouched', async () => {
+    const storage = new MemoryProductStorage();
+    const outbound: Message = { ...message('outbound', 'hello', 'pending'), sender: 'me', type: 'sent' };
+    const created = await prepareMessageAcceptance(storage, 'room-a', outbound);
+    expect(await storage.compareAndSwapRecords([created])).toBe(true);
+
+    const accepted = await prepareMessageDeliveryUpdate(storage, 'room-a', outbound.id, 'accepted');
+    expect(accepted).toBeDefined();
+    expect(await storage.compareAndSwapRecords([accepted!])).toBe(true);
+    expect((await readMessages(storage, 'room-a'))[0]).toMatchObject({ id: 'outbound', text: 'hello', delivery: 'accepted' });
+    expect(await prepareMessageDeliveryUpdate(storage, 'room-a', outbound.id, 'pending')).toBeUndefined();
+    expect(await prepareMessageDeliveryUpdate(storage, 'room-a', 'unknown', 'accepted')).toBeUndefined();
   });
 });

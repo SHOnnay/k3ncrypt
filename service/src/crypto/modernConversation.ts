@@ -107,6 +107,8 @@ export interface InboundMessageAcceptancePlan {
     updates: readonly SecureRecordUpdate[];
     afterCommit?: () => void | Promise<void>;
 }
+export type OutboundHistoryUpdateBuilder = (clientId: string) => readonly SecureRecordUpdate[] | Promise<readonly SecureRecordUpdate[]>;
+export type DeliveryStateUpdateBuilder = (clientId: string, state: 'accepted') => SecureRecordUpdate | undefined | Promise<SecureRecordUpdate | undefined>;
 interface PublicationMarker { version: 1; roomId: string; address?: string; routingProof?: string; }
 export interface ModernConnectionDetails {
     ownFingerprint: string;
@@ -265,6 +267,7 @@ export class ModernConversation {
     private trustEpoch?: number;
     private syncController?: RuntimeSyncController;
     private deliveryObserver?: (clientId: string, state: 'accepted') => void;
+    private deliveryStateUpdateBuilder?: DeliveryStateUpdateBuilder;
     private syncRelay?: SocketSyncRelay;
     private groupAdapter?: SecureStorageGroupRuntimeAdapter;
     private groupRuntime?: GroupSecurityRuntime;
@@ -670,12 +673,15 @@ export class ModernConversation {
         return 'pending';
     }
 
-    public async sendWithReceipt(text: string): Promise<string> {
-        if (this.roomId) return this.withTabLock(this.roomId, () => this.sendUnlocked(text));
+    public async sendWithReceipt(text: string, buildHistoryUpdates?: OutboundHistoryUpdateBuilder): Promise<string> {
+        if (this.roomId) return this.withTabLock(this.roomId, () => this.sendUnlocked(text, buildHistoryUpdates));
         throw new Error('The private contact is not ready.');
     }
 
-    public onDeliveryUpdate(observer: (clientId: string, state: 'accepted') => void): void { this.deliveryObserver = observer; }
+    public onDeliveryUpdate(observer: (clientId: string, state: 'accepted') => void, buildDurableUpdate?: DeliveryStateUpdateBuilder): void {
+        this.deliveryObserver = observer;
+        this.deliveryStateUpdateBuilder = buildDurableUpdate;
+    }
 
     /** Observe the existing relay presence event to release active media when a peer leaves. */
     public onPeerDisconnect(observer: () => void): () => void {
@@ -688,7 +694,7 @@ export class ModernConversation {
         };
     }
 
-    private async sendUnlocked(text: string): Promise<string> {
+    private async sendUnlocked(text: string, buildHistoryUpdates?: OutboundHistoryUpdateBuilder): Promise<string> {
         if (this.sessionHealth === 'unhealthy') throw new Error('The encrypted session needs verified renewal before sending.');
         if (!this.roomId || !text.trim()) throw new Error('The private contact is not ready.');
         testOnlyDeliveryStage('send-start');
@@ -718,6 +724,7 @@ export class ModernConversation {
                         const updates: SecureRecordUpdate[] = [
                             { recordType: OUTBOX_RECORD, recordId: this.roomId!, expected: raw, next: asBytes(pending) },
                         ];
+                        if (buildHistoryUpdates) updates.push(...await buildHistoryUpdates(clientId));
                         if (renewal && renewalBytes) updates.push({ recordType: SESSION_RENEWAL_RECORD, recordId: this.roomId!, expected: renewalBytes,
                             next: asBytes({ ...renewal, clientId } satisfies SessionRenewal) });
                         return updates;
@@ -855,9 +862,14 @@ export class ModernConversation {
             const accepted = pending.find((item) => item.relayId === relayId);
             const next = pending.filter((item) => item.relayId !== relayId);
             if (next.length !== pending.length) {
-                if (!this.storage.compareAndSwapRecords || !await this.storage.compareAndSwapRecords([
+                const updates: SecureRecordUpdate[] = [
                     { recordType: OUTBOX_RECORD, recordId: this.roomId!, expected: raw, next: asBytes(next) },
-                ])) return;
+                ];
+                if (accepted?.clientId && this.deliveryStateUpdateBuilder) {
+                    const historyUpdate = await this.deliveryStateUpdateBuilder(accepted.clientId, 'accepted');
+                    if (historyUpdate) updates.push(historyUpdate);
+                }
+                if (!this.storage.compareAndSwapRecords || !await this.storage.compareAndSwapRecords(updates)) return;
             }
             const renewal = parseSessionRenewal(await this.storage.read(SESSION_RENEWAL_RECORD, this.roomId!));
             if (accepted?.clientId && renewal?.clientId === accepted.clientId) {

@@ -47,7 +47,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
       <div className="message-meta">
         <span>{formatMessageTime(message.timestamp)}</span>
         {message.type === 'sent' && message.delivery === 'pending' && <span>Sending…</span>}
-        {message.type === 'sent' && message.delivery === 'accepted' && <span>Delivered</span>}
+        {message.type === 'sent' && message.delivery === 'accepted' && <span>Relay acknowledged</span>}
         {message.type === 'sent' && message.delivery === 'failed' && <button type="button" onClick={() => retryMessage(message.id)}>Not sent · Retry</button>}
       </div>
     </div>

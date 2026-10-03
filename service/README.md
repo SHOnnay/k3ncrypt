@@ -214,7 +214,7 @@ The SDK uses an event-driven architecture. Listen to events using `chat.on(event
 | `on-alice-join` | Fired when the second user joins the channel. | `null` |
 | `on-alice-disconnect` | Fired when the other user leaves the channel. | `null` |
 | `chat-message` | Fired once a message has been decrypted (and passed replay checks). | `{ sender, message, image, id, timestamp }` |
-| `delivered` | Fired when your message is successfully received by the peer. | `id` |
+| `delivered` | A relay event indicating that its active receiver handler accepted the envelope or that mailbox replay was acknowledged. The event is not a recipient-authenticated receipt and does not independently prove peer persistence. | `id` |
 | `limit-reached` | Fired if the channel already has 2 participants. | `null` |
 | `call-added` | Fired when an incoming call is received. | `E2ECall` |
 | `call-removed` | Fired when a call is disconnected/ended. | `null` |

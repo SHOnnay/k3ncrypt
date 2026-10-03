@@ -922,6 +922,70 @@ describe('Stage 0 identity authorization and delivery boundaries', () => {
         await conversation.close();
     });
 
+    it('commits caller-owned sender history with the session and exact outbox envelope', async () => {
+        const { conversation, storage } = await setup();
+        await conversation.acceptDelivery('relay-1');
+        await conversation.sendWithReceipt('recoverable plaintext', (clientId) => [{
+            recordType: 'product-messages', recordId: room, expected: undefined,
+            next: new TextEncoder().encode(JSON.stringify([{ id: clientId, sender: localAddress, text: 'recoverable plaintext', type: 'sent', timestamp: '2026-01-01T00:00:00.000Z', delivery: 'pending' }])).buffer as ArrayBuffer,
+        }]);
+        const history = JSON.parse(new TextDecoder().decode((await storage.read('product-messages', room))!));
+        const outbox = JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!));
+        expect(history).toHaveLength(1);
+        expect(history[0]).toMatchObject({ sender: localAddress, text: 'recoverable plaintext', type: 'sent', delivery: 'pending' });
+        expect(outbox).toHaveLength(1);
+        expect(outbox[0].clientId).toBe(history[0].id);
+        expect(outbox[0].envelope).toBeDefined();
+        await conversation.close();
+    });
+
+    it('commits the accepted history state with the corresponding outbox removal', async () => {
+        const { conversation, storage } = await setup();
+        await conversation.acceptDelivery('relay-1');
+        await conversation.sendWithReceipt('history is recoverable', (clientId) => [{
+            recordType: 'product-messages', recordId: room, expected: undefined,
+            next: new TextEncoder().encode(JSON.stringify([{ id: clientId, sender: localAddress, text: 'history is recoverable', type: 'sent', timestamp: '2026-01-01T00:00:00.000Z', delivery: 'pending' }])).buffer as ArrayBuffer,
+        }]);
+        conversation.onDeliveryUpdate(() => undefined, async (clientId) => {
+            const expected = await storage.read('product-messages', room);
+            const history = JSON.parse(new TextDecoder().decode(expected!));
+            const next = history.map((message: { id: string }) => message.id === clientId ? { ...message, delivery: 'accepted' } : message);
+            return { recordType: 'product-messages', recordId: room, expected, next: new TextEncoder().encode(JSON.stringify(next)).buffer as ArrayBuffer };
+        });
+        const compareAndSwap = storage.compareAndSwapRecords.bind(storage);
+        const updatesSeen: string[][] = [];
+        jest.spyOn(storage, 'compareAndSwapRecords').mockImplementation(async (updates) => {
+            updatesSeen.push(updates.map((update) => update.recordType));
+            return compareAndSwap(updates);
+        });
+        await conversation.acceptDelivery('relay-2');
+        expect(updatesSeen[updatesSeen.length - 1]?.sort()).toEqual(['modern-outbox', 'product-messages']);
+        expect(JSON.parse(new TextDecoder().decode((await storage.read('product-messages', room))!))[0].delivery).toBe('accepted');
+        expect(JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!))).toEqual([]);
+        jest.restoreAllMocks();
+        await conversation.close();
+    });
+
+    it('sender-history CAS failure aborts session and outbox acceptance together', async () => {
+        const { conversation, storage } = await setup();
+        await conversation.acceptDelivery('relay-1');
+        const beforeSession = await storage.read('vodozemac-session', room);
+        const compareAndSwap = storage.compareAndSwapRecords.bind(storage);
+        jest.spyOn(storage, 'compareAndSwapRecords').mockImplementation(async (updates) => {
+            if (updates.some((update) => update.recordType === 'product-messages')) return false;
+            return compareAndSwap(updates);
+        });
+        await expect(conversation.sendWithReceipt('must be recoverable', (clientId) => [{
+            recordType: 'product-messages', recordId: room, expected: undefined,
+            next: new TextEncoder().encode(JSON.stringify([{ id: clientId, sender: localAddress, text: 'must be recoverable', type: 'sent', timestamp: '2026-01-01T00:00:00.000Z', delivery: 'pending' }])).buffer as ArrayBuffer,
+        }])).rejects.toThrow('safely persisted');
+        expect(Buffer.from(await storage.read('vodozemac-session', room)!).equals(Buffer.from(beforeSession!))).toBe(true);
+        expect(JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!))).toEqual([]);
+        expect(await storage.read('product-messages', room)).toBeUndefined();
+        jest.restoreAllMocks();
+        await conversation.close();
+    });
+
     it('relay submission is not completion; restart retries unchanged envelope without encrypting', async () => {
         const { conversation, storage, transport } = await setup();
         const wire = JSON.stringify(transport.sent[0]);

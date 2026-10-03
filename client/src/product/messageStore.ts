@@ -56,6 +56,22 @@ export const prepareMessageAcceptance = async (
   return { recordType: TYPE, recordId: roomId, expected, next: encode([...current, stored]) };
 };
 
+/** Prepare a monotonic delivery update for an existing outgoing history row. */
+export const prepareMessageDeliveryUpdate = async (
+  storage: ProductSecureStorage,
+  roomId: string,
+  messageId: string,
+  delivery: NonNullable<Message['delivery']>,
+): Promise<SecureRecordUpdate | undefined> => {
+  const expected = await storage.read(TYPE, roomId);
+  const current = decode(expected);
+  const index = current.findIndex((message) => message.id === messageId && message.type === 'sent');
+  if (index < 0 || deliveryRank(delivery) <= deliveryRank(current[index].delivery)) return undefined;
+  const next = current.slice();
+  next[index] = { ...next[index], delivery };
+  return { recordType: TYPE, recordId: roomId, expected, next: encode(next) };
+};
+
 /**
  * Merge React's history projection with the latest durable state. CAS retries
  * prevent a stale render from erasing a concurrently accepted inbound message.

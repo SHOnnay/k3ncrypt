@@ -48,7 +48,29 @@ const atomicSend = async (page: Page, clientId: string): Promise<unknown> => pag
     return envelope;
 }, clientId);
 
-const restoreRuntime = async (page: Page): Promise<{ pending: unknown[]; sessionId: string; digestHex: string }> => {
+const atomicSendWithHistory = async (page: Page, clientId: string): Promise<unknown> => page.evaluate(async ({ root, clientId }) => {
+    const { storage, runtime, conversationId } = (window as any).__outboxRecovery;
+    const { prepareMessageAcceptance } = await import(/* @vite-ignore */ `${root}/client/src/product/messageStore.ts`);
+    const raw = await storage.read('modern-outbox', conversationId);
+    const pending = JSON.parse(new TextDecoder().decode(raw));
+    const text = 'recoverable sender history body';
+    const plaintext = new TextEncoder().encode(text);
+    const history = await prepareMessageAcceptance(storage, conversationId, {
+        id: clientId, sender: 'local-user', text, type: 'sent', timestamp: new Date('2026-01-01T00:00:00.000Z'), delivery: 'pending',
+    });
+    const envelope = await runtime.encryptMessageWithAtomicRecords(plaintext.buffer.slice(0) as ArrayBuffer, (encrypted: unknown) => {
+        pending.push({ envelope: encrypted, clientId });
+        return [
+            { recordType: 'modern-outbox', recordId: conversationId, expected: raw,
+                next: new TextEncoder().encode(JSON.stringify(pending)).buffer as ArrayBuffer },
+            history,
+        ];
+    });
+    plaintext.fill(0);
+    return envelope;
+}, { root: `/@fs${resolve('.')}`, clientId });
+
+const restoreRuntime = async (page: Page): Promise<{ pending: unknown[]; history: unknown[]; sessionId: string; digestHex: string }> => {
     await page.reload();
     return page.evaluate(async ({ root, passphrase }) => {
         const { BrowserSecureStorage } = await import(/* @vite-ignore */ `${root}/service/src/storage/secureVault.ts`);
@@ -64,11 +86,13 @@ const restoreRuntime = async (page: Page): Promise<{ pending: unknown[]; session
         await runtime.restoreOrCreateIdentity();
         await runtime.restoreSession(metadata.conversationId, metadata.sessionId);
         const pendingBytes = await storage.read('modern-outbox', metadata.conversationId);
+        const historyBytes = await storage.read('product-messages', metadata.conversationId);
         const session = await storage.read('vodozemac-session', metadata.conversationId);
         const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', session!));
         const digestHex = Array.from(digest, (value) => value.toString(16).padStart(2, '0')).join('');
         (window as any).__outboxRecovery = { storage, runtime, conversationId: metadata.conversationId };
-        return { pending: pendingBytes ? JSON.parse(new TextDecoder().decode(pendingBytes)) : [], sessionId: runtime.activeSessionId!, digestHex,
+        return { pending: pendingBytes ? JSON.parse(new TextDecoder().decode(pendingBytes)) : [],
+            history: historyBytes ? JSON.parse(new TextDecoder().decode(historyBytes)) : [], sessionId: runtime.activeSessionId!, digestHex,
             expectedDigestHex: metadata.digestHex };
     }, { root, passphrase });
 };
@@ -329,6 +353,64 @@ test('repeated restart recovery does not mint another envelope or duplicate outb
     const twice = await restoreRuntime(page);
     expect(once.pending).toEqual([{ envelope, clientId: 'single-pending-item' }]);
     expect(twice.pending).toEqual(once.pending);
+});
+
+test('sender plaintext history and exact envelope survive repeated browser reloads without duplication', async ({ page }) => {
+    await initializeRuntime(page);
+    const envelope = await atomicSendWithHistory(page, 'sender-history-client-id');
+    const firstReload = await restoreRuntime(page);
+    expect(firstReload.pending).toEqual([{ envelope, clientId: 'sender-history-client-id' }]);
+    expect(firstReload.history).toEqual([{
+        id: 'sender-history-client-id', sender: 'local-user', text: 'recoverable sender history body', type: 'sent',
+        timestamp: '2026-01-01T00:00:00.000Z', delivery: 'pending',
+    }]);
+    const secondReload = await restoreRuntime(page);
+    expect(secondReload.pending).toEqual(firstReload.pending);
+    expect(secondReload.history).toEqual(firstReload.history);
+    expect(secondReload.digestHex).toBe(firstReload.digestHex);
+});
+
+test('abort at sender-history write leaves no committed sender history, outbox envelope, or advanced session', async ({ page }) => {
+    await initializeRuntime(page);
+    const result = await page.evaluate(async ({ root }) => {
+        const { storage, runtime, conversationId } = (window as any).__outboxRecovery;
+        const { prepareMessageAcceptance } = await import(/* @vite-ignore */ `${root}/client/src/product/messageStore.ts`);
+        const raw = await storage.read('modern-outbox', conversationId);
+        const pending = JSON.parse(new TextDecoder().decode(raw));
+        const history = await prepareMessageAcceptance(storage, conversationId, {
+            id: 'aborted-history', sender: 'local-user', text: 'must not be partially accepted', type: 'sent',
+            timestamp: new Date('2026-01-01T00:00:00.000Z'), delivery: 'pending',
+        });
+        const originalPut = IDBObjectStore.prototype.put;
+        let rejected = false;
+        IDBObjectStore.prototype.put = function (value: unknown, key?: IDBValidKey) {
+            if (String(key).includes('product-messages')) {
+                this.transaction.abort();
+                throw new DOMException('injected sender history transaction abort', 'AbortError');
+            }
+            return originalPut.call(this, value, key);
+        };
+        try {
+            const plaintext = new TextEncoder().encode('must not be partially accepted');
+            await runtime.encryptMessageWithAtomicRecords(plaintext.buffer, (envelope: unknown) => {
+                pending.push({ envelope, clientId: 'aborted-history' });
+                return [
+                    { recordType: 'modern-outbox', recordId: conversationId, expected: raw,
+                        next: new TextEncoder().encode(JSON.stringify(pending)).buffer },
+                    history,
+                ];
+            });
+        } catch { rejected = true; }
+        finally { IDBObjectStore.prototype.put = originalPut; }
+        const outbox = await storage.read('modern-outbox', conversationId);
+        return { rejected, currentOutbox: outbox ? JSON.parse(new TextDecoder().decode(outbox)) : [] };
+    }, { root: `/@fs${resolve('.')}` });
+    expect(result.rejected).toBe(true);
+    expect(result.currentOutbox).toEqual([]);
+    const restored = await restoreRuntime(page);
+    expect(restored.pending).toEqual([]);
+    expect(restored.history).toEqual([]);
+    expect(restored.digestHex).toBe(restored.expectedDigestHex);
 });
 
 test('renewal correlation and encrypted envelope can be committed as companion records atomically', async ({ page }) => {
