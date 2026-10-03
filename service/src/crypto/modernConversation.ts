@@ -7,6 +7,8 @@ import { ContactIdentityRegistry, type StoredContactIdentity } from '../identity
 import { fingerprintVodozemacIdentity, type VodozemacPublicIdentity } from '../identity/vodozemacIdentity';
 import { validateVodozemacPublicBundle } from '../identity/vodozemacBundle';
 import { DefaultTransportManager } from '../transports/transportManager';
+import { DeliveryCoordinator } from '../delivery/deliveryCoordinator';
+import { RelayPathAdapter } from '../transports/relayPathAdapter';
 import { JOIN_INTRODUCTION_FEATURE, SocketIoRelayTransport, type SubscriptionType } from '../transports/socketIoRelayTransport';
 import { Logger } from '../utils/logger';
 import { AsyncMutex } from '../utils/asyncMutex';
@@ -226,6 +228,7 @@ export class ModernConversation {
     private readonly modes: ConversationModeStore;
     private readonly subscriptions: SubscriptionType = new Map();
     private readonly transport: TransportManager;
+    private readonly deliveryCoordinator: DeliveryCoordinator;
     private readonly deliveryMutex = new AsyncMutex();
     private readonly receiveMutex = new AsyncMutex();
     private roomId?: string;
@@ -308,6 +311,9 @@ export class ModernConversation {
                     : this.withTabLock(this.roomId ?? 'unknown', () => this.receive(message.envelope, message.senderRoutingId)));
             });
         this.transport = transportManager ?? new DefaultTransportManager(relay!);
+        // Message envelopes use the relay-only delivery boundary. Call
+        // signaling and transport lifecycle remain owned by TransportManager.
+        this.deliveryCoordinator = new DeliveryCoordinator(new RelayPathAdapter(this.transport));
         this.subscriptions.set('on-alice-join', new Set([() => {
             void this.retryPending();
             void this.retryJoinIntroduction();
@@ -769,7 +775,7 @@ export class ModernConversation {
             await this.storage.write(JOIN_INTRODUCTION_RECORD, this.roomId, asBytes(record));
         }
         await this.assertCurrentDeviceTrust();
-        await this.transport.sendEnvelope('message', record.envelope, this.remoteAddress);
+        await this.deliveryCoordinator.submit(record.envelope, this.remoteAddress);
     }
 
     public async retryPending(): Promise<void> {
@@ -779,18 +785,16 @@ export class ModernConversation {
             const pending = await this.readPending();
             const renewal = this.sessionHealth === 'renewal-pending'
                 ? parseSessionRenewal(await this.storage.read(SESSION_RENEWAL_RECORD, this.roomId!)) : undefined;
-            for (const item of pending) {
-                if (this.sessionHealth === 'renewal-pending' && item.clientId !== renewal?.clientId) continue;
-                if (item.relayId && item.sentAt && Date.now() - item.sentAt < 5000) continue;
-                try {
+            await this.deliveryCoordinator.retry({
+                pending,
+                recipientRoutingId: this.remoteAddress,
+                skip: (item) => this.sessionHealth === 'renewal-pending' && item.clientId !== renewal?.clientId,
+                beforeSubmit: async () => {
                     await this.assertCurrentDeviceTrust();
                     testOnlyDeliveryStage('relay-dispatch');
-                    const sent = await this.transport.sendEnvelope('message', item.envelope, this.remoteAddress);
-                    item.relayId = sent.id;
-                    item.sentAt = Date.now();
-                    await this.storage.write(OUTBOX_RECORD, this.roomId!, asBytes(pending));
-                } catch { return; }
-            }
+                },
+                persist: async (nextPending) => this.storage.write(OUTBOX_RECORD, this.roomId!, asBytes(nextPending)),
+            });
         });
     }
 

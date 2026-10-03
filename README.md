@@ -4,6 +4,8 @@
 
 K3NCRYPT is an open-source messenger in experimental beta. It provides device-held identities, encrypted one-to-one messaging, and explicit contact verification. Features and compatibility can change while the beta is being tested; do not rely on it as your only channel for critical communication.
 
+**Project website:** [K3NCRYPT landing page](https://shonnay.github.io/k3ncrypt/)
+
 **Try K3NCRYPT:** [Open the web app](https://k3ncrypt.onrender.com) · [Download the Android beta APK](https://github.com/SHOnnay/k3ncrypt/releases/download/v0.1.0-beta.2/K3NCRYPT-v0.1.0-beta.2.apk) · [View the source](https://github.com/SHOnnay/k3ncrypt)
 
 ## What is available

@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "purpose": "Policy contract only; no optional path is enabled by this fixture",
+  "cases": [
+    {
+      "name": "feature disabled",
+      "readiness": { "featureEnabled": false, "privacyAllowsAddressDisclosure": true, "contactVerifiedAndUnchanged": true, "requiredTrustFreshnessAvailable": true, "capabilitiesAuthenticated": true, "peerAdmissionAuthenticatedAndCurrent": true, "stableEnvelopeIdentityAvailable": true, "receiverDeduplicatesBeforeDecrypt": true, "sharedDedupeHorizonDefined": true, "acceptanceCrashConsistent": true, "authenticatedReceiptAvailable": true, "outboxCompletionSupportsPath": true },
+      "eligible": false,
+      "blockers": ["feature-disabled"]
+    },
+    {
+      "name": "privacy forbids address disclosure",
+      "readiness": { "featureEnabled": true, "privacyAllowsAddressDisclosure": false, "contactVerifiedAndUnchanged": true, "requiredTrustFreshnessAvailable": true, "capabilitiesAuthenticated": true, "peerAdmissionAuthenticatedAndCurrent": true, "stableEnvelopeIdentityAvailable": true, "receiverDeduplicatesBeforeDecrypt": true, "sharedDedupeHorizonDefined": true, "acceptanceCrashConsistent": true, "authenticatedReceiptAvailable": true, "outboxCompletionSupportsPath": true },
+      "eligible": false,
+      "blockers": ["privacy-disallows-address-disclosure"]
+    },
+    {
+      "name": "unverified contact",
+      "readiness": { "featureEnabled": true, "privacyAllowsAddressDisclosure": true, "contactVerifiedAndUnchanged": false, "requiredTrustFreshnessAvailable": true, "capabilitiesAuthenticated": true, "peerAdmissionAuthenticatedAndCurrent": true, "stableEnvelopeIdentityAvailable": true, "receiverDeduplicatesBeforeDecrypt": true, "sharedDedupeHorizonDefined": true, "acceptanceCrashConsistent": true, "authenticatedReceiptAvailable": true, "outboxCompletionSupportsPath": true },
+      "eligible": false,
+      "blockers": ["contact-not-verified-and-unchanged"]
+    },
+    {
+      "name": "missing peer admission",
+      "readiness": { "featureEnabled": true, "privacyAllowsAddressDisclosure": true, "contactVerifiedAndUnchanged": true, "requiredTrustFreshnessAvailable": true, "capabilitiesAuthenticated": true, "peerAdmissionAuthenticatedAndCurrent": false, "stableEnvelopeIdentityAvailable": true, "receiverDeduplicatesBeforeDecrypt": true, "sharedDedupeHorizonDefined": true, "acceptanceCrashConsistent": true, "authenticatedReceiptAvailable": true, "outboxCompletionSupportsPath": true },
+      "eligible": false,
+      "blockers": ["peer-admission-unavailable"]
+    },
+    {
+      "name": "dedupe horizon open",
+      "readiness": { "featureEnabled": true, "privacyAllowsAddressDisclosure": true, "contactVerifiedAndUnchanged": true, "requiredTrustFreshnessAvailable": true, "capabilitiesAuthenticated": true, "peerAdmissionAuthenticatedAndCurrent": true, "stableEnvelopeIdentityAvailable": true, "receiverDeduplicatesBeforeDecrypt": true, "sharedDedupeHorizonDefined": false, "acceptanceCrashConsistent": true, "authenticatedReceiptAvailable": true, "outboxCompletionSupportsPath": true },
+      "eligible": false,
+      "blockers": ["dedupe-horizon-undefined"]
+    },
+    {
+      "name": "relay is the only current production path",
+      "readiness": { "featureEnabled": false, "privacyAllowsAddressDisclosure": false, "contactVerifiedAndUnchanged": false, "requiredTrustFreshnessAvailable": false, "capabilitiesAuthenticated": false, "peerAdmissionAuthenticatedAndCurrent": false, "stableEnvelopeIdentityAvailable": false, "receiverDeduplicatesBeforeDecrypt": false, "sharedDedupeHorizonDefined": false, "acceptanceCrashConsistent": false, "authenticatedReceiptAvailable": false, "outboxCompletionSupportsPath": false },
+      "eligible": false,
+      "blockers": ["feature-disabled", "privacy-disallows-address-disclosure", "contact-not-verified-and-unchanged", "trust-freshness-unavailable", "capability-not-authenticated", "peer-admission-unavailable", "stable-envelope-identity-unavailable", "receiver-deduplication-unavailable", "dedupe-horizon-undefined", "acceptance-not-crash-consistent", "authenticated-receipt-unavailable", "outbox-completion-incompatible"]
+    }
+  ]
+}

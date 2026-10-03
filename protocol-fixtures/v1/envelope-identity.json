@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "purpose": "Local correlation vectors; this identity is not authentication or a receipt",
+  "algorithm": "SHA-256(domain || u32be(conversationUtf8Length) || conversationUtf8 || u32be(messageUtf8Length) || messageUtf8)",
+  "domain": "k3ncrypt/envelope-id/v1",
+  "vectors": [
+    {
+      "conversationId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "olmMessage": "opaque-olm-message",
+      "expectedHex": "d0c5c6482e7817c6c9ecaf74f8e6557a1208028a04bff24da782c34d8ec8229d"
+    },
+    {
+      "conversationId": "conversation-ñ-東京",
+      "olmMessage": "/\"\\☃",
+      "expectedHex": "84304b7d413470842c17b83e15bc8e4691f8ef96591c61b07f1892fc3d09be3a"
+    },
+    {
+      "conversationId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "olmMessage": "opaque-olm-message",
+      "expectedHex": "554623be5ca800b6a5ea7e157a6a8447b8e8b3f30ccee8ed8dfd79c01f294cd7"
+    }
+  ]
+}
