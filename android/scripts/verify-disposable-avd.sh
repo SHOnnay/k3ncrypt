@@ -53,5 +53,12 @@ if [[ "$user_state" != "RUNNING_UNLOCKED" ]]; then
   exit 3
 fi
 
+lock_screen_secure="$("$adb_bin" -s "$serial" shell dumpsys window policy | sed -n 's/.*secure=true.*/true/p; s/.*secure=false.*/false/p' | head -n 1 | tr -d '\r')"
+if [[ "$lock_screen_secure" != "true" ]]; then
+  echo "Refusing instrumentation because $expected_avd has no secure screen lock configured." >&2
+  exit 3
+fi
+
 echo "Disposable instrumentation target verified: $expected_avd"
 echo "Disposable instrumentation user verified unlocked: user 0"
+echo "Disposable instrumentation screen lock verified secure"
