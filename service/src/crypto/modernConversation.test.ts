@@ -83,11 +83,14 @@ const loader = async () => ({ protocolVersion: 1 as const,
     accountFactory: { createAccount: account, loadAccount: account },
     sessionFactory: { loadSession: session } });
 
-const fakeTransport = (supportsJoinIntroduction = false) => {
+const fakeTransport = (supportsJoinIntroduction = false, failSends = 0) => {
     const sent: EncryptedEnvelope[] = [];
     const transport = {
         start: async () => undefined, stop: async () => undefined, join: () => undefined,
-        sendEnvelope: async (_channel: unknown, envelope: EncryptedEnvelope) => { sent.push(envelope); return { id: `relay-${sent.length}` }; },
+        sendEnvelope: async (_channel: unknown, envelope: EncryptedEnvelope) => {
+            if (failSends > 0) { failSends -= 1; throw new Error('simulated relay interruption'); }
+            sent.push(envelope); return { id: `relay-${sent.length}` };
+        },
         activeTransport: () => undefined as unknown as import('../core/contracts').Transport,
         peerSupportsFeature: (feature: string) => feature === 'join-introduction-v1' && supportsJoinIntroduction,
     } as unknown as TransportManager & { peerSupportsFeature: (feature: string) => boolean };
@@ -142,6 +145,14 @@ const messageAcceptance = (storage: Storage, received?: string[]) => async (text
         }],
         afterCommit: async () => { received?.push(text); },
     };
+};
+
+const sentHistoryUpdate = (storage: Storage, text: string) => async (id: string) => {
+    const expected = await storage.read('product-messages', room);
+    const current = expected ? JSON.parse(new TextDecoder().decode(expected)) as Array<Record<string, unknown>> : [];
+    const next = [...current, { id, sender: 'self', text, type: 'sent', timestamp: '2026-01-01T00:00:00.000Z', delivery: 'pending' }];
+    return { recordType: 'product-messages', recordId: room, expected,
+        next: new TextEncoder().encode(JSON.stringify(next)).buffer as ArrayBuffer };
 };
 
 const verifiedPeerPair = async () => {
@@ -400,6 +411,203 @@ it('retries the identical persisted envelope after a lost ACK and after restart'
     later.mockRestore();
 });
 
+it('commits the first-send account, ratchet, outbox, history, and local origin before relay submission', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
+    const storage = new Storage();
+    const transport = fakeTransport();
+    const conversation = new ModernConversation(storage, loader, transport.transport);
+    await conversation.connect(room, key(9), remoteAddress, await remoteCommitment());
+    expect(await storage.read('vodozemac-session', room)).toBeUndefined();
+    const compareAndSwap = jest.spyOn(storage, 'compareAndSwapRecords');
+
+    const clientId = await conversation.sendWithReceipt('atomic first send', sentHistoryUpdate(storage, 'atomic first send'));
+    const senderCommit = compareAndSwap.mock.calls.find(([updates]) =>
+        ['vodozemac-account', 'vodozemac-session', 'modern-outbox', 'product-messages', 'conversation-protocol', 'conversation-session-audit']
+            .every((type) => updates.some((item) => item.recordType === type)));
+    expect(senderCommit).toBeDefined();
+    expect(transport.sent).toHaveLength(1);
+    expect(Object.keys(transport.sent[0]).sort()).toEqual(['data', 'strategy', 'version']);
+    const pending = JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!));
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({ clientId, envelope: transport.sent[0], senderOrigin: { version: 1, basis: 'durable-commit' } });
+    const history = JSON.parse(new TextDecoder().decode((await storage.read('product-messages', room))!));
+    expect(history).toContainEqual(expect.objectContaining({ id: clientId, text: 'atomic first send', type: 'sent', delivery: 'pending' }));
+    expect(JSON.parse(new TextDecoder().decode((await storage.read('conversation-protocol', room))!))).toHaveProperty('sessionId');
+    await conversation.close();
+});
+
+it('rolls back in-memory first-send advancement when the sender transaction aborts and submits nothing', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
+    const storage = new Storage();
+    const transport = fakeTransport();
+    const conversation = new ModernConversation(storage, loader, transport.transport);
+    await conversation.connect(room, key(9), remoteAddress, await remoteCommitment());
+    storage.failNextCas = 'before';
+
+    await expect(conversation.sendWithReceipt('abort this send', sentHistoryUpdate(storage, 'abort this send'))).rejects.toThrow();
+    expect(transport.sent).toHaveLength(0);
+    expect(await storage.read('vodozemac-session', room)).toBeUndefined();
+    expect(await storage.read('modern-outbox', room)).toBeUndefined();
+    expect(await storage.read('product-messages', room)).toBeUndefined();
+    expect(JSON.parse(new TextDecoder().decode((await storage.read('conversation-protocol', room))!)).sessionId).toBeUndefined();
+    expect(encryptions).toBe(1);
+
+    await expect(conversation.sendWithReceipt('new explicit send')).resolves.toBeTruthy();
+    expect(transport.sent).toHaveLength(1);
+    expect(encryptions).toBe(2);
+    await conversation.close();
+});
+
+it('keeps an established ratchet and sender history unchanged when its outbound commit aborts', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
+    const storage = new Storage();
+    const transport = fakeTransport();
+    const conversation = new ModernConversation(storage, loader, transport.transport);
+    await conversation.connect(room, key(9), remoteAddress, await remoteCommitment());
+    await conversation.sendWithReceipt('seed established session');
+    await conversation.acceptDelivery('relay-1');
+    const beforeSession = await storage.read('vodozemac-session', room);
+    const beforeHistory = await storage.read('product-messages', room);
+    const beforeEncryptionCount = encryptions;
+    const beforeSubmissionCount = transport.sent.length;
+    storage.failNextCas = 'before';
+
+    await expect(conversation.sendWithReceipt('must remain uncommitted', sentHistoryUpdate(storage, 'must remain uncommitted'))).rejects.toThrow();
+    expect(await storage.read('vodozemac-session', room)).toEqual(beforeSession);
+    expect(JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!))).toEqual([]);
+    expect(await storage.read('product-messages', room)).toEqual(beforeHistory);
+    expect(transport.sent).toHaveLength(beforeSubmissionCount);
+    expect(encryptions).toBe(beforeEncryptionCount + 1);
+    await conversation.close();
+});
+
+it('restores the old first-send account and session if sender history preparation fails', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
+    const storage = new Storage();
+    const transport = fakeTransport();
+    const conversation = new ModernConversation(storage, loader, transport.transport);
+    await conversation.connect(room, key(9), remoteAddress, await remoteCommitment());
+
+    await expect(conversation.sendWithReceipt('history preparation fault', async () => { throw new Error('history persistence unavailable'); })).rejects.toThrow();
+    expect(await storage.read('vodozemac-session', room)).toBeUndefined();
+    expect(await storage.read('modern-outbox', room)).toBeUndefined();
+    expect(JSON.parse(new TextDecoder().decode((await storage.read('conversation-protocol', room))!)).sessionId).toBeUndefined();
+    expect(transport.sent).toHaveLength(0);
+    expect(encryptions).toBe(1);
+    await conversation.close();
+});
+
+it('recovers an uncertain completed sender transaction without re-encrypting', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
+    const storage = new Storage();
+    const transport = fakeTransport();
+    const conversation = new ModernConversation(storage, loader, transport.transport);
+    await conversation.connect(room, key(9), remoteAddress, await remoteCommitment());
+    storage.failNextCas = 'after';
+
+    const clientId = await conversation.sendWithReceipt('commit then lose completion', sentHistoryUpdate(storage, 'commit then lose completion'));
+    expect(encryptions).toBe(1);
+    expect(transport.sent).toHaveLength(1);
+    expect(JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!))[0])
+        .toMatchObject({ clientId, envelope: transport.sent[0], senderOrigin: { version: 1, basis: 'durable-commit' } });
+    expect(JSON.parse(new TextDecoder().decode((await storage.read('product-messages', room))!)))
+        .toContainEqual(expect.objectContaining({ id: clientId, text: 'commit then lose completion' }));
+    await conversation.close();
+});
+
+it('returns the durable pending id when dispatch cannot reread the committed outbox', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
+    const storage = new Storage();
+    const transport = fakeTransport();
+    const conversation = new ModernConversation(storage, loader, transport.transport);
+    await conversation.connect(room, key(9), remoteAddress, await remoteCommitment());
+    const commit = storage.compareAndSwapRecords.bind(storage);
+    let failOutboxRead = false;
+    jest.spyOn(storage, 'compareAndSwapRecords').mockImplementation(async (updates) => {
+        const committed = await commit(updates);
+        if (committed && updates.some((item) => item.recordType === 'modern-outbox')) failOutboxRead = true;
+        return committed;
+    });
+    const read = storage.read.bind(storage);
+    jest.spyOn(storage, 'read').mockImplementation(async (type, id) => {
+        if (failOutboxRead && type === 'modern-outbox') { failOutboxRead = false; throw new Error('simulated post-commit local read failure'); }
+        return read(type, id);
+    });
+
+    const clientId = await conversation.sendWithReceipt('committed before dispatch failure');
+    expect(clientId).toBeTruthy();
+    expect(encryptions).toBe(1);
+    expect(transport.sent).toHaveLength(0);
+    expect(JSON.parse(new TextDecoder().decode((await read('modern-outbox', room))!))[0])
+        .toMatchObject({ clientId, senderOrigin: { version: 1, basis: 'durable-commit' } });
+    await conversation.close();
+});
+
+it('retries the committed envelope after restart when relay submission failed', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
+    const storage = new Storage();
+    const interruptedTransport = fakeTransport(false, 1);
+    const first = new ModernConversation(storage, loader, interruptedTransport.transport);
+    await first.connect(room, key(9), remoteAddress, await remoteCommitment());
+    const clientId = await first.sendWithReceipt('retry after restart');
+    expect(interruptedTransport.sent).toHaveLength(0);
+    const committed = JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!))[0];
+    expect(committed).toMatchObject({ clientId, senderOrigin: { version: 1, basis: 'durable-commit' } });
+    await first.close();
+
+    const restoredTransport = fakeTransport();
+    const restarted = new ModernConversation(storage, loader, restoredTransport.transport);
+    await restarted.connect(room, key(9), remoteAddress, await remoteCommitment());
+    await restarted.retryPending();
+    expect(restoredTransport.sent).toEqual([committed.envelope]);
+    expect(encryptions).toBe(1);
+    expect(JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!))[0].senderOrigin)
+        .toEqual({ version: 1, basis: 'durable-commit' });
+    await restarted.close();
+});
+
+it('restores legacy pending envelopes without inventing origin metadata', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
+    const storage = new Storage();
+    const firstTransport = fakeTransport();
+    const first = new ModernConversation(storage, loader, firstTransport.transport);
+    await first.connect(room, key(9), remoteAddress, await remoteCommitment());
+    await first.sendWithReceipt('legacy compatible');
+    const originalEnvelope = firstTransport.sent[0];
+    const pending = JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!)) as Array<Record<string, unknown>>;
+    delete pending[0].senderOrigin;
+    await storage.write('modern-outbox', room, new TextEncoder().encode(JSON.stringify(pending)).buffer as ArrayBuffer);
+    await first.close();
+
+    const restartedTransport = fakeTransport();
+    const restarted = new ModernConversation(storage, loader, restartedTransport.transport);
+    const later = jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 6000);
+    await restarted.connect(room, key(9), remoteAddress, await remoteCommitment());
+    await restarted.retryPending();
+    expect(restartedTransport.sent).toEqual([originalEnvelope]);
+    expect(encryptions).toBe(1);
+    const restored = JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!));
+    expect(restored[0]).not.toHaveProperty('senderOrigin');
+    await restarted.close();
+    later.mockRestore();
+});
+
 it('accepts the peer first-message pre-key after joining without creating a competing outbound session', async () => {
     jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
     jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
@@ -450,8 +658,12 @@ it('sends a signed encrypted join introduction only when the peer advertises sup
     const storage = new Storage();
     const transport = fakeTransport(true);
     const conversation = new ModernConversation(storage, loader, transport.transport);
+    const compareAndSwap = jest.spyOn(storage, 'compareAndSwapRecords');
     await conversation.connect(room, key(9), remoteAddress, await remoteCommitment(), undefined, undefined, undefined, { sendJoinIntroduction: true });
 
+    expect(compareAndSwap.mock.calls.some(([updates]) =>
+        ['vodozemac-account', 'vodozemac-session', 'conversation-join-introduction', 'conversation-protocol', 'conversation-session-audit']
+            .every((type) => updates.some((item) => item.recordType === type)))).toBe(true);
     expect(transport.sent).toHaveLength(1);
     expect(outboundSessionCreations).toBe(1);
     expect(claimVodozemacOneTimeKey).toHaveBeenCalledTimes(1);
@@ -460,6 +672,7 @@ it('sends a signed encrypted join introduction only when the peer advertises sup
         .toMatchObject({ classification: 'active-established', direction: 'outbound', origin: 'join' });
     const intro = JSON.parse(new TextDecoder().decode((await storage.read('conversation-join-introduction', room))!));
     expect(intro).toMatchObject({ version: 1, recipientAddress: remoteAddress, recipientIdentityCommitment: await remoteCommitment() });
+    expect(intro).toMatchObject({ clientId: expect.any(String), senderOrigin: { version: 1, basis: 'durable-commit' } });
     expect(intro.envelope).toEqual(transport.sent[0]);
     await conversation.close();
 });

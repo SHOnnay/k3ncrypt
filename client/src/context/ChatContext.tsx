@@ -460,11 +460,12 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   // Send message
   const sendMessage = useCallback(
     async (text: string) => {
-      if (!userId || (protocolMode === 'legacy' && !chat) || (protocolMode === 'modern' && !modern)) throw new Error('Chat not ready');
+      if (!userId || (protocolMode === 'legacy' && !chat) || (protocolMode === 'modern' && (!modern || !vault || !channelHash))) throw new Error('Chat not ready');
       const outgoing = { ...displayMessage(userId, text, 'sent'), delivery: 'pending' as const };
       try {
         if (protocolMode === 'modern') {
-          const clientId = await modern!.sendWithReceipt(text);
+          const clientId = await modern!.sendWithReceipt(text, async (id) =>
+            prepareMessageAcceptance(vault!, channelHash, { ...outgoing, id }));
           const accepted = acceptedDeliveries.current.delete(clientId);
           addMessage({ ...outgoing, id: clientId, delivery: accepted ? 'accepted' : 'pending' });
           const contact = await modern!.getContact();
@@ -481,7 +482,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         throw err;
       }
     },
-    [chat, modern, protocolMode, userId]
+    [channelHash, chat, modern, protocolMode, userId, vault]
   );
 
   const retryMessage = useCallback(async (messageId: string): Promise<void> => {

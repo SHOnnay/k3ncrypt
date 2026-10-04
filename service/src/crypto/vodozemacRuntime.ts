@@ -20,6 +20,15 @@ const equalBytes = (left: ArrayBuffer | undefined, right: ArrayBuffer | undefine
 };
 
 export type InboundAcceptanceUpdateBuilder = (plaintext: ArrayBuffer) => Promise<readonly SecureRecordUpdate[]>;
+export interface OutboundSessionInitialization {
+    conversationId: string;
+    recipientIdentityKey: string;
+    recipientOneTimeKey: string;
+}
+export type OutboundAcceptanceUpdateBuilder = (
+    envelope: import('../core/contracts').EncryptedEnvelope,
+    sessionId: string,
+) => Promise<readonly SecureRecordUpdate[]>;
 
 export type VodozemacLifecycleState =
     | 'uninitialized'
@@ -533,6 +542,187 @@ export class VodozemacRuntime {
                 throw new VodozemacBoundaryError('CORRUPTED_SESSION', 'The message could not be safely persisted.');
             }
         });
+    }
+
+    /** Encrypts once, then atomically commits the ratchet/account and caller-owned delivery records. */
+    public async encryptAndCommitOutbound(
+        channel: 'message',
+        plaintext: ArrayBuffer,
+        buildUpdates: OutboundAcceptanceUpdateBuilder,
+        initialization?: OutboundSessionInitialization,
+    ): Promise<import('../core/contracts').EncryptedEnvelope> {
+        return this.sessionMutex.runExclusive(async () => {
+            if (!this.storage.compareAndSwapRecords) {
+                throw new VodozemacBoundaryError('CORRUPTED_SESSION', 'The message could not be safely persisted.');
+            }
+            const initial = initialization !== undefined;
+            const identity = this.identity;
+            let expectedAccount: ArrayBuffer | undefined;
+            let expectedSession: ArrayBuffer | undefined;
+            let sessionBefore: ArrayBuffer | undefined;
+            let accountNext: ArrayBuffer | undefined;
+            let sessionNext: ArrayBuffer | undefined;
+            let updates: readonly SecureRecordUpdate[] = [];
+            let conversationId = initialization?.conversationId ?? this.conversationId;
+            let sessionId = '';
+            let envelope: import('../core/contracts').EncryptedEnvelope | undefined;
+            let mayNeedRestore = false;
+            try {
+                if (initialization) {
+                    this.requireState('identity-restored', 'persisted');
+                    if (!identity || this.session || !initialization.recipientIdentityKey || !initialization.recipientOneTimeKey || !conversationId) {
+                        throw new VodozemacBoundaryError('MISSING_SESSION', 'The outbound session is unavailable.');
+                    }
+                    expectedAccount = await this.storage.read('vodozemac-account', 'local');
+                    expectedSession = await this.storage.read('vodozemac-session', conversationId);
+                    if (!expectedAccount || expectedSession) throw new Error('The initial outbound session state changed.');
+                    // Account session creation may consume or otherwise update pre-key state.
+                    mayNeedRestore = true;
+                    const handle = await identity.withAccount(async (account) => {
+                        if (!account.createOutboundSession) throw new VodozemacBoundaryError('UNSUPPORTED_PROTOCOL', 'Outbound modern sessions are unavailable.');
+                        return account.createOutboundSession(initialization.recipientIdentityKey, initialization.recipientOneTimeKey);
+                    });
+                    await this.establishSession(conversationId, handle, handle.sessionId());
+                } else {
+                    this.requireState('active', 'persisted');
+                    if (!this.session || !conversationId || !this.session.ready) {
+                        throw new VodozemacBoundaryError('MISSING_SESSION', 'The outbound session is unavailable.');
+                    }
+                    expectedSession = await this.storage.read('vodozemac-session', conversationId);
+                    sessionBefore = this.serializeCurrentSession();
+                    if (!expectedSession || !equalBytes(expectedSession, sessionBefore)) {
+                        throw new Error('The persisted outbound session changed.');
+                    }
+                }
+
+                const currentSession = this.session;
+                if (!currentSession) throw new VodozemacBoundaryError('MISSING_SESSION', 'The outbound session is unavailable.');
+                sessionId = currentSession.sessionId();
+                mayNeedRestore = true;
+                try { envelope = await currentSession.encrypt(channel, plaintext); }
+                catch { throw new VodozemacBoundaryError('INVALID_CIPHERTEXT', 'The message could not be encrypted.'); }
+                sessionNext = this.serializeCurrentSession();
+                if (initialization) accountNext = await identity!.serializeAccountForCommit();
+
+                for (let attempt = 0; attempt < 4; attempt += 1) {
+                    const additionalUpdates = await buildUpdates(envelope, sessionId);
+                    updates = [
+                        ...(initialization ? [{ recordType: 'vodozemac-account', recordId: 'local', expected: expectedAccount?.slice(0), next: accountNext!.slice(0) }] : []),
+                        { recordType: 'vodozemac-session', recordId: conversationId, expected: expectedSession?.slice(0), next: sessionNext.slice(0) },
+                        ...additionalUpdates,
+                    ];
+                    this.assertUniqueUpdates(updates);
+
+                    let committed = false;
+                    try { committed = await this.storage.compareAndSwapRecords(updates); }
+                    catch (commitError) {
+                        const durable = await Promise.all(updates.map((item) => this.storage.read(item.recordType, item.recordId)));
+                        try {
+                            if (updates.every((item, index) => equalBytes(durable[index], item.next))) {
+                                this.state = 'active';
+                                mayNeedRestore = false;
+                                return envelope;
+                            }
+                            if (this.outboundCryptoStateMatches(updates, durable, expectedAccount, expectedSession)) {
+                                await this.restoreUncommittedOutbound(initial, identity, sessionBefore, sessionId);
+                                mayNeedRestore = false;
+                            } else {
+                                this.quarantineSession();
+                                if (identity) identity.lock();
+                                this.identity = undefined;
+                                mayNeedRestore = false;
+                            }
+                        } finally {
+                            durable.forEach((value) => { if (value) new Uint8Array(value).fill(0); });
+                            this.clearRecordUpdates(updates);
+                            updates = [];
+                        }
+                        throw commitError;
+                    }
+                    if (committed) {
+                        this.state = 'active';
+                        mayNeedRestore = false;
+                        return envelope;
+                    }
+
+                    const durable = await Promise.all(updates.map((item) => this.storage.read(item.recordType, item.recordId)));
+                    let cryptoStateUnchanged: boolean;
+                    try {
+                        if (updates.every((item, index) => equalBytes(durable[index], item.next))) {
+                            this.state = 'active';
+                            mayNeedRestore = false;
+                            return envelope;
+                        }
+                        cryptoStateUnchanged = this.outboundCryptoStateMatches(updates, durable, expectedAccount, expectedSession);
+                    } finally {
+                        durable.forEach((value) => { if (value) new Uint8Array(value).fill(0); });
+                    }
+                    this.clearRecordUpdates(updates);
+                    updates = [];
+                    if (!cryptoStateUnchanged) {
+                        this.quarantineSession();
+                        if (identity) identity.lock();
+                        this.identity = undefined;
+                        mayNeedRestore = false;
+                        throw new Error('The outbound session transaction conflicted.');
+                    }
+                    if (attempt < 3) continue; // Rebuild only local records; retain the exact ciphertext and mutated ratchet.
+                    await this.restoreUncommittedOutbound(initial, identity, sessionBefore, sessionId);
+                    mayNeedRestore = false;
+                    throw new Error('The outbound session transaction conflicted.');
+                }
+                throw new Error('The outbound session transaction could not be committed.');
+            } catch (error) {
+                if (mayNeedRestore) {
+                    try { await this.restoreUncommittedOutbound(initial, identity, sessionBefore, sessionId); }
+                    catch { this.quarantineSession(); identity?.lock(); this.identity = undefined; }
+                }
+                throw error instanceof VodozemacBoundaryError ? error
+                    : new VodozemacBoundaryError('CORRUPTED_SESSION', 'The message could not be safely persisted.');
+            } finally {
+                this.clearRecordUpdates(updates);
+                if (expectedAccount) new Uint8Array(expectedAccount).fill(0);
+                if (expectedSession) new Uint8Array(expectedSession).fill(0);
+                if (sessionBefore) new Uint8Array(sessionBefore).fill(0);
+                if (accountNext) new Uint8Array(accountNext).fill(0);
+                if (sessionNext) new Uint8Array(sessionNext).fill(0);
+            }
+        });
+    }
+
+    private outboundCryptoStateMatches(
+        updates: readonly SecureRecordUpdate[],
+        durable: readonly (ArrayBuffer | undefined)[],
+        expectedAccount: ArrayBuffer | undefined,
+        expectedSession: ArrayBuffer | undefined,
+    ): boolean {
+        return updates.every((item, index) => {
+            if (item.recordType === 'vodozemac-session') return equalBytes(durable[index], expectedSession);
+            if (item.recordType === 'vodozemac-account') return equalBytes(durable[index], expectedAccount);
+            return true;
+        });
+    }
+
+    private async restoreUncommittedOutbound(
+        initial: boolean,
+        identity: PersistentVodozemacIdentity | undefined,
+        sessionBefore: ArrayBuffer | undefined,
+        sessionId: string,
+    ): Promise<void> {
+        if (initial) {
+            if (!identity) throw new Error('Outbound identity recovery is unavailable.');
+            await this.resetUncommittedFirstSession(identity);
+            return;
+        }
+        if (!sessionBefore) throw new Error('Outbound session recovery is unavailable.');
+        await this.restoreSessionSnapshot(sessionBefore, sessionId);
+    }
+
+    private clearRecordUpdates(updates: readonly SecureRecordUpdate[]): void {
+        for (const item of updates) {
+            if (item.expected) new Uint8Array(item.expected).fill(0);
+            new Uint8Array(item.next).fill(0);
+        }
     }
 
     public async decrypt(channel: 'message' | 'signaling', envelope: Parameters<VodozemacCryptoSession['decrypt']>[1]) {

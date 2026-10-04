@@ -13,7 +13,7 @@ import { JOIN_INTRODUCTION_FEATURE, SocketIoRelayTransport, type SubscriptionTyp
 import { Logger } from '../utils/logger';
 import { AsyncMutex } from '../utils/asyncMutex';
 import { ConversationModeStore } from './conversationMode';
-import { VodozemacRuntime, type VodozemacBindingsLoader } from './vodozemacRuntime';
+import { VodozemacRuntime, type OutboundSessionInitialization, type VodozemacBindingsLoader } from './vodozemacRuntime';
 import { createAuthenticatedCallComposition, type AuthenticatedCallComposition } from '../calls/composition';
 import { VerifiedCallIdentityVerifier } from '../calls/signalBinding';
 import type { CallParticipant } from '../calls/contracts';
@@ -76,6 +76,8 @@ type JoinIntroductionRecord = {
     recipientAddress: string;
     recipientIdentityCommitment: string;
     envelope?: EncryptedEnvelope;
+    clientId?: string;
+    senderOrigin?: SenderOriginMetadata;
 };
 const parseSessionRenewal = (bytes: ArrayBuffer | undefined): SessionRenewal | undefined => {
     if (!bytes) return undefined;
@@ -103,7 +105,9 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const strictMessageDecoder = new TextDecoder('utf-8', { fatal: true });
 
-interface PendingEnvelope { envelope: EncryptedEnvelope; relayId?: string; sentAt?: number; clientId?: string; }
+interface SenderOriginMetadata { version: 1; basis: 'durable-commit'; }
+const SENDER_ORIGIN: SenderOriginMetadata = Object.freeze({ version: 1, basis: 'durable-commit' });
+interface PendingEnvelope { envelope: EncryptedEnvelope; relayId?: string; sentAt?: number; clientId?: string; senderOrigin?: SenderOriginMetadata; }
 interface PublicationMarker { version: 1; roomId: string; address?: string; routingProof?: string; }
 export interface ModernConnectionDetails {
     ownFingerprint: string;
@@ -149,6 +153,11 @@ const testOnlyCallSignalStage = (stage: 'signal-received' | 'trust-check-passed'
 };
 
 const asBytes = (value: unknown): ArrayBuffer => encoder.encode(JSON.stringify(value)).buffer as ArrayBuffer;
+const isSenderOriginMetadata = (value: unknown): value is SenderOriginMetadata => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const item = value as Record<string, unknown>;
+    return Object.keys(item).sort().join(',') === 'basis,version' && item.version === 1 && item.basis === 'durable-commit';
+};
 const parseList = <T>(bytes: ArrayBuffer | undefined): T[] => {
     if (!bytes) return [];
     const value = JSON.parse(decoder.decode(bytes));
@@ -225,10 +234,12 @@ const parseJoinIntroductionRecord = (bytes: ArrayBuffer | undefined): JoinIntrod
     try { value = JSON.parse(decoder.decode(bytes)); } catch { throw new Error('Saved join introduction is invalid.'); }
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Saved join introduction is invalid.');
     const item = value as Record<string, unknown>;
-    if (Object.keys(item).some((key) => !['version', 'recipientAddress', 'recipientIdentityCommitment', 'envelope'].includes(key)) ||
+    if (Object.keys(item).some((key) => !['version', 'recipientAddress', 'recipientIdentityCommitment', 'envelope', 'clientId', 'senderOrigin'].includes(key)) ||
         item.version !== 1 || typeof item.recipientAddress !== 'string' || !/^[0-9a-f-]{36}$/i.test(item.recipientAddress) ||
         typeof item.recipientIdentityCommitment !== 'string' || item.recipientIdentityCommitment.length < 8 || item.recipientIdentityCommitment.length > 128 ||
-        (item.envelope !== undefined && firstMessage(item.envelope as EncryptedEnvelope) === undefined)) {
+        (item.envelope !== undefined && firstMessage(item.envelope as EncryptedEnvelope) === undefined) ||
+        (item.clientId !== undefined && (typeof item.clientId !== 'string' || !item.clientId)) ||
+        (item.senderOrigin !== undefined && !isSenderOriginMetadata(item.senderOrigin))) {
         throw new Error('Saved join introduction is invalid.');
     }
     return item as JoinIntroductionRecord;
@@ -678,8 +689,11 @@ export class ModernConversation {
         return 'pending';
     }
 
-    public async sendWithReceipt(text: string): Promise<string> {
-        if (this.roomId) return this.withTabLock(this.roomId, () => this.sendUnlocked(text));
+    public async sendWithReceipt(
+        text: string,
+        prepareHistoryUpdate?: (clientId: string) => Promise<SecureRecordUpdate>,
+    ): Promise<string> {
+        if (this.roomId) return this.withTabLock(this.roomId, () => this.sendUnlocked(text, prepareHistoryUpdate));
         throw new Error('The private contact is not ready.');
     }
 
@@ -696,36 +710,59 @@ export class ModernConversation {
         };
     }
 
-    private async sendUnlocked(text: string): Promise<string> {
+    private async sendUnlocked(text: string, prepareHistoryUpdate?: (clientId: string) => Promise<SecureRecordUpdate>): Promise<string> {
         if (this.sessionHealth === 'unhealthy') throw new Error('The encrypted session needs verified renewal before sending.');
         if (!this.roomId || !text.trim()) throw new Error('The private contact is not ready.');
         testOnlyDeliveryStage('send-start');
         await this.assertCurrentDeviceTrust();
         const contact = await this.getContact();
         if (contact?.changeStatus !== 'unchanged') throw new Error('Review this contact’s changed identity before sending.');
-        await this.ensureOutboundSession();
+        const sessionSetup = await this.prepareOutboundSession();
         const clientId = crypto.randomUUID();
-        if (this.sessionHealth === 'renewal-pending') {
-            const renewal = parseSessionRenewal(await this.storage.read(SESSION_RENEWAL_RECORD, this.roomId));
-            if (!renewal) throw new Error('Verified renewal state is unavailable.');
-            await this.storage.write(SESSION_RENEWAL_RECORD, this.roomId, asBytes({ ...renewal, clientId } satisfies SessionRenewal));
-        }
         await this.deliveryMutex.runExclusive(async () => {
-            const pending = await this.readPending();
-            if (pending.length >= MAX_PENDING) throw new Error('Too many messages are waiting to send.');
-            const envelope = await this.runtime.encrypt('message', encoder.encode(text).buffer as ArrayBuffer);
-            testOnlyDeliveryStage('envelope-created');
-            pending.push({ envelope, clientId });
-            await this.storage.write(OUTBOX_RECORD, this.roomId!, asBytes(pending));
+            const plaintext = encoder.encode(text);
+            try {
+                await this.runtime.encryptAndCommitOutbound('message', plaintext.buffer.slice(plaintext.byteOffset, plaintext.byteOffset + plaintext.byteLength) as ArrayBuffer,
+                    async (envelope, sessionId) => {
+                        testOnlyDeliveryStage('envelope-created');
+                        const outboxBytes = await this.storage.read(OUTBOX_RECORD, this.roomId!);
+                        const pending = parseList<PendingEnvelope>(outboxBytes);
+                        if (pending.length >= MAX_PENDING) throw new Error('Too many messages are waiting to send.');
+                        if (pending.some((item) => item.clientId === clientId)) throw new Error('The sender message identifier already exists.');
+                        pending.push({ envelope, clientId, senderOrigin: SENDER_ORIGIN });
+                        const updates: SecureRecordUpdate[] = [
+                            { recordType: OUTBOX_RECORD, recordId: this.roomId!, expected: outboxBytes, next: asBytes(pending) },
+                        ];
+                        if (sessionSetup) {
+                            updates.push(await this.modes.prepareWrite(this.roomId!, { sessionId, remoteAddress: this.remoteAddress }));
+                            const auditBytes = await this.storage.read(SESSION_AUDIT_RECORD, this.roomId!);
+                            updates.push({ recordType: SESSION_AUDIT_RECORD, recordId: this.roomId!, expected: auditBytes,
+                                next: asBytes({ version: 1, classification: 'active-established', direction: 'outbound', origin: 'first-message' } satisfies SessionAudit) });
+                        }
+                        if (this.sessionHealth === 'renewal-pending') {
+                            const renewalBytes = await this.storage.read(SESSION_RENEWAL_RECORD, this.roomId!);
+                            const renewal = parseSessionRenewal(renewalBytes);
+                            if (!renewal) throw new Error('Verified renewal state is unavailable.');
+                            updates.push({ recordType: SESSION_RENEWAL_RECORD, recordId: this.roomId!, expected: renewalBytes,
+                                next: asBytes({ ...renewal, clientId } satisfies SessionRenewal) });
+                        }
+                        if (prepareHistoryUpdate) updates.push(await prepareHistoryUpdate(clientId));
+                        return updates;
+                    }, sessionSetup ? { conversationId: this.roomId!, ...sessionSetup } : undefined);
+            } finally { plaintext.fill(0); }
         });
-        await this.retryPending();
+        if (sessionSetup) this.lastConnectionFailureCategory = undefined;
+        // The sender transaction is the acceptance boundary. A later local
+        // read or relay attempt cannot turn its durable pending send into a
+        // caller-visible failure that might encourage re-encryption.
+        try { await this.retryPending(); } catch { /* Reconnect retries the committed ciphertext. */ }
         return clientId;
     }
 
-    /** Establishes the initial outbound session only when this device sends first. */
-    private async ensureOutboundSession(origin: 'join' | 'first-message' = 'first-message'): Promise<void> {
+    /** Fetches and verifies first-send material without advancing or persisting the local account. */
+    private async prepareOutboundSession(): Promise<Omit<OutboundSessionInitialization, 'conversationId'> | undefined> {
         if (this.sessionHealth === 'unhealthy') throw new Error('The encrypted session needs verified renewal before sending.');
-        if (this.runtime.activeSessionId) return;
+        if (this.runtime.activeSessionId) return undefined;
         if (!this.roomId || !this.capability || !this.remoteAddress) throw new Error('The private contact is not ready.');
         let contact;
         try { contact = validateVodozemacPublicBundle(await fetchVodozemacBundle(this.roomId, this.capability, this.remoteAddress)); }
@@ -743,11 +780,7 @@ export class ModernConversation {
             this.lastConnectionFailureCategory = 'prekey-session-lookup-failure';
             throw new Error('The claimed invitation key changed.');
         }
-        try { await this.runtime.establishOutboundSession(this.roomId, contact.identity.curve25519, claimed.key); }
-        catch (error) { this.lastConnectionFailureCategory = 'prekey-session-lookup-failure'; throw error; }
-        await this.modes.write(this.roomId, { sessionId: this.runtime.activeSessionId, remoteAddress: this.remoteAddress });
-        await this.writeSessionAudit('outbound', origin);
-        this.lastConnectionFailureCategory = undefined;
+        return { recipientIdentityKey: contact.identity.curve25519, recipientOneTimeKey: claimed.key };
     }
 
     private async retryJoinIntroduction(): Promise<void> {
@@ -765,11 +798,11 @@ export class ModernConversation {
         const transport = this.transport.activeTransport();
         if (!transport?.peerSupportsFeature?.(JOIN_INTRODUCTION_FEATURE)) return;
 
-        const record = parseJoinIntroductionRecord(await this.storage.read(JOIN_INTRODUCTION_RECORD, this.roomId));
+        let record = parseJoinIntroductionRecord(await this.storage.read(JOIN_INTRODUCTION_RECORD, this.roomId));
         if (!record || record.recipientAddress !== this.remoteAddress || record.recipientIdentityCommitment !== this.remoteIdentityCommitment) return;
         if (!record.envelope) {
             await this.assertCurrentDeviceTrust();
-            await this.ensureOutboundSession('join');
+            const sessionSetup = await this.prepareOutboundSession();
             const unsigned: Omit<JoinIntroduction, 'signature'> = {
                 version: 1,
                 type: 'join-introduction',
@@ -783,11 +816,28 @@ export class ModernConversation {
                 ...unsigned,
                 signature: await this.runtime.signControlEvent(canonicalJoinIntroduction(unsigned)),
             };
-            const envelope = await this.runtime.encrypt('message', encodeJoinIntroduction(event));
-            record.envelope = envelope;
-            await this.storage.write(JOIN_INTRODUCTION_RECORD, this.roomId, asBytes(record));
+            const envelope = await this.runtime.encryptAndCommitOutbound('message', encodeJoinIntroduction(event), async (exactEnvelope, sessionId) => {
+                const recordBytes = await this.storage.read(JOIN_INTRODUCTION_RECORD, this.roomId!);
+                const current = parseJoinIntroductionRecord(recordBytes);
+                if (!current || current.recipientAddress !== this.remoteAddress || current.recipientIdentityCommitment !== this.remoteIdentityCommitment || current.envelope) {
+                    throw new Error('Saved join introduction changed before it could be committed.');
+                }
+                const next: JoinIntroductionRecord = { ...current, clientId: event.eventId, envelope: exactEnvelope, senderOrigin: SENDER_ORIGIN };
+                const updates: SecureRecordUpdate[] = [
+                    { recordType: JOIN_INTRODUCTION_RECORD, recordId: this.roomId!, expected: recordBytes, next: asBytes(next) },
+                ];
+                if (sessionSetup) {
+                    updates.push(await this.modes.prepareWrite(this.roomId!, { sessionId, remoteAddress: this.remoteAddress }));
+                    const auditBytes = await this.storage.read(SESSION_AUDIT_RECORD, this.roomId!);
+                    updates.push({ recordType: SESSION_AUDIT_RECORD, recordId: this.roomId!, expected: auditBytes,
+                        next: asBytes({ version: 1, classification: 'active-established', direction: 'outbound', origin: 'join' } satisfies SessionAudit) });
+                }
+                return updates;
+            }, sessionSetup ? { conversationId: this.roomId, ...sessionSetup } : undefined);
+            record = { ...record, clientId: event.eventId, envelope, senderOrigin: SENDER_ORIGIN };
         }
         await this.assertCurrentDeviceTrust();
+        if (!record.envelope) throw new Error('Saved join introduction ciphertext is unavailable.');
         await this.deliveryCoordinator.submit(record.envelope, this.remoteAddress);
     }
 
@@ -1096,12 +1146,6 @@ export class ModernConversation {
         if (audit?.classification !== 'retired-unused-outbound') return;
         await this.storage.delete('vodozemac-session', conversationId);
         await this.storage.delete(SESSION_AUDIT_RECORD, conversationId);
-    }
-
-    private async writeSessionAudit(direction: 'outbound' | 'inbound', origin: 'join' | 'first-message'): Promise<void> {
-        if (!this.roomId) throw new Error('Conversation session cannot be audited without a conversation.');
-        const audit: SessionAudit = { version: 1, classification: 'active-established', direction, origin };
-        await this.storage.write(SESSION_AUDIT_RECORD, this.roomId, asBytes(audit));
     }
 
     private receive(envelope: EncryptedEnvelope, senderAddress?: string): Promise<boolean> {
@@ -1590,7 +1634,9 @@ export class ModernConversation {
 
     private async readPending(): Promise<PendingEnvelope[]> {
         const values = parseList<PendingEnvelope>(await this.storage.read(OUTBOX_RECORD, this.roomId!));
-        if (values.length > MAX_PENDING || values.some((item) => !item || firstMessage(item.envelope) === undefined)) {
+        if (values.length > MAX_PENDING || values.some((item) => !item || firstMessage(item.envelope) === undefined ||
+            (item.clientId !== undefined && (typeof item.clientId !== 'string' || !item.clientId)) ||
+            (item.senderOrigin !== undefined && !isSenderOriginMetadata(item.senderOrigin)))) {
             throw new Error('Modern pending delivery state is invalid.');
         }
         return values;

@@ -7,6 +7,9 @@ data class SessionState(val sessionId: String, val pickle: ByteArray)
 data class LifecycleMetadata(val accountReference: String, val deviceId: String, val identityReference: String, val epoch: Long, val state: String)
 data class StoredMessage(val deliveryId: String, val conversationId: String, val senderRoutingId: String, val text: String, val receivedAt: Long)
 data class StoredOutboundMessage(val clientMessageId: String, val conversationId: String, val senderRoutingId: String, val peerRoutingId: String, val text: String, val createdAt: Long)
+data class SenderOriginMetadata(val version: Int = 1, val basis: String = "durable-commit") {
+    init { require(version == 1 && basis == "durable-commit") }
+}
 enum class InboundCommitResult { STORED, DUPLICATE }
 
 /** The only inbound acceptance boundary used by the messaging processor. */
@@ -116,13 +119,23 @@ class CryptoStateStore(private val database: K3ncryptSecureDatabase, private val
         InboundCommitResult.STORED
     }
 
-    suspend fun commitOutbound(accountId: String, accountPickle: String, session: SessionState, clientMessageId: String, encryptedEnvelope: String, message: StoredOutboundMessage) {
+    suspend fun commitOutbound(
+        accountId: String,
+        accountPickle: String,
+        session: SessionState,
+        clientMessageId: String,
+        encryptedEnvelope: String,
+        message: StoredOutboundMessage,
+        senderOrigin: SenderOriginMetadata = SenderOriginMetadata(),
+    ) {
         database.withTransaction {
             val records = database.records()
             check(records.get("outbox", clientMessageId) == null) { "Duplicate outbound message identifier" }
             records.put(seal("account", accountId, accountPickle.encodeToByteArray()))
             records.put(seal("session", session.sessionId, session.pickle))
-            records.put(seal("outbox", clientMessageId, JSONObject().put("conversationId", message.conversationId).put("peerRoutingId", message.peerRoutingId).put("envelope", encryptedEnvelope).toString().encodeToByteArray()))
+            val origin = JSONObject().put("version", senderOrigin.version).put("basis", senderOrigin.basis)
+            records.put(seal("outbox", clientMessageId, JSONObject().put("conversationId", message.conversationId).put("peerRoutingId", message.peerRoutingId)
+                .put("envelope", encryptedEnvelope).put("senderOrigin", origin).toString().encodeToByteArray()))
             records.put(seal("outbound-message", clientMessageId, JSONObject().put("clientMessageId", clientMessageId).put("conversationId", message.conversationId).put("senderRoutingId", message.senderRoutingId).put("peerRoutingId", message.peerRoutingId).put("text", message.text).put("createdAt", message.createdAt).toString().encodeToByteArray()))
         }
     }
