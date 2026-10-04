@@ -253,3 +253,16 @@ optional user-operated/self-hosted rendezvous/relay nodes and visibility UI.
 User-operated nodes gain no peer trust by relaying. Discovery/address privacy
 and node policy need their own review. VPN/TUN/site-to-site networking is a
 separate architecture; service/src/privateNetwork is not a chat path adapter.
+
+
+## A1 review overlay — 2026-10-05
+
+See [authenticated capability review](authenticated-capability-review.md) and
+[A1 immutable source reconciliation](authenticated-capability-reconciliation.md).
+A1 uses a separate unsigned review domain and literal complete offers; it recommends
+a fixed reviewed preference profile rather than assuming numeric ordering, derives
+the outcome, and compares three-flight authentication with completion loss.
+This supersedes C1 bare-list/explicit-outcome projections only as an A1 candidate;
+C1 fixtures and historical claims are preserved. Complete protocol readiness remains
+blocked by final key/lifecycle/binding, bootstrap framing, completion and policy decisions.
+No production negotiation, admission, trust adoption or LAN/direct implementation.

@@ -231,3 +231,16 @@ Recheck eligibility before every outbound envelope and when dispatching inbound
 ones into the existing owner; admission does not bypass normal validation,
 M1/legacy dedupe or atomic acceptance. No route success changes verification.
 Relay retains its existing authorization and exact-ciphertext retry behavior.
+
+
+## A1 review overlay — 2026-10-05
+
+See [authenticated capability review](authenticated-capability-review.md) and
+[A1 immutable source reconciliation](authenticated-capability-reconciliation.md).
+A1 uses a separate unsigned review domain and literal complete offers; it recommends
+a fixed reviewed preference profile rather than assuming numeric ordering, derives
+the outcome, and compares three-flight authentication with completion loss.
+This supersedes C1 bare-list/explicit-outcome projections only as an A1 candidate;
+C1 fixtures and historical claims are preserved. Complete protocol readiness remains
+blocked by final key/lifecycle/binding, bootstrap framing, completion and policy decisions.
+No production negotiation, admission, trust adoption or LAN/direct implementation.

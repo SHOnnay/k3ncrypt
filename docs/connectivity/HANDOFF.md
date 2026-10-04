@@ -264,3 +264,16 @@ Next, obtain an owner decision for the maximum envelope reappearance age and pos
 | LAN spike | **BRANCH-ONLY; VALIDATED EXPERIMENT ONLY** | Dummy multicast/TCP results; unauthenticated, no real Wi-Fi or delivery guarantee. | Gate 7 after Gates 1–6. |
 | Production LAN | **BLOCKED / NO-GO** | Android instrumentation, dedupe, spec reconciliation, peer-admission, and real-device evidence remain incomplete. | All seven gates. |
 | File sharing / notifications / video calling | **PLANNED** | Product roadmap only; outside connectivity foundation. | Separate product and architecture tasks. |
+
+
+## A1 review overlay — 2026-10-05
+
+See [authenticated capability review](authenticated-capability-review.md) and
+[A1 immutable source reconciliation](authenticated-capability-reconciliation.md).
+A1 uses a separate unsigned review domain and literal complete offers; it recommends
+a fixed reviewed preference profile rather than assuming numeric ordering, derives
+the outcome, and compares three-flight authentication with completion loss.
+This supersedes C1 bare-list/explicit-outcome projections only as an A1 candidate;
+C1 fixtures and historical claims are preserved. Complete protocol readiness remains
+blocked by final key/lifecycle/binding, bootstrap framing, completion and policy decisions.
+No production negotiation, admission, trust adoption or LAN/direct implementation.

@@ -82,3 +82,16 @@ the newest document. See the self-contained requirements/review package.
    source and bounded runs are not adoption, release or physical crash/LAN proof.
 
 No contradiction is closed by a merge or normative promotion on this branch.
+
+
+## A1 review overlay — 2026-10-05
+
+See [authenticated capability review](authenticated-capability-review.md) and
+[A1 immutable source reconciliation](authenticated-capability-reconciliation.md).
+A1 uses a separate unsigned review domain and literal complete offers; it recommends
+a fixed reviewed preference profile rather than assuming numeric ordering, derives
+the outcome, and compares three-flight authentication with completion loss.
+This supersedes C1 bare-list/explicit-outcome projections only as an A1 candidate;
+C1 fixtures and historical claims are preserved. Complete protocol readiness remains
+blocked by final key/lifecycle/binding, bootstrap framing, completion and policy decisions.
+No production negotiation, admission, trust adoption or LAN/direct implementation.
