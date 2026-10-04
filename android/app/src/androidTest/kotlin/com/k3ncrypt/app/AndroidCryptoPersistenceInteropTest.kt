@@ -53,6 +53,7 @@ class AndroidCryptoPersistenceInteropTest {
             val inboundSessionPickle = crypto.saveSession(inbound.session)
             val digest = MessageDigest.getInstance("SHA-256").digest(firstEnvelope.encodeToByteArray())
                 .joinToString("") { "%02x".format(it) }
+            val envelopeId = com.k3ncrypt.messaging.EnvelopeIdentity.create("interop-conversation", firstEnvelope)
             assertEquals(
                 InboundCommitResult.STORED,
                 state.commitInbound(
@@ -61,14 +62,19 @@ class AndroidCryptoPersistenceInteropTest {
                     SessionState("interop-session", inboundSessionPickle),
                     digest,
                     StoredMessage("delivery-one", "interop-conversation", "sender-route", "interop-frame-one", 1L),
+                    null,
+                    envelopeId,
                 ),
             )
+            assertTrue(state.hasInboundEnvelopeId(envelopeId))
             assertEquals(InboundCommitResult.DUPLICATE, state.commitInbound(
                 "interop-account",
                 inboundAccountPickle,
                 SessionState("interop-session", inboundSessionPickle),
-                digest,
-                StoredMessage("delivery-one", "interop-conversation", "sender-route", "interop-frame-one", 1L),
+                "different-legacy-wrapper-digest",
+                StoredMessage("delivery-two", "interop-conversation", "sender-route", "interop-frame-one", 2L),
+                null,
+                envelopeId,
             ))
 
             // Simulate process death: release native handles and close Room, then reconstruct all state.

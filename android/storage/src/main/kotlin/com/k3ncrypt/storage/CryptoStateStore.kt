@@ -9,8 +9,24 @@ data class StoredMessage(val deliveryId: String, val conversationId: String, val
 data class StoredOutboundMessage(val clientMessageId: String, val conversationId: String, val senderRoutingId: String, val peerRoutingId: String, val text: String, val createdAt: Long)
 enum class InboundCommitResult { STORED, DUPLICATE }
 
+/** The only inbound acceptance boundary used by the messaging processor. */
+interface InboundAcceptanceStore {
+    suspend fun hasInboundDigest(digest: String): Boolean
+    suspend fun hasInboundEnvelopeId(envelopeId: String): Boolean
+    suspend fun isSessionRenewalArmed(peerRoutingId: String): Boolean
+    suspend fun commitInbound(
+        accountId: String,
+        accountPickle: String,
+        session: SessionState,
+        digest: String,
+        message: StoredMessage,
+        renewalSenderRoute: String?,
+        envelopeId: String,
+    ): InboundCommitResult
+}
+
 /** Encrypted Room adapter. Security state, message bytes, and dedupe markers commit together. */
-class CryptoStateStore(private val database: K3ncryptSecureDatabase, private val aead: KeystoreAead, private val now: () -> Long = { System.currentTimeMillis() }) {
+class CryptoStateStore(private val database: K3ncryptSecureDatabase, private val aead: KeystoreAead, private val now: () -> Long = { System.currentTimeMillis() }) : InboundAcceptanceStore {
     private fun aad(namespace: String, id: String) = "k3ncrypt:android:storage:v1:$namespace:$id".encodeToByteArray()
     private fun seal(namespace: String, id: String, bytes: ByteArray): SecureRecordEntity = SecureRecordEntity(namespace, id, aead.encrypt(bytes, aad(namespace, id)), now())
     private fun open(record: SecureRecordEntity): ByteArray = aead.decrypt(record.ciphertext, aad(record.namespace, record.recordId))
@@ -18,7 +34,9 @@ class CryptoStateStore(private val database: K3ncryptSecureDatabase, private val
     suspend fun read(namespace: String, id: String): ByteArray? = database.records().get(namespace, id)?.let(::open)
     suspend fun list(namespace: String): List<Pair<String, ByteArray>> = database.records().list(namespace).map { it.recordId to open(it) }
     suspend fun write(namespace: String, id: String, bytes: ByteArray) { database.records().put(seal(namespace, id, bytes)) }
-    suspend fun hasInboundDigest(digest: String): Boolean = database.records().get("inbound-digest", digest) != null
+    override suspend fun hasInboundDigest(digest: String): Boolean = database.records().get("inbound-digest", digest) != null
+    override suspend fun hasInboundEnvelopeId(envelopeId: String): Boolean =
+        database.records().get("inbound-envelope-id-v1", envelopeId) != null
 
     /** Local user approval for a new Olm pre-key session from an already pinned peer. */
     suspend fun armSessionRenewal(peerRoutingId: String, expiresAt: Long) {
@@ -26,7 +44,7 @@ class CryptoStateStore(private val database: K3ncryptSecureDatabase, private val
         database.records().put(seal("session-renewal-arm", peerRoutingId, expiresAt.toString().encodeToByteArray()))
     }
 
-    suspend fun isSessionRenewalArmed(peerRoutingId: String): Boolean =
+    override suspend fun isSessionRenewalArmed(peerRoutingId: String): Boolean =
         read("session-renewal-arm", peerRoutingId)?.let { bytes ->
             try { bytes.decodeToString().toLongOrNull()?.let { it > now() } ?: false }
             finally { bytes.fill(0) }
@@ -55,10 +73,19 @@ class CryptoStateStore(private val database: K3ncryptSecureDatabase, private val
     suspend fun readIdentityCheckpoint(): ByteArray? = read("identity-checkpoint", "local")
 
     /** Returns DUPLICATE without ratchet/state writes when the same envelope was committed before. */
-    suspend fun commitInbound(accountId: String, accountPickle: String, session: SessionState, digest: String, message: StoredMessage, renewalSenderRoute: String? = null): InboundCommitResult = database.withTransaction {
+    override suspend fun commitInbound(
+        accountId: String,
+        accountPickle: String,
+        session: SessionState,
+        digest: String,
+        message: StoredMessage,
+        renewalSenderRoute: String?,
+        envelopeId: String,
+    ): InboundCommitResult = database.withTransaction {
         val records = database.records()
         val prior = records.get("inbound-digest", digest)
-        if (prior != null) return@withTransaction InboundCommitResult.DUPLICATE
+        val envelopePrior = records.get("inbound-envelope-id-v1", envelopeId)
+        if (prior != null || envelopePrior != null) return@withTransaction InboundCommitResult.DUPLICATE
         val deliveryPrior = records.get("inbound-delivery", message.deliveryId)
         check(deliveryPrior == null) { "Mailbox delivery identifier conflicts with stored state" }
         if (renewalSenderRoute != null) {
@@ -84,6 +111,7 @@ class CryptoStateStore(private val database: K3ncryptSecureDatabase, private val
         records.put(seal("session", session.sessionId, session.pickle))
         records.put(seal("message", message.deliveryId, encodedMessage))
         records.put(seal("inbound-digest", digest, message.deliveryId.encodeToByteArray()))
+        records.put(seal("inbound-envelope-id-v1", envelopeId, message.deliveryId.encodeToByteArray()))
         records.put(seal("inbound-delivery", message.deliveryId, digest.encodeToByteArray()))
         InboundCommitResult.STORED
     }

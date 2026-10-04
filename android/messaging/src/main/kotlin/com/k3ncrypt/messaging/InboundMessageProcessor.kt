@@ -3,7 +3,7 @@ package com.k3ncrypt.messaging
 import com.k3ncrypt.crypto.AccountHandle
 import com.k3ncrypt.crypto.CryptoPort
 import com.k3ncrypt.crypto.SessionHandle
-import com.k3ncrypt.storage.CryptoStateStore
+import com.k3ncrypt.storage.InboundAcceptanceStore
 import com.k3ncrypt.storage.InboundCommitResult
 import com.k3ncrypt.storage.SessionState
 import com.k3ncrypt.storage.StoredMessage
@@ -27,7 +27,7 @@ class InboundMessageProcessor(
     private val account: AccountHandle,
     private val accountId: String,
     private val crypto: CryptoPort,
-    private val cryptoState: CryptoStateStore,
+    private val cryptoState: InboundAcceptanceStore,
     private val bundles: SenderBundleResolver,
     private val trust: DeviceTrustVerifier,
     private val sessions: ConversationSessionStore,
@@ -46,7 +46,10 @@ class InboundMessageProcessor(
             require(delivery.id.isNotBlank() && delivery.senderRoutingId.isNotBlank() && delivery.conversationId.isNotBlank())
             val envelope = EncryptedEnvelopeParser.parse(delivery.envelope)
             val digest = digest(delivery.envelope)
-            if (cryptoState.hasInboundDigest(digest)) return@withLock DeliveryAcceptance.Duplicate
+            val envelopeId = EnvelopeIdentity.create(delivery.conversationId, envelope.olmMessage)
+            if (cryptoState.hasInboundDigest(digest) || cryptoState.hasInboundEnvelopeId(envelopeId)) {
+                return@withLock DeliveryAcceptance.Duplicate
+            }
 
             val bundle = bundles.resolve(delivery.senderRoutingId)
             trust.requireTrustedSender(delivery.senderRoutingId, bundle.senderIdentityKey)
@@ -84,6 +87,7 @@ class InboundMessageProcessor(
                                 digest,
                                 StoredMessage(delivery.id, delivery.conversationId, delivery.senderRoutingId, body, now()),
                                 if (replacingSession) delivery.senderRoutingId else null,
+                                envelopeId,
                             )
                         },
                         remember = { sessions.remember(delivery.senderRoutingId, inboundSession!!) },

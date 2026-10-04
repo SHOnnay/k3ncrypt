@@ -31,24 +31,25 @@ class SessionRenewalPersistenceTest {
         val state = CryptoStateStore(database, aead)
         val oldSession = byteArrayOf(1, 2, 3)
         val newSession = byteArrayOf(4, 5, 6)
+        val envelopeId = "v1:${"a".repeat(64)}"
         try {
             state.commitAccountAndSession("account", "opaque-account", SessionState("peer-route", oldSession))
             val message = StoredMessage("delivery", "conversation", "peer-route", "verified message", 1L)
             assertThrows(IllegalStateException::class.java) {
-                runBlocking { state.commitInbound("account", "opaque-account", SessionState("peer-route", newSession), "digest", message, "peer-route") }
+                runBlocking { state.commitInbound("account", "opaque-account", SessionState("peer-route", newSession), "digest", message, "peer-route", envelopeId) }
             }
             assertArrayEquals(oldSession, state.read("session", "peer-route"))
             assertTrue(state.messages().isEmpty())
             state.armSessionRenewal("peer-route", System.currentTimeMillis() + 60_000)
             assertTrue(state.isSessionRenewalArmed("peer-route"))
             assertEquals(InboundCommitResult.STORED,
-                state.commitInbound("account", "opaque-account", SessionState("peer-route", newSession), "digest", message, "peer-route"))
+                state.commitInbound("account", "opaque-account", SessionState("peer-route", newSession), "digest", message, "peer-route", envelopeId))
             assertArrayEquals(newSession, state.read("session", "peer-route"))
             assertArrayEquals(oldSession, state.read("session-archive", "peer-route:digest"))
             assertFalse(state.isSessionRenewalArmed("peer-route"))
             assertEquals(1, state.messages().size)
             assertEquals(InboundCommitResult.DUPLICATE,
-                state.commitInbound("account", "opaque-account", SessionState("peer-route", newSession), "digest", message, "peer-route"))
+                state.commitInbound("account", "opaque-account", SessionState("peer-route", newSession), "digest", message, "peer-route", envelopeId))
         } finally { database.close() }
     }
 }
