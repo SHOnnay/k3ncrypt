@@ -201,6 +201,25 @@ it('does not mark a message seen until durable consumer acceptance succeeds', as
     await conversation.close();
 });
 
+it('recognizes a previously accepted exact envelope before a second decrypt', async () => {
+    const pair = await verifiedPeerPair();
+    await pair.alice.sendWithReceipt('single receiver delivery');
+    const envelope = pair.aliceTransport.sent[0];
+
+    await expect(receiveFirstMessage(pair.bob, envelope, localAddress)).resolves.toBe(true);
+    expect(pair.bobMessages).toEqual(['android first message']);
+    const inboundSessions = inboundSessionCreations;
+    const decryptions = sessionDecryptions;
+
+    await expect(receiveFirstMessage(pair.bob, envelope, localAddress)).resolves.toBe(true);
+    expect(inboundSessionCreations).toBe(inboundSessions);
+    expect(sessionDecryptions).toBe(decryptions);
+    expect(pair.bobMessages).toEqual(['android first message']);
+
+    await pair.alice.close();
+    await pair.bob.close();
+});
+
 it('retries the identical persisted envelope after a lost ACK and after restart', async () => {
     encryptions = 0;
     jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });

@@ -16,6 +16,23 @@ describe('opaque offline message mailbox', () => {
     expect(await countOfflineMessages({ mailbox: message.mailbox, channel: message.channel })).toBe(0);
   });
 
+  it('allows the same envelope key to be stored again after its mailbox row is deleted', async () => {
+    const message = base();
+    const first = await storeOfflineMessage(message);
+    expect(await ackOfflineMessage(first.id, message.mailbox, message.channel)).toBe(true);
+
+    const resubmitted = await storeOfflineMessage({
+      ...message,
+      id: randomUUID(),
+      timestamp: message.timestamp + 1,
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+
+    expect(resubmitted.id).not.toBe(first.id);
+    expect(await countOfflineMessages({ mailbox: message.mailbox, channel: message.channel })).toBe(1);
+    expect(await ackOfflineMessage(resubmitted.id, message.mailbox, message.channel)).toBe(true);
+  });
+
   it('expires abandoned ciphertext without inspecting its contents', async () => {
     const message = { ...base(), expiresAt: new Date(Date.now() - 1) };
     await storeOfflineMessage(message);
