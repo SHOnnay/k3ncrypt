@@ -181,3 +181,16 @@ Recommend D13/D14 next to settle carrier binding and permitted discovery/privacy
 - npm run lint PASS; git diff --check PASS. Dependency install used existing lockfile with npm ci --ignore-scripts --offline; no dependency/lockfile changes.
 
 Jest --forceExit printed its existing open-handle advisory; no handle-cleanup claim. Kotlin Gradle compiled existing native dependencies as part of focused unit task prerequisites; these runs do not execute production JNI verification instrumentation. Tests establish unsigned encoding, symmetric synthetic selection and retained local context checks only. They do not validate live mutual authentication, actual freshness/nonce entropy/replay defenses, old/new deployment migration, live carrier binding, physical LAN or protocol approval. No production source, UI, flags, assets, schemas or dependencies changed. Nine changed files: four documentation overlays, this package and source reconciliation, the new shared JSON fixture and two test-only encoders.
+
+
+## D13/D14 review overlay — 2026-10-05
+
+See [carrier/discovery/privacy review](carrier-discovery-privacy-review.md),
+[platform evidence](carrier-platform-evidence.md),
+[immutable reconciliation](carrier-discovery-privacy-reconciliation.md) and
+[staged physical plan](carrier-physical-test-plan.md).
+D13 and D14 remain OPEN. Dedicated one-channel messaging PeerConnection is a
+preferred evaluation candidate, not approved carrier/binding. Offline bootstrap,
+Android observed cert association, exact association/channel proof and privacy
+policy remain blockers. No runtime/permission/UI/dependency/fixture changes.
+Historical C1/A1 vectors are preserved; no production LAN or physical claim.

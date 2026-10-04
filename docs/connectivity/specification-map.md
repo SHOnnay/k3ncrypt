@@ -95,3 +95,16 @@ This supersedes C1 bare-list/explicit-outcome projections only as an A1 candidat
 C1 fixtures and historical claims are preserved. Complete protocol readiness remains
 blocked by final key/lifecycle/binding, bootstrap framing, completion and policy decisions.
 No production negotiation, admission, trust adoption or LAN/direct implementation.
+
+
+## D13/D14 review overlay — 2026-10-05
+
+See [carrier/discovery/privacy review](carrier-discovery-privacy-review.md),
+[platform evidence](carrier-platform-evidence.md),
+[immutable reconciliation](carrier-discovery-privacy-reconciliation.md) and
+[staged physical plan](carrier-physical-test-plan.md).
+D13 and D14 remain OPEN. Dedicated one-channel messaging PeerConnection is a
+preferred evaluation candidate, not approved carrier/binding. Offline bootstrap,
+Android observed cert association, exact association/channel proof and privacy
+policy remain blockers. No runtime/permission/UI/dependency/fixture changes.
+Historical C1/A1 vectors are preserved; no production LAN or physical claim.
