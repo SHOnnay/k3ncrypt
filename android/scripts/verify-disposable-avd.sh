@@ -31,4 +31,27 @@ if [[ "$avd_name" != "$expected_avd" ]]; then
   exit 3
 fi
 
+user_state="$("$adb_bin" -s "$serial" shell dumpsys user | awk '
+  {
+    line = $0
+    sub(/^[[:space:]]+/, "", line)
+    if (index(line, "UserInfo{0:") == 1) {
+      user_zero = 1
+      next
+    }
+    if (user_zero && index(line, "State: ") == 1) {
+      sub(/^State: /, "", line)
+      gsub(/\r/, "", line)
+      print line
+      exit
+    }
+    if (user_zero && index(line, "UserInfo{") == 1) exit
+  }
+')"
+if [[ "$user_state" != "RUNNING_UNLOCKED" ]]; then
+  echo "Refusing instrumentation while Android user 0 is '$user_state'; unlock $expected_avd first." >&2
+  exit 3
+fi
+
 echo "Disposable instrumentation target verified: $expected_avd"
+echo "Disposable instrumentation user verified unlocked: user 0"
