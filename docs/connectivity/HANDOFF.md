@@ -1,5 +1,15 @@
 # K3NCRYPT master connectivity handoff
 
+> Current review overlay (2026-10-05): this historical handoff describes its
+> named 2026-10-03 main baseline. The current review starts at sender-origin
+> 5111aff9cbed6668194d2ab522bd80dcf1b0f9b1, with live M1, atomic Web sender/
+> receiver boundaries, Android Room sender origin and later scoped passing
+> instrumentation. See [C1 review package](peer-admission-freshness-review.md)
+> and [current reconciliation](specification-map.md). Historical absent/failed
+> facts below are not current branch status. Android verification/readiness
+> remains unadopted; M6/A1/E1/D13/D14 and full PeerAdmission approval remain open.
+> Relay is the sole production/default messaging path; no optional runtime.
+
 **Version:** 2
 **Purpose:** State of the repository and gated plan for future connectivity work. This is a documentation-only update on `connectivity/handoff-v2`; it does not change production behavior.
 **Authoritative baseline inspected:** `origin/main` at `3e26ce952ea539ef7aaa9bb5db3d5dea4bf30f7f` (refreshed from origin on 2026-10-03).
