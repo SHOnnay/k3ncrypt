@@ -36,10 +36,15 @@ const remoteCommitment = async (): Promise<string> => fingerprintVodozemacIdenti
 class Storage implements SecureStorage {
     async compareAndSwapRecords(updates: readonly import('../core/contracts').SecureRecordUpdate[]): Promise<boolean> {
         if (updates.some((item) => { const old = this.values.get(`${item.recordType}:${item.recordId}`); return old === undefined ? item.expected !== undefined : item.expected === undefined || !Buffer.from(old).equals(Buffer.from(item.expected)); })) return false;
+        const fail = this.failNextCas;
+        this.failNextCas = undefined;
+        if (fail === 'before') throw new Error('simulated transaction abort');
         for (const item of updates) this.values.set(`${item.recordType}:${item.recordId}`, item.next.slice(0));
+        if (fail === 'after') throw new Error('simulated uncertain transaction completion');
         return true;
     }
     private readonly values = new Map<string, ArrayBuffer>();
+    failNextCas?: 'before' | 'after';
     async initializeWithPassphrase() {}
     async unlock() {}
     lock() {}
@@ -58,7 +63,7 @@ let sessionDecryptions = 0;
 let decryptedBytes: Uint8Array | undefined;
 const session = (): VodozemacSessionHandle => ({
     sessionId: () => 'session-test',
-    encrypt: () => { encryptions++; return JSON.stringify({ version: 1, message_type: 0, ciphertext: 'opaque' }); },
+    encrypt: () => { encryptions++; return JSON.stringify({ version: 1, message_type: 0, ciphertext: `opaque-${encryptions}` }); },
     decrypt: () => { sessionDecryptions++; return decryptedBytes ?? new Uint8Array([1, 1, ...new TextEncoder().encode('restored established message')]); }, saveSession: () => new Uint8Array([1, 2]),
 });
 const account = (): VodozemacAccountHandle => ({
@@ -122,6 +127,23 @@ const seedVerifiedContact = async (storage: Storage, contactId: string): Promise
     })).buffer as ArrayBuffer);
 };
 
+const messageAcceptance = (storage: Storage, received?: string[]) => async (text: string, id: string) => {
+    const expected = await storage.read('product-messages', room);
+    const current = expected ? JSON.parse(new TextDecoder().decode(expected)) as Array<Record<string, unknown>> : [];
+    const existing = current.find((message) => message.id === id);
+    if (existing && existing.text !== text) throw new Error('Accepted message identity conflicts with saved history.');
+    const next = existing ? current : [...current, {
+        id, sender: 'contact', text, type: 'received', timestamp: '2026-01-01T00:00:00.000Z',
+    }];
+    return {
+        updates: [{
+            recordType: 'product-messages', recordId: room, expected,
+            next: new TextEncoder().encode(JSON.stringify(next)).buffer as ArrayBuffer,
+        }],
+        afterCommit: async () => { received?.push(text); },
+    };
+};
+
 const verifiedPeerPair = async () => {
     jest.mocked(publishVodozemacBundle)
         .mockResolvedValueOnce({ address: localAddress, renewalProof: 'r'.repeat(43) })
@@ -137,19 +159,19 @@ const verifiedPeerPair = async () => {
     const bobMessages: string[] = [];
     const alice = new ModernConversation(aliceStorage, loader, aliceTransport.transport);
     const bob = new ModernConversation(bobStorage, loader, bobTransport.transport);
-    await alice.connect(room, key(9), remoteAddress, await remoteCommitment(), (text) => aliceMessages.push(text));
-    await bob.connect(room, key(9), localAddress, await remoteCommitment(), (text) => bobMessages.push(text));
+    await alice.connect(room, key(9), remoteAddress, await remoteCommitment(), messageAcceptance(aliceStorage, aliceMessages));
+    await bob.connect(room, key(9), localAddress, await remoteCommitment(), messageAcceptance(bobStorage, bobMessages));
     await seedVerifiedContact(aliceStorage, remoteAddress);
     await seedVerifiedContact(bobStorage, localAddress);
     await Promise.all([alice.verifyContact(true), bob.verifyContact(true)]);
 
-    return { alice, bob, aliceTransport, bobTransport, aliceMessages, bobMessages };
+    return { alice, bob, aliceStorage, bobStorage, aliceTransport, bobTransport, aliceMessages, bobMessages };
 };
 
 const receiveFirstMessage = (conversation: ModernConversation, envelope: EncryptedEnvelope, senderAddress: string): Promise<boolean> =>
     (conversation as unknown as { receive: (value: EncryptedEnvelope, sender: string) => Promise<boolean> }).receive(envelope, senderAddress);
 
-beforeEach(() => { jest.clearAllMocks(); outboundSessionCreations = 0; inboundSessionCreations = 0; sessionDecryptions = 0; decryptedBytes = undefined; });
+beforeEach(() => { jest.clearAllMocks(); encryptions = 0; outboundSessionCreations = 0; inboundSessionCreations = 0; sessionDecryptions = 0; decryptedBytes = undefined; });
 
 it('registers and removes the existing relay peer-disconnect observer', () => {
     const conversation = new ModernConversation(new Storage(), loader, fakeTransport().transport);
@@ -168,7 +190,7 @@ it('rejects malformed UTF-8 without recording a replay marker', async () => {
     jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
     const storage = new Storage();
     const conversation = new ModernConversation(storage, loader, fakeTransport().transport);
-    const delivered = jest.fn();
+    const delivered = jest.fn(messageAcceptance(storage));
     await conversation.connect(room, key(9), remoteAddress, await remoteCommitment(), delivered);
     await conversation.send('establish session');
     decryptedBytes = new Uint8Array([0xc3, 0x28]);
@@ -186,19 +208,86 @@ it('does not mark a message seen until durable consumer acceptance succeeds', as
     const storage = new Storage();
     const conversation = new ModernConversation(storage, loader, fakeTransport().transport);
     let fail = true;
-    const delivered = jest.fn(async () => { if (fail) throw new Error('persistence unavailable'); });
+    const persistMessage = messageAcceptance(storage);
+    const delivered = jest.fn(async (text: string, id: string) => {
+        if (fail) throw new Error('persistence unavailable');
+        return persistMessage(text, id);
+    });
     await conversation.connect(room, key(9), remoteAddress, await remoteCommitment(), delivered);
     await conversation.send('establish session');
     const envelope: EncryptedEnvelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1, olmMessage: JSON.stringify({ version: 1, message_type: 1, ciphertext: 'opaque' }) } };
     const receive = (conversation as unknown as { receive: (value: EncryptedEnvelope, sender: string) => Promise<boolean> }).receive.bind(conversation);
     await expect(receive(envelope, remoteAddress)).rejects.toThrow('persistence unavailable');
     expect(await storage.read('modern-seen', room)).toBeUndefined();
+    expect(await storage.read('modern-seen-m1-v1', room)).toBeUndefined();
+    expect(await storage.read('product-messages', room)).toBeUndefined();
     fail = false;
     await expect(receive(envelope, remoteAddress)).resolves.toBe(true);
     expect(delivered).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(new TextDecoder().decode((await storage.read('modern-seen', room))!))).toHaveLength(1);
+    expect(JSON.parse(new TextDecoder().decode((await storage.read('modern-seen-m1-v1', room))!)).ids).toHaveLength(1);
+    expect(JSON.parse(new TextDecoder().decode((await storage.read('product-messages', room))!))).toHaveLength(1);
     await expect(receive(envelope, remoteAddress)).resolves.toBe(true);
     expect(delivered).toHaveBeenCalledTimes(2);
     await conversation.close();
+});
+
+it('recovers an aborted established-session acceptance after restart and redelivery', async () => {
+    const pair = await verifiedPeerPair();
+    await pair.alice.sendWithReceipt('establish the receive session');
+    await receiveFirstMessage(pair.bob, pair.aliceTransport.sent[0], localAddress);
+    await pair.alice.sendWithReceipt('recover this message');
+    const envelope = pair.aliceTransport.sent[1];
+    const beforeSession = await pair.bobStorage.read('vodozemac-session', room);
+    const beforeLegacy = await pair.bobStorage.read('modern-seen', room);
+    const beforeM1 = await pair.bobStorage.read('modern-seen-m1-v1', room);
+    const beforeMessages = await pair.bobStorage.read('product-messages', room);
+    decryptedBytes = new Uint8Array([1, 1, ...new TextEncoder().encode('recover this message')]);
+    pair.bobStorage.failNextCas = 'before';
+
+    await expect(receiveFirstMessage(pair.bob, envelope, localAddress)).rejects.toThrow();
+    expect(await pair.bobStorage.read('vodozemac-session', room)).toEqual(beforeSession);
+    expect(await pair.bobStorage.read('modern-seen', room)).toEqual(beforeLegacy);
+    expect(await pair.bobStorage.read('modern-seen-m1-v1', room)).toEqual(beforeM1);
+    expect(await pair.bobStorage.read('product-messages', room)).toEqual(beforeMessages);
+    const decryptionsAfterAbort = sessionDecryptions;
+    expect(decryptionsAfterAbort).toBeGreaterThan(0);
+
+    await pair.bob.close();
+    const restarted = new ModernConversation(pair.bobStorage, loader, fakeTransport().transport);
+    await restarted.connect(room, key(9), localAddress, await remoteCommitment(), messageAcceptance(pair.bobStorage, pair.bobMessages));
+    decryptedBytes = new Uint8Array([1, 1, ...new TextEncoder().encode('recover this message')]);
+    await expect(receiveFirstMessage(restarted, envelope, localAddress)).resolves.toBe(true);
+    expect(sessionDecryptions).toBe(decryptionsAfterAbort + 1);
+    expect(pair.bobMessages).toEqual(['android first message', 'recover this message']);
+    const afterAcceptance = sessionDecryptions;
+    await expect(receiveFirstMessage(restarted, envelope, localAddress)).resolves.toBe(true);
+    expect(sessionDecryptions).toBe(afterAcceptance);
+    expect(JSON.parse(new TextDecoder().decode((await pair.bobStorage.read('modern-seen-m1-v1', room))!)).ids).toHaveLength(2);
+    expect(JSON.parse(new TextDecoder().decode((await pair.bobStorage.read('product-messages', room))!))).toHaveLength(2);
+
+    await restarted.close();
+    await pair.alice.close();
+});
+
+it('resolves an uncertain completed transaction from durable state without accepting twice', async () => {
+    const pair = await verifiedPeerPair();
+    await pair.alice.sendWithReceipt('establish the receive session');
+    await receiveFirstMessage(pair.bob, pair.aliceTransport.sent[0], localAddress);
+    await pair.alice.sendWithReceipt('commit despite lost completion signal');
+    const envelope = pair.aliceTransport.sent[1];
+    decryptedBytes = new Uint8Array([1, 1, ...new TextEncoder().encode('commit despite lost completion signal')]);
+    pair.bobStorage.failNextCas = 'after';
+
+    await expect(receiveFirstMessage(pair.bob, envelope, localAddress)).resolves.toBe(true);
+    expect(JSON.parse(new TextDecoder().decode((await pair.bobStorage.read('modern-seen-m1-v1', room))!)).ids).toHaveLength(2);
+    expect(JSON.parse(new TextDecoder().decode((await pair.bobStorage.read('product-messages', room))!))).toHaveLength(2);
+    const afterCommit = sessionDecryptions;
+    await expect(receiveFirstMessage(pair.bob, envelope, localAddress)).resolves.toBe(true);
+    expect(sessionDecryptions).toBe(afterCommit);
+
+    await pair.bob.close();
+    await pair.alice.close();
 });
 
 it('recognizes a previously accepted exact envelope before a second decrypt', async () => {
@@ -208,9 +297,19 @@ it('recognizes a previously accepted exact envelope before a second decrypt', as
 
     await expect(receiveFirstMessage(pair.bob, envelope, localAddress)).resolves.toBe(true);
     expect(pair.bobMessages).toEqual(['android first message']);
+    const m1 = JSON.parse(new TextDecoder().decode((await pair.bobStorage.read('modern-seen-m1-v1', room))!)).ids[0];
+    expect(m1).toMatch(/^v1:[0-9a-f]{64}$/);
+    expect(JSON.parse(new TextDecoder().decode((await pair.bobStorage.read('modern-seen', room))!))).toHaveLength(1);
+    expect(JSON.parse(new TextDecoder().decode((await pair.bobStorage.read('product-messages', room))!))[0].id).toBe(m1);
     const inboundSessions = inboundSessionCreations;
     const decryptions = sessionDecryptions;
 
+    const reordered = {
+        data: { olmMessage: (envelope.data as { olmMessage: string }).olmMessage, version: 1 },
+        strategy: 'vodozemac-olm-v1',
+        version: 2,
+    } as EncryptedEnvelope;
+    await expect(receiveFirstMessage(pair.bob, reordered, localAddress)).resolves.toBe(true);
     await expect(receiveFirstMessage(pair.bob, envelope, localAddress)).resolves.toBe(true);
     expect(inboundSessionCreations).toBe(inboundSessions);
     expect(sessionDecryptions).toBe(decryptions);
@@ -218,6 +317,52 @@ it('recognizes a previously accepted exact envelope before a second decrypt', as
 
     await pair.alice.close();
     await pair.bob.close();
+
+    const restarted = new ModernConversation(pair.bobStorage, loader, fakeTransport().transport);
+    await restarted.connect(room, key(9), localAddress, await remoteCommitment(), messageAcceptance(pair.bobStorage, pair.bobMessages));
+    await expect(receiveFirstMessage(restarted, reordered, localAddress)).resolves.toBe(true);
+    expect(sessionDecryptions).toBe(decryptions);
+    expect(pair.bobMessages).toEqual(['android first message']);
+    await restarted.close();
+});
+
+it('suppresses a legacy-only replay marker before decrypt without fabricating M1 history', async () => {
+    const pair = await verifiedPeerPair();
+    await pair.alice.sendWithReceipt('legacy replay');
+    const envelope = pair.aliceTransport.sent[0];
+    const digestBytes = new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(envelope))));
+    const digest = Array.from(digestBytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+    await pair.bobStorage.write('modern-seen', room, new TextEncoder().encode(JSON.stringify([digest])).buffer as ArrayBuffer);
+    const decryptions = sessionDecryptions;
+
+    await expect(receiveFirstMessage(pair.bob, envelope, localAddress)).resolves.toBe(true);
+    expect(sessionDecryptions).toBe(decryptions);
+    expect(pair.bobMessages).toEqual([]);
+    expect(await pair.bobStorage.read('modern-seen-m1-v1', room)).toBeUndefined();
+    expect(await pair.bobStorage.read('product-messages', room)).toBeUndefined();
+
+    await pair.bob.close();
+    await pair.alice.close();
+});
+
+it('serializes concurrent live and mailbox copies through one pre-decrypt M1 check', async () => {
+    const pair = await verifiedPeerPair();
+    await pair.alice.sendWithReceipt('overlapping relay delivery');
+    const envelope = pair.aliceTransport.sent[0];
+    const before = sessionDecryptions;
+
+    const results = await Promise.all([
+        receiveFirstMessage(pair.bob, envelope, localAddress),
+        receiveFirstMessage(pair.bob, { ...envelope }, localAddress),
+    ]);
+    expect(results).toEqual([true, true]);
+    expect(inboundSessionCreations).toBe(1);
+    expect(sessionDecryptions).toBe(before);
+    expect(pair.bobMessages).toEqual(['android first message']);
+    expect(JSON.parse(new TextDecoder().decode((await pair.bobStorage.read('product-messages', room))!))).toHaveLength(1);
+
+    await pair.bob.close();
+    await pair.alice.close();
 });
 
 it('retries the identical persisted envelope after a lost ACK and after restart', async () => {
@@ -262,7 +407,7 @@ it('accepts the peer first-message pre-key after joining without creating a comp
     const transport = fakeTransport();
     const received: string[] = [];
     const conversation = new ModernConversation(storage, loader, transport.transport);
-    await conversation.connect(room, key(9), remoteAddress, await remoteCommitment(), (text) => received.push(text));
+    await conversation.connect(room, key(9), remoteAddress, await remoteCommitment(), messageAcceptance(storage, received));
     expect(outboundSessionCreations).toBe(0);
     expect(claimVodozemacOneTimeKey).not.toHaveBeenCalled();
 
@@ -340,7 +485,7 @@ it('accepts an authenticated join introduction without creating a chat message o
     jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
     const storage = new Storage();
     const conversation = new ModernConversation(storage, loader, fakeTransport().transport);
-    const onMessage = jest.fn();
+    const onMessage = jest.fn(async (_text: string, _id: string) => ({ updates: [] }));
     await conversation.connect(room, key(9), undefined, undefined, onMessage);
     decryptedBytes = await signedJoinIntroductionPlaintext();
     const envelope: EncryptedEnvelope = {
@@ -372,7 +517,7 @@ it('rejects a signed introduction for another conversation without learning its 
     jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
     const storage = new Storage();
     const conversation = new ModernConversation(storage, loader, fakeTransport().transport);
-    const onMessage = jest.fn();
+    const onMessage = jest.fn(async (_text: string, _id: string) => ({ updates: [] }));
     await conversation.connect(room, key(9), undefined, undefined, onMessage);
     decryptedBytes = await signedJoinIntroductionPlaintext({ conversationId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee' });
     const envelope: EncryptedEnvelope = {
@@ -457,7 +602,7 @@ it('preserves an existing established conversation session and decrypts after th
     ])).buffer as ArrayBuffer);
     const received: string[] = [];
     const restored = new ModernConversation(storage, loader, fakeTransport().transport);
-    await restored.connect(room, key(9), remoteAddress, await remoteCommitment(), (text) => received.push(text));
+    await restored.connect(room, key(9), remoteAddress, await remoteCommitment(), messageAcceptance(storage, received));
     const envelope: EncryptedEnvelope = {
         version: 2,
         strategy: 'vodozemac-olm-v1',
@@ -493,7 +638,7 @@ it('restores missing contact and route state after an existing session authentic
     const received: string[] = [];
     const onContactChange = jest.fn();
     const restored = new ModernConversation(storage, loader, fakeTransport().transport);
-    await restored.connect(room, key(9), undefined, undefined, (text) => received.push(text), onContactChange);
+    await restored.connect(room, key(9), undefined, undefined, messageAcceptance(storage, received), onContactChange);
     decryptedBytes = new Uint8Array([1, 1, ...new TextEncoder().encode('authenticated peer message')]);
     const envelope: EncryptedEnvelope = {
         version: 2,
@@ -530,7 +675,7 @@ it('does not create contact state when an authenticated session sender conflicts
     await storage.write('conversation-protocol', room, new TextEncoder().encode(JSON.stringify(mode)).buffer as ArrayBuffer);
     await storage.delete('contact-identity', remoteAddress);
 
-    const onMessage = jest.fn();
+    const onMessage = jest.fn(async (_text: string, _id: string) => ({ updates: [] }));
     const onContactChange = jest.fn();
     const restored = new ModernConversation(storage, loader, fakeTransport().transport);
     await restored.connect(room, key(9), undefined, '0'.repeat(43), onMessage, onContactChange);
@@ -566,7 +711,7 @@ it('does not create contact state when the restored session rejects an incoming 
     await storage.write('conversation-protocol', room, new TextEncoder().encode(JSON.stringify(mode)).buffer as ArrayBuffer);
     await storage.delete('contact-identity', remoteAddress);
 
-    const onMessage = jest.fn();
+    const onMessage = jest.fn(async (_text: string, _id: string) => ({ updates: [] }));
     const onContactChange = jest.fn();
     const restored = new ModernConversation(storage, loader, fakeTransport().transport);
     await restored.connect(room, key(9), undefined, undefined, onMessage, onContactChange);

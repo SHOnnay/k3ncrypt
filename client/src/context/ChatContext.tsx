@@ -16,7 +16,7 @@ import { readConversationDescriptors, removeConversationDescriptor, saveConversa
 import { readProfileName, writeProfileName } from '../product/profileStore';
 import { readPrivacyPreferences, writePrivacyPreferences, type PrivacyPreferences } from '../product/preferences';
 import { deliverNotification } from '../product/notifications';
-import { readMessages, writeMessages } from '../product/messageStore';
+import { prepareMessageAcceptance, readMessages, writeMessages } from '../product/messageStore';
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
 
@@ -221,17 +221,22 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setMessages((current) => current.map((message) => message.id === clientId ? { ...message, delivery: state } : message));
     });
     try {
-      const details = await conversation.connect(descriptor.roomId, descriptor.controlCapability, descriptor.remoteAddress, descriptor.remoteIdentityCommitment, async (text) => {
-        const message = displayMessage('contact', text, 'received');
-        await writeMessages(secureVault, descriptor.roomId, [...await readMessages(secureVault, descriptor.roomId), message]);
-        setMessages((previous) => [...previous, message]);
-        deliverNotification({ kind: 'message', conversationId: descriptor.roomId, preview: message.text }, privacyPreferencesRef.current);
-        if (conversation.hasEstablishedSession()) {
-          const contact = await conversation.getContact();
-          if (contact?.verification === 'verified' && contact.changeStatus === 'unchanged') {
-            await installModernCallSupport(conversation).catch(() => setCallError('Call signaling is unavailable for this saved contact.'));
+      const details = await conversation.connect(descriptor.roomId, descriptor.controlCapability, descriptor.remoteAddress, descriptor.remoteIdentityCommitment, async (text, envelopeId) => {
+        const message = { ...displayMessage('contact', text, 'received'), id: envelopeId };
+        const historyUpdate = await prepareMessageAcceptance(secureVault, descriptor.roomId, message);
+        return {
+          updates: [historyUpdate],
+          afterCommit: async () => {
+            setMessages((previous) => previous.some((item) => item.id === envelopeId) ? previous : [...previous, message]);
+            deliverNotification({ kind: 'message', conversationId: descriptor.roomId, preview: message.text }, privacyPreferencesRef.current);
+            if (conversation.hasEstablishedSession()) {
+              const contact = await conversation.getContact();
+              if (contact?.verification === 'verified' && contact.changeStatus === 'unchanged') {
+                await installModernCallSupport(conversation).catch(() => setCallError('Call signaling is unavailable for this saved contact.'));
+              }
+            }
           }
-        }
+        };
       }, async (contact) => {
         setContactIdentity(contact);
         if (contact.contactId && (!descriptor.remoteAddress || descriptor.remoteAddress !== contact.contactId || descriptor.remoteIdentityCommitment !== contact.identityId)) {

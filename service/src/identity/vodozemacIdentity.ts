@@ -125,6 +125,16 @@ export class PersistentVodozemacIdentity implements IdentityManager<MessagingIde
         });
     }
 
+    /** Serialize an account mutation for a caller-owned atomic acceptance transaction. */
+    public async serializeAccountForCommit(): Promise<ArrayBuffer> {
+        if (!this.account) throw new Error('Messaging identity is locked.');
+        return this.storage.withVodozemacPickleKey(async (pickleKey) => {
+            const encryptedPickle = this.account!.saveAccount(pickleKey);
+            const bytes = new TextEncoder().encode(encryptedPickle);
+            return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+        });
+    }
+
     /** Returns authenticated-by-identity public material only. */
     public async getPublicBundle(): Promise<VodozemacPublicBundle> {
         return this.withAccount((account) => createVodozemacPublicBundle(account));
