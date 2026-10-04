@@ -97,7 +97,7 @@ The relay's independent TTL can therefore exceed the remaining sender lifetime. 
 
 For a strictly validated modern envelope, calculate the M1 ID from canonical conversation ID plus exact inner ciphertext before decrypt. M1 is the primary stable key for all paths. Also calculate the current platform's legacy digest exactly as that platform does and check it as a compatibility alias. Do not alter relay mailbox IDs or its server dedupeKey.
 
-On accepted new or legacy messages, atomically write the M1 record and the legacy digest with the ratchet/account state and accepted message. On Web, that requires the crash-consistent acceptance transaction described by the branch-only ADR 0002; current Web code does not provide it. On Android, add M1 to the existing Room transaction and retain the pre-decrypt check plus transaction recheck.
+On accepted new or legacy messages, atomically write the M1 record and the legacy digest with the ratchet/account state and accepted message. On Web, that requires the crash-consistent acceptance transaction described by the branch-only ADR 0002; the policy base lacked it, and `connectivity/m1-live-dedupe` adds it. On Android, add M1 to the existing Room transaction and retain the pre-decrypt check plus transaction recheck.
 
 An incoming envelope that exactly matches an old legacy digest can be recognized before decrypt and may add its now-computable M1 alias without decrypting. A legacy digest alone cannot be converted to M1: old records contain hashes, not the original validated ciphertext. Do not rewrite, discard, or speculate about unpaired legacy records. Keep the exact existing digest compatibility lookup for rollback/old local binaries.
 
@@ -110,6 +110,8 @@ The legacy digest algorithms are not cross-platform identities: Web hashes JavaS
 - For new-contract messages, retain accepted M1 markers through the authenticated expiry boundary. Cleanup is allowed only when trusted local time proves the deadline has passed; if time is ambiguous, retain the marker. Post-expiry copies remain rejectable before decrypt only because the expiry metadata is authenticated and independently checked.
 - Persist a terminal-stale M1 tombstone before acknowledging a relay copy as handled. It may be retired at the same proven expiry boundary, because all later copies are stale by authenticated metadata. If that pre-decrypt authentication or time proof is unavailable, do not clean the marker and do not claim bounded retention.
 - Restore must not roll tombstones back undetectably. Conversation deletion may clear local state only as part of deleting that conversation/session and disabling further use of its old identity; server mailbox rows are not purged by the current soft-delete link operation and expire independently.
+
+For the M1 migration implementation, the interim treatment is append-only with no time/count pruning: **retention pending owner-approved horizon**. If the secure record cannot hold the additional marker state, acceptance fails closed instead of evicting markers. This is a temporary implementation treatment, not a permanent unbounded-retention product decision.
 
 M1 still does not identify a logical user action across re-encryption, different ratchet ciphertext, or different devices. A deliberate user retry after expiry is a new envelope and a new M1 ID.
 
