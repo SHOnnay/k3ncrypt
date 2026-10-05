@@ -7,6 +7,8 @@ import { Message } from '../../types/index';
 import { formatMessageTime } from '../../utils/messageHandling';
 import { useMedia } from '../../context/MediaContext';
 import { useChat } from '../../context/ChatContext';
+import { deriveMessageDeliveryVisibility } from '../../product/securityVisibility';
+import './SecurityVisibility.css';
 import './MessageBubble.css';
 
 interface MessageBubbleProps {
@@ -16,10 +18,11 @@ interface MessageBubbleProps {
 export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
   const media = message.media;
   const { receive } = useMedia();
-  const { retryMessage } = useChat();
+  const { retryMessage, protocolMode } = useChat();
   const [mediaUrl, setMediaUrl] = useState<string>();
   const [mediaError, setMediaError] = useState(false);
   const [isOpening, setIsOpening] = useState(false);
+  const deliveryVisibility = deriveMessageDeliveryVisibility(message.delivery, protocolMode);
   useEffect(() => () => { if (mediaUrl) URL.revokeObjectURL(mediaUrl); }, [mediaUrl]);
   const openMedia = async () => {
     if (!media?.reference || isOpening) return;
@@ -46,9 +49,13 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
       {mediaUrl && media && media.kind !== 'image' && media.kind !== 'voice' && media.kind !== 'video' && <a className="message-media-action" href={mediaUrl} download="protected-file">Save protected file</a>}
       <div className="message-meta">
         <span>{formatMessageTime(message.timestamp)}</span>
-        {message.type === 'sent' && message.delivery === 'pending' && <span>Sending…</span>}
-        {message.type === 'sent' && message.delivery === 'accepted' && <span>Delivered</span>}
-        {message.type === 'sent' && message.delivery === 'failed' && <button type="button" onClick={() => retryMessage(message.id)}>Not sent · Retry</button>}
+        {message.type === 'sent' && message.delivery === 'failed' && <button type="button" title={deliveryVisibility.explanation} onClick={() => retryMessage(message.id)}>Could not confirm · Retry</button>}
+        {message.type === 'sent' && message.delivery !== 'failed' && message.delivery && (
+          <details className="message-delivery-details">
+            <summary aria-label={`Message status: ${deliveryVisibility.label}`}>{deliveryVisibility.label}</summary>
+            <p>{deliveryVisibility.explanation}</p>
+          </details>
+        )}
       </div>
     </div>
   );

@@ -1,0 +1,11 @@
+.conversation-security-details { margin-top: 4px; color: var(--muted); font-size: .7rem; }
+.conversation-security-details summary { width: fit-content; cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px; }
+.conversation-security-details summary:focus-visible, .message-delivery-details summary:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; border-radius: 2px; }
+.conversation-security-details dl { display: grid; gap: 4px; margin: 7px 0; }
+.conversation-security-details dl div { display: flex; flex-wrap: wrap; gap: 4px 8px; }
+.conversation-security-details dt { font-weight: 700; }
+.conversation-security-details dd { margin: 0; }
+.conversation-security-details p { max-width: 560px; margin: 6px 0 0; line-height: 1.45; white-space: normal; }
+.message-delivery-details { position: relative; }
+.message-delivery-details summary { cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px; }
+.message-delivery-details p { max-width: 280px; margin: 6px 0 0; color: var(--muted); font-size: .72rem; line-height: 1.45; text-align: left; }

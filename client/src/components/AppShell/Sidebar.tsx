@@ -22,7 +22,7 @@ const formatSidebarTime = (date?: Date): string => {
 };
 
 export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection, onNavigate, onNewConversation, onOpenConversation, onOpenSettings, settingsOpen = false }) => {
-  const { channelHash, messages, isConnected, conversations, syncStatus, sessionHealth, profileDisplayName } = useChat();
+  const { channelHash, messages, conversations, syncStatus, sessionHealth, profileDisplayName, protocolMode } = useChat();
   const latest = messages.at(-1);
 
   return (
@@ -51,10 +51,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection
         <p className="section-label">Conversations</p>
         {conversations.map((conversation) => (
           <button key={conversation.roomId} className={`conversation-row ${!isWelcomeActive && channelHash === conversation.roomId ? 'active' : ''}`} type="button" onClick={() => onOpenConversation(conversation.roomId)}>
-            <Avatar label={contactDisplayName(conversation.label)} size="medium" status={channelHash === conversation.roomId && isConnected ? 'online' : 'offline'} />
+            <Avatar label={contactDisplayName(conversation.label)} size="medium" />
             <span className="conversation-copy">
               <span className="conversation-name-row"><span className="conversation-name">{contactDisplayName(conversation.label)}</span><time>{channelHash === conversation.roomId ? formatSidebarTime(latest?.timestamp) : ''}</time></span>
-              <span className="conversation-preview">{channelHash === conversation.roomId && sessionHealth !== 'healthy' ? 'Review connection' : channelHash === conversation.roomId && latest?.text ? latest.text : syncStatus === 'blocked' ? 'Review connection' : isConnected ? 'Ready to chat' : 'Saved on this device'}</span>
+              <span className="conversation-preview">{channelHash === conversation.roomId && protocolMode === 'modern' && sessionHealth !== 'healthy' ? 'Review connection' : channelHash === conversation.roomId && latest?.text ? latest.text : syncStatus === 'blocked' ? 'Review connection' : channelHash === conversation.roomId ? 'Relay conversation open' : 'Saved on this device'}</span>
             </span>
           </button>
         ))}

@@ -30,7 +30,7 @@ export const MediaProvider: React.FC<{ children: ReactNode; workflow?: MediaMess
       const result = await workflow.sendFile(context, kind, file, async (serialized) => sendMessage(serialized));
       setTransfer({ state: 'ready', result });
     } catch {
-      setTransfer({ state: 'failed', error: 'The protected media could not be sent. Try again.' });
+      setTransfer({ state: 'failed', error: 'The protected media send could not be confirmed.' });
     }
   }, [workflow, protocolMode, context.conversationId, context.participantId, sendMessage]);
 
@@ -60,7 +60,7 @@ export const MediaProvider: React.FC<{ children: ReactNode; workflow?: MediaMess
       const result = await workflow.sendVoice(context, bytes, async (serialized) => sendMessage(serialized), durationMs);
       setTransfer({ state: 'ready', result });
     } catch {
-      setTransfer({ state: 'failed', error: 'The protected voice message could not be sent. Try again.' });
+      setTransfer({ state: 'failed', error: 'The protected voice message send could not be confirmed.' });
     }
   }, [workflow, protocolMode, context.conversationId, context.participantId, sendMessage]);
 

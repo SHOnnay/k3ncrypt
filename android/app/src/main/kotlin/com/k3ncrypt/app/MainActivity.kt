@@ -383,6 +383,7 @@ private fun IdentityAndConversationScreen(
     }
     var busy by remember { mutableStateOf(false) }
     var showAdvancedVerification by remember { mutableStateOf(false) }
+    var showSecurityVisibilityDetails by remember { mutableStateOf(false) }
     var showAdvancedDeviceDetails by remember { mutableStateOf(false) }
     var showAdvancedNetwork by remember { mutableStateOf(false) }
     var identityChecked by remember { mutableStateOf(false) }
@@ -445,11 +446,7 @@ private fun IdentityAndConversationScreen(
                 messageStatus = "This message was already received."
                 return@launch
             }
-            messageStatus = if (message.senderRoutingId == conversation?.localRoutingId) {
-                "Message delivered."
-            } else {
-                "New message received."
-            }
+            if (message.senderRoutingId != conversation?.localRoutingId) messageStatus = "New message received."
         }
     }
     fun onPeerPending(route: String, fingerprint: String) {
@@ -509,7 +506,7 @@ private fun IdentityAndConversationScreen(
                "add-contact" -> "Share or scan a private invitation"
                "calls" -> "Voice and video calls"
                "settings" -> "Your profile and security settings"
-               else -> if (state == null) "Set up your private device" else if (conversation != null && SavedConversationIndex.isTrusted(conversation!!)) "Verified contact" else "Private communication you control"
+               else -> if (state == null) "Set up your private device" else if (conversation != null && SavedConversationIndex.isTrusted(conversation!!)) "Pinned contact" else "Private communication you control"
            },
            action = if (selectedTab == "chats" || selectedTab == "contacts") ({
                Row {
@@ -696,7 +693,7 @@ private fun IdentityAndConversationScreen(
                                         allStoredMessages.addAll(stored)
                                         if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("conversation-restored")
                                         status = "Conversation connected."
-                                    }.onFailure { status = "Saved trusted conversation could not be restored." }
+                                    }.onFailure { status = "Saved conversation could not be restored." }
                                     busy = false
                                 }
                             },
@@ -711,9 +708,9 @@ private fun IdentityAndConversationScreen(
                                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                     Text(k3ncryptContactName(saved.label), modifier = Modifier.fillMaxWidth(), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
                                     Text(preview?.text?.take(64) ?: "Start a private conversation", maxLines = 1, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
-                                    Text(if (preview != null) formatChatTime(preview.timestamp) else if (saved.connectionState == "connected") "Ready to chat" else "Saved on this device", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
+                                    Text(if (preview != null) formatChatTime(preview.timestamp) else if (saved.connectionState == "connected") "Relay socket connected here" else "Saved on this device", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
                                 }
-                                K3ncryptStatus(if (saved.trustState == "verified") "Verified" else "Verify contact", positive = saved.trustState == "verified")
+                                K3ncryptStatus("Saved contact", positive = false)
                             }
                         }
                     }
@@ -804,9 +801,27 @@ private fun IdentityAndConversationScreen(
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(k3ncryptContactName(savedTrustedConversations.firstOrNull { it.conversationHash == SavedConversationIndex.hash(active.conversationId) }?.label), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
-                        Text(if (SavedConversationIndex.isTrusted(active)) "Verified contact" else "Verify contact to continue", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(if (SavedConversationIndex.isTrusted(active)) "Identity pinned · verification status unavailable" else "Contact identity not confirmed", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    K3ncryptStatus(if (SavedConversationIndex.isTrusted(active)) "Verified" else "Review", positive = SavedConversationIndex.isTrusted(active))
+                    K3ncryptStatus(if (SavedConversationIndex.isTrusted(active)) "Identity pinned" else "Review", positive = false)
+                }
+                if (focusedChat) {
+                    val security = deriveAndroidSecurityVisibility(active.peerRoutingId, active.peerIdentityReference, relayConnected)
+                    OutlinedButton(onClick = { showSecurityVisibilityDetails = !showSecurityVisibilityDetails }) {
+                        Text(if (showSecurityVisibilityDetails) "Hide security details" else "Security details")
+                    }
+                    if (showSecurityVisibilityDetails) K3ncryptCard {
+                        Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                            Text("Security and connection", style = MaterialTheme.typography.titleSmall)
+                            Text("Identity: ${if (security.identityBinding == AndroidIdentityBinding.PINNED) "Pinned for this conversation" else "Not pinned"}")
+                            Text("Verification: ${if (security.verificationRecorded) "Recorded" else "Not separately recorded in this Android build"}")
+                            Text("Identity changes: ${if (security.identityChangeRecorded) "Available" else "Not available in this Android build"}")
+                            Text("Message path: ${security.transport}")
+                            Text("Relay socket: ${if (security.relaySocket == AndroidRelaySocketState.CONNECTED) "Connected" else "Disconnected"}")
+                            Text("Session health: ${if (security.sessionHealthRecorded) "Available" else "Not exposed"}")
+                            Text("A relay socket connection does not show peer presence. A send acknowledgement does not distinguish recipient acceptance from mailbox storage; no authenticated peer receipt is available.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
                 }
             } else {
                 Spacer(Modifier.height(8.dp))
@@ -852,7 +867,7 @@ private fun IdentityAndConversationScreen(
                             Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                                 Text(message.text, color = if (sentByThisDevice) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyMedium)
                                 Text(
-                                    if (sentByThisDevice) "Sent · ${formatChatTime(message.timestamp)}" else formatChatTime(message.timestamp),
+                                    if (sentByThisDevice) "You · ${formatChatTime(message.timestamp)}" else formatChatTime(message.timestamp),
                                     style = MaterialTheme.typography.labelSmall,
                                     color = if (sentByThisDevice) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.78f) else MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -874,10 +889,10 @@ private fun IdentityAndConversationScreen(
                     val text = draft
                     scope.launch {
                         busy = true
-                        messageStatus = "Encrypting and sending…"
+                        messageStatus = deriveAndroidMessageDeliveryVisibility(AndroidSendAttemptState.SENDING).label
                         runCatching { messaging.sendText(text) }
-                            .onSuccess { draft = ""; messageStatus = "Message delivered." }
-                            .onFailure { messageStatus = "Message not sent. It is saved on this device and can be sent when the connection returns." }
+                            .onSuccess { draft = ""; messageStatus = deriveAndroidMessageDeliveryVisibility(AndroidSendAttemptState.RELAY_ACKNOWLEDGED).label }
+                            .onFailure { messageStatus = deriveAndroidMessageDeliveryVisibility(AndroidSendAttemptState.COULD_NOT_CONFIRM).label }
                         busy = false
                     }
                 }) {
@@ -923,7 +938,7 @@ private fun IdentityAndConversationScreen(
         }
        } else if (selectedTab == "contacts") {
         Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            K3ncryptSectionTitle("Your people", "Contacts", "Trusted conversations saved on this device.")
+            K3ncryptSectionTitle("Your people", "Contacts", "Conversations saved on this device.")
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Button(onClick = { selectedTab = "add-contact"; showNewConversation = true }) { Icon(Icons.Filled.Add, contentDescription = null); Spacer(Modifier.size(6.dp)); Text("Add contact") }
                 OutlinedButton(onClick = ::scanInvitation) { Text("Scan QR") }
@@ -949,10 +964,10 @@ private fun IdentityAndConversationScreen(
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                                 Text(saved.label, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
-                                Text(if (saved.connectionState == "connected") "Connected on this device" else "Saved on this device", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                                Text(if (saved.connectionState == "connected") "Relay socket connected on this device" else "Saved on this device", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                                 if (saved.lastActivityTimestamp > 0L) Text("Last message · ${formatChatTime(saved.lastActivityTimestamp)}", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
                             }
-                            K3ncryptStatus("Verified", positive = saved.trustState == "verified")
+                            K3ncryptStatus("Saved contact", positive = false)
                         }
                         if (nicknameEditingHash == saved.conversationHash) {
                             OutlinedTextField(nicknameDraft, { nicknameDraft = it }, label = { Text("Contact nickname") }, supportingText = { Text("For recognition on this device only. A nickname does not verify identity.") }, singleLine = true, modifier = Modifier.fillMaxWidth())
@@ -985,7 +1000,7 @@ private fun IdentityAndConversationScreen(
                                     status = "Conversation ready."
                                     selectedTab = "chats"
                                     showConversationList = false
-                                }.onFailure { status = "Saved trusted conversation could not be restored." }
+                                }.onFailure { status = "Saved conversation could not be restored." }
                                 busy = false
                             }
                         }) { Text("Open conversation") }
@@ -995,7 +1010,7 @@ private fun IdentityAndConversationScreen(
         }
        } else if (selectedTab == "calls") {
         Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            K3ncryptSectionTitle("Stay in touch", "Calls", "Start a voice or video call from a trusted conversation.")
+            K3ncryptSectionTitle("Stay in touch", "Calls", "Start a voice or video call from a saved contact.")
             val active = conversation
             if (active == null) {
                 Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
@@ -1006,7 +1021,7 @@ private fun IdentityAndConversationScreen(
                 Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
                     Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text(k3ncryptContactName(savedTrustedConversations.firstOrNull { it.conversationHash == SavedConversationIndex.hash(active.conversationId) }?.label), style = MaterialTheme.typography.titleMedium)
-                        Text(if (SavedConversationIndex.isTrusted(active) && callState.callId == null) "Verified contact" else "Verify contact before calling.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(if (SavedConversationIndex.isTrusted(active) && callState.callId == null) "Contact saved for this conversation" else "Confirm the contact identity before calling.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             Button(enabled = !busy && callState.callId == null && SavedConversationIndex.isTrusted(active), onClick = { requestCallPermissions("audio") }) { Text("Voice call") }
                             Button(enabled = !busy && callState.callId == null && SavedConversationIndex.isTrusted(active), onClick = { requestCallPermissions("video") }) { Text("Video call") }
@@ -1158,7 +1173,7 @@ private fun IdentityAndConversationScreen(
             K3ncryptCard {
                 Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                     Text("Privacy", style = MaterialTheme.typography.titleMedium)
-                    Text("Your messages are protected for the people in your trusted conversation. Notification preview controls are not available in this beta yet.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                    Text("Messages use end-to-end encryption within each saved conversation. Verification status is not separately recorded in this Android build. Notification preview controls are not available in this beta yet.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                     Text("K3NCRYPT never asks you to share a passphrase or private key.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                 }
             }

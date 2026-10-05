@@ -54,7 +54,7 @@ export const ChatFooter: React.FC = () => {
       inputRef.current?.focus();
     } catch (err) {
       debugError('Message send failed', err);
-      setActionMessage('Message could not be sent. Please try again.');
+      setActionMessage('Could not confirm sending. Check the message status before retrying.');
     } finally {
       setIsSending(false);
     }
@@ -68,7 +68,7 @@ export const ChatFooter: React.FC = () => {
     setLastAttachment({ kind, file });
     setActionMessage('');
     try { await sendFile(kind, file); }
-    catch { setActionMessage('The protected file could not be sent. Please try again.'); }
+    catch { setActionMessage('Could not confirm the protected file send. Check the conversation before retrying.'); }
   };
 
   const retryAttachment = async () => { if (lastAttachment) await sendFile(lastAttachment.kind, lastAttachment.file); };
@@ -92,8 +92,8 @@ export const ChatFooter: React.FC = () => {
         recorderRef.current = null;
         if (discardRecording.current) { discardRecording.current = false; return; }
         const bytes = new Uint8Array(await new Blob(chunks, { type: recorder.mimeType }).arrayBuffer());
-        try { await sendVoice(bytes, Date.now() - recordingStartedAt.current); setActionMessage('Voice message sent securely.'); }
-        catch { setActionMessage('The voice message could not be sent. Please try again.'); }
+        try { await sendVoice(bytes, Date.now() - recordingStartedAt.current); setActionMessage('Voice message added to the conversation.'); }
+        catch { setActionMessage('Could not confirm the voice message send. Check the conversation before retrying.'); }
       };
       recorder.start();
       recorderRef.current = recorder;
@@ -156,7 +156,7 @@ export const ChatFooter: React.FC = () => {
           <SendIcon size={20} />
         </Button>
       </div>
-      {transfer.state !== 'idle' && <div className="media-transfer-status" role="status"><span>{({ uploading: 'Sending protected file…', downloading: 'Opening protected media…', ready: 'Protected media ready.', failed: 'The protected file could not be sent.', idle: '' } as Record<string, string>)[transfer.state]}</span>{transfer.state === 'uploading' && <button type="button" onClick={cancelTransfer}>Cancel</button>}{transfer.state === 'failed' && lastAttachment && <button type="button" onClick={retryAttachment}>Try again</button>}</div>}
+      {transfer.state !== 'idle' && <div className="media-transfer-status" role="status"><span>{({ uploading: 'Sending protected file…', downloading: 'Opening protected media…', ready: 'Protected media ready.', failed: 'Protected file send could not be confirmed.', idle: '' } as Record<string, string>)[transfer.state]}</span>{transfer.state === 'uploading' && <button type="button" onClick={cancelTransfer}>Cancel</button>}{transfer.state === 'failed' && lastAttachment && <button type="button" onClick={retryAttachment}>Try again</button>}</div>}
       {actionMessage && <div className="composer-feedback" role="status">{actionMessage}</div>}
     </footer>
   );

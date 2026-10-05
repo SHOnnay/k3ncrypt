@@ -8,6 +8,8 @@ import { Button } from '../common/Button';
 import { CopyIcon, ShareIcon, PhoneIcon, TrashIcon, VideoIcon } from '../common/icons';
 import { Avatar } from '../common/Avatar';
 import { StatusPill } from '../common/StatusPill';
+import { deriveSecurityVisibility } from '../../product/securityVisibility';
+import './SecurityVisibility.css';
 import './ChatHeader.css';
 import { debugError } from '../../utils/debug';
 
@@ -23,6 +25,11 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({ onStartCall, onStartVide
   const activeConversation = conversations.find((conversation) => conversation.roomId === channelHash)
     ?? (protocolMode === 'legacy' && channelHash ? { roomId: channelHash, label: 'Private conversation' } : undefined);
   const contactLabel = activeConversation?.label ?? 'Conversation';
+  const securityVisibility = deriveSecurityVisibility({
+    contact: protocolMode === 'modern' ? contactIdentity : undefined,
+    sessionHealth: protocolMode === 'modern' ? sessionHealth : undefined,
+    protocol: protocolMode,
+  });
 
   const handleCopyHash = () => {
     navigator.clipboard.writeText(window.location.href);
@@ -58,12 +65,12 @@ const handleDelete = async () => {
 
   return (
     <header className={`chat-header glass ${isConnected ? 'active' : ''}`}>
-      <Avatar label={contactLabel} size="medium" status={isConnected ? 'online' : 'offline'} />
+      <Avatar label={contactLabel} size="medium" />
       <div className="header-info">
         <div className="title-row">
           <h2 className="channel-title">{contactLabel}</h2>
           {activeConversation && <StatusPill tone="neutral">{protocolMode === 'modern' ? 'Encrypted chat' : 'Private chat'}</StatusPill>}
-          {activeConversation && protocolMode === 'modern' && contactIdentity && <StatusPill tone={contactIdentity.verification === 'verified' && contactIdentity.changeStatus === 'unchanged' ? 'positive' : 'quiet'}>{contactIdentity.verification === 'verified' && contactIdentity.changeStatus === 'unchanged' ? 'Verified contact' : 'Verify contact'}</StatusPill>}
+          {activeConversation && <StatusPill tone={securityVisibility.verification === 'verified' ? 'positive' : 'quiet'}>{securityVisibility.badgeLabel}</StatusPill>}
         </div>
         {activeConversation && protocolMode === 'legacy' && (
           <div className="hash-badge-container">
@@ -81,8 +88,19 @@ const handleDelete = async () => {
           </div>
         )}
         <p id="participant-info" className="participant-info">
-          {activeConversation && (sessionHealth === 'unhealthy' ? 'Review the security update for this conversation before continuing.' : sessionHealth === 'renewal-pending' ? 'Waiting for your contact to review the connection update.' : isConnected ? protocolMode === 'modern' ? 'Messages in this conversation are encrypted.' : 'Conversation connected' : 'Waiting for your contact to connect')}
+          {activeConversation && (protocolMode === 'modern' && sessionHealth === 'unhealthy' ? 'Review the security update for this conversation before continuing.' : protocolMode === 'modern' && sessionHealth === 'renewal-pending' ? 'Waiting for your contact to review the connection update.' : protocolMode === 'modern' ? 'Messages in this conversation are encrypted.' : 'Messages use the relay path.')}
         </p>
+        {activeConversation && <details className="conversation-security-details">
+          <summary>Security details</summary>
+          <dl>
+            <div><dt>Verification</dt><dd>{securityVisibility.verification === 'verified' ? 'Verified' : securityVisibility.verification === 'unverified' ? 'Unverified' : 'Not available'}</dd></div>
+            <div><dt>Identity change</dt><dd>{securityVisibility.identityChange === 'unchanged' ? 'No change reported' : securityVisibility.identityChange === 'changed-pending-review' ? 'Changed · review required' : 'Not available'}</dd></div>
+            <div><dt>Message path</dt><dd>{securityVisibility.transport === 'relay' ? 'Relay' : 'Not available'}</dd></div>
+            <div><dt>Relay connection</dt><dd>{securityVisibility.relayAvailability === 'not-exposed' ? 'Not exposed in this view' : 'Unknown'}</dd></div>
+            <div><dt>Session</dt><dd>{securityVisibility.session === 'healthy' ? 'Healthy' : securityVisibility.session === 'unhealthy' ? 'Unavailable' : securityVisibility.session === 'renewal-pending' ? 'Renewal pending' : 'Not available'}</dd></div>
+          </dl>
+          <p>Relay acknowledgements are not signed peer receipts. They do not prove that a message was displayed or read.</p>
+        </details>}
       </div>
       <div className="header-actions">
         {typeof navigator !== 'undefined' && 'share' in navigator && (
