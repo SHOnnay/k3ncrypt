@@ -30,7 +30,8 @@ class ExperimentBoundsTest {
         val state = ExperimentState()
         assertFalse(state.transition(0, Stage.CONNECTED, "forged"))
         val generation = state.begin("advertiser")
-        assertFalse(state.transition(generation, Stage.CONNECTED, "skip acceptance"))
+        assertFalse(state.transition(generation, Stage.CONNECTED, "skip authentication"))
+        assertTrue(state.transition(generation, Stage.AUTHENTICATING, "verify code"))
         assertTrue(state.transition(generation, Stage.WAITING_ACCEPTANCE, "accept"))
         assertTrue(state.transition(generation, Stage.CONNECTING, "connect"))
         assertTrue(state.transition(generation, Stage.CONNECTED, "connected"))
@@ -74,6 +75,46 @@ class ExperimentBoundsTest {
         state.failBeforeStart(SafeReason.UNSUPPORTED_NETWORK_PROFILE, "Wi-Fi unavailable")
         assertEquals(Stage.FAILED, state.value.stage)
         assertEquals(SafeReason.UNSUPPORTED_NETWORK_PROFILE, state.value.reason)
+    }
+
+
+    @Test fun secureConnectedRequiresBothVerifiedPairingAndActiveEncryption() {
+        val state = ExperimentState()
+        val generation = state.begin("discoverer")
+        assertTrue(state.transition(generation, Stage.PEER_FOUND, "found"))
+        assertTrue(state.transition(generation, Stage.AUTHENTICATING, "auth"))
+        assertFalse(state.value.secureConnected)
+        assertTrue(state.transition(generation, Stage.CONNECTING, "waiting for server confirmation"))
+        assertFalse(state.value.secureConnected)
+        assertTrue(state.transition(generation, Stage.CONNECTED, "connected"))
+        assertFalse(state.value.secureConnected)
+        state.updateSecurity(generation, "pairing code verified", "AES-256-GCM active", pairingVerified = true, encryptionActive = true)
+        assertTrue(state.value.secureConnected)
+    }
+
+    @Test fun finishClearsTemporarySnapshotAndStaleClearCannotTouchRestart() {
+        val state = ExperimentState()
+        val old = state.begin("advertiser")
+        state.setPairingCode(old, "ABCD-EFGH-IJKL-MNOP-QRST")
+        state.updateSecurity(old, "pairing code verified", "AES-256-GCM active", pairingVerified = true, encryptionActive = true)
+        state.transition(old, Stage.AUTHENTICATING, "auth")
+        state.transition(old, Stage.WAITING_ACCEPTANCE, "accept")
+        state.transition(old, Stage.CONNECTING, "ready")
+        state.transition(old, Stage.CONNECTED, "connected")
+        state.append(old, "Received encrypted: PING-A")
+        val current = state.invalidateGeneration()
+        state.clearTemporaryData(current)
+        assertTrue(state.value.messages.isEmpty())
+        assertNull(state.value.pairingCode)
+        assertFalse(state.value.pairingVerified)
+        assertFalse(state.value.encryptionActive)
+        val restarted = state.begin("discoverer")
+        state.updateSecurity(restarted, "new temporary session", "new temporary keys", pairingVerified = true, encryptionActive = true)
+        state.clearTemporaryData(current)
+        assertTrue(state.value.pairingVerified)
+        assertTrue(state.value.encryptionActive)
+        assertEquals(restarted, state.value.generation)
+        assertEquals(Stage.DISCOVERING, state.value.stage)
     }
 
     @Test fun duplicateDiscoveryDoesNotCreateAnotherHint() {

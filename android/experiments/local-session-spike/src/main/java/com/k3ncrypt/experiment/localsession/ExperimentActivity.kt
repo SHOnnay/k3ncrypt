@@ -7,10 +7,12 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.os.Bundle
-import android.view.Gravity
+import android.text.InputFilter
+import android.text.InputType
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -20,6 +22,7 @@ class ExperimentActivity : Activity() {
     private lateinit var controller: SpikeController
     private lateinit var status: TextView
     private lateinit var messageList: TextView
+    private lateinit var pairingInput: EditText
     private lateinit var connectionButton: Button
     private lateinit var acceptButton: Button
     private lateinit var stopButton: Button
@@ -40,12 +43,14 @@ class ExperimentActivity : Activity() {
     }
 
     override fun onStop() {
+        pairingInput.text?.clear()
         controller.onBackground()
         unregisterNetworkMonitor()
         super.onStop()
     }
 
     override fun onDestroy() {
+        pairingInput.text?.clear()
         controller.dispose()
         super.onDestroy()
     }
@@ -74,15 +79,32 @@ class ExperimentActivity : Activity() {
         status = TextView(this).apply {
             textSize = 15f
             setTextColor(0xff18212b.toInt())
-            setPadding(0, dp(14), 0, dp(14))
+            setPadding(0, dp(14), 0, dp(10))
         }
         outer.addView(status)
 
+        pairingInput = EditText(this).apply {
+            hint = getString(R.string.pairing_code_hint)
+            contentDescription = getString(R.string.pairing_code_description)
+            isSaveEnabled = false
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+            filters = arrayOf(InputFilter.LengthFilter(28))
+            isSingleLine = true
+            importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
+        }
+        outer.addView(pairingInput, matchWrap())
+
         addButton(outer, R.string.start_advertiser, R.string.start_advertiser_description) { controller.advertiser() }
         addButton(outer, R.string.start_discovery, R.string.start_discovery_description) { controller.discover() }
-        connectionButton = addButton(outer, R.string.connect_endpoint, R.string.connect_endpoint_description) { controller.connectSelected() }
+        connectionButton = addButton(outer, R.string.connect_endpoint, R.string.connect_endpoint_description) {
+            controller.connectSelected(pairingInput.text?.toString().orEmpty())
+            pairingInput.text?.clear()
+        }
         acceptButton = addButton(outer, R.string.accept_peer, R.string.accept_peer_description) { controller.acceptPeer() }
-        stopButton = addButton(outer, R.string.stop_disconnect, R.string.stop_description) { controller.stop() }
+        stopButton = addButton(outer, R.string.stop_disconnect, R.string.stop_description) {
+            pairingInput.text?.clear()
+            controller.stop()
+        }
 
         val testHeading = TextView(this).apply {
             text = getString(R.string.fixed_synthetic_messages)
@@ -132,8 +154,23 @@ class ExperimentActivity : Activity() {
         val wifi = getString(if (profile == null) R.string.wifi_unavailable else R.string.wifi_available)
         val reason = snapshot.reason?.name ?: getString(R.string.none)
         val stateName = snapshot.stage.name.lowercase(java.util.Locale.ROOT).replace('_', ' ')
-        status.text = getString(R.string.network_summary, wifi, snapshot.internet, snapshot.role, stateName, snapshot.event, reason)
+        val codeLine = snapshot.pairingCode?.let { getString(R.string.pairing_code_display, it) } ?: getString(R.string.pairing_code_not_displayed)
+        status.text = getString(
+            R.string.network_summary,
+            wifi,
+            snapshot.internet,
+            snapshot.role,
+            stateName,
+            snapshot.event,
+            reason,
+            codeLine,
+            snapshot.pairingStatus,
+            snapshot.encryptionStatus,
+        )
         messageList.text = snapshot.messages.takeLast(32).joinToString("\n").ifBlank { getString(R.string.empty_messages) }
+        pairingInput.visibility = if (snapshot.role == "discoverer" && snapshot.stage in setOf(Stage.DISCOVERING, Stage.PEER_FOUND, Stage.AUTHENTICATING, Stage.CONNECTING)) View.VISIBLE else View.GONE
+        pairingInput.isEnabled = snapshot.stage == Stage.PEER_FOUND
+        if (snapshot.secureConnected || snapshot.stage in setOf(Stage.DISCONNECTED, Stage.FAILED)) pairingInput.text?.clear()
         connectionButton.isEnabled = snapshot.stage == Stage.PEER_FOUND
         acceptButton.isEnabled = snapshot.canAccept
         stopButton.isEnabled = snapshot.stage !in setOf(Stage.INACTIVE, Stage.DISCONNECTED, Stage.FAILED)
@@ -143,7 +180,7 @@ class ExperimentActivity : Activity() {
     private fun setButtonsEnabled(view: View, snapshot: Snapshot) {
         if (view is Button) {
             view.isEnabled = when (view.tag as? Int) {
-                R.string.send_ping_a, R.string.send_ping_b, R.string.send_hello_local_1, R.string.send_hello_local_2 -> snapshot.connected
+                R.string.send_ping_a, R.string.send_ping_b, R.string.send_hello_local_1, R.string.send_hello_local_2 -> snapshot.secureConnected
                 R.string.start_advertiser, R.string.start_discovery -> snapshot.stage in setOf(Stage.INACTIVE, Stage.DISCONNECTED, Stage.FAILED)
                 R.string.connect_endpoint -> snapshot.stage == Stage.PEER_FOUND
                 R.string.accept_peer -> snapshot.canAccept

@@ -1,18 +1,22 @@
 <resources>
     <string name="app_name">Local Session Experiment</string>
     <string name="experiment_title">EXPERIMENTAL LOCAL SESSION</string>
-    <string name="experiment_warning">UNAUTHENTICATED AND UNENCRYPTED\nUse synthetic test data only. Not normal K3NCRYPT messaging.\nAccepted means only that you allowed this experimental connection.</string>
+    <string name="experiment_warning">EXPERIMENTAL PAIRING-CODE SESSION\nUses a temporary high-entropy pairing code and AES-GCM. This authenticates the temporary shared code, not a K3NCRYPT identity. Not production-reviewed. Use synthetic test data only.</string>
     <string name="start_advertiser">Start Advertiser</string>
-    <string name="start_advertiser_description">Start advertiser</string>
+    <string name="start_advertiser_description">Start advertiser and create a temporary pairing code</string>
     <string name="start_discovery">Start Discovery</string>
     <string name="start_discovery_description">Start discovery</string>
-    <string name="connect_endpoint">Connect to endpoint 1</string>
-    <string name="connect_endpoint_description">Connect to untrusted test endpoint</string>
-    <string name="accept_peer">Accept Peer</string>
-    <string name="accept_peer_description">Accept unverified test connection</string>
+    <string name="connect_endpoint">Connect using pairing code</string>
+    <string name="connect_endpoint_description">Connect to the selected local endpoint using the temporary pairing code</string>
+    <string name="accept_peer">Accept pairing-code peer</string>
+    <string name="accept_peer_description">Accept the temporary peer after the pairing-code proof was verified; this is not K3NCRYPT identity verification</string>
     <string name="stop_disconnect">Stop / Disconnect</string>
     <string name="stop_description">Stop</string>
-    <string name="fixed_synthetic_messages">Fixed synthetic messages</string>
+    <string name="pairing_code_hint">Enter 20-character pairing code</string>
+    <string name="pairing_code_description">Temporary Local Session pairing code</string>
+    <string name="pairing_code_display">Pairing code: %1$s</string>
+    <string name="pairing_code_not_displayed">Pairing code: not shown on this role</string>
+    <string name="fixed_synthetic_messages">Fixed encrypted synthetic messages</string>
     <string name="send_ping_a">Send PING-A</string>
     <string name="send_ping_b">Send PING-B</string>
     <string name="send_hello_local_1">Send HELLO-LOCAL-1</string>
@@ -21,5 +25,5 @@
     <string name="wifi_available">available (selected Wi-Fi)</string>
     <string name="wifi_unavailable">unavailable / unsupported</string>
     <string name="none">none</string>
-    <string name="network_summary">Network: Wi-Fi %1$s\nInternet required: No\nInternet capability: %2$s\n\nRole: %3$s\nState: %4$s\nStatus: %5$s\nReason: %6$s\n\nSession: temporary · memory-only\nAuthentication: NOT PROVIDED\nEncryption: NOT PROVIDED\nTransport: NSD + bounded experimental TCP\nRelay: NOT USED</string>
+    <string name="network_summary">Network: Wi-Fi %1$s\nInternet required: No\nInternet capability: %2$s\n\nRole: %3$s\nState: %4$s\nStatus: %5$s\nReason: %6$s\n\n%7$s\nAuthentication: %8$s\nEncryption: %9$s\nSession: temporary · memory-only\nTransport: NSD + bounded experimental TCP\nRelay: NOT USED\nMain K3NCRYPT identity/trust: NOT USED</string>
 </resources>

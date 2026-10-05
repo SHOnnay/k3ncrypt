@@ -33,7 +33,7 @@ internal data class WiFiProfile(
 
 internal class SpikeController(context: Context, private val render: (Snapshot) -> Unit) {
     companion object {
-        const val SERVICE_TYPE = "_k3nlsx._tcp."
+        const val SERVICE_TYPE = "_k3nlsx2._tcp."
         private const val SESSION_MS = 10 * 60_000L
         private const val ADVERTISE_MS = 120_000L
         private const val DISCOVERY_MS = 60_000L
@@ -63,6 +63,8 @@ internal class SpikeController(context: Context, private val render: (Snapshot) 
     private var profile: WiFiProfile? = null
     private var hostContext = ByteArray(0)
     private var clientContext = ByteArray(0)
+    private var pairingCode: String? = null
+    private var sessionKeys: LocalSessionCrypto.KeySet? = null
     private var serverSocket: ServerSocket? = null
     private var socket: Socket? = null
     private var registration: NsdManager.RegistrationListener? = null
@@ -95,12 +97,20 @@ internal class SpikeController(context: Context, private val render: (Snapshot) 
 
     fun advertiser() = begin("advertiser") { gen, netProfile ->
         val host = ByteArray(16).also(random::nextBytes)
+        val code = LocalSessionCrypto.generatePairingCode(random)
         hostContext = host
+        pairingCode = code
         val address = netProfile.address
         val listener = ServerSocket(0, 1, address)
         if (!isCurrent(gen)) { listener.close(); return@begin }
         serverSocket = listener
-        post(gen) { state.updateInternet(netProfile.internet); state.transition(gen, Stage.ADVERTISING, "Advertising on selected Wi-Fi"); publish() }
+        post(gen) {
+            state.updateInternet(netProfile.internet)
+            state.setPairingCode(gen, LocalSessionCrypto.formatPairingCode(code))
+            state.updateSecurity(gen, "pairing code generated", "not established", pairingVerified = false, encryptionActive = false)
+            state.transition(gen, Stage.ADVERTISING, "Advertising on selected Wi-Fi; share the temporary pairing code in person")
+            publish()
+        }
         submit(gen) { acceptLoop(gen, listener) }
         registerAdvertisement(gen, listener.localPort, host, netProfile)
         advertisingDeadline = schedule(gen, ADVERTISE_MS) {
@@ -113,8 +123,14 @@ internal class SpikeController(context: Context, private val render: (Snapshot) 
 
     fun discover() = begin("discoverer") { gen, netProfile ->
         hostContext = ByteArray(0)
+        pairingCode = null
         hints.clear()
-        post(gen) { state.updateInternet(netProfile.internet); state.transition(gen, Stage.DISCOVERING, "Discovering on local network"); publish() }
+        post(gen) {
+            state.updateInternet(netProfile.internet)
+            state.updateSecurity(gen, "pairing code required", "not established", pairingVerified = false, encryptionActive = false)
+            state.transition(gen, Stage.DISCOVERING, "Discovering on local network")
+            publish()
+        }
         val listener = object : NsdManager.DiscoveryListener {
             override fun onDiscoveryStarted(serviceType: String) = Unit
             override fun onServiceFound(serviceInfo: NsdServiceInfo) {
@@ -168,15 +184,34 @@ internal class SpikeController(context: Context, private val render: (Snapshot) 
         }
     }
 
-    fun connectSelected() {
+    fun connectSelected(rawPairingCode: String) {
         val gen = generation
         if (state.value.stage != Stage.PEER_FOUND) return
-        val entry = hints.values(android.os.SystemClock.elapsedRealtime()).firstOrNull() ?: run { finish(gen, Stage.FAILED, SafeReason.NSD_RESOLVE_FAILED, "Endpoint is no longer available"); return }
+        val normalizedCode = try {
+            LocalSessionCrypto.normalizePairingCode(rawPairingCode)
+        } catch (_: Throwable) {
+            state.annotate(gen, "Enter the 20-character code shown on the advertiser", SafeReason.PAIRING_CODE_REQUIRED)
+            publish()
+            return
+        }
+        val entry = hints.values(android.os.SystemClock.elapsedRealtime()).firstOrNull() ?: run {
+            finish(gen, Stage.FAILED, SafeReason.NSD_RESOLVE_FAILED, "Endpoint is no longer available")
+            return
+        }
         val expectedHost = parseHostContext(entry.serviceName)
-        if (expectedHost.size != 16 || !reserveAttempt()) { finish(gen, Stage.FAILED, SafeReason.RATE_LIMIT, "Connection attempt limit reached"); return }
+        if (expectedHost.size != 16 || !reserveAttempt()) {
+            finish(gen, Stage.FAILED, SafeReason.RATE_LIMIT, "Connection attempt limit reached")
+            return
+        }
+        pairingCode = normalizedCode
         stopDiscovery(gen)
-        post(gen) { state.transition(gen, Stage.CONNECTING, "Connecting to an untrusted endpoint"); publish() }
+        post(gen) {
+            state.transition(gen, Stage.CONNECTING, "Connecting to selected local endpoint")
+            state.updateSecurity(gen, "verifying pairing code", "not established", pairingVerified = false, encryptionActive = false)
+            publish()
+        }
         submit(gen) {
+            var keys: LocalSessionCrypto.KeySet? = null
             try {
                 val service = resolve(entry, gen)
                 val current = readWiFiProfile() ?: error("UNSUPPORTED_NETWORK_PROFILE")
@@ -200,57 +235,110 @@ internal class SpikeController(context: Context, private val render: (Snapshot) 
                 val preambleDeadline = android.os.SystemClock.elapsedRealtime() + 5_000L
                 readPreambleBefore(client, input, preambleDeadline)
                 val localClient = ByteArray(16).also(random::nextBytes)
+                val clientNonce = ByteArray(16).also(random::nextBytes)
                 clientContext = localClient
-                writeFrame(out, LocalSessionProtocol.hello(expectedHost, localClient))
+                writeFrame(out, LocalSessionProtocol.hello(expectedHost, localClient, clientNonce))
+                post(gen) {
+                    state.transition(gen, Stage.AUTHENTICATING, "Authenticating temporary pairing code")
+                    publish()
+                }
+                val challengeFrame = readFrameBefore(client, input, android.os.SystemClock.elapsedRealtime() + 5_000L)
+                val challenge = LocalSessionProtocol.decodeChallenge(challengeFrame, expectedHost, localClient, clientNonce)
+                val transcript = LocalSessionCrypto.transcript(expectedHost, localClient, clientNonce, challenge.serverNonce)
+                val derivedKeys = deriveKeysFromPendingCode(transcript)
+                keys = derivedKeys
+                writeFrame(out, LocalSessionProtocol.auth(LocalSessionCrypto.clientProof(derivedKeys)))
+                post(gen) {
+                    state.annotate(gen, "Pairing proof sent; waiting for advertiser acceptance")
+                    publish()
+                }
                 val accepted = try {
                     readFrameBefore(client, input, android.os.SystemClock.elapsedRealtime() + 30_000L)
                 } catch (error: IOException) {
                     if (error.message?.contains("FRAME_TIMEOUT") == true) throw IOException("ACCEPT_TIMEOUT")
                     throw error
                 }
-                LocalSessionProtocol.validateContext(accepted, LocalSessionProtocol.TYPE_ACCEPT, expectedHost, localClient)
-                synchronized(currentSocketLock) { output = out }
+                val serverProof = LocalSessionProtocol.decodeProof(accepted, LocalSessionProtocol.TYPE_ACCEPT)
+                if (!LocalSessionCrypto.verifyProof(LocalSessionCrypto.serverProof(derivedKeys), serverProof)) {
+                    error("PAIRING_AUTH_FAILED")
+                }
+                writeFrame(out, LocalSessionProtocol.ready(LocalSessionCrypto.clientReadyProof(derivedKeys)))
+                val readyAckFrame = readFrameBefore(client, input, android.os.SystemClock.elapsedRealtime() + 5_000L)
+                val readyAck = LocalSessionProtocol.decodeProof(readyAckFrame, LocalSessionProtocol.TYPE_READY_ACK)
+                if (!LocalSessionCrypto.verifyProof(LocalSessionCrypto.serverReadyProof(derivedKeys), readyAck)) {
+                    error("PAIRING_AUTH_FAILED")
+                }
+                synchronized(currentSocketLock) {
+                    output = out
+                    sessionKeys?.clear()
+                    sessionKeys = derivedKeys
+                    keys = null
+                    pairingCode = null
+                }
                 sendSequence = 1L; receiveSequence = 1L; sentTextCount = 0; receivedTextCount = 0
-                connected(gen, "Transport connected; unauthenticated")
+                post(gen) {
+                    state.setPairingCode(gen, null)
+                    state.updateSecurity(gen, "pairing code verified", "AES-256-GCM active", pairingVerified = true, encryptionActive = true)
+                    publish()
+                }
+                connected(gen, "Pairing code verified; encrypted temporary transport active")
                 readLoop(gen, client, input)
             } catch (error: Throwable) {
-                if (isCurrent(gen)) finish(gen, Stage.FAILED, reason(error, SafeReason.NSD_RESOLVE_FAILED), "Could not connect to selected endpoint")
+                keys?.clear()
+                if (isCurrent(gen)) finish(gen, Stage.FAILED, reason(error, SafeReason.NSD_RESOLVE_FAILED), "Could not establish pairing-code protected local session")
             }
         }
     }
 
     fun acceptPeer() {
         if (!state.value.canAccept) return
+        val gen = generation
         val latch = pendingAcceptance ?: return
         if (!pendingAccepted.compareAndSet(false, true)) return
         stopAdvertisement()
         runCatching { serverSocket?.close() }; serverSocket = null
-        post(generation) { state.transition(generation, Stage.CONNECTING, "User accepted unverified test connection"); publish() }
+        state.transition(gen, Stage.CONNECTING, "User accepted pairing-code verified test connection")
+        publish()
         latch.countDown()
     }
 
     fun sendSynthetic(value: String) {
         val gen = generation
-        if (!state.value.connected || value !in setOf("PING-A", "PING-B", "HELLO-LOCAL-1", "HELLO-LOCAL-2")) return
+        if (!state.value.secureConnected || value !in setOf("PING-A", "PING-B", "HELLO-LOCAL-1", "HELLO-LOCAL-2")) return
         val now = android.os.SystemClock.elapsedRealtime()
+        val frame: ByteArray
         synchronized(currentSocketLock) {
+            val keys = sessionKeys ?: run {
+                finish(gen, Stage.FAILED, SafeReason.CRYPTO_FAILED, "Encrypted session state is unavailable")
+                return
+            }
             if (outboundFrames.size() >= 8) { finish(gen, Stage.FAILED, SafeReason.RESOURCE_LIMIT, "Send queue is full"); return }
-            if (sentTextCount >= 100 || now - lastSendAt < 100L) { finish(gen, Stage.FAILED, SafeReason.RATE_LIMIT, "Message rate limit reached"); return }
-            val frame = LocalSessionProtocol.text(sendSequence, value)
+            if (sentTextCount >= LocalSessionProtocol.maxMessagesPerSession || now - lastSendAt < 100L) { finish(gen, Stage.FAILED, SafeReason.RATE_LIMIT, "Message rate limit reached"); return }
+            val plaintext = LocalSessionProtocol.validateSyntheticText(value)
+            val isClient = state.value.role == "discoverer"
+            val key = if (isClient) keys.clientToServerKey else keys.serverToClientKey
+            val prefix = if (isClient) keys.clientNoncePrefix else keys.serverNoncePrefix
+            val direction: Byte = if (isClient) 1 else 2
+            val ciphertext = try {
+                LocalSessionCrypto.encryptText(key, prefix, keys.transcriptHash, direction, sendSequence, plaintext)
+            } finally {
+                plaintext.fill(0)
+            }
+            frame = LocalSessionProtocol.secureText(sendSequence, ciphertext)
             if (!outboundFrames.offer(frame)) { finish(gen, Stage.FAILED, SafeReason.RESOURCE_LIMIT, "Send queue is full"); return }
             sentTextCount++; sendSequence++; lastSendAt = now
         }
         try {
             sender.execute {
                 try {
-                    val frame = synchronized(currentSocketLock) {
-                        val queued = outboundFrames.take() ?: return@execute
+                    val queued = synchronized(currentSocketLock) {
                         if (!isCurrent(gen)) return@execute
-                        queued
+                        val next = outboundFrames.take() ?: return@execute
+                        next
                     }
                     val out = synchronized(currentSocketLock) { output }
-                    synchronized(sendLock) { if (isCurrent(gen)) writeFrame(out, frame) }
-                    post(gen) { state.append(gen, "Sent: $value (test socket)"); publish() }
+                    synchronized(sendLock) { if (isCurrent(gen)) writeFrame(out, queued) }
+                    post(gen) { state.append(gen, "Sent encrypted: $value"); publish() }
                 } catch (_: Throwable) {
                     if (isCurrent(gen)) finish(gen, Stage.FAILED, SafeReason.PEER_DISCONNECTED, "Connection ended")
                 }
@@ -307,7 +395,7 @@ internal class SpikeController(context: Context, private val render: (Snapshot) 
     }
 
     private fun registerAdvertisement(gen: Int, port: Int, host: ByteArray, selected: WiFiProfile) {
-        val name = "lsx-${host.joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }}"
+        val name = "lsx2-${host.joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }}"
         val info = NsdServiceInfo().apply {
             serviceName = name
             serviceType = SERVICE_TYPE
@@ -335,6 +423,7 @@ internal class SpikeController(context: Context, private val render: (Snapshot) 
     private fun acceptLoop(gen: Int, listener: ServerSocket) {
         while (isCurrent(gen) && !listener.isClosed) {
             var candidate: Socket? = null
+            var keys: LocalSessionCrypto.KeySet? = null
             try {
                 val accepted = listener.accept()
                 candidate = accepted
@@ -352,33 +441,67 @@ internal class SpikeController(context: Context, private val render: (Snapshot) 
                 LocalSessionProtocol.writePreamble(out)
                 val handshakeDeadline = android.os.SystemClock.elapsedRealtime() + 5_000L
                 readPreambleBefore(accepted, input, handshakeDeadline)
-                val hello = readFrameBefore(accepted, input, handshakeDeadline)
-                if (hello.body.size != 32) error("CONTEXT_MISMATCH")
-                val clientId = hello.body.copyOfRange(16, 32)
+                val helloFrame = readFrameBefore(accepted, input, handshakeDeadline)
                 val host = hostContext
-                LocalSessionProtocol.validateContext(hello, LocalSessionProtocol.TYPE_HELLO, host, clientId)
-                if (clientId.size != 16) error("CONTEXT_MISMATCH")
-                clientContext = clientId
+                val hello = LocalSessionProtocol.decodeHello(helloFrame, host)
+                clientContext = hello.clientContext
+                val serverNonce = ByteArray(16).also(random::nextBytes)
+                writeFrame(out, LocalSessionProtocol.challenge(host, hello.clientContext, hello.clientNonce, serverNonce))
+                val transcript = LocalSessionCrypto.transcript(host, hello.clientContext, hello.clientNonce, serverNonce)
+                val derivedKeys = deriveKeysFromPendingCode(transcript)
+                keys = derivedKeys
+                post(gen) {
+                    state.transition(gen, Stage.AUTHENTICATING, "Verifying temporary pairing code proof")
+                    publish()
+                }
+                val authFrame = readFrameBefore(accepted, input, android.os.SystemClock.elapsedRealtime() + 5_000L)
+                val clientProof = LocalSessionProtocol.decodeProof(authFrame, LocalSessionProtocol.TYPE_AUTH)
+                if (!LocalSessionCrypto.verifyProof(LocalSessionCrypto.clientProof(derivedKeys), clientProof)) {
+                    error("PAIRING_AUTH_FAILED")
+                }
                 val latch = CountDownLatch(1)
                 pendingAccepted = AtomicBoolean(false)
                 pendingAcceptance = latch
-                post(gen) { state.transition(gen, Stage.WAITING_ACCEPTANCE, "Untrusted endpoint; explicit acceptance required"); publish() }
+                post(gen) {
+                    state.updateSecurity(gen, "pairing code verified", "pending explicit acceptance", pairingVerified = true, encryptionActive = false)
+                    state.transition(gen, Stage.WAITING_ACCEPTANCE, "Pairing code verified; explicit acceptance required")
+                    publish()
+                }
                 accepted.soTimeout = 30_000
                 if (!latch.await(30, TimeUnit.SECONDS) || !pendingAccepted.get() || !isCurrent(gen)) error("ACCEPT_TIMEOUT")
-                writeFrame(out, LocalSessionProtocol.accept(host, clientId))
-                synchronized(currentSocketLock) { output = out; pendingAcceptance = null }
+                writeFrame(out, LocalSessionProtocol.accept(LocalSessionCrypto.serverProof(derivedKeys)))
+                val readyFrame = readFrameBefore(accepted, input, android.os.SystemClock.elapsedRealtime() + 5_000L)
+                val readyProof = LocalSessionProtocol.decodeProof(readyFrame, LocalSessionProtocol.TYPE_READY)
+                if (!LocalSessionCrypto.verifyProof(LocalSessionCrypto.clientReadyProof(derivedKeys), readyProof)) {
+                    error("PAIRING_AUTH_FAILED")
+                }
+                writeFrame(out, LocalSessionProtocol.readyAck(LocalSessionCrypto.serverReadyProof(derivedKeys)))
+                synchronized(currentSocketLock) {
+                    output = out
+                    pendingAcceptance = null
+                    sessionKeys?.clear()
+                    sessionKeys = derivedKeys
+                    keys = null
+                    pairingCode = null
+                }
                 sendSequence = 1L; receiveSequence = 1L; sentTextCount = 0; receivedTextCount = 0
-                connected(gen, "User accepted; unauthenticated transport")
+                post(gen) {
+                    state.setPairingCode(gen, null)
+                    state.updateSecurity(gen, "pairing code verified", "AES-256-GCM active", pairingVerified = true, encryptionActive = true)
+                    publish()
+                }
+                connected(gen, "User accepted pairing-code verified temporary session; encrypted transport active")
                 readLoop(gen, accepted, input)
                 return
             } catch (error: Throwable) {
+                keys?.clear()
                 runCatching { candidate?.close() }
                 synchronized(currentSocketLock) { if (socket === candidate) socket = null }
                 if (isCurrent(gen)) {
                     val stage = state.value.stage
                     pendingAcceptance?.countDown(); pendingAcceptance = null; pendingAccepted.set(false)
-                    if (stage == Stage.WAITING_ACCEPTANCE || stage == Stage.CONNECTING || stage == Stage.CONNECTED) {
-                        finish(gen, Stage.FAILED, reason(error, SafeReason.FRAME_INVALID), "Untrusted connection closed")
+                    if (stage in setOf(Stage.AUTHENTICATING, Stage.WAITING_ACCEPTANCE, Stage.CONNECTING, Stage.CONNECTED)) {
+                        finish(gen, Stage.FAILED, reason(error, SafeReason.FRAME_INVALID), "Pairing-code local-session setup failed")
                         return
                     }
                     if (stage == Stage.ADVERTISING && candidate != null) continue
@@ -404,18 +527,33 @@ internal class SpikeController(context: Context, private val render: (Snapshot) 
             val payload = ByteArray(size); java.io.DataInputStream(input).readFully(payload)
             val frame = LocalSessionProtocol.Frame(payload[0], payload.copyOfRange(1, payload.size))
             when (frame.type) {
-                LocalSessionProtocol.TYPE_TEXT -> {
-                    val value = LocalSessionProtocol.decodeText(frame, receiveSequence)
+                LocalSessionProtocol.TYPE_SECURE_TEXT -> {
+                    val secure = LocalSessionProtocol.decodeSecureText(frame)
+                    try { LocalSessionProtocol.requireExpectedSequence(secure.sequence, receiveSequence) }
+                    catch (_: IllegalArgumentException) { throw IOException("UNEXPECTED_MESSAGE") }
+                    val keys = synchronized(currentSocketLock) { sessionKeys } ?: throw IOException("CRYPTO_FAILED")
+                    val isClient = state.value.role == "discoverer"
+                    val key = if (isClient) keys.serverToClientKey else keys.clientToServerKey
+                    val prefix = if (isClient) keys.serverNoncePrefix else keys.clientNoncePrefix
+                    val direction: Byte = if (isClient) 2 else 1
+                    val plaintext = try {
+                        LocalSessionCrypto.decryptText(key, prefix, keys.transcriptHash, direction, receiveSequence, secure.ciphertext)
+                    } catch (_: javax.crypto.AEADBadTagException) {
+                        throw IOException("CRYPTO_FAILED")
+                    } catch (_: java.security.GeneralSecurityException) {
+                        throw IOException("CRYPTO_FAILED")
+                    }
+                    val value = try { LocalSessionProtocol.decodeSyntheticText(plaintext) } finally { plaintext.fill(0) }
                     val now = android.os.SystemClock.elapsedRealtime()
                     if (now - lastActivity > IDLE_TIMEOUT_MS || now - lastReceiveAt < 100L) throw IOException("RATE_LIMIT")
-                    if (receivedTextCount >= 100) throw IOException("RATE_LIMIT")
+                    if (receivedTextCount >= LocalSessionProtocol.maxMessagesPerSession) throw IOException("RATE_LIMIT")
                     receiveSequence++; receivedTextCount++; lastReceiveAt = now; lastActivity = now
                     synchronized(currentSocketLock) {
                         if (inboundQueued >= 16) throw IOException("RESOURCE_LIMIT")
                         inboundQueued++
                     }
                     main.post {
-                        try { if (isCurrent(gen)) { state.append(gen, "Received: $value (test memory)"); publish() } }
+                        try { if (isCurrent(gen)) { state.append(gen, "Received encrypted: $value"); publish() } }
                         finally { synchronized(currentSocketLock) { inboundQueued = (inboundQueued - 1).coerceAtLeast(0) } }
                     }
                 }
@@ -483,25 +621,49 @@ internal class SpikeController(context: Context, private val render: (Snapshot) 
 
     private fun readWiFiProfile(): WiFiProfile? {
         return try {
-            val network = connectivity.activeNetwork ?: return null
-            val caps = connectivity.getNetworkCapabilities(network) ?: return null
-            if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return null
-            // Older NSD APIs browse without a Network scope. Require mobile data/VPN
-            // off so legacy discovery cannot silently span another active transport.
-            if (connectivity.allNetworks.any { other ->
-                    other != network && connectivity.getNetworkCapabilities(other)?.let { otherCaps ->
-                        otherCaps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) || otherCaps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
-                    } == true
+            val active = connectivity.activeNetwork
+            val all = connectivity.allNetworks.toList()
+            if (all.any { network ->
+                    connectivity.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
                 }) return null
-            val links = connectivity.getLinkProperties(network)?.linkAddresses.orEmpty()
-            val ipv4 = links.firstOrNull { (it.address as? Inet4Address)?.let(::isPrivateV4) == true } ?: return null
-            val address = ipv4.address as Inet4Address
-            val internet = when {
-                !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) -> "unavailable"
-                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) -> "available (Android validated)"
-                else -> "unknown"
+
+            val candidates = all.mapNotNull { network ->
+                val caps = connectivity.getNetworkCapabilities(network) ?: return@mapNotNull null
+                if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return@mapNotNull null
+                val links = connectivity.getLinkProperties(network)?.linkAddresses.orEmpty()
+                val ipv4 = links.firstOrNull { (it.address as? Inet4Address)?.let(::isPrivateV4) == true } ?: return@mapNotNull null
+                val address = ipv4.address as Inet4Address
+                WiFiProfile(
+                    network = network,
+                    address = address,
+                    linkAddress = ipv4,
+                    internet = when {
+                        !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) -> "unavailable"
+                        caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) -> "available (Android validated)"
+                        else -> "unknown"
+                    },
+                )
             }
-            WiFiProfile(network, address, ipv4, internet)
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                // API 33+ lets NSD and sockets bind to the selected Wi-Fi Network.
+                // Prefer active Wi-Fi, but if cellular is the default network (common
+                // when the router has no Internet), accept exactly one usable Wi-Fi
+                // candidate rather than misclassifying the device as unsupported.
+                candidates.firstOrNull { it.network == active } ?: candidates.singleOrNull()
+            } else {
+                // API 26-32 NSD cannot be scoped to a Network. Require the default
+                // network itself to be Wi-Fi and reject simultaneous cellular or
+                // multiple Wi-Fi networks so the unscoped browse cannot silently
+                // cross an unintended transport.
+                if (all.count { network ->
+                        connectivity.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+                    } != 1) return null
+                if (all.any { network ->
+                        network != active && connectivity.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true
+                    }) return null
+                candidates.firstOrNull { it.network == active }
+            }
         } catch (_: SecurityException) { null } catch (_: Throwable) { null }
     }
 
@@ -530,6 +692,16 @@ internal class SpikeController(context: Context, private val render: (Snapshot) 
         val now = android.os.SystemClock.elapsedRealtime()
         while (attempts.isNotEmpty() && now - attempts.first() >= 60_000L) attempts.removeFirst()
         if (attempts.size >= 6) false else { attempts.addLast(now); true }
+    }
+
+
+    private fun deriveKeysFromPendingCode(transcript: ByteArray): LocalSessionCrypto.KeySet {
+        val code = synchronized(currentSocketLock) {
+            val pending = pairingCode ?: error("PAIRING_AUTH_FAILED")
+            pairingCode = null
+            pending
+        }
+        return LocalSessionCrypto.derive(code, transcript)
     }
 
     private fun writeFrame(out: BufferedOutputStream, frame: ByteArray) {
@@ -574,6 +746,7 @@ internal class SpikeController(context: Context, private val render: (Snapshot) 
         generation = state.invalidateGeneration()
         closeResources(gen)
         clearMemory()
+        state.clearTemporaryData(generation)
         publish()
     }
 
@@ -610,6 +783,8 @@ internal class SpikeController(context: Context, private val render: (Snapshot) 
 
     private fun clearMemory() {
         hostContext.fill(0); clientContext.fill(0); hostContext = ByteArray(0); clientContext = ByteArray(0)
+        sessionKeys?.clear(); sessionKeys = null
+        pairingCode = null
         hints.clear(); pendingAccepted.set(false); sendSequence = 1; receiveSequence = 1; sentTextCount = 0; receivedTextCount = 0
         lastSendAt = 0; lastReceiveAt = 0; profile = null
         discoveryWindowStart = 0; discoveryEvents = 0; discoveryOverrunStart = 0
@@ -629,6 +804,8 @@ internal class SpikeController(context: Context, private val render: (Snapshot) 
         error.message?.contains("NETWORK_CHANGED") == true -> SafeReason.NETWORK_CHANGED
         error.message?.contains("UNSUPPORTED_NETWORK_PROFILE") == true -> SafeReason.UNSUPPORTED_NETWORK_PROFILE
         error.message?.contains("ACCEPT_TIMEOUT") == true -> SafeReason.ACCEPT_TIMEOUT
+        error.message?.contains("PAIRING_CODE") == true || error.message?.contains("PAIRING_AUTH_FAILED") == true -> SafeReason.PAIRING_AUTH_FAILED
+        error.message?.contains("CRYPTO_FAILED") == true || error is javax.crypto.AEADBadTagException -> SafeReason.CRYPTO_FAILED
         error.message?.contains("RESOLVE_TIMEOUT") == true -> SafeReason.RESOLVE_TIMEOUT
         error.message?.contains("IDLE_TIMEOUT") == true -> SafeReason.FRAME_TIMEOUT
         error.message?.contains("CONNECT_TIMEOUT") == true || error is java.net.SocketTimeoutException -> SafeReason.CONNECT_TIMEOUT
@@ -637,7 +814,7 @@ internal class SpikeController(context: Context, private val render: (Snapshot) 
     }
 
     private fun parseHostContext(name: String): ByteArray {
-        val match = Regex("^lsx-([0-9a-f]{32})(?: \\(\\d+\\))?$", RegexOption.IGNORE_CASE).matchEntire(name) ?: return ByteArray(0)
+        val match = Regex("^lsx2-([0-9a-f]{32})(?: \\(\\d+\\))?$", RegexOption.IGNORE_CASE).matchEntire(name) ?: return ByteArray(0)
         return match.groupValues[1].chunked(2).map { it.toInt(16).toByte() }.toByteArray()
     }
 

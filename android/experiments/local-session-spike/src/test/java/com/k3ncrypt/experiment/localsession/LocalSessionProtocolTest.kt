@@ -10,39 +10,84 @@ import org.junit.Test
 
 class LocalSessionProtocolTest {
     @Test fun magicAndVersionAreExplicit() {
-        assertArrayEquals(byteArrayOf(0x4b, 0x33, 0x4e, 0x4c, 0x53, 0x58, 0x31, 0x0a), LocalSessionProtocol.preamble)
+        assertArrayEquals(byteArrayOf(0x4b, 0x33, 0x4e, 0x4c, 0x53, 0x58, 0x32, 0x0a), LocalSessionProtocol.preamble)
         LocalSessionProtocol.readPreamble(ByteArrayInputStream(LocalSessionProtocol.preamble))
         assertThrows(IllegalArgumentException::class.java) {
-            LocalSessionProtocol.readPreamble(ByteArrayInputStream("K3NLSX2\n".toByteArray()))
+            LocalSessionProtocol.readPreamble(ByteArrayInputStream("K3NLSX1\n".toByteArray()))
         }
     }
 
-    @Test fun validSyntheticTextRoundTripsThroughBoundedFrame() {
-        val encoded = LocalSessionProtocol.text(1, "PING-A")
-        val frame = LocalSessionProtocol.readFrame(ByteArrayInputStream(encoded))
-        assertEquals(LocalSessionProtocol.TYPE_TEXT, frame.type)
-        assertEquals("PING-A", LocalSessionProtocol.decodeText(frame, 1))
+    @Test fun helloAndChallengeBindExactContexts() {
+        val host = ByteArray(16) { it.toByte() }
+        val client = ByteArray(16) { (it + 16).toByte() }
+        val cn = ByteArray(16) { (it + 32).toByte() }
+        val sn = ByteArray(16) { (it + 48).toByte() }
+        val hello = LocalSessionProtocol.decodeHello(
+            LocalSessionProtocol.readFrame(ByteArrayInputStream(LocalSessionProtocol.hello(host, client, cn))), host
+        )
+        assertArrayEquals(client, hello.clientContext)
+        assertArrayEquals(cn, hello.clientNonce)
+        val challenge = LocalSessionProtocol.decodeChallenge(
+            LocalSessionProtocol.readFrame(ByteArrayInputStream(LocalSessionProtocol.challenge(host, client, cn, sn))), host, client, cn
+        )
+        assertArrayEquals(sn, challenge.serverNonce)
+        assertThrows(IllegalArgumentException::class.java) {
+            LocalSessionProtocol.decodeChallenge(
+                LocalSessionProtocol.readFrame(ByteArrayInputStream(LocalSessionProtocol.challenge(host, client, cn, sn))),
+                ByteArray(16), client, cn
+            )
+        }
     }
 
-    @Test fun maximumAllowedTextIs256Bytes() {
+    @Test fun authAcceptAndReadyProofsAreExactly32Bytes() {
+        val proof = ByteArray(32) { it.toByte() }
+        assertArrayEquals(proof, LocalSessionProtocol.decodeProof(
+            LocalSessionProtocol.readFrame(ByteArrayInputStream(LocalSessionProtocol.auth(proof))), LocalSessionProtocol.TYPE_AUTH
+        ))
+        assertArrayEquals(proof, LocalSessionProtocol.decodeProof(
+            LocalSessionProtocol.readFrame(ByteArrayInputStream(LocalSessionProtocol.accept(proof))), LocalSessionProtocol.TYPE_ACCEPT
+        ))
+        assertArrayEquals(proof, LocalSessionProtocol.decodeProof(
+            LocalSessionProtocol.readFrame(ByteArrayInputStream(LocalSessionProtocol.ready(proof))), LocalSessionProtocol.TYPE_READY
+        ))
+        assertArrayEquals(proof, LocalSessionProtocol.decodeProof(
+            LocalSessionProtocol.readFrame(ByteArrayInputStream(LocalSessionProtocol.readyAck(proof))), LocalSessionProtocol.TYPE_READY_ACK
+        ))
+        assertThrows(IllegalArgumentException::class.java) {
+            LocalSessionProtocol.decodeProof(
+                LocalSessionProtocol.readFrame(ByteArrayInputStream(LocalSessionProtocol.ready(proof))),
+                LocalSessionProtocol.TYPE_READY_ACK,
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) { LocalSessionProtocol.auth(ByteArray(31)) }
+    }
+
+    @Test fun secureTextFrameRoundTripsSequenceAndCiphertext() {
+        val ciphertext = ByteArray(32) { (it + 1).toByte() }
+        val parsed = LocalSessionProtocol.decodeSecureText(
+            LocalSessionProtocol.readFrame(ByteArrayInputStream(LocalSessionProtocol.secureText(7, ciphertext)))
+        )
+        assertEquals(7L, parsed.sequence)
+        assertArrayEquals(ciphertext, parsed.ciphertext)
+    }
+
+    @Test fun syntheticTextIsBoundedPrintableAscii() {
         val value = "x".repeat(256)
-        val frame = LocalSessionProtocol.readFrame(ByteArrayInputStream(LocalSessionProtocol.text(9, value)))
-        assertEquals(value, LocalSessionProtocol.decodeText(frame, 9))
-    }
-
-    @Test fun textOver256BytesIsRejected() {
-        assertThrows(IllegalArgumentException::class.java) { LocalSessionProtocol.text(1, "x".repeat(257)) }
-        assertThrows(IllegalArgumentException::class.java) { LocalSessionProtocol.text(1, "π") }
+        assertEquals(value, LocalSessionProtocol.decodeSyntheticText(LocalSessionProtocol.validateSyntheticText(value)))
+        assertThrows(IllegalArgumentException::class.java) { LocalSessionProtocol.validateSyntheticText("x".repeat(257)) }
+        assertThrows(IllegalArgumentException::class.java) { LocalSessionProtocol.validateSyntheticText("π") }
     }
 
     @Test fun completeFrameAt512BytesIsAccepted() {
-        val encoded = LocalSessionProtocol.encodeFrame(LocalSessionProtocol.TYPE_TEXT, ByteArray(LocalSessionProtocol.maxPayload - 1))
+        val encoded = LocalSessionProtocol.encodeFrame(LocalSessionProtocol.TYPE_SECURE_TEXT, ByteArray(LocalSessionProtocol.maxPayload - 1))
         assertEquals(512, encoded.size)
         assertEquals(LocalSessionProtocol.maxPayload, LocalSessionProtocol.readFrame(ByteArrayInputStream(encoded)).body.size + 1)
     }
 
     @Test fun frameOver512BytesIsRejectedBeforeEncoding() {
-        assertThrows(IllegalArgumentException::class.java) { LocalSessionProtocol.encodeFrame(LocalSessionProtocol.TYPE_TEXT, ByteArray(LocalSessionProtocol.maxPayload)) }
+        assertThrows(IllegalArgumentException::class.java) {
+            LocalSessionProtocol.encodeFrame(LocalSessionProtocol.TYPE_SECURE_TEXT, ByteArray(LocalSessionProtocol.maxPayload))
+        }
     }
 
     @Test fun negativeAndOversizedLengthsAreRejectedBeforeAllocation() {
@@ -58,23 +103,37 @@ class LocalSessionProtocolTest {
         assertThrows(EOFException::class.java) { LocalSessionProtocol.readFrame(ByteArrayInputStream(headerOnly)) }
     }
 
-    @Test fun unknownFrameTypeCannotDecodeAsText() {
-        val frame = LocalSessionProtocol.Frame(99, byteArrayOf(0, 0, 0, 1, 65))
-        assertThrows(IllegalArgumentException::class.java) { LocalSessionProtocol.decodeText(frame, 1) }
+    @Test fun unknownFrameTypeCannotDecodeAsSecureText() {
+        val frame = LocalSessionProtocol.Frame(99, ByteArray(24))
+        assertThrows(IllegalArgumentException::class.java) { LocalSessionProtocol.decodeSecureText(frame) }
     }
 
-    @Test fun sequenceMustBeExactlyExpected() {
-        val frame = LocalSessionProtocol.readFrame(ByteArrayInputStream(LocalSessionProtocol.text(2, "PING-A")))
-        assertThrows(IllegalArgumentException::class.java) { LocalSessionProtocol.decodeText(frame, 1) }
-    }
-
-    @Test fun contextAndControlFramesAreStrict() {
-        val host = ByteArray(16) { it.toByte() }
-        val client = ByteArray(16) { (it + 16).toByte() }
-        LocalSessionProtocol.validateContext(LocalSessionProtocol.readFrame(ByteArrayInputStream(LocalSessionProtocol.hello(host, client))), LocalSessionProtocol.TYPE_HELLO, host, client)
-        assertThrows(IllegalArgumentException::class.java) {
-            LocalSessionProtocol.validateContext(LocalSessionProtocol.Frame(LocalSessionProtocol.TYPE_ACCEPT, ByteArray(31)), LocalSessionProtocol.TYPE_ACCEPT, host, client)
+    @Test fun malformedSecureTextLengthsAreRejected() {
+        for (body in listOf(ByteArray(0), ByteArray(23), ByteArray(8 + 256 + 16 + 1))) {
+            assertThrows(IllegalArgumentException::class.java) {
+                LocalSessionProtocol.decodeSecureText(LocalSessionProtocol.Frame(LocalSessionProtocol.TYPE_SECURE_TEXT, body))
+            }
         }
+    }
+
+    @Test fun secureSequenceMustBePositive() {
+        assertThrows(IllegalArgumentException::class.java) { LocalSessionProtocol.secureText(0, ByteArray(16)) }
+        val body = ByteBuffer.allocate(24).order(ByteOrder.BIG_ENDIAN).putLong(0).put(ByteArray(16)).array()
+        assertThrows(IllegalArgumentException::class.java) {
+            LocalSessionProtocol.decodeSecureText(LocalSessionProtocol.Frame(LocalSessionProtocol.TYPE_SECURE_TEXT, body))
+        }
+    }
+
+    @Test fun secureSequenceMustBeExpectedAndWithinSessionLimit() {
+        LocalSessionProtocol.requireExpectedSequence(1, 1)
+        LocalSessionProtocol.requireExpectedSequence(100, 100)
+        assertThrows(IllegalArgumentException::class.java) { LocalSessionProtocol.requireExpectedSequence(1, 2) }
+        assertThrows(IllegalArgumentException::class.java) { LocalSessionProtocol.requireExpectedSequence(2, 1) }
+        assertThrows(IllegalArgumentException::class.java) { LocalSessionProtocol.requireExpectedSequence(101, 101) }
+        assertThrows(IllegalArgumentException::class.java) { LocalSessionProtocol.secureText(101, ByteArray(16)) }
+    }
+
+    @Test fun closeFrameIsStrict() {
         LocalSessionProtocol.validateClose(LocalSessionProtocol.readFrame(ByteArrayInputStream(LocalSessionProtocol.closeFrame())))
         assertThrows(IllegalArgumentException::class.java) {
             LocalSessionProtocol.validateClose(LocalSessionProtocol.Frame(LocalSessionProtocol.TYPE_CLOSE, byteArrayOf(1)))

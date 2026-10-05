@@ -10,8 +10,8 @@ android {
         applicationId = "com.k3ncrypt.experiment.localsession"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1-experiment"
+        versionCode = 2
+        versionName = "0.2-authenticated-experiment"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     compileOptions {
