@@ -2,7 +2,7 @@
 
 **Recorded:** 2026-10-05
 
-**Purpose:** isolated, unauthenticated, unencrypted, synthetic-text transport feasibility instrument. This report does not claim physical LAN feasibility.
+**Purpose:** isolated, unauthenticated, unencrypted, synthetic-text transport feasibility instrument. The bounded transport milestone was subsequently demonstrated on two physical Android phones; this report still makes no authentication, confidentiality, or production-security claim.
 
 ## Requested report
 
@@ -26,25 +26,25 @@
 18. **Unit tests:** PASS, 20 tests total (8 bounds/state, 12 protocol), zero failures. Covers requested framing, malformed lengths/frames/types, max text/frame, queue bounds, state transitions, teardown, generation fencing including restart, expiration, recreation, and duplicate hint handling.
 19. **Build/lint:** PASS. Experiment `testDebugUnitTest`, `assembleDebug`, and `lintDebug` all succeeded; lint reports “No issues found.” `:app:assembleDebug` also succeeded with the local NDK path configured.
 20. **Manifest/dependency inspection:** PASS. Packaged APK reports app ID above, min SDK 26, target/compile SDK 35, launcher `ExperimentActivity`, and only the two listed permissions. Packaged backup and data-extraction XML exclude app data. Normal `./gradlew projects` omits the experiment; debug runtime graph has no production or third-party application dependency. APK SHA-256: `d3cceb1ffb24e5ba5b8e545959b627f73d04eb28110b6ce84f9d49bf762bb5f4`.
-21. **Physical devices used:** none. `adb devices -l` found only `emulator-5554`; therefore no two-physical-device attempt could proceed.
-22. **Android versions:** emulator only: `sdk_gphone64_arm64`, Android 15 / API 35, `ro.boot.qemu=1`. Physical-device model/version: unavailable.
-23. **Router/network setup:** none. The emulator UI reported Wi-Fi unavailable/unsupported. No shared Wi-Fi router was used.
-24. **Proof Internet was unavailable:** none. Emulator Internet capability was unknown and no router uplink was disabled. Offline behavior is unverified.
-25. **Physical NSD discovery:** BLOCKED because no physical devices or usable Wi-Fi profile were available. No discovery success is claimed.
-26. **Physical A→B text:** BLOCKED; no two-device session.
-27. **Physical B→A text:** BLOCKED; no two-device session.
-28. **Physical teardown:** BLOCKED. Teardown behavior is covered by state tests and implemented socket/NSD cleanup, but no live peer session was available.
-29. **Physical restart:** BLOCKED. Unit recreation and emulator cold-launch INACTIVE were observed; two-device restart behavior was not tested.
-30. **Reverse roles:** BLOCKED; no physical devices/session.
-31. **Negative cases:** parser tests PASS for malformed/truncated/oversize/unknown frames and invalid sequence/context. Physical discovery stop, advertiser disappearance, live malformed traffic, disconnect, rapid controller start/stop, concurrent peer and timeout cases are BLOCKED/not run.
-32. **Crashes/ANRs/leaks:** one early emulator startup crash exposed incorrect executor keep-alive initialization; fixed before final build. Final APK install/launch remained alive (PID observed), rendered the expected UI, and fresh post-launch AndroidRuntime log had no crash. No ANR or leak measurement was performed.
-33. **Render/relay contact:** no Render or relay dependency/call exists in the experiment source graph; no peer connection or Internet-restoration test was attempted, so no relay traffic was observed.
-34. **Normal K3NCRYPT state:** untouched. Our only emulator install/launch action was for the distinct experiment package. No production app package was installed, launched, or modified by this run; production app build was compile/package only.
-35. **Unexpected platform findings:** emulator networking cannot supply the selected private Wi-Fi profile needed by this experiment. Legacy NSD APIs compile with deprecation warnings; API 33+ scoped overloads are selected where available. The initial executor-order crash was fixed. Current Android local-network permission behavior depends on target SDK; see item 9.
-36. **Files changed:** `android/settings.gradle.kts`; `android/experiments/local-session-spike/` (build file, README, manifest, Kotlin UI/controller/protocol/bounds/state, strings/icon/theme, backup rules, unit tests); this report.
-37. **Claims supported:** isolated debug APK builds and installs; protocol/state bounds pass 20 focused tests; lint is clean; final app launches on the API 35 emulator and displays the warning/controls; source and manifest checks show no production integration.
-38. **Claims unsupported:** physical LAN/NSD/TCP feasibility; operation with Internet disabled; bidirectional peer text; physical teardown/restart/reverse-role behavior; behavior after Internet restoration; authentication, encryption, confidentiality, MITM resistance, trusted identity, or production transport suitability.
-39. **Physical experiment overall:** **BLOCKED** (only one emulator, no physical Android devices, no usable Wi-Fi/router test setup).
-40. **Next boundary:** first obtain two physical Android devices and complete the offline same-router test. If that succeeds, priority ranking is **A** authenticated temporary Local Session pairing, **E** encrypted Local Session text, **C** security-visibility UI, **B** dedicated Local Session WebRTC DataChannel carrier, **D** Bluetooth discovery/bootstrap experiment, **F** file-transfer design. The smallest step that turns successful transport into an authenticated Local Session is **A**, kept temporary and independent of normal K3NCRYPT identity/trust. Do not start another architecture review.
+21. **Physical devices used:** two physical Android phones: one Samsung and one OnePlus. Exact models/Android versions were not captured in the owner report and are therefore not asserted here.
+22. **Android versions:** not recorded for the physical devices. The earlier emulator-only result remains historical evidence but is no longer the physical-test blocker.
+23. **Router/network setup:** both phones were connected to the same Wi-Fi router. The owner tested with the router Internet connection available and with the router WAN/Ethernet uplink disconnected while local Wi-Fi remained active.
+24. **Internet-off evidence:** for the successful offline run, Airplane mode was enabled on the phones, Wi-Fi was manually re-enabled, both phones joined the same router, and the router Internet/WAN link was disabled. This removes mobile-data fallback and demonstrates the experiment did not require Internet for the observed local exchange.
+25. **Physical NSD discovery:** **PASS** in the recorded two-phone setup. The discoverer found the advertiser and the experiment reached the explicit-acceptance path.
+26. **Physical A→B text:** **PASS** for fixed synthetic messages. Screenshots supplied by the owner show sent/received test strings across the local connection.
+27. **Physical B→A text:** **PASS** for fixed synthetic messages. Bidirectional synthetic exchange was observed.
+28. **Physical teardown:** not formally exercised as a complete test matrix in the owner report. Code/unit cleanup evidence remains valid; no new physical teardown claim is added.
+29. **Physical restart:** **PARTIAL evidence only.** The OnePlus was force-closed and reopened after an initially rejected network profile, then successfully participated. A full post-session restart/cleanup matrix was not separately recorded.
+30. **Reverse roles:** not explicitly confirmed in the owner report; no reverse-role claim is made.
+31. **Negative cases:** parser/unit negative cases remain PASS. A full hostile/live negative physical matrix was not executed.
+32. **Crashes/ANRs/leaks:** no crash was reported during the successful physical exchange. No formal ANR or leak measurement was performed.
+33. **Render/relay contact:** the standalone experiment has no Render/relay dependency, and the UI showed `Relay: NOT USED`. The successful exchange occurred with the router Internet uplink unavailable, so the observed local message path did not depend on Render/relay.
+34. **Normal K3NCRYPT state:** the separate experiment package was used; no evidence indicates normal K3NCRYPT identity, trust, conversations, outbox, relay credentials, or storage were touched.
+35. **OnePlus network-profile observation:** the OnePlus initially showed `UNSUPPORTED_NETWORK_PROFILE` both with and without router Internet while its normal network profile was active. After Airplane mode ON → Wi-Fi manually ON → force-close/reopen, the selected Wi-Fi profile was accepted and the experiment worked. The exact vendor/platform cause is not proven, so no OnePlus-wide conclusion is made.
+36. **Files changed:** `android/settings.gradle.kts`; `android/experiments/local-session-spike/`; this report. The successful physical follow-up itself requires only documentation to record evidence.
+37. **Claims supported:** two physical Android phones on the same local Wi-Fi router discovered/connected and exchanged bounded fixed synthetic Local Session transport messages in both directions while Internet connectivity was unavailable; the same local experiment also worked with Internet available. This is transport-feasibility evidence only.
+38. **Claims unsupported:** authenticated peer identity, encryption/confidentiality, MITM resistance, production raw TCP approval, production LAN, normal K3NCRYPT messaging, secure file transfer, calls, WebRTC, Bluetooth, or main-domain security-gate closure.
+39. **Physical experiment overall:** **PASS** for the bounded transport-feasibility milestone only.
+40. **Next boundary:** add a temporary Local Session authentication mechanism and encrypted synthetic text while preserving the standalone package, memory-only state, no main K3NCRYPT identity/trust use, and the existing transport/resource bounds. Do not promote the raw TCP carrier to production status.
 
 No screenshots, device identifiers, or raw endpoint logs were added to the repository. The emulator observation is limited to the UI hierarchy and process status described above.
