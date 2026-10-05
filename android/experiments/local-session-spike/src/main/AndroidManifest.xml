@@ -3,6 +3,8 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <application
         android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:icon="@android:drawable/sym_def_app_icon"
         android:label="Local Session Experiment"
         android:theme="@style/LocalSessionTheme"
         android:usesCleartextTraffic="false">

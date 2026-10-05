@@ -11,7 +11,9 @@ import java.nio.ByteOrder
 /** Throwaway transport test framing. It is not an application security protocol. */
 internal object LocalSessionProtocol {
     val preamble = byteArrayOf(0x4b, 0x33, 0x4e, 0x4c, 0x53, 0x58, 0x31, 0x0a) // K3NLSX1\n
-    const val maxPayload = 512
+    const val maxWireFrame = 512
+    // The four-byte big-endian length prefix is part of the complete frame.
+    const val maxPayload = maxWireFrame - 4
     const val maxText = 256
     const val TYPE_HELLO: Byte = 1
     const val TYPE_ACCEPT: Byte = 2

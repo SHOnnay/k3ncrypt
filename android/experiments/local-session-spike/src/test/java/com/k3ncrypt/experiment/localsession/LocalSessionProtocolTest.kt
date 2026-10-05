@@ -35,8 +35,14 @@ class LocalSessionProtocolTest {
         assertThrows(IllegalArgumentException::class.java) { LocalSessionProtocol.text(1, "π") }
     }
 
+    @Test fun completeFrameAt512BytesIsAccepted() {
+        val encoded = LocalSessionProtocol.encodeFrame(LocalSessionProtocol.TYPE_TEXT, ByteArray(LocalSessionProtocol.maxPayload - 1))
+        assertEquals(512, encoded.size)
+        assertEquals(LocalSessionProtocol.maxPayload, LocalSessionProtocol.readFrame(ByteArrayInputStream(encoded)).body.size + 1)
+    }
+
     @Test fun frameOver512BytesIsRejectedBeforeEncoding() {
-        assertThrows(IllegalArgumentException::class.java) { LocalSessionProtocol.encodeFrame(LocalSessionProtocol.TYPE_TEXT, ByteArray(512)) }
+        assertThrows(IllegalArgumentException::class.java) { LocalSessionProtocol.encodeFrame(LocalSessionProtocol.TYPE_TEXT, ByteArray(LocalSessionProtocol.maxPayload)) }
     }
 
     @Test fun negativeAndOversizedLengthsAreRejectedBeforeAllocation() {
