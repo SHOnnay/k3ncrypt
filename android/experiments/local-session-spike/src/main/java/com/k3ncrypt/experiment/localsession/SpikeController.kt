@@ -54,7 +54,7 @@ internal class SpikeController(context: Context, private val render: (Snapshot) 
         Thread(task, "local-session-send").apply { isDaemon = true }
     }
     private val random = SecureRandom()
-    private val attempts = ArrayDeque<Long>()
+    private val attempts = ConnectionAttemptLimiter()
     private val hints = BoundedHintSet<String, NsdServiceInfo>()
     private val outboundFrames = OutboundFrameQueue()
     private val currentSocketLock = Any()
@@ -62,9 +62,8 @@ internal class SpikeController(context: Context, private val render: (Snapshot) 
     @Volatile private var generation = 0
     private var profile: WiFiProfile? = null
     private var hostContext = ByteArray(0)
-    private var clientContext = ByteArray(0)
     private var pairingCode: String? = null
-    private var sessionKeys: LocalSessionCrypto.KeySet? = null
+    private var secureChannel: LocalSessionSecureChannel? = null
     private var serverSocket: ServerSocket? = null
     private var socket: Socket? = null
     private var registration: NsdManager.RegistrationListener? = null
@@ -72,8 +71,6 @@ internal class SpikeController(context: Context, private val render: (Snapshot) 
     private var pendingAcceptance: CountDownLatch? = null
     private var pendingAccepted = AtomicBoolean(false)
     private var output = BufferedOutputStream(java.io.ByteArrayOutputStream())
-    private var sendSequence = 1L
-    private var receiveSequence = 1L
     private var sentTextCount = 0
     private var receivedTextCount = 0
     private var lastSendAt = 0L
@@ -211,7 +208,7 @@ internal class SpikeController(context: Context, private val render: (Snapshot) 
             publish()
         }
         submit(gen) {
-            var keys: LocalSessionCrypto.KeySet? = null
+            var handshake: LocalSessionHandshake? = null
             try {
                 val service = resolve(entry, gen)
                 val current = readWiFiProfile() ?: error("UNSUPPORTED_NETWORK_PROFILE")
@@ -234,22 +231,18 @@ internal class SpikeController(context: Context, private val render: (Snapshot) 
                 LocalSessionProtocol.writePreamble(out)
                 val preambleDeadline = android.os.SystemClock.elapsedRealtime() + 5_000L
                 readPreambleBefore(client, input, preambleDeadline)
-                val localClient = ByteArray(16).also(random::nextBytes)
-                val clientNonce = ByteArray(16).also(random::nextBytes)
-                clientContext = localClient
-                writeFrame(out, LocalSessionProtocol.hello(expectedHost, localClient, clientNonce))
+                handshake = LocalSessionHandshake.discoverer(expectedHost, normalizedCode, random)
+                writeFrame(out, handshake.discovererStart())
                 post(gen) {
                     state.transition(gen, Stage.AUTHENTICATING, "Authenticating temporary pairing code")
                     publish()
                 }
                 val challengeFrame = readFrameBefore(client, input, android.os.SystemClock.elapsedRealtime() + 5_000L)
-                val challenge = LocalSessionProtocol.decodeChallenge(challengeFrame, expectedHost, localClient, clientNonce)
-                val transcript = LocalSessionCrypto.transcript(expectedHost, localClient, clientNonce, challenge.serverNonce)
-                val derivedKeys = deriveKeysFromPendingCode(transcript)
-                keys = derivedKeys
-                writeFrame(out, LocalSessionProtocol.auth(LocalSessionCrypto.clientProof(derivedKeys)))
+                val authFrame = handshake.discovererOnChallenge(challengeFrame)
+                synchronized(currentSocketLock) { pairingCode = null }
+                writeFrame(out, authFrame)
                 post(gen) {
-                    state.annotate(gen, "Pairing proof sent; waiting for advertiser acceptance")
+                    state.annotate(gen, "Pairing proof sent; waiting for explicit acceptance")
                     publish()
                 }
                 val accepted = try {
@@ -258,24 +251,20 @@ internal class SpikeController(context: Context, private val render: (Snapshot) 
                     if (error.message?.contains("FRAME_TIMEOUT") == true) throw IOException("ACCEPT_TIMEOUT")
                     throw error
                 }
-                val serverProof = LocalSessionProtocol.decodeProof(accepted, LocalSessionProtocol.TYPE_ACCEPT)
-                if (!LocalSessionCrypto.verifyProof(LocalSessionCrypto.serverProof(derivedKeys), serverProof)) {
-                    error("PAIRING_AUTH_FAILED")
+                writeFrame(out, handshake.discovererOnAccept(accepted))
+                post(gen) {
+                    state.annotate(gen, "READY sent; waiting for advertiser READY_ACK")
+                    publish()
                 }
-                writeFrame(out, LocalSessionProtocol.ready(LocalSessionCrypto.clientReadyProof(derivedKeys)))
                 val readyAckFrame = readFrameBefore(client, input, android.os.SystemClock.elapsedRealtime() + 5_000L)
-                val readyAck = LocalSessionProtocol.decodeProof(readyAckFrame, LocalSessionProtocol.TYPE_READY_ACK)
-                if (!LocalSessionCrypto.verifyProof(LocalSessionCrypto.serverReadyProof(derivedKeys), readyAck)) {
-                    error("PAIRING_AUTH_FAILED")
-                }
+                val keys = handshake.discovererOnReadyAck(readyAckFrame)
                 synchronized(currentSocketLock) {
                     output = out
-                    sessionKeys?.clear()
-                    sessionKeys = derivedKeys
-                    keys = null
+                    secureChannel?.close()
+                    secureChannel = LocalSessionSecureChannel(keys, LocalSessionHandshake.Role.DISCOVERER)
                     pairingCode = null
                 }
-                sendSequence = 1L; receiveSequence = 1L; sentTextCount = 0; receivedTextCount = 0
+                sentTextCount = 0; receivedTextCount = 0
                 post(gen) {
                     state.setPairingCode(gen, null)
                     state.updateSecurity(gen, "pairing code verified", "AES-256-GCM active", pairingVerified = true, encryptionActive = true)
@@ -284,7 +273,7 @@ internal class SpikeController(context: Context, private val render: (Snapshot) 
                 connected(gen, "Pairing code verified; encrypted temporary transport active")
                 readLoop(gen, client, input)
             } catch (error: Throwable) {
-                keys?.clear()
+                handshake?.abort()
                 if (isCurrent(gen)) finish(gen, Stage.FAILED, reason(error, SafeReason.NSD_RESOLVE_FAILED), "Could not establish pairing-code protected local session")
             }
         }
@@ -297,7 +286,7 @@ internal class SpikeController(context: Context, private val render: (Snapshot) 
         if (!pendingAccepted.compareAndSet(false, true)) return
         stopAdvertisement()
         runCatching { serverSocket?.close() }; serverSocket = null
-        state.transition(gen, Stage.CONNECTING, "User accepted pairing-code verified test connection")
+        state.transition(gen, Stage.CONNECTING, "Accepted; waiting for discoverer READY")
         publish()
         latch.countDown()
     }
@@ -308,25 +297,15 @@ internal class SpikeController(context: Context, private val render: (Snapshot) 
         val now = android.os.SystemClock.elapsedRealtime()
         val frame: ByteArray
         synchronized(currentSocketLock) {
-            val keys = sessionKeys ?: run {
+            val channel = secureChannel ?: run {
                 finish(gen, Stage.FAILED, SafeReason.CRYPTO_FAILED, "Encrypted session state is unavailable")
                 return
             }
             if (outboundFrames.size() >= 8) { finish(gen, Stage.FAILED, SafeReason.RESOURCE_LIMIT, "Send queue is full"); return }
             if (sentTextCount >= LocalSessionProtocol.maxMessagesPerSession || now - lastSendAt < 100L) { finish(gen, Stage.FAILED, SafeReason.RATE_LIMIT, "Message rate limit reached"); return }
-            val plaintext = LocalSessionProtocol.validateSyntheticText(value)
-            val isClient = state.value.role == "discoverer"
-            val key = if (isClient) keys.clientToServerKey else keys.serverToClientKey
-            val prefix = if (isClient) keys.clientNoncePrefix else keys.serverNoncePrefix
-            val direction: Byte = if (isClient) 1 else 2
-            val ciphertext = try {
-                LocalSessionCrypto.encryptText(key, prefix, keys.transcriptHash, direction, sendSequence, plaintext)
-            } finally {
-                plaintext.fill(0)
-            }
-            frame = LocalSessionProtocol.secureText(sendSequence, ciphertext)
+            frame = channel.encodeText(value)
             if (!outboundFrames.offer(frame)) { finish(gen, Stage.FAILED, SafeReason.RESOURCE_LIMIT, "Send queue is full"); return }
-            sentTextCount++; sendSequence++; lastSendAt = now
+            sentTextCount++; lastSendAt = now
         }
         try {
             sender.execute {
@@ -423,7 +402,7 @@ internal class SpikeController(context: Context, private val render: (Snapshot) 
     private fun acceptLoop(gen: Int, listener: ServerSocket) {
         while (isCurrent(gen) && !listener.isClosed) {
             var candidate: Socket? = null
-            var keys: LocalSessionCrypto.KeySet? = null
+            var handshake: LocalSessionHandshake? = null
             try {
                 val accepted = listener.accept()
                 candidate = accepted
@@ -442,23 +421,17 @@ internal class SpikeController(context: Context, private val render: (Snapshot) 
                 val handshakeDeadline = android.os.SystemClock.elapsedRealtime() + 5_000L
                 readPreambleBefore(accepted, input, handshakeDeadline)
                 val helloFrame = readFrameBefore(accepted, input, handshakeDeadline)
-                val host = hostContext
-                val hello = LocalSessionProtocol.decodeHello(helloFrame, host)
-                clientContext = hello.clientContext
-                val serverNonce = ByteArray(16).also(random::nextBytes)
-                writeFrame(out, LocalSessionProtocol.challenge(host, hello.clientContext, hello.clientNonce, serverNonce))
-                val transcript = LocalSessionCrypto.transcript(host, hello.clientContext, hello.clientNonce, serverNonce)
-                val derivedKeys = deriveKeysFromPendingCode(transcript)
-                keys = derivedKeys
+                val code = synchronized(currentSocketLock) { pairingCode ?: error("PAIRING_AUTH_FAILED") }
+                handshake = LocalSessionHandshake.advertiser(hostContext, code, random)
+                val challenge = handshake.advertiserOnHello(helloFrame)
+                synchronized(currentSocketLock) { pairingCode = null }
+                writeFrame(out, challenge)
                 post(gen) {
                     state.transition(gen, Stage.AUTHENTICATING, "Verifying temporary pairing code proof")
                     publish()
                 }
                 val authFrame = readFrameBefore(accepted, input, android.os.SystemClock.elapsedRealtime() + 5_000L)
-                val clientProof = LocalSessionProtocol.decodeProof(authFrame, LocalSessionProtocol.TYPE_AUTH)
-                if (!LocalSessionCrypto.verifyProof(LocalSessionCrypto.clientProof(derivedKeys), clientProof)) {
-                    error("PAIRING_AUTH_FAILED")
-                }
+                handshake.advertiserOnAuth(authFrame)
                 val latch = CountDownLatch(1)
                 pendingAccepted = AtomicBoolean(false)
                 pendingAcceptance = latch
@@ -469,22 +442,22 @@ internal class SpikeController(context: Context, private val render: (Snapshot) 
                 }
                 accepted.soTimeout = 30_000
                 if (!latch.await(30, TimeUnit.SECONDS) || !pendingAccepted.get() || !isCurrent(gen)) error("ACCEPT_TIMEOUT")
-                writeFrame(out, LocalSessionProtocol.accept(LocalSessionCrypto.serverProof(derivedKeys)))
-                val readyFrame = readFrameBefore(accepted, input, android.os.SystemClock.elapsedRealtime() + 5_000L)
-                val readyProof = LocalSessionProtocol.decodeProof(readyFrame, LocalSessionProtocol.TYPE_READY)
-                if (!LocalSessionCrypto.verifyProof(LocalSessionCrypto.clientReadyProof(derivedKeys), readyProof)) {
-                    error("PAIRING_AUTH_FAILED")
+                writeFrame(out, handshake.advertiserAccept())
+                post(gen) {
+                    state.annotate(gen, "ACCEPT sent; waiting for discoverer READY")
+                    publish()
                 }
-                writeFrame(out, LocalSessionProtocol.readyAck(LocalSessionCrypto.serverReadyProof(derivedKeys)))
+                val readyFrame = readFrameBefore(accepted, input, android.os.SystemClock.elapsedRealtime() + 5_000L)
+                writeFrame(out, handshake.advertiserOnReady(readyFrame))
+                val keys = handshake.advertiserReadyAckWritten()
                 synchronized(currentSocketLock) {
                     output = out
                     pendingAcceptance = null
-                    sessionKeys?.clear()
-                    sessionKeys = derivedKeys
-                    keys = null
+                    secureChannel?.close()
+                    secureChannel = LocalSessionSecureChannel(keys, LocalSessionHandshake.Role.ADVERTISER)
                     pairingCode = null
                 }
-                sendSequence = 1L; receiveSequence = 1L; sentTextCount = 0; receivedTextCount = 0
+                sentTextCount = 0; receivedTextCount = 0
                 post(gen) {
                     state.setPairingCode(gen, null)
                     state.updateSecurity(gen, "pairing code verified", "AES-256-GCM active", pairingVerified = true, encryptionActive = true)
@@ -494,7 +467,7 @@ internal class SpikeController(context: Context, private val render: (Snapshot) 
                 readLoop(gen, accepted, input)
                 return
             } catch (error: Throwable) {
-                keys?.clear()
+                handshake?.abort()
                 runCatching { candidate?.close() }
                 synchronized(currentSocketLock) { if (socket === candidate) socket = null }
                 if (isCurrent(gen)) {
@@ -528,26 +501,15 @@ internal class SpikeController(context: Context, private val render: (Snapshot) 
             val frame = LocalSessionProtocol.Frame(payload[0], payload.copyOfRange(1, payload.size))
             when (frame.type) {
                 LocalSessionProtocol.TYPE_SECURE_TEXT -> {
-                    val secure = LocalSessionProtocol.decodeSecureText(frame)
-                    try { LocalSessionProtocol.requireExpectedSequence(secure.sequence, receiveSequence) }
+                    val channel = synchronized(currentSocketLock) { secureChannel } ?: throw IOException("CRYPTO_FAILED")
+                    val value = try { channel.decodeText(frame) }
+                    catch (_: javax.crypto.AEADBadTagException) { throw IOException("CRYPTO_FAILED") }
+                    catch (_: java.security.GeneralSecurityException) { throw IOException("CRYPTO_FAILED") }
                     catch (_: IllegalArgumentException) { throw IOException("UNEXPECTED_MESSAGE") }
-                    val keys = synchronized(currentSocketLock) { sessionKeys } ?: throw IOException("CRYPTO_FAILED")
-                    val isClient = state.value.role == "discoverer"
-                    val key = if (isClient) keys.serverToClientKey else keys.clientToServerKey
-                    val prefix = if (isClient) keys.serverNoncePrefix else keys.clientNoncePrefix
-                    val direction: Byte = if (isClient) 2 else 1
-                    val plaintext = try {
-                        LocalSessionCrypto.decryptText(key, prefix, keys.transcriptHash, direction, receiveSequence, secure.ciphertext)
-                    } catch (_: javax.crypto.AEADBadTagException) {
-                        throw IOException("CRYPTO_FAILED")
-                    } catch (_: java.security.GeneralSecurityException) {
-                        throw IOException("CRYPTO_FAILED")
-                    }
-                    val value = try { LocalSessionProtocol.decodeSyntheticText(plaintext) } finally { plaintext.fill(0) }
                     val now = android.os.SystemClock.elapsedRealtime()
                     if (now - lastActivity > IDLE_TIMEOUT_MS || now - lastReceiveAt < 100L) throw IOException("RATE_LIMIT")
                     if (receivedTextCount >= LocalSessionProtocol.maxMessagesPerSession) throw IOException("RATE_LIMIT")
-                    receiveSequence++; receivedTextCount++; lastReceiveAt = now; lastActivity = now
+                    receivedTextCount++; lastReceiveAt = now; lastActivity = now
                     synchronized(currentSocketLock) {
                         if (inboundQueued >= 16) throw IOException("RESOURCE_LIMIT")
                         inboundQueued++
@@ -688,21 +650,8 @@ internal class SpikeController(context: Context, private val render: (Snapshot) 
     private fun sameNetwork(a: WiFiProfile?, b: WiFiProfile?): Boolean =
         a != null && b != null && a.network == b.network && a.address == b.address && a.linkAddress.prefixLength == b.linkAddress.prefixLength
 
-    private fun reserveAttempt(): Boolean = synchronized(attempts) {
-        val now = android.os.SystemClock.elapsedRealtime()
-        while (attempts.isNotEmpty() && now - attempts.first() >= 60_000L) attempts.removeFirst()
-        if (attempts.size >= 6) false else { attempts.addLast(now); true }
-    }
+    private fun reserveAttempt(): Boolean = attempts.reserve(android.os.SystemClock.elapsedRealtime())
 
-
-    private fun deriveKeysFromPendingCode(transcript: ByteArray): LocalSessionCrypto.KeySet {
-        val code = synchronized(currentSocketLock) {
-            val pending = pairingCode ?: error("PAIRING_AUTH_FAILED")
-            pairingCode = null
-            pending
-        }
-        return LocalSessionCrypto.derive(code, transcript)
-    }
 
     private fun writeFrame(out: BufferedOutputStream, frame: ByteArray) {
         out.write(frame); out.flush()
@@ -782,10 +731,10 @@ internal class SpikeController(context: Context, private val render: (Snapshot) 
     }
 
     private fun clearMemory() {
-        hostContext.fill(0); clientContext.fill(0); hostContext = ByteArray(0); clientContext = ByteArray(0)
-        sessionKeys?.clear(); sessionKeys = null
+        hostContext.fill(0); hostContext = ByteArray(0)
+        secureChannel?.close(); secureChannel = null
         pairingCode = null
-        hints.clear(); pendingAccepted.set(false); sendSequence = 1; receiveSequence = 1; sentTextCount = 0; receivedTextCount = 0
+        hints.clear(); pendingAccepted.set(false); sentTextCount = 0; receivedTextCount = 0
         lastSendAt = 0; lastReceiveAt = 0; profile = null
         discoveryWindowStart = 0; discoveryEvents = 0; discoveryOverrunStart = 0
     }

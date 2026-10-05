@@ -1,5 +1,21 @@
 package com.k3ncrypt.experiment.localsession
 
+/** Sliding-window connection-attempt cap, separated so the controller and tests share it. */
+internal class ConnectionAttemptLimiter(
+    private val maxAttempts: Int = 6,
+    private val windowMs: Long = 60_000L,
+) {
+    private val attempts = ArrayDeque<Long>()
+
+    @Synchronized
+    fun reserve(nowMs: Long): Boolean {
+        while (attempts.isNotEmpty() && nowMs - attempts.first() >= windowMs) attempts.removeFirst()
+        if (attempts.size >= maxAttempts) return false
+        attempts.addLast(nowMs)
+        return true
+    }
+}
+
 /** Small synchronized FIFO with the spike's count and byte caps. */
 internal class OutboundFrameQueue(private val maxFrames: Int = 8, private val maxBytes: Int = 4096) {
     private val frames = ArrayDeque<ByteArray>()

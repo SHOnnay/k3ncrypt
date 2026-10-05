@@ -94,8 +94,9 @@ Advertiser verifies READY, then sends:
                         <--- READY_ACK(HMAC server-ready-confirmation)
 
 Discoverer verifies READY_ACK. Only then does it enter CONNECTED. The advertiser
-enters CONNECTED only after validating READY. Both sides then enable encrypted
-synthetic-text buttons.
+enters CONNECTED after validating READY and completing its local READY_ACK write.
+Both sides then enable encrypted synthetic-text buttons. A dropped final write is
+visible to the advertiser only when the discoverer times out and closes the socket.
 ```
 
 If READY is dropped, the advertiser remains pending and the discoverer times out
@@ -171,25 +172,67 @@ permission or system-picker model. See [Android local-network permission guidanc
 
 ## Required validation before any stronger claim
 
-## Validation recorded 2026-10-06
+## Software loopback integration validation recorded 2026-10-06
 
-The software validation passed in the existing worktree:
+The experiment's production handshake steps and encrypted-text sequence handling
+are now shared by the Android controller and a deterministic JVM integration
+harness. The harness connects two endpoints over ephemeral localhost TCP sockets;
+it does not emulate Wi-Fi, Android network discovery, or physical-device behavior.
 
-- `:local-session-experiment:testDebugUnitTest` — PASS (33 tests)
+- `:local-session-experiment:testDebugUnitTest` — PASS (46 tests, including 100
+  successful fresh loopback handshakes with bidirectional encrypted text)
 - `:local-session-experiment:assembleDebug` — PASS
 - `:local-session-experiment:lintDebug` — PASS
 - `:app:assembleDebug` without the experiment opt-in — PASS
+- default `gradlew projects` omits `:local-session-experiment` — PASS
+- source scan found no experiment references in production Android modules — PASS
 - `git diff --check` — PASS
-- normal `gradlew projects` omits `:local-session-experiment` — PASS
-- experiment runtime dependencies are Kotlin stdlib and JetBrains annotations;
-  no third-party runtime dependency is added
-- packaged application ID is `com.k3ncrypt.experiment.localsession`, target SDK 35;
-  packaged permissions match the two listed above
+- no new third-party dependency; the experiment module retains JUnit only for tests
+- the standalone application ID remains `com.k3ncrypt.experiment.localsession`
+
+The loopback suite exercises the actual `LocalSessionHandshake`,
+`LocalSessionSecureChannel`, `LocalSessionProtocol`, `ExperimentState`, and
+connection-attempt limiter. It covers wrong codes; AUTH, ACCEPT, READY, and
+READY_ACK proof mutation; ciphertext and GCM-tag mutation; sequence/direction
+changes; duplicate and stale text; previous-session control and ciphertext
+replay; interruptions at every control-frame boundary; acceptance timeout;
+active disconnect; simulated restart/generation fencing; frame/text/queue bounds;
+the connection-attempt window; message 100/101; and session expiry.
+
+Completion-edge results:
+
+| Case | Advertiser | Discoverer | Secure text enabled | Cleanup / timeout |
+| --- | --- | --- | --- | --- |
+| READY and READY_ACK delivered | Connected | Connected | Both | Normal session lifetime |
+| READY dropped | Failed | Failed | Neither | Bounded handshake timeout; temporary state cleared |
+| READY_ACK dropped | Connected briefly, then disconnected on peer EOF | Failed | Advertiser only during that interval | Discoverer closes after timeout; controller's timeout is 5 s (harness: 350 ms) |
+| Connection closed just after READY | Connected briefly after local ACK write, then disconnected on EOF | Failed | Advertiser only during that interval | Immediate transport close; no discoverer READY_ACK verification |
+| Connection closed just after READY_ACK | Connected until EOF is processed | Connected until EOF is processed | Both briefly | Both read loops clear on peer/local close; no handshake wait remains |
+
+The last two rows exercise a flushed frame followed immediately by socket close;
+endpoint state is sampled before disconnect cleanup. The integration harness then
+drives the same fail/clear outcome, while the Android controller's read loop maps
+EOF or a closed socket to `finish`. In all rows with a close/loss, no session stays
+usable after cleanup. Wrong codes, altered proofs, altered ciphertext/tags,
+duplicate/stale sequence numbers, and old-session data do not produce accepted
+plaintext.
+
+No protocol or cryptographic redesign was needed. The brief advertiser-only
+connected state is bounded by the discoverer's existing timeout and transport
+close; it does not authenticate the discoverer on its side or accept plaintext
+without a valid encrypted frame. This is the current final-flight behavior, not
+evidence of symmetric peer completion at the same instant. The Android
+controller's existing read loop maps EOF to session cleanup. No JVM-wide
+memory-erasure claim is made.
+
+The supported statement is: **“Local Session v2 passed automated end-to-end
+software integration and negative-path testing over a local loopback harness.”**
+This is not physical LAN evidence or production-security approval.
 
 The APK was built at
 `android/experiments/local-session-spike/build/outputs/apk/debug/local-session-experiment-debug.apk`.
 Its SHA-256 at validation time was
-`5952be0079d558f47d0f2de85cc01c620983c332e8bcddd3ad8867a8ff1062c2`.
+`3c3b5791ed76a4448784c7cb975732b04d68cf1726c65c3e04c9dc9a57cda574`.
 
 ADB found one emulator and no physical Samsung/OnePlus devices. No v2 APK was
 installed and no v2 physical test was attempted. **Physical v2 status: READY FOR
