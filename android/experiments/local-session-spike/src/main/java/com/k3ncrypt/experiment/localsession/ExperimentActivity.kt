@@ -57,14 +57,14 @@ class ExperimentActivity : Activity() {
             setBackgroundColor(0xfff4f5f7.toInt())
         }
         val title = TextView(this).apply {
-            text = "EXPERIMENTAL LOCAL SESSION"
+            text = getString(R.string.experiment_title)
             textSize = 22f
             setTextColor(0xff18212b.toInt())
             setPadding(0, 0, 0, dp(10))
         }
         outer.addView(title)
         val warning = TextView(this).apply {
-            text = "UNAUTHENTICATED AND UNENCRYPTED\nUse synthetic test data only. Not normal K3NCRYPT messaging.\nAccepted means only that you allowed this experimental connection."
+            text = getString(R.string.experiment_warning)
             textSize = 16f
             setTextColor(0xff7a1c16.toInt())
             setBackgroundColor(0xffffe6e3.toInt())
@@ -78,25 +78,25 @@ class ExperimentActivity : Activity() {
         }
         outer.addView(status)
 
-        addButton(outer, "Start Advertiser", "Start advertiser") { controller.advertiser() }
-        addButton(outer, "Start Discovery", "Start discovery") { controller.discover() }
-        connectionButton = addButton(outer, "Connect to endpoint 1", "Connect to untrusted test endpoint") { controller.connectSelected() }
-        acceptButton = addButton(outer, "Accept Peer", "Accept unverified test connection") { controller.acceptPeer() }
-        stopButton = addButton(outer, "Stop / Disconnect", "Stop") { controller.stop() }
+        addButton(outer, R.string.start_advertiser, R.string.start_advertiser_description) { controller.advertiser() }
+        addButton(outer, R.string.start_discovery, R.string.start_discovery_description) { controller.discover() }
+        connectionButton = addButton(outer, R.string.connect_endpoint, R.string.connect_endpoint_description) { controller.connectSelected() }
+        acceptButton = addButton(outer, R.string.accept_peer, R.string.accept_peer_description) { controller.acceptPeer() }
+        stopButton = addButton(outer, R.string.stop_disconnect, R.string.stop_description) { controller.stop() }
 
         val testHeading = TextView(this).apply {
-            text = "Fixed synthetic messages"
+            text = getString(R.string.fixed_synthetic_messages)
             textSize = 18f
             setTextColor(0xff18212b.toInt())
             setPadding(0, dp(14), 0, dp(4))
         }
         outer.addView(testHeading)
-        addButton(outer, "Send PING-A", "PING-A") { controller.sendSynthetic("PING-A") }
-        addButton(outer, "Send PING-B", "PING-B") { controller.sendSynthetic("PING-B") }
-        addButton(outer, "Send HELLO-LOCAL-1", "HELLO-LOCAL-1") { controller.sendSynthetic("HELLO-LOCAL-1") }
-        addButton(outer, "Send HELLO-LOCAL-2", "HELLO-LOCAL-2") { controller.sendSynthetic("HELLO-LOCAL-2") }
+        addButton(outer, R.string.send_ping_a, R.string.send_ping_a) { controller.sendSynthetic("PING-A") }
+        addButton(outer, R.string.send_ping_b, R.string.send_ping_b) { controller.sendSynthetic("PING-B") }
+        addButton(outer, R.string.send_hello_local_1, R.string.send_hello_local_1) { controller.sendSynthetic("HELLO-LOCAL-1") }
+        addButton(outer, R.string.send_hello_local_2, R.string.send_hello_local_2) { controller.sendSynthetic("HELLO-LOCAL-2") }
         messageList = TextView(this).apply {
-            text = "No test messages (memory only)."
+            text = getString(R.string.empty_messages)
             textSize = 14f
             setTextColor(0xff18212b.toInt())
             setPadding(0, dp(8), 0, dp(12))
@@ -116,10 +116,11 @@ class ExperimentActivity : Activity() {
         setContentView(page)
     }
 
-    private fun addButton(parent: LinearLayout, visible: String, description: String, action: () -> Unit): Button =
+    private fun addButton(parent: LinearLayout, visible: Int, description: Int, action: () -> Unit): Button =
         Button(this).apply {
-            text = visible
-            contentDescription = description
+            text = getString(visible)
+            contentDescription = getString(description)
+            tag = visible
             isAllCaps = false
             setOnClickListener { action() }
             parent.addView(this, matchWrap())
@@ -128,10 +129,11 @@ class ExperimentActivity : Activity() {
     private fun render(snapshot: Snapshot) {
         if (LooperGuard.notMain()) { main.post { render(snapshot) }; return }
         val profile = controller.networkProfile()
-        val wifi = if (profile == null) "unavailable / unsupported" else "available (selected Wi-Fi)"
-        val reason = snapshot.reason?.name ?: "none"
-        status.text = "Network: Wi-Fi $wifi\nInternet required: No\nInternet capability: ${snapshot.internet}\n\nRole: ${snapshot.role}\nState: ${snapshot.stage.name.lowercase().replace('_', ' ')}\nStatus: ${snapshot.event}\nReason: $reason\n\nSession: temporary · memory-only\nAuthentication: NOT PROVIDED\nEncryption: NOT PROVIDED\nTransport: NSD + bounded experimental TCP\nRelay: NOT USED"
-        messageList.text = snapshot.messages.takeLast(32).joinToString("\n").ifBlank { "No test messages (memory only)." }
+        val wifi = getString(if (profile == null) R.string.wifi_unavailable else R.string.wifi_available)
+        val reason = snapshot.reason?.name ?: getString(R.string.none)
+        val stateName = snapshot.stage.name.lowercase(java.util.Locale.ROOT).replace('_', ' ')
+        status.text = getString(R.string.network_summary, wifi, snapshot.internet, snapshot.role, stateName, snapshot.event, reason)
+        messageList.text = snapshot.messages.takeLast(32).joinToString("\n").ifBlank { getString(R.string.empty_messages) }
         connectionButton.isEnabled = snapshot.stage == Stage.PEER_FOUND
         acceptButton.isEnabled = snapshot.canAccept
         stopButton.isEnabled = snapshot.stage !in setOf(Stage.INACTIVE, Stage.DISCONNECTED, Stage.FAILED)
@@ -140,13 +142,12 @@ class ExperimentActivity : Activity() {
 
     private fun setButtonsEnabled(view: View, snapshot: Snapshot) {
         if (view is Button) {
-            val label = view.text.toString()
-            view.isEnabled = when {
-                label.startsWith("Send ") -> snapshot.connected
-                label == "Start Advertiser" || label == "Start Discovery" -> snapshot.stage in setOf(Stage.INACTIVE, Stage.DISCONNECTED, Stage.FAILED)
-                view === connectionButton -> snapshot.stage == Stage.PEER_FOUND
-                view === acceptButton -> snapshot.canAccept
-                view === stopButton -> snapshot.stage !in setOf(Stage.INACTIVE, Stage.DISCONNECTED, Stage.FAILED)
+            view.isEnabled = when (view.tag as? Int) {
+                R.string.send_ping_a, R.string.send_ping_b, R.string.send_hello_local_1, R.string.send_hello_local_2 -> snapshot.connected
+                R.string.start_advertiser, R.string.start_discovery -> snapshot.stage in setOf(Stage.INACTIVE, Stage.DISCONNECTED, Stage.FAILED)
+                R.string.connect_endpoint -> snapshot.stage == Stage.PEER_FOUND
+                R.string.accept_peer -> snapshot.canAccept
+                R.string.stop_disconnect -> snapshot.stage !in setOf(Stage.INACTIVE, Stage.DISCONNECTED, Stage.FAILED)
                 else -> view.isEnabled
             }
         }

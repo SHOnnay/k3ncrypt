@@ -49,6 +49,17 @@ class ExperimentBoundsTest {
         assertTrue(state.value.messages.isEmpty())
     }
 
+    @Test fun restartFencesCallbacksFromThePreviousGeneration() {
+        val state = ExperimentState()
+        val old = state.begin("advertiser")
+        state.stop(SafeReason.USER_ENDED)
+        val current = state.begin("discoverer")
+        assertTrue(current > old)
+        assertFalse(state.transition(old, Stage.PEER_FOUND, "stale discovery callback"))
+        assertEquals(Stage.DISCOVERING, state.value.stage)
+        assertEquals(current, state.value.generation)
+    }
+
     @Test fun expiryIsFiniteAndControllerRecreationStartsInactive() {
         val original = ExperimentState()
         val gen = original.begin("advertiser")

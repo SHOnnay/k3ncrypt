@@ -1,0 +1,25 @@
+<resources>
+    <string name="app_name">Local Session Experiment</string>
+    <string name="experiment_title">EXPERIMENTAL LOCAL SESSION</string>
+    <string name="experiment_warning">UNAUTHENTICATED AND UNENCRYPTED\nUse synthetic test data only. Not normal K3NCRYPT messaging.\nAccepted means only that you allowed this experimental connection.</string>
+    <string name="start_advertiser">Start Advertiser</string>
+    <string name="start_advertiser_description">Start advertiser</string>
+    <string name="start_discovery">Start Discovery</string>
+    <string name="start_discovery_description">Start discovery</string>
+    <string name="connect_endpoint">Connect to endpoint 1</string>
+    <string name="connect_endpoint_description">Connect to untrusted test endpoint</string>
+    <string name="accept_peer">Accept Peer</string>
+    <string name="accept_peer_description">Accept unverified test connection</string>
+    <string name="stop_disconnect">Stop / Disconnect</string>
+    <string name="stop_description">Stop</string>
+    <string name="fixed_synthetic_messages">Fixed synthetic messages</string>
+    <string name="send_ping_a">Send PING-A</string>
+    <string name="send_ping_b">Send PING-B</string>
+    <string name="send_hello_local_1">Send HELLO-LOCAL-1</string>
+    <string name="send_hello_local_2">Send HELLO-LOCAL-2</string>
+    <string name="empty_messages">No test messages (memory only).</string>
+    <string name="wifi_available">available (selected Wi-Fi)</string>
+    <string name="wifi_unavailable">unavailable / unsupported</string>
+    <string name="none">none</string>
+    <string name="network_summary">Network: Wi-Fi %1$s\nInternet required: No\nInternet capability: %2$s\n\nRole: %3$s\nState: %4$s\nStatus: %5$s\nReason: %6$s\n\nSession: temporary · memory-only\nAuthentication: NOT PROVIDED\nEncryption: NOT PROVIDED\nTransport: NSD + bounded experimental TCP\nRelay: NOT USED</string>
+</resources>
