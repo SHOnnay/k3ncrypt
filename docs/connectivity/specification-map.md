@@ -1,5 +1,10 @@
 # Connectivity specification reconciliation — C1
 
+> Overall product intent, security philosophy, domain boundaries and roadmap:
+> [master product/security architecture](../PROJECT_SECURITY_ARCHITECTURE.md).
+> Connectivity ADRs/specifications retain protocol-level authority; the master
+> does not approve protocols or enable optional runtime.
+
 Exact base: 5111aff9cbed6668194d2ab522bd80dcf1b0f9b1.
 Review branch: connectivity/peer-admission-freshness-review, 2026-10-05.
 These immutable sources were inspected locally; historical refs were neither

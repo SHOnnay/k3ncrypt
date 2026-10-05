@@ -1,5 +1,10 @@
 # K3NCRYPT master connectivity handoff
 
+> Overall product intent, security philosophy, domain boundaries and roadmap:
+> [master product/security architecture](../PROJECT_SECURITY_ARCHITECTURE.md).
+> Connectivity ADRs/specifications retain protocol-level authority; the master
+> does not approve protocols or enable optional runtime.
+
 > Current review overlay (2026-10-05): this historical handoff describes its
 > named 2026-10-03 main baseline. The current review starts at sender-origin
 > 5111aff9cbed6668194d2ab522bd80dcf1b0f9b1, with live M1, atomic Web sender/
