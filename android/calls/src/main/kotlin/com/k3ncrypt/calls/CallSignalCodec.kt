@@ -55,6 +55,7 @@ object CallSignalCodec {
 
     fun encode(signal: CallSignalValue): String {
         require(validate(signal, signal.conversationId, signal.receiverIdentityId, System.currentTimeMillis()))
+        // Legacy wire value is compatibility metadata; admission uses the receiver's local authority.
         val sender = "{\"participantId\":${JSONObject.quote(signal.senderParticipantId)},\"identityId\":${JSONObject.quote(signal.senderIdentityId)},\"verification\":\"verified\"}"
         return buildString {
             append('{')
@@ -101,6 +102,7 @@ object CallSignalCodec {
     }
 
     private fun canonical(value: CallSignalValue): String {
+        // Legacy wire value is compatibility metadata; admission uses the receiver's local authority.
         val sender = "{\"participantId\":${canonicalQuote(value.senderParticipantId)},\"identityId\":${canonicalQuote(value.senderIdentityId)},\"verification\":\"verified\"}"
         val payload = value.payload?.let(::stableJson) ?: "null"
         return "{\"callId\":${canonicalQuote(value.callId)},\"conversationId\":${canonicalQuote(value.conversationId)},\"sender\":$sender," +

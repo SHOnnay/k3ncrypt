@@ -239,6 +239,14 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         };
       }, async (contact) => {
         setContactIdentity(contact);
+        if (contact.verification !== 'verified' || contact.changeStatus !== 'unchanged') {
+          await callNegotiator.current?.dispose();
+          callNegotiator.current = undefined;
+          setModernCallComposition(null);
+          setCallActive(false);
+          setIsIncomingCall(false);
+          setModernCallId(undefined);
+        }
         if (contact.contactId && (!descriptor.remoteAddress || descriptor.remoteAddress !== contact.contactId || descriptor.remoteIdentityCommitment !== contact.identityId)) {
           const latestDescriptor = (await readConversationDescriptors(secureVault))
             .find((item) => item.roomId === descriptor.roomId) ?? descriptor;
@@ -366,9 +374,20 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const verifyContact = useCallback(async (): Promise<void> => {
     if (!modern) throw new Error('No modern contact is open.');
-    await modern.verifyContact(true);
+    if (!contactIdentity) throw new Error('Contact identity is unavailable.');
+    await modern.verifyContact(true, contactIdentity.identityId);
     setContactIdentity(await modern.getContact());
     if (modern.hasEstablishedSession()) await installModernCallSupport(modern);
+  }, [modern, contactIdentity]);
+
+  const unverifyContact = useCallback(async (): Promise<void> => {
+    if (!modern) throw new Error('No modern contact is open.');
+    await modern.unverifyContact();
+    await callNegotiator.current?.dispose();
+    callNegotiator.current = undefined;
+    callSupportConversation.current = null;
+    setModernCallComposition(null);
+    setContactIdentity(await modern.getContact());
   }, [modern]);
 
   const acceptChangedIdentity = useCallback(async (): Promise<void> => {
@@ -517,14 +536,6 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return modern.attachmentAuthorizationHeaders();
   }, [modern, protocolMode]);
 
-  const describeMediaError = (error: unknown, mediaMode: 'audio' | 'video'): string => {
-    const name = error instanceof DOMException ? error.name : '';
-    if (name === 'NotAllowedError' || name === 'SecurityError') return mediaMode === 'video' ? 'Camera permission is required for video calls.' : 'Microphone permission is required for calls.';
-    if (name === 'NotFoundError' || name === 'OverconstrainedError') return mediaMode === 'video' ? 'No camera or microphone was found.' : 'No microphone was found.';
-    if (name === 'NotSupportedError') return 'This browser does not support video calls.';
-    return 'Unable to start the call. Please retry.';
-  };
-
   const clearCallMedia = useCallback((): void => {
     if (callMediaPoll.current) clearInterval(callMediaPoll.current);
     callMediaPoll.current = undefined;
@@ -571,22 +582,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setCallStatus('Ringing...');
       return;
     }
-    if (!chat) throw new Error('Chat not initialized');
-    try {
-      const call = await chat.startCall();
-      setCallMediaMode('audio');
-      setCallError(undefined);
-      setCallActive(true);
-       setIsIncomingCall(false);
-      setCallLifecycleState('ringing');
-      setCallStatus('Ringing...');
-      setupCallListeners(call);
-    } catch (err) {
-      debugError('Call start failed', err);
-      const message = describeMediaError(err, 'audio');
-      setCallError(message);
-      throw new Error(message);
-    }
+    throw new Error('Verification required: legacy conversations have no local contact verification authority.');
   }, [chat, modern, modernCallComposition, protocolMode]);
 
   const startVideoCall = useCallback(async () => {
@@ -607,22 +603,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setCallStatus('Ringing...');
       return;
     }
-    if (!chat) throw new Error('Chat not initialized');
-    try {
-      setCallMediaMode('video');
-      setCallError(undefined);
-      const call = await chat.startVideoCall();
-      setCallActive(true);
-      setIsIncomingCall(false);
-      setCallLifecycleState('ringing');
-      setCallStatus('Ringing...');
-      setupCallListeners(call);
-    } catch (error) {
-      const message = describeMediaError(error, 'video');
-      setCallError(message);
-      setCallMediaMode('audio');
-      throw new Error(message);
-    }
+    throw new Error('Verification required: legacy conversations have no local contact verification authority.');
   }, [chat, modern, modernCallComposition, protocolMode]);
 
   const acceptCall = useCallback(async () => {
@@ -792,14 +773,9 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setupCallListeners(call);
     });
 
-    chatInstance.on('call-invite', (invite: { mediaKind?: 'audio' | 'video' }) => {
-      setCallActive(true);
-      setIsIncomingCall(true);
-      setCallMediaMode(invite.mediaKind ?? 'audio');
-      setCallLifecycleState('incoming');
-      setCallStatus('Incoming Call...');
-      playBeep();
-      deliverNotification({ kind: 'incoming-call', conversationId: channelHash || 'legacy' }, privacyPreferencesRef.current);
+    chatInstance.on('call-invite', () => {
+      void chatInstance.rejectCall().catch(() => undefined);
+      setCallError('Verification required: legacy conversations have no local contact verification authority.');
     });
 
     chatInstance.on('call-state-changed', (update: CallLifecycleUpdate) => {
@@ -939,6 +915,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     createModernChannel,
     joinModernChannel,
     verifyContact,
+    unverifyContact,
     acceptChangedIdentity,
     prepareVerifiedSessionRenewal,
     requestDeviceEnrollment,

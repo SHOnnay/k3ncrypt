@@ -357,6 +357,11 @@ private fun IdentityAndConversationScreen(
     var selectedTab by remember { mutableStateOf("chats") }
     var fingerprintConfirmation by remember { mutableStateOf("") }
     var conversation by remember { mutableStateOf<ConversationInvitation?>(null) }
+    var contactVerification by remember { mutableStateOf(ContactVerificationState.UNKNOWN) }
+    val verificationRevision by messaging.verificationRevision.collectAsState()
+    LaunchedEffect(conversation, verificationRevision) {
+        contactVerification = conversation?.let { messaging.verificationState(it) } ?: ContactVerificationState.UNKNOWN
+    }
     var savedTrustedConversations by remember { mutableStateOf<List<SavedConversationSummary>>(emptyList()) }
     val allStoredMessages = remember { mutableStateListOf<AndroidChatMessage>() }
     var outgoingInvite by remember { mutableStateOf("") }
@@ -404,11 +409,15 @@ private fun IdentityAndConversationScreen(
                         "video" -> calls.startVideo()
                         "accept-audio", "accept-video" -> calls.accept()
                     }
-                }.onFailure { status = "Call could not start. Check permissions and connection, then retry." }
+                }.onFailure { status = if (it.message?.startsWith("Verification required") == true) it.message!! else "Call could not start. Check permissions and connection, then retry." }
             }
         } else status = denial
     }
     fun requestCallPermissions(action: String) {
+        if (contactVerification != ContactVerificationState.VERIFIED) {
+            status = "Verification required: compare and explicitly verify this contact before calling."
+            return
+        }
         pendingCallAction = action
         val permissions = mutableListOf(android.Manifest.permission.RECORD_AUDIO)
         if (action == "video" || action == "accept-video") permissions += android.Manifest.permission.CAMERA
@@ -801,12 +810,12 @@ private fun IdentityAndConversationScreen(
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(k3ncryptContactName(savedTrustedConversations.firstOrNull { it.conversationHash == SavedConversationIndex.hash(active.conversationId) }?.label), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
-                        Text(if (SavedConversationIndex.isTrusted(active)) "Identity pinned · verification status unavailable" else "Contact identity not confirmed", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(if (SavedConversationIndex.isTrusted(active)) "Identity pinned · ${verificationLabel(contactVerification)}" else "Contact identity not confirmed", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    K3ncryptStatus(if (SavedConversationIndex.isTrusted(active)) "Identity pinned" else "Review", positive = false)
+                    K3ncryptStatus(verificationLabel(contactVerification), positive = contactVerification == ContactVerificationState.VERIFIED)
                 }
                 if (focusedChat) {
-                    val security = deriveAndroidSecurityVisibility(active.peerRoutingId, active.peerIdentityReference, relayConnected)
+                    val security = deriveAndroidSecurityVisibility(active.peerRoutingId, active.peerIdentityReference, relayConnected, contactVerification)
                     OutlinedButton(onClick = { showSecurityVisibilityDetails = !showSecurityVisibilityDetails }) {
                         Text(if (showSecurityVisibilityDetails) "Hide security details" else "Security details")
                     }
@@ -814,8 +823,8 @@ private fun IdentityAndConversationScreen(
                         Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                             Text("Security and connection", style = MaterialTheme.typography.titleSmall)
                             Text("Identity: ${if (security.identityBinding == AndroidIdentityBinding.PINNED) "Pinned for this conversation" else "Not pinned"}")
-                            Text("Verification: ${if (security.verificationRecorded) "Recorded" else "Not separately recorded in this Android build"}")
-                            Text("Identity changes: ${if (security.identityChangeRecorded) "Available" else "Not available in this Android build"}")
+                            Text("Verification: ${verificationLabel(security.verificationState)}")
+                            Text("Identity changes: ${if (security.identityChangeRecorded) "Review required" else "No pending change recorded"}")
                             Text("Message path: ${security.transport}")
                             Text("Relay socket: ${if (security.relaySocket == AndroidRelaySocketState.CONNECTED) "Connected" else "Disconnected"}")
                             Text("Session health: ${if (security.sessionHealthRecorded) "Available" else "Not exposed"}")
@@ -913,6 +922,26 @@ private fun IdentityAndConversationScreen(
             if (!relayConnected) K3ncryptNotice("Connection interrupted. Saved messages stay on this device while K3NCRYPT tries to reconnect.", K3ncryptNoticeTone.Attention)
             if (messageStatus.isNotBlank()) K3ncryptNotice(messageStatus, k3ncryptNoticeToneFor(messageStatus))
             if (SavedConversationIndex.isTrusted(active)) {
+                K3ncryptCard {
+                    K3ncryptSectionTitle("Contact verification", verificationLabel(contactVerification), "Compare the exact fingerprint through a separate trusted channel. Verification is local to this device and separate from the saved identity pin.")
+                    Text(active.peerIdentityReference, style = MaterialTheme.typography.bodySmall)
+                    if (contactVerification == ContactVerificationState.IDENTITY_CHANGED_PENDING_REVIEW) {
+                        Text("A different identity was observed. Existing identity pins and encrypted sessions are not replaced here. Review the new identity through a fresh invitation before verifying it.")
+                    }
+                    OutlinedTextField(fingerprintConfirmation, { fingerprintConfirmation = it }, label = { Text("Enter the fingerprint you compared") }, modifier = Modifier.fillMaxWidth())
+                    Button(enabled = !busy && fingerprintConfirmation.trim() == active.peerIdentityReference, onClick = {
+                        busy = true
+                        scope.launch {
+                            runCatching { messaging.verifyCurrentContact(active, fingerprintConfirmation.trim()) }
+                                .onSuccess { fingerprintConfirmation = ""; status = "Contact verification recorded on this device." }
+                                .onFailure { status = "Verification was not recorded. Review the current contact identity." }
+                            busy = false
+                        }
+                    }) { Text("I have verified this fingerprint") }
+                    OutlinedButton(enabled = !busy, onClick = {
+                        scope.launch { runCatching { messaging.unverifyCurrentContact(active) }.onSuccess { status = "Contact marked unverified on this device." }.onFailure { status = "Could not reset contact verification." } }
+                    }) { Text("Mark unverified") }
+                }
                 if (showAdvancedVerification) {
                     Text("Before restoring this connection, compare your contact’s fingerprint through another trusted channel. This helps ensure you are reconnecting with the same person.")
                     Text("Contact fingerprint: ${active.peerIdentityReference}")
@@ -1021,10 +1050,10 @@ private fun IdentityAndConversationScreen(
                 Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
                     Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text(k3ncryptContactName(savedTrustedConversations.firstOrNull { it.conversationHash == SavedConversationIndex.hash(active.conversationId) }?.label), style = MaterialTheme.typography.titleMedium)
-                        Text(if (SavedConversationIndex.isTrusted(active) && callState.callId == null) "Contact saved for this conversation" else "Confirm the contact identity before calling.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(if (SavedConversationIndex.isTrusted(active) && callState.callId == null) verificationLabel(contactVerification) else "Explicit verification is required before calling.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Button(enabled = !busy && callState.callId == null && SavedConversationIndex.isTrusted(active), onClick = { requestCallPermissions("audio") }) { Text("Voice call") }
-                            Button(enabled = !busy && callState.callId == null && SavedConversationIndex.isTrusted(active), onClick = { requestCallPermissions("video") }) { Text("Video call") }
+                            Button(enabled = !busy && callState.callId == null && contactVerification == ContactVerificationState.VERIFIED, onClick = { requestCallPermissions("audio") }) { Text("Voice call") }
+                            Button(enabled = !busy && callState.callId == null && contactVerification == ContactVerificationState.VERIFIED, onClick = { requestCallPermissions("video") }) { Text("Video call") }
                         }
                         if (callState.callId != null) Text("${callState.mediaMode.replaceFirstChar { it.uppercase() }} call · ${callState.status}")
                     }
@@ -1173,7 +1202,7 @@ private fun IdentityAndConversationScreen(
             K3ncryptCard {
                 Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                     Text("Privacy", style = MaterialTheme.typography.titleMedium)
-                    Text("Messages use end-to-end encryption within each saved conversation. Verification status is not separately recorded in this Android build. Notification preview controls are not available in this beta yet.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                    Text("Messages use end-to-end encryption within each saved conversation. Verification is an explicit local decision for the exact contact identity. Notification preview controls are not available in this beta yet.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                     Text("K3NCRYPT never asks you to share a passphrase or private key.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                 }
             }

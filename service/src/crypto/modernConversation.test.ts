@@ -1126,3 +1126,17 @@ it('rejects a server-substituted first-contact bundle that does not match the in
     await expect(conversation.connect(room, key(9), remoteAddress, await remoteCommitment())).rejects.toThrow('identity commitment');
     await conversation.close();
 });
+
+it('cached call composition denies local unverify without mutating verification during gate checks', async () => {
+    const pair = await verifiedPeerPair();
+    await pair.bob.sendWithReceipt('establish session');
+    await receiveFirstMessage(pair.alice, pair.bobTransport.sent[0], remoteAddress);
+    const composition = await pair.alice.createAuthenticatedCallComposition();
+    await expect(composition.assertVerifiedContact?.()).resolves.toBeUndefined();
+    await pair.alice.unverifyContact();
+    expect((await pair.alice.getContact())?.verification).toBe('unverified');
+    await expect(pair.alice.createAuthenticatedCallComposition()).rejects.toThrow('Verify');
+    await expect(composition.invite()).rejects.toThrow('Verification');
+    expect((await pair.alice.getContact())?.verification).toBe('unverified');
+    await pair.alice.close(); await pair.bob.close();
+});

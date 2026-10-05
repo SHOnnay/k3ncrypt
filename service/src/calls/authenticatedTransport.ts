@@ -50,6 +50,7 @@ export class AuthenticatedCallSignalTransport implements CallSignalTransport {
     if (!signal.nonce) { callSignalDiagnostic('nonce-missing'); throw new Error('Call signal origin rejected.'); }
     if (signal.sender.verification !== 'verified') { callSignalDiagnostic('sender-unverified'); throw new Error('Call signal origin rejected.'); }
     if (!(await this.identity.isParticipant(this.conversationId, signal.sender.participantId))) { callSignalDiagnostic('membership-rejected'); throw new Error('Call signal origin rejected.'); }
+    if (await this.identity.getVerification(signal.sender.participantId) !== 'verified') throw new Error('Verification required for calls.');
     const digestValid = await verifySignalDigest(signal);
     if (signal.kind === 'offer' || !digestValid) callSignalByteDiagnostic(signal);
     if (!digestValid) { callSignalDiagnostic(await diagnoseSignalDigestMismatch(signal)); throw new Error('Call signal origin rejected.'); }

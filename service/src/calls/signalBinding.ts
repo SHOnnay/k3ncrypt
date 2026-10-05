@@ -65,8 +65,8 @@ export const identityBinding = async (conversationId: string, participants: read
     return [...digest].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 };
 export class VerifiedCallIdentityVerifier implements CallIdentityVerifier {
-    constructor(private readonly members: ReadonlySet<string>, private readonly verifications: ReadonlyMap<string, CallParticipant['verification']>) {}
+    constructor(private readonly members: ReadonlySet<string>, private readonly verifications: ReadonlyMap<string, CallParticipant['verification']>, private readonly currentVerification?: () => Promise<CallParticipant['verification']>) {}
     isParticipant(_conversationId: string, participantId: string): Promise<boolean> { return Promise.resolve(this.members.has(participantId)); }
-    getVerification(participantId: string): Promise<CallParticipant['verification']> { return Promise.resolve(this.verifications.get(participantId) ?? 'unknown'); }
+    async getVerification(participantId: string): Promise<CallParticipant['verification']> { if (!this.members.has(participantId)) return 'unknown'; return this.currentVerification ? this.currentVerification().catch(() => 'unknown' as const) : this.verifications.get(participantId) ?? 'unknown'; }
     identityBinding(conversationId: string, participants: readonly [CallParticipant, CallParticipant]): Promise<string> { return identityBinding(conversationId, participants); }
 }

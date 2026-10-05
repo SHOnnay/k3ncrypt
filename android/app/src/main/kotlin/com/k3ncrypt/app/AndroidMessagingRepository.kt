@@ -95,6 +95,49 @@ class AndroidMessagingRepository(
     private var peerIdentityObserver: ((String, String) -> Unit)? = null
     @Volatile private var callSignalObserver: ((String) -> Unit)? = null
     private val firstContactCandidates = ConcurrentHashMap<String, String>()
+    private val contactVerification = ContactVerificationAuthority(object : ContactVerificationRecords {
+        override suspend fun read(contactId: String) = stateStore.read("contact-verification-v1", contactId)
+        override suspend fun write(contactId: String, bytes: ByteArray) = stateStore.write("contact-verification-v1", contactId, bytes)
+    })
+    private val verificationChanges = kotlinx.coroutines.flow.MutableStateFlow(0L)
+    internal val verificationRevision: kotlinx.coroutines.flow.StateFlow<Long> = verificationChanges
+
+    internal suspend fun verificationState(binding: ConversationInvitation): ContactVerificationState =
+        contactVerification.state(binding.conversationId, binding.peerIdentityReference)
+
+    internal suspend fun requireVerifiedCallConversation(): ConversationInvitation = mutex.withLock {
+        val binding = conversation?.takeIf(SavedConversationIndex::isTrusted) ?: error("Verification required: no pinned contact is open.")
+        requireVerifiedCallContact(verificationState(binding))
+        binding
+    }
+
+    internal suspend fun verifyCurrentContact(expected: ConversationInvitation, confirmedIdentity: String) = mutex.withLock {
+        val binding = conversation ?: error("No contact is open")
+        check(binding == expected) { "Contact changed during comparison; review it again" }
+        // Observe the published identity, then enforce the existing exact pin before recording a decision.
+        pinnedBundle(binding)
+        contactVerification.observeIdentity(binding.conversationId, binding.peerIdentityReference)
+        contactVerification.markVerified(binding.conversationId, binding.peerIdentityReference, confirmedIdentity)
+        verificationChanges.value += 1
+    }
+
+    internal suspend fun unverifyCurrentContact(expected: ConversationInvitation) = mutex.withLock {
+        val binding = conversation ?: error("No contact is open")
+        check(binding == expected) { "Contact changed; review it again" }
+        contactVerification.markUnverified(binding.conversationId)
+        verificationChanges.value += 1
+    }
+
+    private suspend fun pinnedBundle(binding: ConversationInvitation, publication: JSONObject? = null): com.k3ncrypt.network.ClaimedPrekeyBundle {
+        val json = publication ?: api.fetchPrekeys(binding.conversationId, binding.controlCapability, binding.peerRoutingId)
+        val observed = VodozemacBundleCodec.parse(json, null)
+        val fingerprint = IdentityFingerprint.generate(observed.identity)
+        if (fingerprint != binding.peerIdentityReference) {
+            contactVerification.observeIdentity(binding.conversationId, fingerprint, binding.peerIdentityReference)
+            verificationChanges.value += 1
+        }
+        return VodozemacBundleCodec.parse(json, binding.peerIdentityReference)
+    }
 
     suspend fun profileDisplayName(): String = stateStore.read("profile", "display-name")?.let { bytes ->
         try { bytes.decodeToString() } finally { bytes.fill(0) }
@@ -157,14 +200,14 @@ class AndroidMessagingRepository(
     }
 
     fun observeCallSignals(observer: (String) -> Unit) { callSignalObserver = observer }
-    suspend fun activeConversation(): ConversationInvitation = mutex.withLock { conversation?.takeIf(SavedConversationIndex::isTrusted) ?: error("A verified conversation is required for calls") }
+    suspend fun activeConversation(): ConversationInvitation = mutex.withLock { conversation?.takeIf(SavedConversationIndex::isTrusted) ?: error("A pinned conversation is required") }
 
     /** Explicitly arms one replacement pre-key message after out-of-band comparison with the pinned peer. */
     suspend fun armVerifiedSessionRenewal(confirmedPeerFingerprint: String) = mutex.withLock {
         val binding = conversation?.takeIf(SavedConversationIndex::isTrusted) ?: error("A verified conversation is required")
         require(confirmedPeerFingerprint == binding.peerIdentityReference) { "Peer identity confirmation did not match" }
         require(sessions.existing(binding.peerRoutingId) != null) { "There is no established session to renew" }
-        VodozemacBundleCodec.parse(api.fetchPrekeys(binding.conversationId, binding.controlCapability, binding.peerRoutingId), confirmedPeerFingerprint)
+        pinnedBundle(binding)
         stateStore.armSessionRenewal(binding.peerRoutingId, System.currentTimeMillis() + 10 * 60_000)
     }
 
@@ -185,7 +228,7 @@ class AndroidMessagingRepository(
     }
 
     suspend fun sendCallSignal(plaintext: String) {
-        val binding = activeConversation()
+        val binding = requireVerifiedCallConversation()
         ensureCallRelayJoined(binding)
         try {
             sendCallSignalOnce(plaintext, binding.conversationId)
@@ -200,7 +243,7 @@ class AndroidMessagingRepository(
     private suspend fun sendCallSignalOnce(plaintext: String, expectedConversationId: String) = mutex.withLock {
         val binding = conversation ?: error("Call conversation is unavailable")
         require(binding.conversationId == expectedConversationId) { "Call conversation changed while reconnecting" }
-        require(binding.peerRoutingId.isNotEmpty() && binding.peerIdentityReference.startsWith("K3 ")) { "Verified contact is required for calls" }
+        requireVerifiedCallContact(verificationState(binding))
         require(plaintext.toByteArray(Charsets.UTF_8).size in 1..65_536) { "Call signal is malformed" }
         val local = identity.activeState()
         val account = identity.activeAccount()
@@ -270,7 +313,13 @@ class AndroidMessagingRepository(
         validateInvitation(invitation)
         if (invitation.peerRoutingId.isNotEmpty()) {
             require(userConfirmedPeerFingerprint == invitation.peerIdentityReference) { "Peer identity confirmation did not match" }
-            VodozemacBundleCodec.parse(api.fetchPrekeys(invitation.conversationId, invitation.controlCapability, invitation.peerRoutingId), userConfirmedPeerFingerprint)
+            val priorBytes = stateStore.read("conversation", invitation.conversationId)
+            val prior = priorBytes?.let { bytes -> try { parseInvitation(bytes.decodeToString()) } finally { bytes.fill(0) } }
+            if (prior != null && prior.peerIdentityReference.isNotEmpty()) {
+                pinnedBundle(prior, api.fetchPrekeys(invitation.conversationId, invitation.controlCapability, invitation.peerRoutingId))
+            } else {
+                VodozemacBundleCodec.parse(api.fetchPrekeys(invitation.conversationId, invitation.controlCapability, invitation.peerRoutingId), userConfirmedPeerFingerprint)
+            }
         } else require(userConfirmedPeerFingerprint == null && invitation.peerIdentityReference.isEmpty())
         val existing = stateStore.read("conversation", invitation.conversationId)
         if (existing != null) {
@@ -365,8 +414,8 @@ class AndroidMessagingRepository(
                 conversationHash = SavedConversationIndex.hash(invitation.conversationId),
                 label = stateStore.read("contact-nickname", SavedConversationIndex.hash(invitation.conversationId))?.let { bytes ->
                     try { bytes.decodeToString() } finally { bytes.fill(0) }
-                }?.takeIf(String::isNotBlank) ?: "Trusted contact",
-                trustState = "verified",
+                }?.takeIf(String::isNotBlank) ?: "Contact",
+                trustState = verificationState(invitation).name.lowercase(),
                 connectionState = if (invitation.conversationId == activeId && relay.connected.value) "connected" else "saved",
                 deliveryState = if (lastActivityByConversation[invitation.conversationId]?.let { it > 0L } == true) "has_messages" else "empty",
                 lastActivityTimestamp = lastActivityByConversation[invitation.conversationId] ?: 0L,
@@ -484,12 +533,12 @@ class AndroidMessagingRepository(
             val account = identity.activeAccount()
             val resolver = SenderBundleResolver { sender ->
                 require(sender == binding.peerRoutingId) { "Unknown conversation sender" }
-                val remote = VodozemacBundleCodec.parse(api.fetchPrekeys(binding.conversationId, binding.controlCapability, sender), binding.peerIdentityReference)
+                val remote = pinnedBundle(binding)
                 SenderBundle(remote.identity.curve25519)
             }
             val trust = DeviceTrustVerifier { sender, senderIdentity ->
                 require(sender == binding.peerRoutingId) { "Unknown sender route" }
-                val remote = VodozemacBundleCodec.parse(api.fetchPrekeys(binding.conversationId, binding.controlCapability, sender), binding.peerIdentityReference)
+                val remote = pinnedBundle(binding)
                 require(remote.identity.curve25519 == senderIdentity && IdentityFingerprint.generate(remote.identity) == binding.peerIdentityReference) { "Sender identity mismatch" }
             }
             val processor = InboundMessageProcessor(
@@ -520,7 +569,7 @@ class AndroidMessagingRepository(
         setStage("fetch_peer_prekeys")
         val bundle = api.fetchPrekeys(binding.conversationId, binding.controlCapability, binding.peerRoutingId)
         setStage("validate_peer_bundle")
-        val public = VodozemacBundleCodec.parse(bundle, binding.peerIdentityReference)
+        val public = pinnedBundle(binding, bundle)
         val oneTimeKeyId = public.oneTimeKeyId
         val claimed = if (oneTimeKeyId != null) {
             setStage("claim_peer_prekey")

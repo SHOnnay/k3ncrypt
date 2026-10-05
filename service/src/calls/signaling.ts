@@ -7,6 +7,7 @@ export class SecureCallSignaling {
     const now = Date.now();
     if (signal.callId !== session.callId || signal.conversationId !== session.conversationId || signal.identityBinding !== session.identityBinding || signal.mediaMode !== session.mediaMode || !signal.nonce || !signal.receiverIdentityId || signal.expiresAt > session.expiresAt || signal.expiresAt <= now || signal.timestamp > now + 30_000 || signal.timestamp > signal.expiresAt || !(await verifySignalDigest(signal))) throw new Error('Invalid call signal.');
     if (!(await this.identity.isParticipant(session.conversationId, signal.sender.participantId))) throw new Error('Unauthorized call participant.');
+    if (await this.identity.getVerification(signal.sender.participantId) !== 'verified') throw new Error('Verification required for calls.');
     if (signal.sender.verification === 'changed-pending-review') throw new Error('Call identity requires review.');
     const key = `${signal.callId}:${signal.sender.participantId}:${signal.sequence}`;
     const result = await this.replay.claim(key, signal.expiresAt, now);
@@ -19,7 +20,8 @@ export class SecureCallSignaling {
     const now = Date.now();
     if (!signal.callId || !signal.conversationId || !signal.nonce || !signal.receiverIdentityId || !['audio', 'video'].includes(signal.mediaMode) || signal.expiresAt <= now || signal.timestamp > now + 30_000 ||
       signal.timestamp > signal.expiresAt || !(await verifySignalDigest(signal))) throw new Error('Invalid call signal.');
-    if (!(await this.identity.isParticipant(signal.conversationId, signal.sender.participantId)) || signal.sender.verification !== 'verified') {
+    // Remote 'verified' is a legacy schema value, never local verification evidence.
+    if (!(await this.identity.isParticipant(signal.conversationId, signal.sender.participantId)) || await this.identity.getVerification(signal.sender.participantId) !== 'verified' || signal.sender.verification !== 'verified') {
       throw new Error('Unauthorized call participant.');
     }
     const key = `${signal.callId}:${signal.sender.participantId}:${signal.sequence}`;

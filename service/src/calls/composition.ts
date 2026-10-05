@@ -34,6 +34,7 @@ export interface AuthenticatedCallComposition {
   readonly signalTransport: AuthenticatedCallSignalTransport;
   readonly repository: MemoryCallRepository;
   /** Starts a call only after the authenticated identity binding is derived. */
+  readonly assertVerifiedContact?: () => Promise<void>;
   readonly invite: (mediaMode?: 'audio' | 'video') => Promise<CallSession>;
   readonly accept: (callId: string) => Promise<CallSession>;
   readonly reject: (callId: string) => Promise<CallSession>;
@@ -63,8 +64,14 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
     identityId: input.localIdentityId,
     verification: 'verified',
   };
+  const assertVerifiedContact = async (): Promise<void> => {
+    await input.deviceTrust.assertTrusted();
+    for (const participant of [localParticipant, input.remoteParticipant]) {
+      if (!await input.identity.isParticipant(input.conversationId, participant.participantId) || await input.identity.getVerification(participant.participantId) !== 'verified') throw new Error('Verification required for calls.');
+    }
+  };
   const sendEvent = async (session: CallSession, event: CallEvent, sequence: number, kind: CallSignalKind = 'control', payload?: unknown): Promise<void> => {
-    await input.deviceTrust?.assertTrusted();
+    await assertVerifiedContact();
     if (event === 'heartbeat' || event === 'expire') {
       throw new Error('Unsupported call signal event.');
     }
@@ -116,7 +123,7 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
     expiryTimers.set(session.callId, timer);
   };
   const unsubscribeSignals = signaling.onSignal(async (signal) => {
-    try { await input.deviceTrust.assertTrusted(); } catch { callSignalDiagnostic('device-trust-rejected'); throw new Error('Call device trust rejected.'); }
+    try { await assertVerifiedContact(); } catch { callSignalDiagnostic('device-trust-rejected'); throw new Error('Call device trust rejected.'); }
     const existing = await repository.get(signal.callId);
     if (!existing) {
       if (signal.event !== 'invite' || signal.receiverIdentityId !== localParticipant.identityId || signal.mediaMode !== 'audio' && signal.mediaMode !== 'video' || signal.identityBinding !== await input.identity.identityBinding(input.conversationId, [localParticipant, input.remoteParticipant])) { callSignalDiagnostic('invite-binding-rejected'); throw new Error('Unknown call.'); }
@@ -147,7 +154,7 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
     notify(updated);
   });
   const invite = async (mediaMode: 'audio' | 'video' = 'audio'): Promise<CallSession> => {
-    await input.deviceTrust?.assertTrusted();
+    await assertVerifiedContact();
     const participants: readonly [CallParticipant, CallParticipant] = [
       localParticipant,
       input.remoteParticipant,
@@ -161,7 +168,7 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
     return session;
   };
   const respond = async (callId: string, event: 'accept' | 'reject' | 'cancel'): Promise<CallSession> => {
-    await input.deviceTrust?.assertTrusted();
+    await assertVerifiedContact();
     const session = await service.event(callId, event);
     const sequence = (sequences.get(callId) ?? 0) + 1;
     sequences.set(callId, sequence);
@@ -209,5 +216,5 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
   const onMediaSignal = (listener: (session: CallSession, signal: CallSignal) => Promise<void>): (() => void) => { mediaListeners.add(listener); return () => mediaListeners.delete(listener); };
   // Keep the transport listener alive for the lifetime of the composition.
   void unsubscribeSignals;
-  return Object.freeze({ service, signaling, signalTransport, repository, invite, accept: (id: string) => respond(id, 'accept'), reject: (id: string) => respond(id, 'reject'), cancel: (id: string) => respond(id, 'cancel'), end, onCallUpdate, sendMediaSignal, onMediaSignal });
+  return Object.freeze({ assertVerifiedContact, service, signaling, signalTransport, repository, invite, accept: (id: string) => respond(id, 'accept'), reject: (id: string) => respond(id, 'reject'), cancel: (id: string) => respond(id, 'cancel'), end, onCallUpdate, sendMediaSignal, onMediaSignal });
 };

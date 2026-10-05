@@ -1,4 +1,9 @@
+jest.mock('../crypto/base64url', () => ({
+  toBase64Url: (bytes: Uint8Array) => Buffer.from(bytes).toString('base64url'),
+  fromBase64Url: (value: string) => new Uint8Array(Buffer.from(value, 'base64url')),
+}));
 import { webcrypto } from 'crypto';
+import { ContactIdentityRegistry } from '../identity/contactIdentityRegistry';
 import type { CryptoSession, EncryptedEnvelope, TransportManager } from '../core/contracts';
 import { createAuthenticatedCallComposition } from './composition';
 import { VerifiedCallIdentityVerifier, signalDigest } from './signalBinding';
@@ -169,5 +174,84 @@ describe('authenticated bidirectional call flow', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+});
+
+describe('live local verification call admission', () => {
+  const states = ['unverified', 'unknown', 'changed-pending-review'] as const;
+  it.each(states)('rejects outgoing %s before encrypted transport and does not promote trust', async (state) => {
+    const transports = connectedTransports();
+    const sent = jest.spyOn(transports.alice, 'sendEnvelope');
+    const verifier = new VerifiedCallIdentityVerifier(new Set(['alice', 'bob']), new Map([['alice', 'verified'], ['bob', 'verified']]), async () => state);
+    const alice = createAuthenticatedCallComposition({ session: session(), transport: transports.alice, conversationId, localIdentityId: 'alice-id', localParticipantId: 'alice', remoteParticipant: participant('bob', 'bob-id'), identity: verifier, deviceTrust });
+    await expect(alice.invite()).rejects.toThrow('Verification');
+    expect(sent).not.toHaveBeenCalled();
+    expect(await verifier.getVerification('bob')).toBe(state);
+  });
+  it.each(states)('rejects incoming remote verified claim against local %s', async (state) => {
+    const transports = connectedTransports();
+    const alice = createAuthenticatedCallComposition({ session: session(), transport: transports.alice, conversationId, localIdentityId: 'alice-id', localParticipantId: 'alice', remoteParticipant: participant('bob', 'bob-id'), identity: identity('alice', 'bob'), deviceTrust });
+    const verifier = new VerifiedCallIdentityVerifier(new Set(['alice', 'bob']), new Map([['alice', 'verified'], ['bob', 'verified']]), async () => state);
+    const bob = createAuthenticatedCallComposition({ session: session(), transport: transports.bob, conversationId, localIdentityId: 'bob-id', localParticipantId: 'bob', remoteParticipant: participant('alice', 'alice-id'), identity: verifier, deviceTrust });
+    const updates = jest.fn(); bob.onCallUpdate(updates);
+    transports.connect(alice.signalTransport, bob.signalTransport);
+    await expect(alice.invite()).rejects.toThrow();
+    expect(updates).not.toHaveBeenCalled();
+    expect(await verifier.getVerification('alice')).toBe(state);
+  });
+  it('rechecks a cached composition after local unverify before accept and further sends', async () => {
+    const transports = connectedTransports();
+    let state: 'verified' | 'unverified' = 'verified';
+    const verifier = new VerifiedCallIdentityVerifier(new Set(['alice', 'bob']), new Map([['alice', 'verified'], ['bob', 'verified']]), async () => state);
+    const alice = createAuthenticatedCallComposition({ session: session(), transport: transports.alice, conversationId, localIdentityId: 'alice-id', localParticipantId: 'alice', remoteParticipant: participant('bob', 'bob-id'), identity: identity('alice', 'bob'), deviceTrust });
+    const bob = createAuthenticatedCallComposition({ session: session(), transport: transports.bob, conversationId, localIdentityId: 'bob-id', localParticipantId: 'bob', remoteParticipant: participant('alice', 'alice-id'), identity: verifier, deviceTrust });
+    transports.connect(alice.signalTransport, bob.signalTransport);
+    const call = await alice.invite();
+    expect((await bob.service.get(call.callId))?.state).toBe('ringing');
+    state = 'unverified';
+    await expect(bob.accept(call.callId)).rejects.toThrow('Verification');
+    await expect(bob.sendMediaSignal(call.callId, 'connected', 'ice-candidate', { candidate: 'test' })).rejects.toThrow('Verification');
+    expect(state).toBe('unverified');
+  });
+});
+
+describe('call admission backed by actual local contact records', () => {
+  const contact = { identityId: 'alice-id', algorithm: 'test', publicKey: new Uint8Array(32).fill(1), verification: 'verified' as const };
+  const setup = () => {
+    const records = new Map<string, ArrayBuffer>();
+    const writes = jest.fn(async (type: string, id: string, bytes: ArrayBuffer) => { records.set(`${type}:${id}`, bytes.slice(0)); });
+    const storage = { read: async (type: string, id: string) => records.get(`${type}:${id}`), write: writes } as unknown as import('../core/contracts').SecureStorage;
+    const registry = new ContactIdentityRegistry(storage);
+    const verifier = new VerifiedCallIdentityVerifier(new Set(['alice', 'bob']), new Map([['alice', 'verified'], ['bob', 'verified']]), async () => {
+      const current = await registry.get('alice', false);
+      if (!current || current.identityId !== 'alice-id') return 'unknown';
+      return current.changeStatus === 'unchanged' ? current.verification : 'changed-pending-review';
+    });
+    const transports = connectedTransports();
+    const alice = createAuthenticatedCallComposition({ session: session(), transport: transports.alice, conversationId, localIdentityId: 'alice-id', localParticipantId: 'alice', remoteParticipant: participant('bob', 'bob-id'), identity: identity('alice', 'bob'), deviceTrust });
+    const bob = createAuthenticatedCallComposition({ session: session(), transport: transports.bob, conversationId, localIdentityId: 'bob-id', localParticipantId: 'bob', remoteParticipant: participant('alice', 'alice-id'), identity: verifier, deviceTrust });
+    transports.connect(alice.signalTransport, bob.signalTransport);
+    return { records, writes, registry, alice, bob };
+  };
+  it.each(['missing', 'unverified', 'changed', 'corrupt'] as const)('rejects incoming and outgoing with local %s records despite remote verified', async (state) => {
+    const { records, writes, registry, alice, bob } = setup();
+    if (state !== 'missing') await registry.observe('alice', contact);
+    if (state === 'changed') { await registry.markVerified('alice', 'alice-id'); await registry.observe('alice', { ...contact, identityId: 'new-alice', publicKey: new Uint8Array(32).fill(2) }); }
+    if (state === 'corrupt') records.set('contact-identity:alice', new TextEncoder().encode('{}').buffer);
+    writes.mockClear();
+    await expect(bob.invite()).rejects.toThrow();
+    await expect(alice.invite()).rejects.toThrow();
+    expect(writes).not.toHaveBeenCalled();
+  });
+  it('permits an explicitly verified unchanged record and the existing encrypted accept flow without trust writes', async () => {
+    const { registry, writes, alice, bob } = setup();
+    await registry.observe('alice', contact);
+    await registry.markVerified('alice', 'alice-id');
+    writes.mockClear();
+    const incoming = await alice.invite();
+    expect((await bob.service.get(incoming.callId))?.state).toBe('ringing');
+    await bob.accept(incoming.callId);
+    expect((await alice.service.get(incoming.callId))?.state).toBe('accepted');
+    expect(writes).not.toHaveBeenCalled();
   });
 });

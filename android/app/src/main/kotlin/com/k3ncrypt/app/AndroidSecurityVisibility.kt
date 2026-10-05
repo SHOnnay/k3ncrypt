@@ -7,6 +7,7 @@ internal enum class AndroidSendAttemptState { SENDING, RELAY_ACKNOWLEDGED, COULD
 internal data class AndroidSecurityVisibility(
     val identityBinding: AndroidIdentityBinding,
     val verificationRecorded: Boolean,
+    val verificationState: ContactVerificationState,
     val identityChangeRecorded: Boolean,
     val transport: String,
     val relaySocket: AndroidRelaySocketState,
@@ -19,10 +20,12 @@ internal fun deriveAndroidSecurityVisibility(
     peerRoutingId: String,
     peerIdentityReference: String,
     relayConnected: Boolean,
+    verification: ContactVerificationState = ContactVerificationState.UNKNOWN,
 ): AndroidSecurityVisibility = AndroidSecurityVisibility(
     identityBinding = if (peerRoutingId.isNotBlank() && peerIdentityReference.startsWith("K3 ")) AndroidIdentityBinding.PINNED else AndroidIdentityBinding.NOT_PINNED,
-    verificationRecorded = false,
-    identityChangeRecorded = false,
+    verificationRecorded = verification == ContactVerificationState.VERIFIED,
+    verificationState = verification,
+    identityChangeRecorded = verification == ContactVerificationState.IDENTITY_CHANGED_PENDING_REVIEW,
     transport = "Relay",
     relaySocket = if (relayConnected) AndroidRelaySocketState.CONNECTED else AndroidRelaySocketState.DISCONNECTED,
     sessionHealthRecorded = false,
@@ -41,4 +44,11 @@ internal fun deriveAndroidMessageDeliveryVisibility(state: AndroidSendAttemptSta
         "Could not confirm sending · recipient status unknown",
         "The app did not receive a confirmed result. A timeout can leave the relay outcome unknown.",
     )
+}
+
+internal fun verificationLabel(state: ContactVerificationState): String = when (state) {
+    ContactVerificationState.VERIFIED -> "Verified"
+    ContactVerificationState.UNVERIFIED -> "Unverified"
+    ContactVerificationState.IDENTITY_CHANGED_PENDING_REVIEW -> "Identity changed · review required"
+    ContactVerificationState.UNKNOWN -> "Verification unavailable"
 }

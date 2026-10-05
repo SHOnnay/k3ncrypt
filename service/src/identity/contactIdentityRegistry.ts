@@ -44,86 +44,121 @@ const parseStored = (bytes: ArrayBuffer): StoredContactIdentity => {
 const encodeStored = (value: StoredContactIdentity): ArrayBuffer =>
     new TextEncoder().encode(JSON.stringify(value)).buffer as ArrayBuffer;
 
+const registryQueues = new WeakMap<SecureStorage, Promise<unknown>>();
+
 /** Detects key changes and requires explicit acceptance before replacing any known identity. */
 export class ContactIdentityRegistry {
     constructor(private readonly storage: SecureStorage, private readonly now: () => number = Date.now) {}
+    private serialized<T>(operation: () => Promise<T>): Promise<T> {
+        const next = (registryQueues.get(this.storage) ?? Promise.resolve()).catch(() => undefined).then(operation);
+        registryQueues.set(this.storage, next.catch(() => undefined));
+        return next;
+    }
+
+    private async writeRecord(contactId: string, expected: ArrayBuffer | undefined, next: StoredContactIdentity): Promise<void> {
+        const encoded = encodeStored(next);
+        if (this.storage.compareAndSwapRecords) {
+            if (!await this.storage.compareAndSwapRecords([{ recordType: RECORD_TYPE, recordId: contactId, expected, next: encoded }])) throw new Error('Contact state changed concurrently; review it again.');
+        } else {
+            // Non-production adapters serialize through the shared storage-object queue.
+            await this.storage.write(RECORD_TYPE, contactId, encoded);
+        }
+    }
 
     public async observe(contactId: string, presented: ContactIdentity): Promise<ContactIdentityEvent> {
-        const storedBytes = await this.storage.read(RECORD_TYPE, contactId);
-        const presentedRecord = {
-            identityId: presented.identityId,
-            algorithm: presented.algorithm,
-            publicKey: toBase64Url(presented.publicKey),
-        };
-        if (!storedBytes) {
-            const current: StoredContactIdentity = {
-                contactId,
-                ...presentedRecord,
-                verification: 'unverified',
-                changeStatus: 'unchanged',
+        return this.serialized(async () => {
+            const storedBytes = await this.storage.read(RECORD_TYPE, contactId);
+            const presentedRecord = {
+                identityId: presented.identityId,
+                algorithm: presented.algorithm,
+                publicKey: toBase64Url(presented.publicKey),
             };
-            await this.storage.write(RECORD_TYPE, contactId, encodeStored(current));
-            return { kind: 'first-seen', current };
-        }
-        const current = await this.applyRecoveryReset(parseStored(storedBytes));
-        if (current.identityId === presentedRecord.identityId &&
-            current.algorithm === presentedRecord.algorithm && current.publicKey === presentedRecord.publicKey) {
-            return { kind: 'unchanged', current };
-        }
-        const changed: StoredContactIdentity = {
-            ...current,
-            // A changed key can never inherit a previous verification. The
-            // old verified state remains observable through the event, while
-            // the pending key requires a fresh explicit verification.
-            verification: current.verification === 'verified' ? 'unverified' : current.verification,
-            changeStatus: 'changed-pending-review',
-            identityChangedAt: this.now(),
-            pendingIdentity: presentedRecord,
-        };
-        await this.storage.write(RECORD_TYPE, contactId, encodeStored(changed));
-        return {
-            kind: 'identity-changed',
-            current: changed,
-            presented: presentedRecord,
-            verifiedIdentityPreserved: current.verification === 'verified',
-        };
+            if (!storedBytes) {
+                const current: StoredContactIdentity = {
+                    contactId,
+                    ...presentedRecord,
+                    verification: 'unverified',
+                    changeStatus: 'unchanged',
+                };
+                await this.writeRecord(contactId, undefined, current);
+                return { kind: 'first-seen', current };
+            }
+            const current = await this.applyRecoveryReset(parseStored(storedBytes), storedBytes);
+            if (current.identityId === presentedRecord.identityId &&
+                current.algorithm === presentedRecord.algorithm && current.publicKey === presentedRecord.publicKey) {
+                return { kind: 'unchanged', current };
+            }
+            const changed: StoredContactIdentity = {
+                ...current,
+                // A changed key can never inherit a previous verification. The
+                // old verified state remains observable through the event, while
+                // the pending key requires a fresh explicit verification.
+                verification: current.verification === 'verified' ? 'unverified' : current.verification,
+                changeStatus: 'changed-pending-review',
+                identityChangedAt: this.now(),
+                pendingIdentity: presentedRecord,
+            };
+            await this.writeRecord(contactId, current.verification === parseStored(storedBytes).verification ? storedBytes : encodeStored(current), changed);
+            return {
+                kind: 'identity-changed',
+                current: changed,
+                presented: presentedRecord,
+                verifiedIdentityPreserved: current.verification === 'verified',
+            };
+        });
     }
 
-    public async markVerified(contactId: string): Promise<void> {
-        const bytes = await this.storage.read(RECORD_TYPE, contactId);
-        if (!bytes) throw new Error('Unknown contact identity.');
-        const current = parseStored(bytes);
-        if (current.changeStatus !== 'unchanged') throw new Error('Review the changed identity before verifying it.');
-        await this.storage.write(RECORD_TYPE, contactId, encodeStored({ ...current, verification: 'verified', verifiedAt: this.now() }));
+    public async markVerified(contactId: string, expectedIdentity?: string): Promise<void> {
+        return this.serialized(async () => {
+            const bytes = await this.storage.read(RECORD_TYPE, contactId);
+            if (!bytes) throw new Error('Unknown contact identity.');
+            const current = parseStored(bytes);
+            if (expectedIdentity !== undefined && expectedIdentity !== current.identityId) throw new Error('Contact identity changed during comparison.');
+            if (current.changeStatus !== 'unchanged') throw new Error('Review the changed identity before verifying it.');
+            await this.writeRecord(contactId, bytes, { ...current, verification: 'verified', verifiedAt: this.now() });
+        });
     }
 
-    public async get(contactId: string): Promise<StoredContactIdentity | undefined> {
-        const bytes = await this.storage.read(RECORD_TYPE, contactId);
-        return bytes ? this.applyRecoveryReset(parseStored(bytes)) : undefined;
+    public async markUnverified(contactId: string): Promise<void> {
+        return this.serialized(async () => {
+            const bytes = await this.storage.read(RECORD_TYPE, contactId);
+            if (!bytes) throw new Error('Unknown contact identity.');
+            const current = parseStored(bytes);
+            await this.writeRecord(contactId, bytes, { ...current, verification: 'unverified', verifiedAt: undefined });
+        });
+    }
+
+    public async get(contactId: string, persistRecoveryReset = true): Promise<StoredContactIdentity | undefined> {
+        return this.serialized(async () => {
+            const bytes = await this.storage.read(RECORD_TYPE, contactId);
+            return bytes ? this.applyRecoveryReset(parseStored(bytes), bytes, persistRecoveryReset) : undefined;
+        });
     }
 
     public async acceptPendingChange(contactId: string): Promise<void> {
-        const bytes = await this.storage.read(RECORD_TYPE, contactId);
-        if (!bytes) throw new Error('Unknown contact identity.');
-        const current = parseStored(bytes);
-        if (!current.pendingIdentity) throw new Error('No pending identity change.');
-        const { pendingIdentity } = current;
-        await this.storage.write(RECORD_TYPE, contactId, encodeStored({
-            contactId,
-            ...pendingIdentity,
-            verification: 'unverified',
-            changeStatus: 'unchanged',
-        }));
+        return this.serialized(async () => {
+            const bytes = await this.storage.read(RECORD_TYPE, contactId);
+            if (!bytes) throw new Error('Unknown contact identity.');
+            const current = parseStored(bytes);
+            if (!current.pendingIdentity) throw new Error('No pending identity change.');
+            const { pendingIdentity } = current;
+            await this.writeRecord(contactId, bytes, {
+                contactId,
+                ...pendingIdentity,
+                verification: 'unverified',
+                changeStatus: 'unchanged',
+            });
+        });
     }
 
-    private async applyRecoveryReset(current: StoredContactIdentity): Promise<StoredContactIdentity> {
+    private async applyRecoveryReset(current: StoredContactIdentity, expected: ArrayBuffer, persist = true): Promise<StoredContactIdentity> {
         const marker = await this.storage.read('contact-trust-reset', 'local');
         if (!marker || current.verification !== 'verified') return current;
         const reset = JSON.parse(new TextDecoder().decode(marker)) as { version?: unknown; resetAt?: unknown };
         if (reset.version !== 1 || !Number.isSafeInteger(reset.resetAt)) throw new Error('Contact trust reset state is invalid.');
         if ((current.verifiedAt ?? 0) > (reset.resetAt as number)) return current;
         const downgraded = { ...current, verification: 'unverified' as const, verifiedAt: undefined };
-        await this.storage.write(RECORD_TYPE, current.contactId, encodeStored(downgraded));
+        if (persist) await this.writeRecord(current.contactId, expected, downgraded);
         return downgraded;
     }
 }

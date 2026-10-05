@@ -85,6 +85,7 @@ export interface ChatContextType {
   createModernChannel: (passphrase: string) => Promise<string>;
   joinModernChannel: (roomId: string, controlCapability: string, address: string, identityCommitment: string, passphrase: string) => Promise<void>;
   verifyContact: () => Promise<void>;
+  unverifyContact: () => Promise<void>;
   acceptChangedIdentity: () => Promise<void>;
   prepareVerifiedSessionRenewal: () => Promise<void>;
   requestDeviceEnrollment: (deviceId: string, publicIdentityReference: string, algorithm: string) => Promise<void>;

@@ -49,7 +49,12 @@ export class ProductionCallNegotiator {
   constructor(private readonly calls: AuthenticatedCallComposition, private readonly transport: CallTransport, private readonly config: WebRtcConfigProvider, private readonly media = new CallMediaController()) {
     this.unsubscribe = calls.onMediaSignal((session, signal) => this.receive(session, signal));
   }
-  async requestMedia(kind: CaptureKind): Promise<MediaStream> { return this.media.request(kind); }
+  async requestMedia(kind: CaptureKind): Promise<MediaStream> {
+    await this.calls.assertVerifiedContact?.();
+    const stream = await this.media.request(kind);
+    try { await this.calls.assertVerifiedContact?.(); return stream; }
+    catch (error) { this.media.release(); throw error; }
+  }
   async prepareOutgoing(session: CallSession, kind: CaptureKind = session.mediaMode === 'video' ? 'camera' : 'microphone'): Promise<void> { await this.prepare(session, kind); }
   async acceptIncoming(session: CallSession, kind: CaptureKind = session.mediaMode === 'video' ? 'camera' : 'microphone'): Promise<void> { await this.prepare(session, kind); }
   getStreams(callId: string): { local?: MediaStream; remote?: MediaStream } { return { local: this.localStreams.get(callId), remote: this.remoteStreams.get(callId) }; }
@@ -83,7 +88,7 @@ export class ProductionCallNegotiator {
     void ending.finally(() => { if (this.ending.get(callId) === ending) this.ending.delete(callId); }).catch(() => undefined);
     return ending;
   }
-  dispose(): void { this.unsubscribe(); for (const id of this.connections.keys()) { callStabilityDiagnostic('cleanup-trigger', 'negotiator-dispose'); void this.cleanup(id); } }
+  dispose(): void { this.unsubscribe(); this.media.release(); for (const id of this.connections.keys()) { callStabilityDiagnostic('cleanup-trigger', 'negotiator-dispose'); void this.cleanup(id); } }
   private async receive(session: CallSession, signal: CallSignal): Promise<void> {
     const connection = this.connections.get(session.callId);
     if (signal.kind === 'offer') {
@@ -126,10 +131,11 @@ export class ProductionCallNegotiator {
     try { await connection.addIceCandidate(signal.payload); } catch { callNegotiationDiagnostic('candidate-add-failed'); throw new Error('WebRTC candidate rejected.'); }
   }
   private async prepare(session: CallSession, kind: CaptureKind): Promise<void> {
+    await this.calls.assertVerifiedContact?.();
     if (this.connections.has(session.callId)) return;
     const connection = await this.transport.connect(session, await this.config(session));
     try {
-      const stream = await this.media.request(kind);
+      const stream = await this.requestMedia(kind);
       (connection as CallMediaConnection & { addStream?: (value: MediaStream) => void }).addStream?.(stream);
       connection.onIceCandidate((value) => {
         if (!candidate(value)) return;

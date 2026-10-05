@@ -38,3 +38,65 @@ describe('ContactIdentityRegistry', () => {
         expect(unchanged.kind).toBe('unchanged');
     });
 });
+
+describe('local verification reset and serialized identity changes', () => {
+    it('persists explicit unverify across registry recreation', async () => {
+        const storage = new MemoryStorage() as unknown as SecureStorage;
+        const registry = new ContactIdentityRegistry(storage);
+        await registry.observe('contact', identity('a'));
+        await registry.markVerified('contact', 'a');
+        expect((await new ContactIdentityRegistry(storage).get('contact'))?.verification).toBe('verified');
+        await registry.markUnverified('contact');
+        expect((await new ContactIdentityRegistry(storage).get('contact'))?.verification).toBe('unverified');
+    });
+    it('cannot verify a stale comparison and serializes concurrent observation', async () => {
+        const storage = new MemoryStorage() as unknown as SecureStorage;
+        const registry = new ContactIdentityRegistry(storage);
+        await registry.observe('contact', identity('a'));
+        await registry.markVerified('contact', 'a');
+        const other = new ContactIdentityRegistry(storage);
+        const results = await Promise.allSettled([registry.observe('contact', identity('b')), other.markVerified('contact', 'a')]);
+        expect(results[1].status).toBe('rejected');
+        expect((await registry.get('contact'))?.changeStatus).toBe('changed-pending-review');
+        await registry.markUnverified('contact');
+        expect((await registry.get('contact'))?.changeStatus).toBe('changed-pending-review');
+        await registry.acceptPendingChange('contact');
+        await expect(registry.markVerified('contact', 'a')).rejects.toThrow('comparison');
+        await registry.markVerified('contact', 'b');
+        expect((await registry.get('contact'))?.verification).toBe('verified');
+    });
+});
+
+it('uses production atomic comparison and refuses a stale identity verification write', async () => {
+    const memory = new MemoryStorage();
+    const storage = memory as unknown as SecureStorage;
+    let rejectNext = false;
+    storage.compareAndSwapRecords = async (updates) => {
+        if (rejectNext) { rejectNext = false; return false; }
+        for (const update of updates) {
+            const current = await memory.read(update.recordType, update.recordId);
+            if (Buffer.from(current ?? new ArrayBuffer(0)).compare(Buffer.from(update.expected ?? new ArrayBuffer(0))) !== 0) return false;
+        }
+        for (const update of updates) await memory.write(update.recordType, update.recordId, update.next);
+        return true;
+    };
+    const registry = new ContactIdentityRegistry(storage);
+    await registry.observe('contact', identity('a'));
+    rejectNext = true;
+    await expect(registry.markVerified('contact', 'a')).rejects.toThrow('concurrently');
+    expect((await registry.get('contact'))?.verification).toBe('unverified');
+    await registry.markVerified('contact', 'a');
+    await registry.observe('contact', identity('b'));
+    expect((await registry.get('contact'))?.changeStatus).toBe('changed-pending-review');
+});
+
+it('call authority reads do not write verification even when a recovery reset is pending', async () => {
+    const memory = new MemoryStorage();
+    const registry = new ContactIdentityRegistry(memory as unknown as SecureStorage, () => 10);
+    await registry.observe('contact', identity('a'));
+    await registry.markVerified('contact', 'a');
+    await memory.write('contact-trust-reset', 'local', new TextEncoder().encode(JSON.stringify({ version: 1, resetAt: 20 })).buffer);
+    const write = jest.spyOn(memory, 'write');
+    expect((await registry.get('contact', false))?.verification).toBe('unverified');
+    expect(write).not.toHaveBeenCalled();
+});

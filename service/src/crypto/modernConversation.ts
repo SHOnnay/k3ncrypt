@@ -931,15 +931,15 @@ export class ModernConversation {
      */
     public async createAuthenticatedCallComposition(): Promise<AuthenticatedCallComposition> {
         if (this.sessionHealth !== 'healthy') throw new Error('The encrypted session needs verified renewal before calling.');
-        if (this.callComposition) return this.callComposition;
         if (!this.roomId || !this.localAddress || !this.localIdentityId || !this.remoteAddress) {
             throw new Error('Modern conversation is not ready for calling.');
         }
         await this.assertCurrentDeviceTrust();
-        const contact = await this.getContact();
+        const contact = await this.registry.get(this.remoteAddress, false);
         if (!contact || contact.changeStatus !== 'unchanged' || contact.verification !== 'verified') {
             throw new Error('Verify this contact before starting a call.');
         }
+        if (this.callComposition) return this.callComposition;
         // Calls use the established conversation session for encrypted
         // signaling. Do not create an outbound session just to prepare call
         // support: both peers may do so independently before the first
@@ -954,6 +954,13 @@ export class ModernConversation {
         const identity = new VerifiedCallIdentityVerifier(
             new Set([localParticipant.participantId, remoteParticipant.participantId]),
             new Map([[localParticipant.participantId, localParticipant.verification], [remoteParticipant.participantId, remoteParticipant.verification]]),
+            async () => {
+                if (this.sessionHealth !== 'healthy') return 'unknown';
+                const current = await this.registry.get(remoteParticipant.participantId, false);
+                if (!current || current.identityId !== remoteParticipant.identityId) return 'unknown';
+                if (current.changeStatus !== 'unchanged') return 'changed-pending-review';
+                return current.verification;
+            },
         );
         const composition = createAuthenticatedCallComposition({
             session: this.runtime.getAuthenticatedSession(),
@@ -1036,9 +1043,14 @@ export class ModernConversation {
         return this.recoveryRuntime;
     }
 
-    public async verifyContact(confirmed: boolean): Promise<void> {
+    public async verifyContact(confirmed: boolean, expectedIdentity?: string): Promise<void> {
         if (!confirmed || !this.remoteAddress) throw new Error('Confirm the comparison before verifying this contact.');
-        await this.registry.markVerified(this.remoteAddress);
+        await this.registry.markVerified(this.remoteAddress, expectedIdentity ?? (await this.registry.get(this.remoteAddress))?.identityId);
+    }
+
+    public async unverifyContact(): Promise<void> {
+        if (!this.remoteAddress) throw new Error('No contact is open.');
+        await this.registry.markUnverified(this.remoteAddress);
     }
 
     /** Explicitly accepts a changed public identity; the prior session is discarded and a fresh pre-key flow is required. */

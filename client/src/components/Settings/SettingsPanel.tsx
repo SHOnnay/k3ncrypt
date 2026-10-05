@@ -43,7 +43,7 @@ const viewTitles: Record<SettingsView, string> = {
 
 export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose }) => {
   const [view, setView] = useState<SettingsView>('settings');
-  const { channelHash, isConnected, protocolMode, userId, ownFingerprint, contactIdentity, verifyContact, acceptChangedIdentity, prepareVerifiedSessionRenewal, sessionHealth, deleteChannel, deviceLifecycleState, pendingDeviceEnrollment, pendingDeviceApproval, requestDeviceEnrollment, approveDeviceEnrollment, rejectDeviceEnrollment, confirmDeviceEnrollment, revokeDevice, privacyPreferences, updatePrivacyPreferences, permissionStatus, refreshPermissionStatus, syncStatus, profileDisplayName, updateProfileDisplayName, accountState } = useChat();
+  const { channelHash, isConnected, protocolMode, userId, ownFingerprint, contactIdentity, verifyContact, unverifyContact, acceptChangedIdentity, prepareVerifiedSessionRenewal, sessionHealth, deleteChannel, deviceLifecycleState, pendingDeviceEnrollment, pendingDeviceApproval, requestDeviceEnrollment, approveDeviceEnrollment, rejectDeviceEnrollment, confirmDeviceEnrollment, revokeDevice, privacyPreferences, updatePrivacyPreferences, permissionStatus, refreshPermissionStatus, syncStatus, profileDisplayName, updateProfileDisplayName, accountState } = useChat();
   const [comparisonConfirmed, setComparisonConfirmed] = useState(false);
   const [verificationError, setVerificationError] = useState('');
   const [qrInput, setQrInput] = useState('');
@@ -196,6 +196,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
                 {contactIdentity ? <>
                   <strong>Verified contacts</strong>
                   <StatusPill tone={contactIdentity.verification === 'verified' && contactIdentity.changeStatus === 'unchanged' ? 'positive' : 'quiet'}>{contactIdentity.changeStatus === 'changed-pending-review' ? 'Identity changed · review required' : contactIdentity.verification === 'verified' ? 'Verified' : 'Unverified'}</StatusPill>
+                      <button className="btn btn--secondary" type="button" onClick={() => unverifyContact().catch(() => setVerificationError('Could not reset verification.'))}>Mark unverified</button>
                   <strong>Contact fingerprint</strong><code className="verification-code">{contactIdentity.identityId}</code>
                   <button className="btn btn--secondary" type="button" onClick={() => navigator.clipboard.writeText(contactIdentity.identityId)}>Copy contact fingerprint</button>
                   {contactIdentity.changeStatus === 'changed-pending-review' ? <>
@@ -203,7 +204,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
                     <strong>Previous fingerprint</strong><code className="verification-code">{contactIdentity.identityId}</code>
                     <strong>New fingerprint</strong><code className="verification-code">{contactIdentity.pendingIdentity?.identityId ?? 'Unavailable'}</code>
                     <div className="verification-actions">
-                      <button className="btn btn--secondary" type="button" onClick={() => { setComparisonConfirmed(false); setRecoveryNotice('Compare the new fingerprint through another trusted channel before accepting it.'); }}>Verify again</button>
+                    <button className="btn btn--secondary" type="button" onClick={() => { setComparisonConfirmed(false); setRecoveryNotice('Compare the new fingerprint through another trusted channel before accepting it.'); }}>Verify again</button>
                       <button className="btn btn--secondary" type="button" onClick={() => setRecoveryNotice('Change rejected. This conversation remains unverified.')}>Reject change</button>
                       <button className="btn btn--danger" type="button" onClick={() => deleteChannel().catch(() => setVerificationError('Could not block this conversation.'))}>Block conversation</button>
                     </div>

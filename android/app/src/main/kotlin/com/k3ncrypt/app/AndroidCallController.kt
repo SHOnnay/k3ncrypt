@@ -19,6 +19,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -81,6 +82,12 @@ class AndroidCallController @Inject constructor(
             DebugInspectionStore.setCallDigestInputDiagnostic(diagnostic.kind, diagnostic.byteLength, diagnostic.payloadJsonLength, diagnostic.sdpValueLength, diagnostic.metadataLength, diagnostic.escapingCategory)
         }
         messaging.observeCallSignals { raw -> scope.launch { handle(raw) } }
+        scope.launch {
+            messaging.verificationRevision.collect {
+                val current = binding
+                if (current != null && messaging.verificationState(current) != ContactVerificationState.VERIFIED) finish("verification-required")
+            }
+        }
     }
 
     suspend fun startVoice(iceServers: List<IceServerConfig> = emptyList()) = start("audio", iceServers)
@@ -90,6 +97,7 @@ class AndroidCallController @Inject constructor(
         val current = mutableState.value
         check(current.incoming && callId != null) { "No incoming call is waiting" }
         if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("accept-action")
+        messaging.requireVerifiedCallConversation().also { check(it == binding) { "Call contact changed" } }
         startPeer(iceServers)
         send("accept", "control")
         signalingReady = true
@@ -126,7 +134,7 @@ class AndroidCallController @Inject constructor(
     private suspend fun start(mode: String, iceServers: List<IceServerConfig>) {
         check(mutableState.value.callId == null) { "A call is already active" }
         if (BuildConfig.DEBUG) DebugInspectionStore.clearCallSignalStages()
-        val trusted = messaging.activeConversation()
+        val trusted = messaging.requireVerifiedCallConversation()
         val local = identities.activeState()
         require(local.lifecycleState == "active" && local.accountIdentityReference != null && trusted.peerIdentityReference.startsWith("K3 ")) { "Verified device and contact are required for calls" }
         binding = trusted
@@ -209,7 +217,10 @@ class AndroidCallController @Inject constructor(
     }
 
     private suspend fun handle(raw: String) {
-        val trusted = runCatching { messaging.activeConversation() }.getOrNull() ?: return
+        val trusted = runCatching { messaging.requireVerifiedCallConversation() }.getOrNull() ?: run {
+            if (callId != null) finish("verification-required")
+            return
+        }
         val local = runCatching { identities.activeState() }.getOrNull() ?: return
         val signal = runCatching { CallSignalCodec.decode(raw) }.getOrNull() ?: return
         val now = System.currentTimeMillis()
@@ -316,6 +327,7 @@ class AndroidCallController @Inject constructor(
     private suspend fun send(event: String, kind: String, payload: JSONObject? = null) {
         signalMutex.withLock {
             val trusted = binding ?: error("Call conversation is unavailable")
+            check(messaging.requireVerifiedCallConversation() == trusted) { "Call contact changed" }
             val local = identities.activeState()
             val call = callId ?: error("Call is unavailable")
             val sequence = nextSequence
