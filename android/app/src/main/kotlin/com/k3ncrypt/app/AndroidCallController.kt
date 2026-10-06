@@ -37,6 +37,7 @@ data class AndroidCallUiState(
     val localVideo: org.webrtc.VideoTrack? = null,
     val remoteVideo: org.webrtc.VideoTrack? = null,
     val errorCategory: String? = null,
+    val receivedProtocolVersion: Int? = null,
 )
 
 /** Expire an abandoned call setup before considering a newer authenticated invite. */
@@ -52,6 +53,14 @@ internal fun shouldKeepOutgoingCallOnCollision(activeCallId: String, incomingCal
     status == "ringing" && !incoming && activeCallId <= incomingCallId
 
 internal fun isCallReconnectOfferOwner(localRoutingId: String, peerRoutingId: String): Boolean = localRoutingId < peerRoutingId
+
+/** Replay state may change only after protocol, origin, call-state, and sequence admission pass. */
+internal fun shouldClaimCallReplay(
+    protocol: CallSignalCodec.ProtocolClassification,
+    senderIdentityBound: Boolean,
+    callStateAllowsSignal: Boolean,
+    sequenceExpected: Boolean,
+): Boolean = protocol == CallSignalCodec.ProtocolClassification.CURRENT && senderIdentityBound && callStateAllowsSignal && sequenceExpected
 
 /** Owns only call/media state. Identity, Vodozemac signaling, and device proof stay in existing repositories. */
 class AndroidCallController @Inject constructor(
@@ -166,6 +175,17 @@ class AndroidCallController @Inject constructor(
     fun setMicrophoneEnabled(enabled: Boolean) { peer?.setMicrophoneEnabled(enabled); mutableState.value = mutableState.value.copy(microphoneEnabled = enabled) }
     fun setCameraEnabled(enabled: Boolean) { peer?.setCameraEnabled(enabled); mutableState.value = mutableState.value.copy(cameraEnabled = enabled) }
     fun switchCamera() { peer?.switchCamera() }
+    fun clearProtocolError() {
+        mutableState.value = if (callId == null) AndroidCallUiState() else mutableState.value.copy(errorCategory = null, receivedProtocolVersion = null)
+    }
+
+    private fun showProtocolIncompatibility(signalCallId: String, receivedVersion: Int) {
+        mutableState.value = if (callId == null) {
+            AndroidCallUiState(callId = signalCallId, status = "protocol-incompatible", errorCategory = "protocol-incompatible", receivedProtocolVersion = receivedVersion)
+        } else {
+            mutableState.value.copy(errorCategory = "protocol-incompatible", receivedProtocolVersion = receivedVersion)
+        }
+    }
 
     fun recordApplicationLifecycle(backgrounded: Boolean) {
         if (BuildConfig.DEBUG && callId != null) {
@@ -281,9 +301,16 @@ class AndroidCallController @Inject constructor(
         val local = runCatching { identities.activeState() }.getOrNull() ?: return
         val signal = runCatching { CallSignalCodec.decode(raw) }.getOrNull() ?: return
         val now = System.currentTimeMillis()
-        if (!CallSignalCodec.validate(signal, trusted.conversationId, local.deviceIdentityReference, now)) return
-        if (signal.senderParticipantId != trusted.peerRoutingId || signal.senderIdentityId != trusted.peerIdentityReference) return
-        if (signal.identityBinding != CallSignalCodec.binding(trusted.conversationId, trusted.localRoutingId, local.deviceIdentityReference, trusted.peerRoutingId, trusted.peerIdentityReference)) return
+        val senderIdentityBound = signal.senderParticipantId == trusted.peerRoutingId && signal.senderIdentityId == trusted.peerIdentityReference &&
+            signal.identityBinding == CallSignalCodec.binding(trusted.conversationId, trusted.localRoutingId, local.deviceIdentityReference, trusted.peerRoutingId, trusted.peerIdentityReference)
+        if (!senderIdentityBound) return
+        val protocolClassification = CallSignalCodec.classifyProtocol(signal, trusted.conversationId, local.deviceIdentityReference, now)
+        when (protocolClassification) {
+            CallSignalCodec.ProtocolClassification.INVALID -> return
+            CallSignalCodec.ProtocolClassification.LEGACY -> { showProtocolIncompatibility(signal.callId, 1); return }
+            CallSignalCodec.ProtocolClassification.UNSUPPORTED -> { showProtocolIncompatibility(signal.callId, signal.protocolVersion ?: 1); return }
+            CallSignalCodec.ProtocolClassification.CURRENT -> Unit
+        }
         val activeId = callId
         val ownerGeneration = callGeneration
         if (activeId == signal.callId && shouldExpireCallSetupBeforeInvite(activeId, mutableState.value.status, expiresAt, now)) {
@@ -293,8 +320,23 @@ class AndroidCallController @Inject constructor(
         // INVITE is sequence 1 per attempt. Ignore a duplicate for the selected
         // attempt before touching its sequence window.
         if (signal.event == "invite" && activeId == signal.callId) return
+        if (signal.event == "invite") {
+            if (signal.timestamp < controllerStartedAt) return
+        } else {
+            if (signal.callId != callId || signal.mediaMode != mediaMode || ownerGeneration != callGeneration) return
+            val state = mutableState.value.status
+            val allowed = when (signal.event) {
+                "accept" -> isInitiator && state == "ringing"
+                "reject", "cancel", "end", "expire", "fail" -> state !in setOf("idle")
+                "connect", "reconnect" -> state in setOf("connecting", "connected", "reconnecting") && signal.kind == "offer"
+                "connected" -> state in setOf("connecting", "connected", "reconnecting") && signal.kind in setOf("answer", "ice-candidate")
+                else -> false
+            }
+            if (!allowed) return
+        }
         val previousSequence = receivedSequences[signal.callId] ?: 0L
-        if (signal.sequence != previousSequence + 1 || !replayGuard.accept(signal.callId, signal.nonce, signal.expiresAt, now)) return
+        val sequenceExpected = signal.sequence == previousSequence + 1
+        if (!shouldClaimCallReplay(protocolClassification, senderIdentityBound, callStateAllowsSignal = true, sequenceExpected = sequenceExpected) || !replayGuard.accept(signal.callId, signal.nonce, signal.expiresAt, now)) return
         rememberReceivedSequence(signal.callId, signal.sequence)
         if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("signal-received")
         if (BuildConfig.DEBUG && signal.event == "accept") DebugInspectionStore.setCallSignalStage("accept-signal-received")
@@ -302,7 +344,6 @@ class AndroidCallController @Inject constructor(
             DebugInspectionStore.setCallSignalStage("incoming-signal-received")
         }
         if (signal.event == "invite" && signal.kind == "control") {
-            if (signal.timestamp < controllerStartedAt) return
             val competingId = activeId
             if (competingId != null) {
                 if (shouldKeepOutgoingCallOnCollision(competingId, signal.callId, mutableState.value.status, mutableState.value.incoming)) {
@@ -318,7 +359,6 @@ class AndroidCallController @Inject constructor(
                 runCatching { send("cancel", "control") }
                 finish("cancelled")
             }
-            if (signal.timestamp < controllerStartedAt) return
             binding = trusted
             callGeneration += 1
             callId = signal.callId
@@ -334,16 +374,6 @@ class AndroidCallController @Inject constructor(
             scheduleSetupTimeout(signal.callId)
             return
         }
-        if (signal.callId != callId || signal.mediaMode != mediaMode || ownerGeneration != callGeneration) return
-        val state = mutableState.value.status
-        val allowed = when (signal.event) {
-            "accept" -> isInitiator && state == "ringing"
-            "reject", "cancel", "end", "expire", "fail" -> state !in setOf("idle")
-            "connect", "reconnect" -> state in setOf("connecting", "connected", "reconnecting") && signal.kind == "offer"
-            "connected" -> state in setOf("connecting", "connected", "reconnecting") && signal.kind in setOf("answer", "ice-candidate")
-            else -> false
-        }
-        if (!allowed) return
         when (signal.event) {
             "accept" -> {
                 mutableState.value = mutableState.value.copy(status = "connecting")

@@ -6,8 +6,8 @@ import { webcrypto } from 'crypto';
 import { ContactIdentityRegistry } from '../identity/contactIdentityRegistry';
 import type { CryptoSession, EncryptedEnvelope, TransportManager } from '../core/contracts';
 import { createAuthenticatedCallComposition } from './composition';
-import { VerifiedCallIdentityVerifier, signalDigest } from './signalBinding';
-import type { CallSignal } from './contracts';
+import { identityBinding, VerifiedCallIdentityVerifier, legacySignalDigest, signalDigest } from './signalBinding';
+import type { CallSession, CallSignal } from './contracts';
 
 if (!globalThis.crypto) Object.defineProperty(globalThis, 'crypto', { value: webcrypto });
 
@@ -128,6 +128,7 @@ describe('authenticated bidirectional call flow', () => {
     const call = await alice.invite();
     const unsigned: Omit<CallSignal, 'payloadDigest'> = {
       callId: call.callId,
+      protocolVersion: 2,
       conversationId: '22222222-2222-4222-8222-222222222222',
       sender: participant('alice', 'alice-id'),
       receiverIdentityId: 'bob-id',
@@ -196,11 +197,107 @@ describe('authenticated bidirectional call flow', () => {
     const now = Date.now();
     const unsigned: Omit<CallSignal, 'payloadDigest'> = {
       callId: call.callId, conversationId, sender: participant('alice', 'alice-id'), receiverIdentityId: 'bob-id', mediaMode: 'audio',
-      nonce: '22222222-2222-4222-8222-222222222222', event: 'invite', kind: 'control', sequence: 3, timestamp: now,
+      protocolVersion: 2, nonce: '22222222-2222-4222-8222-222222222222', event: 'invite', kind: 'control', sequence: 3, timestamp: now,
       expiresAt: now + 60_000, identityBinding: call.identityBinding,
     };
     await alice.signalTransport.send({ ...unsigned, payloadDigest: await signalDigest(unsigned) });
     expect(await bob.service.get(call.callId)).toMatchObject({ state: 'cancelled' });
+  });
+
+  it('recognizes authenticated legacy invites as incompatible without admitting or replay-claiming them', async () => {
+    const transports = connectedTransports();
+    const bob = createAuthenticatedCallComposition({ session: session(), transport: transports.bob, conversationId, localIdentityId: 'bob-id', localParticipantId: 'bob', remoteParticipant: participant('alice', 'alice-id'), identity: identity('bob', 'alice'), deviceTrust });
+    transports.connect({ receive: async () => undefined }, bob.signalTransport);
+    const protocolIssue = jest.fn();
+    bob.onProtocolIssue(protocolIssue);
+    const now = Date.now();
+    const unsigned: Omit<CallSignal, 'payloadDigest'> = {
+      callId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', conversationId,
+      sender: participant('alice', 'alice-id'), receiverIdentityId: 'bob-id', mediaMode: 'audio',
+      nonce: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', event: 'invite', kind: 'control', sequence: 1,
+      timestamp: now, expiresAt: now + 60_000,
+      identityBinding: await identityBinding(conversationId, [participant('alice', 'alice-id'), participant('bob', 'bob-id')]),
+    };
+    const legacy = { ...unsigned, payloadDigest: await legacySignalDigest(unsigned) };
+    await bob.signalTransport.receivePlaintext(new TextEncoder().encode(JSON.stringify(legacy)).buffer as ArrayBuffer);
+    expect(protocolIssue).toHaveBeenCalledWith({ callId: legacy.callId, receivedVersion: 1, requiredVersion: 2 });
+    expect(await bob.service.get(legacy.callId)).toBeUndefined();
+  });
+
+  it('reports a future protocol with extensions as unsupported without treating it as a call', async () => {
+    const transports = connectedTransports();
+    const bob = createAuthenticatedCallComposition({ session: session(), transport: transports.bob, conversationId, localIdentityId: 'bob-id', localParticipantId: 'bob', remoteParticipant: participant('alice', 'alice-id'), identity: identity('bob', 'alice'), deviceTrust });
+    const issues = jest.fn(); bob.onProtocolIssue(issues);
+    const now = Date.now();
+    const futureSignal = {
+      protocolVersion: 3,
+      callId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      conversationId,
+      sender: { ...participant('alice', 'alice-id'), futureSenderField: 'ignored-only-for-version-classification' },
+      receiverIdentityId: 'bob-id', mediaMode: 'audio', nonce: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+      event: 'invite', kind: 'control', sequence: 1, timestamp: now, expiresAt: now + 30_000,
+      identityBinding: await identityBinding(conversationId, [participant('alice', 'alice-id'), participant('bob', 'bob-id')]),
+      payloadDigest: 'future-protocol-digest', futureSignalField: { extension: true },
+    };
+    await bob.signalTransport.receivePlaintext(new TextEncoder().encode(JSON.stringify(futureSignal)).buffer as ArrayBuffer);
+    expect(issues).toHaveBeenCalledWith({ callId: futureSignal.callId, receivedVersion: 3, requiredVersion: 2 });
+    expect(await bob.service.get(futureSignal.callId)).toBeUndefined();
+  });
+
+  it('does not downgrade a current signal when its version is stripped or altered', async () => {
+    const transports = connectedTransports();
+    const alice = createAuthenticatedCallComposition({ session: session(), transport: transports.alice, conversationId, localIdentityId: 'alice-id', localParticipantId: 'alice', remoteParticipant: participant('bob', 'bob-id'), identity: identity('alice', 'bob'), deviceTrust });
+    const bob = createAuthenticatedCallComposition({ session: session(), transport: transports.bob, conversationId, localIdentityId: 'bob-id', localParticipantId: 'bob', remoteParticipant: participant('alice', 'alice-id'), identity: identity('bob', 'alice'), deviceTrust });
+    transports.connect(alice.signalTransport, bob.signalTransport);
+    const issues = jest.fn(); bob.onProtocolIssue(issues);
+    const binding = await identityBinding(conversationId, [participant('alice', 'alice-id'), participant('bob', 'bob-id')]);
+    const now = Date.now();
+    const unsigned: Omit<CallSignal, 'payloadDigest'> = {
+      callId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', protocolVersion: 2, conversationId,
+      sender: participant('alice', 'alice-id'), receiverIdentityId: 'bob-id', mediaMode: 'audio',
+      nonce: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', event: 'invite', kind: 'control', sequence: 1,
+      timestamp: now, expiresAt: now + 60_000, identityBinding: binding,
+    };
+    const signed = { ...unsigned, payloadDigest: await signalDigest(unsigned) };
+    const stripped = { ...signed } as Record<string, unknown>; delete stripped.protocolVersion;
+    await expect(bob.signalTransport.receivePlaintext(new TextEncoder().encode(JSON.stringify(stripped)).buffer as ArrayBuffer)).rejects.toThrow('integrity rejected');
+    await expect(bob.signalTransport.receivePlaintext(new TextEncoder().encode(JSON.stringify({ ...signed, protocolVersion: 3 })).buffer as ArrayBuffer)).rejects.toThrow('altered');
+    expect(issues).not.toHaveBeenCalled();
+    expect(await bob.service.get(signed.callId)).toBeUndefined();
+  });
+
+  it('keeps established v2 calls active after the invite deadline while requiring fresh reconnect signals', async () => {
+    jest.useFakeTimers();
+    try {
+      const transports = connectedTransports();
+      const alice = createAuthenticatedCallComposition({ session: session(), transport: transports.alice, conversationId, localIdentityId: 'alice-id', localParticipantId: 'alice', remoteParticipant: participant('bob', 'bob-id'), identity: identity('alice', 'bob'), deviceTrust });
+      const bob = createAuthenticatedCallComposition({ session: session(), transport: transports.bob, conversationId, localIdentityId: 'bob-id', localParticipantId: 'bob', remoteParticipant: participant('alice', 'alice-id'), identity: identity('bob', 'alice'), deviceTrust });
+      transports.connect(alice.signalTransport, bob.signalTransport);
+      const received = jest.fn(async (_session: CallSession, _signal: CallSignal) => undefined);
+      bob.onMediaSignal(received);
+      const invite = await alice.invite();
+      await bob.accept(invite.callId);
+      for (const composition of [alice, bob]) {
+        await composition.service.event(invite.callId, 'connect');
+        await composition.service.event(invite.callId, 'connected');
+      }
+
+      await jest.advanceTimersByTimeAsync(60_001);
+      expect(Date.now()).toBeGreaterThan(invite.expiresAt);
+      await alice.sendMediaSignal(invite.callId, 'reconnect', 'offer', { type: 'offer', sdp: 'fresh reconnect' });
+
+      expect(received).toHaveBeenCalledWith(expect.objectContaining({ state: 'connected' }), expect.objectContaining({
+        protocolVersion: 2,
+        event: 'reconnect',
+        expiresAt: expect.any(Number),
+      }));
+      const receivedSignal = received.mock.calls[0]?.[1];
+      expect(receivedSignal?.expiresAt).toBeGreaterThan(Date.now());
+      expect(await alice.service.get(invite.callId)).toMatchObject({ state: 'connected', protocolVersion: 2 });
+      expect(await bob.service.get(invite.callId)).toMatchObject({ state: 'connected', protocolVersion: 2 });
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });
 

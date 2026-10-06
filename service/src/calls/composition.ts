@@ -1,7 +1,7 @@
 import { testDiagnosticsEnabled } from '../utils/testDiagnostics';
 import type { CryptoSession, TransportManager } from '../core/contracts';
 import { CallAuthorization } from './authorization';
-import type { CallEvent, CallIdentityVerifier, CallParticipant, CallSession, CallSignal, CallSignalKind } from './contracts';
+import type { CallEvent, CallIdentityVerifier, CallParticipant, CallProtocolIssue, CallSession, CallSignal, CallSignalKind } from './contracts';
 import { MemoryCallRepository } from './repository';
 import { CallService } from './service';
 import { AuthenticatedCallSignalTransport } from './authenticatedTransport';
@@ -43,6 +43,7 @@ export interface AuthenticatedCallComposition {
   /** Ends an established call with the existing authenticated terminal event. */
   readonly end: (callId: string) => Promise<CallSession | undefined>;
   readonly onCallUpdate: (listener: (session: CallSession) => void) => () => void;
+  readonly onProtocolIssue: (listener: (issue: CallProtocolIssue) => void) => () => void;
   readonly sendMediaSignal: (callId: string, event: 'connect' | 'connected' | 'reconnect', kind: Exclude<CallSignalKind, 'control'>, payload: unknown) => Promise<void>;
   readonly onMediaSignal: (listener: (session: CallSession, signal: CallSignal) => Promise<void>) => () => void;
 }
@@ -51,11 +52,12 @@ export interface AuthenticatedCallComposition {
 export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompositionInput): AuthenticatedCallComposition => {
   if (!input.session.encrypted || !input.session.ready) throw new Error('Authenticated call session is not ready.');
   if (!input.deviceTrust) throw new Error('Authenticated device trust is unavailable.');
-  const signalTransport = new AuthenticatedCallSignalTransport(input.session, input.transport, input.conversationId, input.localIdentityId, input.remoteParticipant, input.identity);
+  const signalTransport = new AuthenticatedCallSignalTransport(input.session, input.transport, input.conversationId, input.localIdentityId, input.remoteParticipant, input.identity, input.localParticipantId ?? input.localIdentityId);
   const signaling = new SecureCallSignaling(input.identity, signalTransport, input.replay);
   const repository = new MemoryCallRepository();
   const service = new CallService(repository, new CallAuthorization(input.identity));
   const listeners = new Set<(session: CallSession) => void>();
+  const protocolIssueListeners = new Set<(issue: CallProtocolIssue) => void>();
   const mediaListeners = new Set<(session: CallSession, signal: CallSignal) => Promise<void>>();
   const sequences = new Map<string, number>();
   const endings = new Map<string, Promise<CallSession | undefined>>();
@@ -81,6 +83,7 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
     const now = Date.now();
     const unsigned: Omit<CallSignal, 'payloadDigest'> = {
       callId: session.callId,
+      protocolVersion: 2,
       conversationId: session.conversationId,
       sender: localParticipant,
       receiverIdentityId: session.participants.find((item) => item.identityId !== localParticipant.identityId)?.identityId ?? '',
@@ -134,6 +137,7 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
       callId: signal.callId,
       conversationId: signal.conversationId,
       participants: [localParticipant, input.remoteParticipant],
+      protocolVersion: 2,
       mediaMode: signal.mediaMode,
       identityBinding: signal.identityBinding,
       state: 'ringing',
@@ -166,6 +170,7 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
       }
       const incoming: CallSession = {
         callId: signal.callId,
+        protocolVersion: 2,
         conversationId: signal.conversationId,
         participants: [localParticipant, input.remoteParticipant],
         mediaMode: signal.mediaMode,
@@ -267,6 +272,8 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
     return ending;
   };
   const onCallUpdate = (listener: (session: CallSession) => void): (() => void) => { listeners.add(listener); return () => listeners.delete(listener); };
+  const onProtocolIssue = (listener: (issue: CallProtocolIssue) => void): (() => void) => { protocolIssueListeners.add(listener); return () => protocolIssueListeners.delete(listener); };
+  signalTransport.onProtocolIssue((issue) => protocolIssueListeners.forEach((listener) => listener(issue)));
   const sendMediaSignal = async (callId: string, event: 'connect' | 'connected' | 'reconnect', kind: Exclude<CallSignalKind, 'control'>, payload: unknown): Promise<void> => {
     await assertVerifiedContact();
     const session = await repository.get(callId); if (!session || !['accepted', 'connecting', 'connected', 'reconnecting'].includes(session.state)) throw new Error('Call is not negotiating or established.');
@@ -276,5 +283,5 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
   const onMediaSignal = (listener: (session: CallSession, signal: CallSignal) => Promise<void>): (() => void) => { mediaListeners.add(listener); return () => mediaListeners.delete(listener); };
   // Keep the transport listener alive for the lifetime of the composition.
   void unsubscribeSignals;
-  return Object.freeze({ assertVerifiedContact, service, signaling, signalTransport, repository, invite, accept: (id: string) => respond(id, 'accept'), reject: (id: string) => respond(id, 'reject'), cancel: (id: string) => respond(id, 'cancel'), end, onCallUpdate, sendMediaSignal, onMediaSignal });
+  return Object.freeze({ assertVerifiedContact, service, signaling, signalTransport, repository, invite, accept: (id: string) => respond(id, 'accept'), reject: (id: string) => respond(id, 'reject'), cancel: (id: string) => respond(id, 'cancel'), end, onCallUpdate, onProtocolIssue, sendMediaSignal, onMediaSignal });
 };

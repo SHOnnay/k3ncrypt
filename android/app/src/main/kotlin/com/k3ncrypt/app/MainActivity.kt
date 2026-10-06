@@ -1,5 +1,7 @@
 package com.k3ncrypt.app
 
+import com.k3ncrypt.calls.CallSignalCodec
+
 import android.content.Context
 import android.content.Intent
 import android.app.Activity
@@ -1232,11 +1234,11 @@ private fun IdentityAndConversationScreen(
        }
       }
       AnimatedVisibility(
-          visible = callState.callId != null,
+          visible = callState.callId != null || callState.errorCategory == "protocol-incompatible",
           enter = fadeIn(animationSpec = tween(K3ncryptMotion.normal)) + scaleIn(initialScale = 0.97f, animationSpec = tween(K3ncryptMotion.normal)),
           exit = fadeOut(animationSpec = tween(K3ncryptMotion.fast)) + scaleOut(targetScale = 0.98f, animationSpec = tween(K3ncryptMotion.fast)),
       ) {
-          val callLabel = when (callState.status.lowercase()) {
+          val callLabel = if (callState.errorCategory == "protocol-incompatible") "Incompatible call version" else when (callState.status.lowercase()) {
               "ringing" -> if (callState.incoming) "Incoming call" else "Calling…"
               "connecting" -> "Connecting…"
               "connected" -> "Connected"
@@ -1273,14 +1275,22 @@ private fun IdentityAndConversationScreen(
                       if (callState.status == "connected") {
                           Text("${callElapsedSeconds / 60}:${(callElapsedSeconds % 60).toString().padStart(2, '0')}", style = MaterialTheme.typography.titleMedium)
                       }
-                      if (callState.status == "failed" || callState.errorCategory != null) {
+                      if (callState.errorCategory == "protocol-incompatible") {
+                          Text(
+                              if ((callState.receivedProtocolVersion ?: 1) < CallSignalCodec.CURRENT_PROTOCOL_VERSION) "This contact needs a newer K3NCRYPT version to call." else "This call needs a newer K3NCRYPT version.",
+                              color = MaterialTheme.colorScheme.error,
+                              style = MaterialTheme.typography.bodyMedium,
+                          )
+                      } else if (callState.status == "failed" || callState.errorCategory != null) {
                           Text("Check your connection and try again.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
                       }
                       if (callState.mediaMode == "video" && !callState.incoming) {
                           callState.remoteVideo?.let { CallVideoSurface(it, calls, mirror = false, height = 210) }
                           callState.localVideo?.let { CallVideoSurface(it, calls, mirror = true, height = 100) }
                       }
-                      if (callState.incoming) {
+                      if (callState.errorCategory == "protocol-incompatible") {
+                          Button(onClick = calls::clearProtocolError) { Text("Dismiss") }
+                      } else if (callState.incoming) {
                           Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                               Button(onClick = {
                                   if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("accept-action")

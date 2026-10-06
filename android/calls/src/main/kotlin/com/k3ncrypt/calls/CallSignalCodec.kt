@@ -20,11 +20,14 @@ data class CallSignalValue(
     val expiresAt: Long,
     val identityBinding: String,
     val payloadDigest: String,
+    val protocolVersion: Int? = 2,
 )
 
 /** Mirrors service/src/calls/signalBinding.ts. Olm encryption authenticates the wire; digest binds the decoded call fields. */
 object CallSignalCodec {
+    const val CURRENT_PROTOCOL_VERSION = 2
     const val SIGNAL_LIFETIME_MS = 60_000L
+    enum class ProtocolClassification { CURRENT, LEGACY, UNSUPPORTED, INVALID }
     data class DigestInputDiagnostic(val kind: String, val byteLength: Int, val payloadJsonLength: Int, val sdpValueLength: Int, val metadataLength: Int, val escapingCategory: String)
     @Volatile private var digestDiagnosticSink: ((DigestInputDiagnostic) -> Unit)? = null
 
@@ -42,8 +45,9 @@ object CallSignalCodec {
         receiverIdentityId: String, mediaMode: String, event: String, kind: String = "control",
         payload: JSONObject? = null, sequence: Long, timestamp: Long, expiresAt: Long, identityBinding: String,
         nonce: String = UUID.randomUUID().toString(),
+        protocolVersion: Int? = CURRENT_PROTOCOL_VERSION,
     ): CallSignalValue {
-        val unsigned = CallSignalValue(callId, conversationId, senderParticipantId, senderIdentityId, receiverIdentityId, mediaMode, nonce, event, kind, payload, sequence, timestamp, expiresAt, identityBinding, "")
+        val unsigned = CallSignalValue(callId, conversationId, senderParticipantId, senderIdentityId, receiverIdentityId, mediaMode, nonce, event, kind, payload, sequence, timestamp, expiresAt, identityBinding, "", protocolVersion)
         val canonicalInput = canonical(unsigned)
         val digestInput = canonicalInput.toByteArray(Charsets.UTF_8)
         if (BuildConfig.DEBUG) {
@@ -60,6 +64,7 @@ object CallSignalCodec {
         val sender = "{\"participantId\":${JSONObject.quote(signal.senderParticipantId)},\"identityId\":${JSONObject.quote(signal.senderIdentityId)},\"verification\":\"verified\"}"
         return buildString {
             append('{')
+            append("\"protocolVersion\":${CURRENT_PROTOCOL_VERSION},")
             append("\"callId\":${JSONObject.quote(signal.callId)},\"conversationId\":${JSONObject.quote(signal.conversationId)},\"sender\":$sender,")
             append("\"receiverIdentityId\":${JSONObject.quote(signal.receiverIdentityId)},\"mediaMode\":${JSONObject.quote(signal.mediaMode)},\"nonce\":${JSONObject.quote(signal.nonce)},")
             append("\"event\":${JSONObject.quote(signal.event)},\"kind\":${JSONObject.quote(signal.kind)},")
@@ -72,7 +77,12 @@ object CallSignalCodec {
     fun decode(json: String): CallSignalValue {
         require(json.length in 1..65_536)
         val value = JSONObject(json)
+        val allowedFields = setOf("protocolVersion", "callId", "conversationId", "sender", "receiverIdentityId", "mediaMode", "nonce", "event", "kind", "payload", "sequence", "timestamp", "expiresAt", "identityBinding", "payloadDigest")
+        val version = if (value.has("protocolVersion")) value.optInt("protocolVersion", Int.MIN_VALUE) else null
+        if (version == null || version == CURRENT_PROTOCOL_VERSION) require(value.keys().asSequence().all { it in allowedFields }) { "Unknown call signal field" }
         val sender = value.getJSONObject("sender")
+        val allowedSenderFields = setOf("participantId", "identityId", "verification")
+        if (version == null || version == CURRENT_PROTOCOL_VERSION) require(sender.keys().asSequence().all { it in allowedSenderFields }) { "Unknown call signal sender field" }
         fun requiredString(source: JSONObject, key: String): String = (source.get(key) as? String)
             ?.takeIf { it.isNotBlank() } ?: throw IllegalArgumentException("Invalid call signal field: $key")
         fun requiredLong(key: String): Long = when (val raw = value.get(key)) {
@@ -80,20 +90,33 @@ object CallSignalCodec {
             is Long -> raw
             else -> throw IllegalArgumentException("Invalid call signal field: $key")
         }
+        fun optionalVersion(): Int? {
+            if (!value.has("protocolVersion")) return null
+            return when (val raw = value.get("protocolVersion")) {
+                is Int -> raw
+                is Long -> raw.takeIf { it in Int.MIN_VALUE..Int.MAX_VALUE }?.toInt()
+                else -> throw IllegalArgumentException("Invalid call signal protocol version")
+            }
+        }
         require(requiredString(sender, "verification") == "verified")
         val kind = if (value.has("kind")) requiredString(value, "kind") else "control"
-        val payload = if (value.has("payload")) value.get("payload") as? JSONObject
-            ?: throw IllegalArgumentException("Invalid call signal payload") else null
-        require(kind == "control" || payload != null) { "Missing call signal payload" }
+        val payload = if (value.has("payload")) {
+            val parsed = value.get("payload") as? JSONObject
+            if (version == null || version == CURRENT_PROTOCOL_VERSION) require(parsed != null) { "Invalid call signal payload" }
+            parsed
+        } else null
+        if (version == null || version == CURRENT_PROTOCOL_VERSION) require(kind == "control" || payload != null) { "Missing call signal payload" }
         return CallSignalValue(
             requiredString(value, "callId"), requiredString(value, "conversationId"), requiredString(sender, "participantId"), requiredString(sender, "identityId"),
             requiredString(value, "receiverIdentityId"), requiredString(value, "mediaMode"), requiredString(value, "nonce"), requiredString(value, "event"),
             kind, payload, requiredLong("sequence"), requiredLong("timestamp"),
-            requiredLong("expiresAt"), requiredString(value, "identityBinding"), requiredString(value, "payloadDigest"),
+            requiredLong("expiresAt"), requiredString(value, "identityBinding"), requiredString(value, "payloadDigest"), optionalVersion(),
         )
     }
 
     fun validate(signal: CallSignalValue, conversationId: String, localIdentityId: String, now: Long): Boolean {
+        if (signal.protocolVersion != CURRENT_PROTOCOL_VERSION) return false
+        if (!validSignalSemantics(signal)) return false
         if (signal.conversationId != conversationId || signal.receiverIdentityId != localIdentityId) return false
         if (signal.mediaMode !in setOf("audio", "video") || signal.event !in setOf("invite", "accept", "reject", "cancel", "connect", "connected", "reconnect", "end", "expire", "fail")) return false
         if (signal.kind !in setOf("control", "offer", "answer", "ice-candidate") || signal.sequence < 1 || signal.timestamp < 0 || signal.timestamp > now + 30_000 || signal.expiresAt <= now || signal.expiresAt <= signal.timestamp || signal.expiresAt - signal.timestamp > SIGNAL_LIFETIME_MS) return false
@@ -102,7 +125,51 @@ object CallSignalCodec {
         return true
     }
 
-    private fun canonical(value: CallSignalValue): String {
+    fun classifyProtocol(signal: CallSignalValue, conversationId: String, localIdentityId: String, now: Long): ProtocolClassification {
+        if (validate(signal, conversationId, localIdentityId, now)) return ProtocolClassification.CURRENT
+        if (signal.protocolVersion != null && signal.protocolVersion != CURRENT_PROTOCOL_VERSION) {
+            if (!validProtocolNoticeEnvelope(signal, conversationId, localIdentityId, now)) return ProtocolClassification.INVALID
+            if (isCurrentDigest(signal.copy(protocolVersion = CURRENT_PROTOCOL_VERSION))) return ProtocolClassification.INVALID
+            return ProtocolClassification.UNSUPPORTED
+        }
+        if (!validBaseSignal(signal, conversationId, localIdentityId, now)) return ProtocolClassification.INVALID
+        if (signal.protocolVersion == null) {
+            val legacyDigest = sha256(legacyCanonical(signal))
+            return if (legacyDigest == signal.payloadDigest && signal.expiresAt > now && signal.expiresAt > signal.timestamp) ProtocolClassification.LEGACY else ProtocolClassification.INVALID
+        }
+        return ProtocolClassification.INVALID
+    }
+
+    fun isCurrentDigest(signal: CallSignalValue): Boolean = signal.protocolVersion == CURRENT_PROTOCOL_VERSION && sha256(currentCanonical(signal)) == signal.payloadDigest
+
+    private fun validBaseSignal(signal: CallSignalValue, conversationId: String, localIdentityId: String, now: Long): Boolean {
+        if (signal.conversationId != conversationId || signal.receiverIdentityId != localIdentityId) return false
+        if (signal.mediaMode !in setOf("audio", "video") || signal.event !in setOf("invite", "accept", "reject", "cancel", "connect", "connected", "reconnect", "end", "expire", "fail")) return false
+        if (signal.kind !in setOf("control", "offer", "answer", "ice-candidate") || signal.sequence < 1 || signal.timestamp < 0 || signal.timestamp > now + 30_000) return false
+        if (runCatching { UUID.fromString(signal.callId) }.isFailure || runCatching { UUID.fromString(signal.nonce) }.isFailure) return false
+        return true
+    }
+
+    private fun validProtocolNoticeEnvelope(signal: CallSignalValue, conversationId: String, localIdentityId: String, now: Long): Boolean {
+        if (signal.conversationId != conversationId || signal.receiverIdentityId != localIdentityId) return false
+        if (signal.sequence < 1 || signal.timestamp < now - SIGNAL_LIFETIME_MS || signal.timestamp > now + 30_000) return false
+        return runCatching { UUID.fromString(signal.callId) }.isSuccess && runCatching { UUID.fromString(signal.nonce) }.isSuccess
+    }
+
+    private fun validSignalSemantics(signal: CallSignalValue): Boolean {
+        return when (signal.event) {
+            "invite", "accept", "reject", "cancel", "end", "expire", "fail" -> signal.kind == "control"
+            "connect", "reconnect" -> signal.kind == "offer" && signal.payload?.optString("type") == "offer" && !signal.payload.optString("sdp").isNullOrBlank()
+            "connected" -> when (signal.kind) {
+                "answer" -> signal.payload?.optString("type") == "answer" && !signal.payload.optString("sdp").isNullOrBlank()
+                "ice-candidate" -> !signal.payload?.optString("candidate").isNullOrBlank()
+                else -> false
+            }
+            else -> false
+        }
+    }
+
+    private fun legacyCanonical(value: CallSignalValue): String {
         // Legacy wire value is compatibility metadata; admission uses the receiver's local authority.
         val sender = "{\"participantId\":${canonicalQuote(value.senderParticipantId)},\"identityId\":${canonicalQuote(value.senderIdentityId)},\"verification\":\"verified\"}"
         val payload = value.payload?.let(::stableJson) ?: "null"
@@ -111,6 +178,10 @@ object CallSignalCodec {
             "\"event\":${canonicalQuote(value.event)},\"kind\":${canonicalQuote(value.kind)},\"payload\":$payload," +
             "\"sequence\":${value.sequence},\"timestamp\":${value.timestamp},\"expiresAt\":${value.expiresAt},\"identityBinding\":${canonicalQuote(value.identityBinding)}}"
     }
+
+    private fun currentCanonical(value: CallSignalValue): String = "k3ncrypt:call-signal-digest:v2\u0000{\"protocolVersion\":$CURRENT_PROTOCOL_VERSION,${legacyCanonical(value).drop(1)}"
+
+    private fun canonical(value: CallSignalValue): String = if (value.protocolVersion == CURRENT_PROTOCOL_VERSION) currentCanonical(value) else legacyCanonical(value)
 
     private fun stableJson(value: Any): String = when (value) {
         JSONObject.NULL -> "null"

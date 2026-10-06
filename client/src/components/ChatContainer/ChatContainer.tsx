@@ -19,7 +19,7 @@ interface ChatContainerProps {
 }
 
 export const ChatContainer: React.FC<ChatContainerProps> = ({ isHidden, onNewConversation }) => {
-  const { startCall, startVideoCall, callLifecycleState, conversations, channelHash, protocolMode } = useChat();
+  const { startCall, startVideoCall, callLifecycleState, callError: remoteCallError, conversations, channelHash, protocolMode } = useChat();
   const [isStartingCall, setIsStartingCall] = useState<boolean>(false);
   const [callError, setCallError] = useState('');
   const isCallBusy = ['initiating', 'ringing', 'incoming', 'connecting', 'connected', 'ending'].includes(callLifecycleState);
@@ -68,7 +68,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ isHidden, onNewCon
     <>
       <div id="chat-container" className={`chat-container ${isHidden ? 'hidden' : ''}`}>
         <ChatHeader onStartCall={handleStartCall} onStartVideoCall={handleStartVideoCall} disableStartCall={isCallBusy || isStartingCall} />
-        {callError && <div className="chat-call-error" role="alert">{callError}</div>}
+        {(callError || remoteCallError) && <div className="chat-call-error" role="alert">{remoteCallError || callError}</div>}
         <MessagesArea />
         <ChatFooter />
       </div>

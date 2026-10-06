@@ -59,6 +59,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const callSupportInstallation = useRef<Promise<void> | null>(null);
   const callMediaUnsubscribe = useRef<(() => void) | null>(null);
   const callStateUnsubscribe = useRef<(() => void) | null>(null);
+  const callProtocolUnsubscribe = useRef<(() => void) | null>(null);
   const locallyAcceptedCalls = useRef(new Set<string>());
   const [userId, setUserId] = useState<string>('');
   const [channelHash, setChannelHash] = useState<string>('');
@@ -160,6 +161,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       callMediaUnsubscribe.current = null;
       callStateUnsubscribe.current?.();
       callStateUnsubscribe.current = null;
+      callProtocolUnsubscribe.current?.();
+      callProtocolUnsubscribe.current = null;
       callNegotiator.current?.dispose();
       callNegotiator.current = new ProductionCallNegotiator(composition, new BrowserCallTransport(), async () => getRuntimeConfig().webrtc);
       setModernCallComposition(composition);
@@ -196,6 +199,11 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         });
       }
       });
+      callProtocolUnsubscribe.current = composition.onProtocolIssue((issue) => {
+        setCallError(issue.receivedVersion < issue.requiredVersion
+          ? 'This contact needs a newer K3NCRYPT version to call.'
+          : 'This call needs a newer K3NCRYPT version.');
+      });
     })();
     callSupportInstallation.current = installation;
     try {
@@ -206,6 +214,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const connectModern = async (secureVault: BrowserSecureStorage, descriptor: ConversationDescriptor, sendJoinIntroduction = false): Promise<{ ownFingerprint: string; ownAddress: string; contact?: StoredContactIdentity }> => {
+    setCallError(undefined);
     if (modern) await modern.close(false);
     setSyncStatus('recovering');
     setMessages(await readMessages(secureVault, descriptor.roomId));
@@ -249,6 +258,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           callMediaUnsubscribe.current = null;
           callStateUnsubscribe.current?.();
           callStateUnsubscribe.current = null;
+          callProtocolUnsubscribe.current?.();
+          callProtocolUnsubscribe.current = null;
           await callNegotiator.current?.dispose();
           callNegotiator.current = undefined;
           callSupportConversation.current = null;
@@ -397,6 +408,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     callMediaUnsubscribe.current = null;
     callStateUnsubscribe.current?.();
     callStateUnsubscribe.current = null;
+    callProtocolUnsubscribe.current?.();
+    callProtocolUnsubscribe.current = null;
     await callNegotiator.current?.dispose();
     callNegotiator.current = undefined;
     callSupportConversation.current = null;
@@ -583,6 +596,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     callMediaUnsubscribe.current = null;
     callStateUnsubscribe.current?.();
     callStateUnsubscribe.current = null;
+    callProtocolUnsubscribe.current?.();
+    callProtocolUnsubscribe.current = null;
     callNegotiator.current?.dispose();
     callNegotiator.current = undefined;
     callSupportConversation.current = null;
@@ -591,6 +606,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   // Start call
   const startCall = useCallback(async () => {
     if (protocolMode === 'modern') {
+      setCallError(undefined);
       if (!modern) throw new Error('Modern conversation is not ready for calling.');
       const composition = modernCallComposition ?? await modern.createAuthenticatedCallComposition();
       setModernCallComposition(composition);
@@ -603,6 +619,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const startVideoCall = useCallback(async () => {
     if (protocolMode === 'modern') {
+      setCallError(undefined);
       if (!modern) throw new Error('Modern conversation is not ready for calling.');
       const composition = modernCallComposition ?? await modern.createAuthenticatedCallComposition();
       setModernCallComposition(composition);

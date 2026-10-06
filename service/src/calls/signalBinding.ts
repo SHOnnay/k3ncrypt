@@ -17,19 +17,28 @@ const canonical = (signal: Omit<CallSignal, 'payloadDigest'>, separator = ',', s
     const sender = quote === javascriptQuote ? JSON.stringify(signal.sender) : stableJson(signal.sender, ',', false, quote);
     return `{"callId":${quote(signal.callId)},"conversationId":${quote(signal.conversationId)},"sender":${sender},"receiverIdentityId":${quote(signal.receiverIdentityId)},"mediaMode":${quote(signal.mediaMode)},"nonce":${quote(signal.nonce)},"event":${quote(signal.event)},"kind":${quote(signal.kind ?? 'control')},"payload":${stableJson(signal.payload ?? null, separator, sortKeys, quote)},"sequence":${signal.sequence},"timestamp":${signal.timestamp},"expiresAt":${signal.expiresAt},"identityBinding":${quote(signal.identityBinding)}}`;
 };
+const currentCanonical = (signal: Omit<CallSignal, 'payloadDigest'>, separator = ',', sortKeys = true, quote: StringQuoter = javascriptQuote): string => `k3ncrypt:call-signal-digest:v2\0{"protocolVersion":2,${canonical(signal, separator, sortKeys, quote).slice(1)}`;
+const digestInput = (signal: Omit<CallSignal, 'payloadDigest'>, separator = ',', sortKeys = true, quote: StringQuoter = javascriptQuote): string => {
+    if (signal.protocolVersion === 2) return currentCanonical(signal, separator, sortKeys, quote);
+    if (signal.protocolVersion === undefined || signal.protocolVersion === 1) return canonical(signal, separator, sortKeys, quote);
+    throw new Error('Unsupported call signaling protocol version.');
+};
 const digestCanonical = async (value: string): Promise<string> => { const bytes = new TextEncoder().encode(value); const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)); return [...digest].map((byte) => byte.toString(16).padStart(2, '0')).join(''); };
-export const signalDigest = async (signal: Omit<CallSignal, 'payloadDigest'>): Promise<string> => digestCanonical(canonical(signal));
+/** Version 1 is the exact historical canonical JSON byte sequence. */
+export const legacySignalDigest = async (signal: Omit<CallSignal, 'payloadDigest'>): Promise<string> => digestCanonical(canonical(signal));
+/** Version 2 uses a domain-separated canonical form that covers protocolVersion. */
+export const signalDigest = async (signal: Omit<CallSignal, 'payloadDigest'>): Promise<string> => digestCanonical(digestInput(signal));
 /** Debug-only callers may observe the byte count without accessing canonical bytes. */
-export const signalDigestInputByteLength = (signal: CallSignal): number => new TextEncoder().encode(canonical(signal)).byteLength;
+export const signalDigestInputByteLength = (signal: CallSignal): number => new TextEncoder().encode(digestInput(signal)).byteLength;
 export const signalDigestShape = (signal: CallSignal): { inputLength: number; payloadJsonLength: number; sdpValueLength: number; metadataLength: number } => {
     const encoder = new TextEncoder();
     const payloadJson = stableJson(signal.payload ?? null);
-    const inputLength = encoder.encode(canonical(signal)).byteLength;
+    const inputLength = encoder.encode(digestInput(signal)).byteLength;
     const payloadJsonLength = encoder.encode(payloadJson).byteLength;
     const sdp = signal.payload && typeof signal.payload === 'object' ? (signal.payload as Record<string, unknown>).sdp : undefined;
     return { inputLength, payloadJsonLength, sdpValueLength: typeof sdp === 'string' ? encoder.encode(sdp).byteLength : 0, metadataLength: inputLength - payloadJsonLength };
 };
-export const androidJsonQuoteSignalDigestForTest = async (signal: Omit<CallSignal, 'payloadDigest'>): Promise<string> => digestCanonical(canonical(signal, ',', true, androidJsonQuote));
+export const androidJsonQuoteSignalDigestForTest = async (signal: Omit<CallSignal, 'payloadDigest'>): Promise<string> => digestCanonical(digestInput(signal, ',', true, androidJsonQuote));
 export const matchesLegacySpacedSignalDigest = async (signal: CallSignal): Promise<boolean> => signal.payloadDigest === await digestCanonical(canonical(signal, ', '));
 const normalizePayloadStrings = (value: unknown, form: 'NFC' | 'NFD'): unknown => {
     if (typeof value === 'string') return value.normalize(form);
@@ -38,26 +47,31 @@ const normalizePayloadStrings = (value: unknown, form: 'NFC' | 'NFD'): unknown =
     return value;
 };
 export const diagnoseSignalDigestMismatch = async (signal: CallSignal): Promise<'CRLF-vs-LF' | 'escape-mismatch' | 'unicode-normalization' | 'wrapper-object-mismatch' | 'field-selection-mismatch' | 'field-order-mismatch' | 'unknown'> => {
-    if (signal.payload && signal.payloadDigest === await digestCanonical(canonical(signal, ',', false))) return 'field-order-mismatch';
+    if (signal.payload && signal.payloadDigest === await digestCanonical(digestInput(signal, ',', false))) return 'field-order-mismatch';
     const payload = signal.payload;
     if (payload && typeof payload === 'object' && typeof (payload as Record<string, unknown>).sdp === 'string') {
         const sdp = (payload as Record<string, string>).sdp;
         for (const normalized of [sdp.replace(/\r\n/g, '\n'), sdp.replace(/\r?\n/g, '\r\n'), sdp.replace(/(?:\r\n|\n)+$/g, '')]) {
             const candidate = { ...signal, payload: { ...payload, sdp: normalized } };
-            if (signal.payloadDigest === await digestCanonical(canonical(candidate))) return 'CRLF-vs-LF';
+            if (signal.payloadDigest === await digestCanonical(digestInput(candidate))) return 'CRLF-vs-LF';
         }
     }
-    if (signal.payloadDigest === await digestCanonical(canonical(signal, ',', true, androidJsonQuote))) return 'escape-mismatch';
+    if (signal.payloadDigest === await digestCanonical(digestInput(signal, ',', true, androidJsonQuote))) return 'escape-mismatch';
     if (payload) {
         for (const form of ['NFC', 'NFD'] as const) {
-            if (signal.payloadDigest === await digestCanonical(canonical({ ...signal, payload: normalizePayloadStrings(payload, form) } as CallSignal))) return 'unicode-normalization';
+            if (signal.payloadDigest === await digestCanonical(digestInput({ ...signal, payload: normalizePayloadStrings(payload, form) } as CallSignal))) return 'unicode-normalization';
         }
     }
-    if (payload && signal.payloadDigest === await digestCanonical(canonical({ ...signal, payload: stableJson(payload) } as CallSignal))) return 'wrapper-object-mismatch';
-    if (signal.payloadDigest === await digestCanonical(canonical({ ...signal, kind: undefined, payload: undefined } as CallSignal))) return 'field-selection-mismatch';
+    if (payload && signal.payloadDigest === await digestCanonical(digestInput({ ...signal, payload: stableJson(payload) } as CallSignal))) return 'wrapper-object-mismatch';
+    if (signal.payloadDigest === await digestCanonical(digestInput({ ...signal, kind: undefined, payload: undefined } as CallSignal))) return 'field-selection-mismatch';
     return 'unknown';
 };
-export const verifySignalDigest = async (signal: CallSignal): Promise<boolean> => signal.payloadDigest === await signalDigest(signal);
+export const verifySignalDigest = async (signal: CallSignal): Promise<boolean> => {
+    if (signal.protocolVersion !== undefined && signal.protocolVersion !== 1 && signal.protocolVersion !== 2) return false;
+    return signal.payloadDigest === await signalDigest(signal);
+};
+export const verifyLegacySignalDigest = async (signal: CallSignal): Promise<boolean> => signal.protocolVersion === undefined && signal.payloadDigest === await legacySignalDigest(signal);
+export const verifyCurrentSignalDigest = async (signal: CallSignal): Promise<boolean> => signal.protocolVersion === 2 && signal.payloadDigest === await signalDigest(signal);
 export const identityBinding = async (conversationId: string, participants: readonly [CallParticipant, CallParticipant]): Promise<string> => {
     const ordered = [...participants].sort((a, b) => a.identityId.localeCompare(b.identityId)).map((participant) => `${participant.participantId}:${participant.identityId}`).join('|');
     const bytes = new TextEncoder().encode(`k3ncrypt:call-binding:v1\0${conversationId}\0${ordered}`);

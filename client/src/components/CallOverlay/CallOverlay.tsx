@@ -98,7 +98,7 @@ export const CallOverlay: React.FC = () => {
         <p id="call-duration" className="call-duration">
           {formatDuration(duration)}
         </p>
-        {callError && <p className="call-error" role="alert">The call could not continue. End the call and try again.</p>}
+        {callError && <p className="call-error" role="alert">{callError}</p>}
         {isIncomingCall ? (
           <div className="incoming-call-actions">
             <Button variant="secondary" size="medium" onClick={handleAcceptCall} title="Accept Call">

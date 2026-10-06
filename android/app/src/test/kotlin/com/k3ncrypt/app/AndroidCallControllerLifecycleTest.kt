@@ -1,5 +1,6 @@
 package com.k3ncrypt.app
 
+import com.k3ncrypt.calls.CallSignalCodec
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -36,5 +37,15 @@ class AndroidCallControllerLifecycleTest {
     @Test fun `both platforms choose the lower stable routing id as reconnect offer owner`() {
         assertTrue(isCallReconnectOfferOwner("route-a", "route-b"))
         assertFalse(isCallReconnectOfferOwner("route-b", "route-a"))
+    }
+
+    @Test fun `invalid expiry protocol origin call state or sequence cannot claim replay state`() {
+        assertFalse(shouldClaimCallReplay(CallSignalCodec.ProtocolClassification.INVALID, true, true, true))
+        assertFalse(shouldClaimCallReplay(CallSignalCodec.ProtocolClassification.LEGACY, true, true, true))
+        assertFalse(shouldClaimCallReplay(CallSignalCodec.ProtocolClassification.UNSUPPORTED, true, true, true))
+        assertFalse(shouldClaimCallReplay(CallSignalCodec.ProtocolClassification.CURRENT, false, true, true))
+        assertFalse(shouldClaimCallReplay(CallSignalCodec.ProtocolClassification.CURRENT, true, false, true))
+        assertFalse(shouldClaimCallReplay(CallSignalCodec.ProtocolClassification.CURRENT, true, true, false))
+        assertTrue(shouldClaimCallReplay(CallSignalCodec.ProtocolClassification.CURRENT, true, true, true))
     }
 }
