@@ -24,6 +24,7 @@ data class CallSignalValue(
 
 /** Mirrors service/src/calls/signalBinding.ts. Olm encryption authenticates the wire; digest binds the decoded call fields. */
 object CallSignalCodec {
+    const val SIGNAL_LIFETIME_MS = 60_000L
     data class DigestInputDiagnostic(val kind: String, val byteLength: Int, val payloadJsonLength: Int, val sdpValueLength: Int, val metadataLength: Int, val escapingCategory: String)
     @Volatile private var digestDiagnosticSink: ((DigestInputDiagnostic) -> Unit)? = null
 
@@ -95,7 +96,7 @@ object CallSignalCodec {
     fun validate(signal: CallSignalValue, conversationId: String, localIdentityId: String, now: Long): Boolean {
         if (signal.conversationId != conversationId || signal.receiverIdentityId != localIdentityId) return false
         if (signal.mediaMode !in setOf("audio", "video") || signal.event !in setOf("invite", "accept", "reject", "cancel", "connect", "connected", "reconnect", "end", "expire", "fail")) return false
-        if (signal.kind !in setOf("control", "offer", "answer", "ice-candidate") || signal.sequence < 1 || signal.timestamp > now + 30_000 || signal.expiresAt <= now || signal.timestamp > signal.expiresAt) return false
+        if (signal.kind !in setOf("control", "offer", "answer", "ice-candidate") || signal.sequence < 1 || signal.timestamp < 0 || signal.timestamp > now + 30_000 || signal.expiresAt <= now || signal.expiresAt <= signal.timestamp || signal.expiresAt - signal.timestamp > SIGNAL_LIFETIME_MS) return false
         if (runCatching { UUID.fromString(signal.callId) }.isFailure || runCatching { UUID.fromString(signal.nonce) }.isFailure) return false
         if (signal.payloadDigest != sha256(canonical(signal))) return false
         return true

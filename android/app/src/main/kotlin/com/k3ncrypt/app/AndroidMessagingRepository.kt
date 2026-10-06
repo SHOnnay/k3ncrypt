@@ -200,6 +200,9 @@ class AndroidMessagingRepository(
     }
 
     fun observeCallSignals(observer: (String) -> Unit) { callSignalObserver = observer }
+    fun observeCallTransportConnectivity(observer: (Boolean) -> Unit) {
+        scope.launch { relay.connected.collect(observer) }
+    }
     suspend fun activeConversation(): ConversationInvitation = mutex.withLock { conversation?.takeIf(SavedConversationIndex::isTrusted) ?: error("A pinned conversation is required") }
 
     /** Explicitly arms one replacement pre-key message after out-of-band comparison with the pinned peer. */

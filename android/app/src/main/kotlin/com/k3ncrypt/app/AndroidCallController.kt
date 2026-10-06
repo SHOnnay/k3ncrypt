@@ -47,6 +47,12 @@ internal fun shouldExpireCallSetupBeforeInvite(
     now: Long,
 ): Boolean = activeCallId != null && expiresAt <= now && status !in setOf("connected", "reconnecting")
 
+/** Stable tie-break for simultaneous unanswered outgoing attempts; no clock ordering is involved. */
+internal fun shouldKeepOutgoingCallOnCollision(activeCallId: String, incomingCallId: String, status: String, incoming: Boolean): Boolean =
+    status == "ringing" && !incoming && activeCallId <= incomingCallId
+
+internal fun isCallReconnectOfferOwner(localRoutingId: String, peerRoutingId: String): Boolean = localRoutingId < peerRoutingId
+
 /** Owns only call/media state. Identity, Vodozemac signaling, and device proof stay in existing repositories. */
 class AndroidCallController @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -60,10 +66,13 @@ class AndroidCallController @Inject constructor(
     private var binding: ConversationInvitation? = null
     private var callId: String? = null
     private var mediaMode = "audio"
+    private var configuredIceServers: List<IceServerConfig> = emptyList()
     private var identityBinding = ""
     private var expiresAt = 0L
+    private val controllerStartedAt = System.currentTimeMillis()
+    private var callGeneration = 0L
     private var nextSequence = 1L
-    private var receivedSequence = 0L
+    private val receivedSequences = linkedMapOf<String, Long>()
     private var remoteDescriptionReady = false
     private var signalingReady = false
     private var isInitiator = false
@@ -73,7 +82,11 @@ class AndroidCallController @Inject constructor(
     private val queuedLocalIce = mutableListOf<IceValue>()
     private val replayGuard = CallReplayGuard()
     private val signalMutex = Mutex()
+    private val actionMutex = Mutex()
     private var postConnectHealthJob: Job? = null
+    private var setupTimeoutJob: Job? = null
+    private var reconnectTimeoutJob: Job? = null
+    private var relayLossJob: Job? = null
 
     fun eglContext() = peer?.eglContext() ?: error("Call video is not active")
 
@@ -81,7 +94,20 @@ class AndroidCallController @Inject constructor(
         if (BuildConfig.DEBUG) CallSignalCodec.installDebugDigestDiagnosticSink { diagnostic ->
             DebugInspectionStore.setCallDigestInputDiagnostic(diagnostic.kind, diagnostic.byteLength, diagnostic.payloadJsonLength, diagnostic.sdpValueLength, diagnostic.metadataLength, diagnostic.escapingCategory)
         }
-        messaging.observeCallSignals { raw -> scope.launch { handle(raw) } }
+        messaging.observeCallSignals { raw ->
+            val receivedGeneration = callGeneration
+            scope.launch { runCatching { actionMutex.withLock { handle(raw) } }.onFailure { if (callId != null && callGeneration == receivedGeneration) finish("failed") } }
+        }
+        messaging.observeCallTransportConnectivity { connected -> scope.launch {
+            if (connected) { relayLossJob?.cancel(); relayLossJob = null }
+            else if (callId != null && relayLossJob?.isActive != true) {
+                val disconnectedCallId = callId
+                relayLossJob = scope.launch {
+                    delay(30_000)
+                    if (callId == disconnectedCallId) finish("failed")
+                }
+            }
+        } }
         scope.launch {
             messaging.verificationRevision.collect {
                 val current = binding
@@ -93,32 +119,48 @@ class AndroidCallController @Inject constructor(
     suspend fun startVoice(iceServers: List<IceServerConfig> = emptyList()) = start("audio", iceServers)
     suspend fun startVideo(iceServers: List<IceServerConfig> = emptyList()) = start("video", iceServers)
 
-    suspend fun accept(iceServers: List<IceServerConfig> = emptyList()) {
+    suspend fun accept(iceServers: List<IceServerConfig> = emptyList()) = actionMutex.withLock { acceptLocked(iceServers) }
+
+    private suspend fun acceptLocked(iceServers: List<IceServerConfig>) {
         val current = mutableState.value
-        check(current.incoming && callId != null) { "No incoming call is waiting" }
+        val acceptedCallId = callId ?: error("No incoming call is waiting")
+        val acceptedGeneration = callGeneration
+        check(current.incoming) { "No incoming call is waiting" }
         if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("accept-action")
         messaging.requireVerifiedCallConversation().also { check(it == binding) { "Call contact changed" } }
-        startPeer(iceServers)
-        send("accept", "control")
-        signalingReady = true
-        flushLocalIce()
+        configuredIceServers = iceServers
         mutableState.value = current.copy(incoming = false, status = "connecting")
+        try {
+            startPeer(iceServers)
+            if (callId != acceptedCallId || callGeneration != acceptedGeneration) return
+            send("accept", "control")
+            if (callId != acceptedCallId || callGeneration != acceptedGeneration) return
+            signalingReady = true
+            flushLocalIce()
+        } catch (error: Throwable) {
+            if (callId == acceptedCallId && callGeneration == acceptedGeneration) finish("failed")
+            throw error
+        }
         // The incoming caller owns offer creation. Creating an offer here causes
         // offer glare: both peers enter HAVE_LOCAL_OFFER before either applies
         // the other's offer. The caller creates its offer after receiving accept.
     }
 
-    suspend fun reject() {
-        check(mutableState.value.incoming && callId != null)
+    suspend fun reject() = actionMutex.withLock {
+        val rejectedCallId = callId ?: error("No incoming call is waiting")
+        val rejectedGeneration = callGeneration
+        check(mutableState.value.incoming)
         if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("decline-action")
-        send("reject", "control")
-        finish("rejected")
+        runCatching { send("reject", "control") }
+        if (callId == rejectedCallId && callGeneration == rejectedGeneration) finish("rejected")
     }
 
-    suspend fun hangup() {
+    suspend fun hangup() = actionMutex.withLock {
+        val endingCallId = callId ?: return@withLock
+        val endingGeneration = callGeneration
         val event = if (mutableState.value.status == "ringing") "cancel" else "end"
-        if (callId != null) runCatching { send(event, "control") }
-        finish("ended")
+        runCatching { send(event, "control") }
+        if (callId == endingCallId && callGeneration == endingGeneration) finish(if (event == "cancel") "cancelled" else "ended")
     }
 
     fun setMicrophoneEnabled(enabled: Boolean) { peer?.setMicrophoneEnabled(enabled); mutableState.value = mutableState.value.copy(microphoneEnabled = enabled) }
@@ -131,9 +173,12 @@ class AndroidCallController @Inject constructor(
         }
     }
 
-    private suspend fun start(mode: String, iceServers: List<IceServerConfig>) {
+    private suspend fun start(mode: String, iceServers: List<IceServerConfig>) = actionMutex.withLock { startLocked(mode, iceServers) }
+
+    private suspend fun startLocked(mode: String, iceServers: List<IceServerConfig>) {
         check(mutableState.value.callId == null) { "A call is already active" }
         if (BuildConfig.DEBUG) DebugInspectionStore.clearCallSignalStages()
+        configuredIceServers = iceServers
         val trusted = messaging.requireVerifiedCallConversation()
         val local = identities.activeState()
         require(local.lifecycleState == "active" && local.accountIdentityReference != null && trusted.peerIdentityReference.startsWith("K3 ")) { "Verified device and contact are required for calls" }
@@ -143,24 +188,24 @@ class AndroidCallController @Inject constructor(
         restartAttempted = false
         callId = UUID.randomUUID().toString()
         if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("call-created")
-        expiresAt = System.currentTimeMillis() + 60_000
+        callGeneration += 1
         identityBinding = CallSignalCodec.binding(trusted.conversationId, trusted.localRoutingId, local.deviceIdentityReference, trusted.peerRoutingId, trusted.peerIdentityReference)
         nextSequence = 1
-        receivedSequence = 1
-        startPeer(iceServers)
-        mutableState.value = AndroidCallUiState(callId = callId, mediaMode = mode, status = "ringing", incoming = false, cameraEnabled = mode == "video", localVideo = peer?.localVideoTrack())
-        send("invite", "control")
+        rememberReceivedSequence(requireNotNull(callId), 0)
+        expiresAt = System.currentTimeMillis() + CallSignalCodec.SIGNAL_LIFETIME_MS
+        mutableState.value = AndroidCallUiState(callId = callId, mediaMode = mode, status = "ringing", incoming = false, cameraEnabled = mode == "video")
+        val startedCallId = requireNotNull(callId)
+        val startedGeneration = callGeneration
+        scheduleSetupTimeout(startedCallId)
+        try { send("invite", "control") } catch (error: Throwable) { if (callId == startedCallId && callGeneration == startedGeneration) finish("failed"); throw error }
         signalingReady = true
         flushLocalIce()
-        val startedCallId = requireNotNull(callId)
-        scope.launch {
-            delay((expiresAt - System.currentTimeMillis()).coerceAtLeast(0))
-            if (this@AndroidCallController.callId == startedCallId && mutableState.value.status in setOf("ringing", "connecting")) finish("timeout")
-        }
     }
 
     private suspend fun startPeer(iceServers: List<IceServerConfig>) {
         if (peer != null) return
+        val ownerCallId = callId
+        val ownerGeneration = callGeneration
         if (BuildConfig.DEBUG) DebugInspectionStore.beginCallTimingTrace()
         val engine = AndroidWebRtcEngine(context)
         engine.setDebugIceDiagnosticSink { stage -> if (BuildConfig.DEBUG) DebugInspectionStore.setIceDiagnostic(stage) }
@@ -173,15 +218,20 @@ class AndroidCallController @Inject constructor(
             if (BuildConfig.DEBUG) DebugInspectionStore.setSdpObserverStage(stage)
         }
         try { engine.start(iceServers, mediaMode == "video", object : AndroidCallObserver {
+            private fun isCurrentCall() = callId == ownerCallId && callGeneration == ownerGeneration
             override fun onLocalIce(candidate: IceValue) {
+                if (!isCurrentCall()) return
                 if (BuildConfig.DEBUG) DebugInspectionStore.setIceDiagnostic("ice-local-candidate-${candidateType(candidate.candidate)}")
                 scope.launch {
                     if (signalingReady) sendIce(candidate) else queuedLocalIce.add(candidate)
                 }
             }
             override fun onState(state: String) {
+                if (!isCurrentCall()) return
                 when (state) {
                     "connected", "completed" -> {
+                        setupTimeoutJob?.cancel(); setupTimeoutJob = null
+                        reconnectTimeoutJob?.cancel(); reconnectTimeoutJob = null
                         if (BuildConfig.DEBUG) {
                             DebugInspectionStore.setCallSignalStage("ice-connected")
                             DebugInspectionStore.setCallSignalStage("media-connected")
@@ -194,7 +244,14 @@ class AndroidCallController @Inject constructor(
                         val wasConnected = mutableState.value.status == "connected" || mutableState.value.status == "reconnecting"
                         if (wasConnected) {
                             mutableState.value = mutableState.value.copy(status = "reconnecting")
-                            if (isInitiator && !restartAttempted) {
+                            reconnectTimeoutJob?.cancel()
+                            val disconnectedCallId = ownerCallId
+                            reconnectTimeoutJob = scope.launch {
+                                delay(30_000)
+                                if (callId == disconnectedCallId && mutableState.value.status == "reconnecting") finish("failed")
+                            }
+                            val currentBinding = binding
+                            if (currentBinding != null && isCallReconnectOfferOwner(currentBinding.localRoutingId, currentBinding.peerRoutingId) && !restartAttempted) {
                                 restartAttempted = true
                                 val activeCallId = callId
                                 scope.launch {
@@ -207,7 +264,7 @@ class AndroidCallController @Inject constructor(
                     "failed" -> scope.launch { finish("failed") }
                 }
             }
-            override fun onRemoteVideo(track: org.webrtc.VideoTrack) { mutableState.value = mutableState.value.copy(remoteVideo = track) }
+            override fun onRemoteVideo(track: org.webrtc.VideoTrack) { if (isCurrentCall()) mutableState.value = mutableState.value.copy(remoteVideo = track) }
         }) } catch (error: Throwable) {
             engine.close()
             throw error
@@ -227,49 +284,85 @@ class AndroidCallController @Inject constructor(
         if (!CallSignalCodec.validate(signal, trusted.conversationId, local.deviceIdentityReference, now)) return
         if (signal.senderParticipantId != trusted.peerRoutingId || signal.senderIdentityId != trusted.peerIdentityReference) return
         if (signal.identityBinding != CallSignalCodec.binding(trusted.conversationId, trusted.localRoutingId, local.deviceIdentityReference, trusted.peerRoutingId, trusted.peerIdentityReference)) return
-        if (signal.event == "invite" && signal.kind == "control" &&
-            shouldExpireCallSetupBeforeInvite(callId, mutableState.value.status, expiresAt, now)) {
+        val activeId = callId
+        val ownerGeneration = callGeneration
+        if (activeId == signal.callId && shouldExpireCallSetupBeforeInvite(activeId, mutableState.value.status, expiresAt, now)) {
             finish("timeout")
+            return
         }
-        if (signal.sequence != receivedSequence + 1 || !replayGuard.accept(signal.callId, signal.nonce, signal.expiresAt, now)) return
+        // INVITE is sequence 1 per attempt. Ignore a duplicate for the selected
+        // attempt before touching its sequence window.
+        if (signal.event == "invite" && activeId == signal.callId) return
+        val previousSequence = receivedSequences[signal.callId] ?: 0L
+        if (signal.sequence != previousSequence + 1 || !replayGuard.accept(signal.callId, signal.nonce, signal.expiresAt, now)) return
+        rememberReceivedSequence(signal.callId, signal.sequence)
         if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("signal-received")
         if (BuildConfig.DEBUG && signal.event == "accept") DebugInspectionStore.setCallSignalStage("accept-signal-received")
-        if (BuildConfig.DEBUG && callId == null && signal.event == "invite" && signal.kind == "control") {
+        if (BuildConfig.DEBUG && activeId == null && signal.event == "invite" && signal.kind == "control") {
             DebugInspectionStore.setCallSignalStage("incoming-signal-received")
         }
-        receivedSequence = signal.sequence
-        val activeId = callId
-        if (activeId == null) {
-            if (signal.event != "invite" || signal.kind != "control") return
+        if (signal.event == "invite" && signal.kind == "control") {
+            if (signal.timestamp < controllerStartedAt) return
+            val competingId = activeId
+            if (competingId != null) {
+                if (shouldKeepOutgoingCallOnCollision(competingId, signal.callId, mutableState.value.status, mutableState.value.incoming)) {
+                    runCatching { sendSignalContext(signal.callId, signal.mediaMode, signal.identityBinding, invitationExpiresAt = signal.expiresAt, event = "reject", kind = "control", sequence = 1, expectedActiveCallId = activeId, expectedGeneration = ownerGeneration) }
+                    return
+                }
+                if (mutableState.value.status != "ringing" || mutableState.value.incoming) {
+                    runCatching { sendSignalContext(signal.callId, signal.mediaMode, signal.identityBinding, invitationExpiresAt = signal.expiresAt, event = "reject", kind = "control", sequence = 1, expectedActiveCallId = activeId, expectedGeneration = ownerGeneration) }
+                    return
+                }
+                // The incoming ID wins the stable tie-break. Cancel and release
+                // the local unanswered attempt before adopting the winner.
+                runCatching { send("cancel", "control") }
+                finish("cancelled")
+            }
+            if (signal.timestamp < controllerStartedAt) return
             binding = trusted
+            callGeneration += 1
             callId = signal.callId
             mediaMode = signal.mediaMode
             isInitiator = false
             restartAttempted = false
             identityBinding = signal.identityBinding
             expiresAt = signal.expiresAt
-        nextSequence = 2
+            // Signal sequence is per sender in the existing Web protocol.
+            nextSequence = 1
             mutableState.value = AndroidCallUiState(signal.callId, signal.mediaMode, "incoming", incoming = true, cameraEnabled = signal.mediaMode == "video")
             if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("call-state-created")
-            scope.launch {
-                delay((signal.expiresAt - System.currentTimeMillis()).coerceAtLeast(0))
-                if (callId == signal.callId && mutableState.value.status in setOf("incoming", "connecting")) finish("timeout")
-            }
+            scheduleSetupTimeout(signal.callId)
             return
         }
-        if (signal.callId != activeId || signal.mediaMode != mediaMode || signal.expiresAt > expiresAt) return
+        if (signal.callId != callId || signal.mediaMode != mediaMode || ownerGeneration != callGeneration) return
+        val state = mutableState.value.status
+        val allowed = when (signal.event) {
+            "accept" -> isInitiator && state == "ringing"
+            "reject", "cancel", "end", "expire", "fail" -> state !in setOf("idle")
+            "connect", "reconnect" -> state in setOf("connecting", "connected", "reconnecting") && signal.kind == "offer"
+            "connected" -> state in setOf("connecting", "connected", "reconnecting") && signal.kind in setOf("answer", "ice-candidate")
+            else -> false
+        }
+        if (!allowed) return
         when (signal.event) {
             "accept" -> {
                 mutableState.value = mutableState.value.copy(status = "connecting")
                 // Only the originating device creates the initial offer. A callee
                 // waits for that offer and answers it in the connect/offer branch.
-                if (isInitiator) createAndSendOffer()
+                if (isInitiator) {
+                    startPeer(configuredIceServers)
+                    if (callId != signal.callId || ownerGeneration != callGeneration) return
+                    signalingReady = true
+                    createAndSendOffer()
+                    flushLocalIce()
+                }
             }
             "reject", "cancel", "end", "expire", "fail" -> finish(if (signal.event == "fail") "failed" else signal.event)
             "connect", "reconnect" -> if (signal.kind == "offer") {
                 if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("offer-received")
                 val description = signal.payload?.let { SdpValue(it.getString("type"), it.getString("sdp")) } ?: return
                 val answer = peer?.acceptOffer(description) ?: return
+                if (callId != signal.callId || ownerGeneration != callGeneration) return
                 if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("answer-created")
                 remoteDescriptionReady = true
                 flushIce()
@@ -280,8 +373,11 @@ class AndroidCallController @Inject constructor(
                     if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("answer-received")
                     val description = signal.payload?.let { SdpValue(it.getString("type"), it.getString("sdp")) } ?: return
                     peer?.acceptAnswer(description) ?: return
+                    if (callId != signal.callId || ownerGeneration != callGeneration) return
                     remoteDescriptionReady = true
                     flushIce()
+                    // Applying an SDP answer is not connectivity evidence; ICE
+                    // connected/completed owns the CONNECTED barrier.
                 }
                 "ice-candidate" -> {
                     val payload = signal.payload ?: return
@@ -325,27 +421,80 @@ class AndroidCallController @Inject constructor(
     }
 
     private suspend fun send(event: String, kind: String, payload: JSONObject? = null) {
+        val call = callId ?: error("Call is unavailable")
+        val activeCallId = call
+        val generation = callGeneration
         signalMutex.withLock {
-            val trusted = binding ?: error("Call conversation is unavailable")
-            check(messaging.requireVerifiedCallConversation() == trusted) { "Call contact changed" }
-            val local = identities.activeState()
-            val call = callId ?: error("Call is unavailable")
             val sequence = nextSequence
-            val signal = CallSignalCodec.create(
-                callId = call, conversationId = trusted.conversationId, senderParticipantId = trusted.localRoutingId,
-                senderIdentityId = local.deviceIdentityReference, receiverIdentityId = trusted.peerIdentityReference,
-                mediaMode = mediaMode, event = event, kind = kind, payload = payload, sequence = sequence,
-                timestamp = System.currentTimeMillis(), expiresAt = expiresAt, identityBinding = identityBinding,
-            )
-            messaging.sendCallSignal(CallSignalCodec.encode(signal))
-            if (BuildConfig.DEBUG) {
-                when {
-                    event == "connect" && kind == "offer" -> DebugInspectionStore.setCallSignalStage("offer-signal-sent")
-                    event == "connected" && kind == "answer" -> DebugInspectionStore.setCallSignalStage("answer-signal-sent")
-                    kind == "ice-candidate" -> DebugInspectionStore.setCallSignalStage("ice-signal-sent")
-                }
-            }
+            sendSignalContextLocked(call, mediaMode, identityBinding, expiresAt, event, kind, sequence, payload, activeCallId, generation)
+            if (callId != activeCallId || callGeneration != generation) error("Call attempt ended")
             nextSequence = sequence + 1
+        }
+    }
+
+    private suspend fun sendSignalContext(
+        call: String,
+        mode: String,
+        bindingValue: String,
+        invitationExpiresAt: Long,
+        event: String,
+        kind: String,
+        sequence: Long,
+        payload: JSONObject? = null,
+        expectedActiveCallId: String? = callId,
+        expectedGeneration: Long = callGeneration,
+    ) {
+        signalMutex.withLock { sendSignalContextLocked(call, mode, bindingValue, invitationExpiresAt, event, kind, sequence, payload, expectedActiveCallId, expectedGeneration) }
+    }
+
+    private suspend fun sendSignalContextLocked(
+        call: String,
+        mode: String,
+        bindingValue: String,
+        invitationExpiresAt: Long,
+        event: String,
+        kind: String,
+        sequence: Long,
+        payload: JSONObject?,
+        expectedActiveCallId: String?,
+        expectedGeneration: Long,
+    ) {
+        check(callId == expectedActiveCallId && callGeneration == expectedGeneration) { "Call attempt ended" }
+        val trusted = binding ?: error("Call conversation is unavailable")
+        check(messaging.requireVerifiedCallConversation() == trusted) { "Call contact changed" }
+        val local = identities.activeState()
+        val timestamp = System.currentTimeMillis()
+        val signalExpiry = if (event == "invite") minOf(invitationExpiresAt, timestamp + CallSignalCodec.SIGNAL_LIFETIME_MS) else timestamp + CallSignalCodec.SIGNAL_LIFETIME_MS
+        val signal = CallSignalCodec.create(
+            callId = call, conversationId = trusted.conversationId, senderParticipantId = trusted.localRoutingId,
+            senderIdentityId = local.deviceIdentityReference, receiverIdentityId = trusted.peerIdentityReference,
+            mediaMode = mode, event = event, kind = kind, payload = payload, sequence = sequence,
+            timestamp = timestamp, expiresAt = signalExpiry, identityBinding = bindingValue,
+        )
+        messaging.sendCallSignal(CallSignalCodec.encode(signal))
+        if (BuildConfig.DEBUG) {
+            when {
+                event == "connect" && kind == "offer" -> DebugInspectionStore.setCallSignalStage("offer-signal-sent")
+                event == "connected" && kind == "answer" -> DebugInspectionStore.setCallSignalStage("answer-signal-sent")
+                kind == "ice-candidate" -> DebugInspectionStore.setCallSignalStage("ice-signal-sent")
+            }
+        }
+    }
+
+    private fun scheduleSetupTimeout(startedCallId: String) {
+        setupTimeoutJob?.cancel()
+        val deadline = expiresAt
+        setupTimeoutJob = scope.launch {
+            delay((deadline - System.currentTimeMillis()).coerceAtLeast(0))
+            if (callId == startedCallId && mutableState.value.status in setOf("incoming", "ringing", "connecting")) finish("timeout")
+        }
+    }
+
+    private fun rememberReceivedSequence(signalCallId: String, sequence: Long) {
+        receivedSequences[signalCallId] = sequence
+        while (receivedSequences.size > 128) {
+            val oldest = receivedSequences.keys.firstOrNull { it != callId } ?: break
+            receivedSequences.remove(oldest)
         }
     }
 
@@ -364,11 +513,18 @@ class AndroidCallController @Inject constructor(
         if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("call-ended")
         postConnectHealthJob?.cancel()
         postConnectHealthJob = null
-        callId?.let { replayGuard.finish(it, expiresAt, System.currentTimeMillis()) }
+        setupTimeoutJob?.cancel(); setupTimeoutJob = null
+        reconnectTimeoutJob?.cancel(); reconnectTimeoutJob = null
+        relayLossJob?.cancel(); relayLossJob = null
+        callId?.let {
+            replayGuard.finish(it, System.currentTimeMillis() + 120_000, System.currentTimeMillis())
+            receivedSequences.remove(it)
+        }
+        callGeneration += 1
         peer?.close(); peer = null
         mutableState.value = AndroidCallUiState(status = status)
         callId = null; binding = null; identityBinding = ""; expiresAt = 0
-        remoteDescriptionReady = false; queuedIce.clear(); receivedSequence = 0; nextSequence = 1
+        remoteDescriptionReady = false; queuedIce.clear(); nextSequence = 1
         signalingReady = false; queuedLocalIce.clear()
         isInitiator = false; restartAttempted = false; firstRemoteCandidateTimingRecorded = false
     }

@@ -22,4 +22,19 @@ class AndroidCallControllerLifecycleTest {
         assertFalse(shouldExpireCallSetupBeforeInvite(null, "idle", 99L, 100L))
         assertFalse(shouldExpireCallSetupBeforeInvite("active-call", "connecting", 101L, 100L))
     }
+
+    @Test fun `simultaneous unanswered outgoing calls choose the same lexical call id winner`() {
+        assertTrue(shouldKeepOutgoingCallOnCollision("call-a", "call-b", "ringing", false))
+        assertFalse(shouldKeepOutgoingCallOnCollision("call-b", "call-a", "ringing", false))
+    }
+
+    @Test fun `incoming or negotiating calls do not use collision replacement`() {
+        assertFalse(shouldKeepOutgoingCallOnCollision("call-a", "call-b", "ringing", true))
+        assertFalse(shouldKeepOutgoingCallOnCollision("call-a", "call-b", "connecting", false))
+    }
+
+    @Test fun `both platforms choose the lower stable routing id as reconnect offer owner`() {
+        assertTrue(isCallReconnectOfferOwner("route-a", "route-b"))
+        assertFalse(isCallReconnectOfferOwner("route-b", "route-a"))
+    }
 }

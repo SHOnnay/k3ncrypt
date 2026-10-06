@@ -80,6 +80,7 @@ class AndroidWebRtcEngine(context: Context) {
     private var debugSdpObserverDiagnosticSink: ((String) -> Unit)? = null
     private var firstLocalCandidateTimed = false
     private var selectedPairTimed = false
+    private var closed = false
 
     fun setDebugIceDiagnosticSink(sink: ((String) -> Unit)?) {
         if (BuildConfig.DEBUG) debugIceDiagnosticSink = sink
@@ -119,6 +120,7 @@ class AndroidWebRtcEngine(context: Context) {
     fun localVideoTrack(): VideoTrack? = videoTrack
 
     fun start(iceServers: List<IceServerConfig>, video: Boolean, observer: AndroidCallObserver) {
+        check(!closed) { "call_engine_closed" }
         check(peer == null) { "call_peer_already_active" }
         this.observer = observer
         val servers = iceServers.flatMap { server ->
@@ -272,6 +274,8 @@ class AndroidWebRtcEngine(context: Context) {
     }
 
     fun close() {
+        if (closed) return
+        closed = true
         emitTimingDiagnostic("peer-connection-closed")
         runCatching { capturer?.stopCapture() }
         capturer?.dispose(); capturer = null

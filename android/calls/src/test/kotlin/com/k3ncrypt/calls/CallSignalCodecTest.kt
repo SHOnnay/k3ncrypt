@@ -48,6 +48,15 @@ class CallSignalCodecTest {
         assertFalse(CallSignalCodec.validate(decoded.copy(mediaMode = "data"), conversation, "K3 device-b", now))
         assertFalse(CallSignalCodec.validate(decoded.copy(nonce = UUID.randomUUID().toString()), conversation, "K3 device-b", now))
     }
+    @Test fun `signal freshness is bounded independently from a call invitation lifetime`() {
+        val conversation = "11111111-1111-4111-8111-111111111111"
+        val now = System.currentTimeMillis()
+        val binding = CallSignalCodec.binding(conversation, "route-a", "a", "route-b", "b")
+        val fresh = CallSignalCodec.create(UUID.randomUUID().toString(), conversation, "route-a", "a", "b", "audio", "connected", sequence = 3, timestamp = now, expiresAt = now + CallSignalCodec.SIGNAL_LIFETIME_MS, identityBinding = binding)
+        val staleBound = fresh.copy(expiresAt = now + CallSignalCodec.SIGNAL_LIFETIME_MS + 1)
+        assertTrue(CallSignalCodec.validate(fresh, conversation, "b", now))
+        assertFalse(CallSignalCodec.validate(staleBound, conversation, "b", now))
+    }
     @Test fun `payload field order does not change canonical digest`() {
         val conversation = "11111111-1111-4111-8111-111111111111"
         val now = System.currentTimeMillis()
