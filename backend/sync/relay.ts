@@ -2,7 +2,7 @@ import type { Server as HttpServer } from 'http';
 import { Server, type Socket } from 'socket.io';
 import { authorizeRoomControl, isValidControlCapability, isValidRoomId } from '../security/controlCapability';
 import channelValid from '../api/chatHash/utils/validateChannel';
-import { allowedCorsOrigins } from '../security/cors';
+import { allowedCorsOrigins, socketOriginAdmission } from '../security/cors';
 import { RateLimiter } from '../socket.io/rateLimiter';
 import { markRelayReady } from '../operations/status';
 import { operationalLog } from '../operations/logger';
@@ -23,7 +23,7 @@ export const validSyncEnvelope = (value: unknown): boolean => {
 
 /** Independent Engine.IO listener: legacy messaging/call packet and mailbox limits are untouched. */
 export const initSyncRelay = (http: HttpServer): Server => {
-    const io = new Server(http, { path: SYNC_SOCKET_PATH, maxHttpBufferSize: MAX_SYNC_PACKET_BYTES,
+    const io = new Server(http, { path: SYNC_SOCKET_PATH, allowRequest: socketOriginAdmission, maxHttpBufferSize: MAX_SYNC_PACKET_BYTES,
         cors: { origin: allowedCorsOrigins(), credentials: false }, allowEIO3: false });
     const routes = new Map<string, Map<string, Socket>>();
     markRelayReady('sync');

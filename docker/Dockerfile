@@ -1,33 +1,26 @@
-FROM node:lts-alpine AS build
+FROM node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402 AS build
+WORKDIR /app
+COPY package.json package-lock.json ./
+COPY client/package.json client/package.json
+COPY service/package.json service/package.json
+RUN npm ci --ignore-scripts
+COPY . .
+ARG CHATE2EE_API_URL=
+ARG CHATE2EE_ICE_SERVERS=[]
+ARG CHATE2EE_ICE_TRANSPORT_POLICY=all
+ENV CHATE2EE_API_URL=$CHATE2EE_API_URL
+ENV CHATE2EE_ICE_SERVERS=$CHATE2EE_ICE_SERVERS
+ENV CHATE2EE_ICE_TRANSPORT_POLICY=$CHATE2EE_ICE_TRANSPORT_POLICY
+RUN npm run build:backend && npm run client:build
 
-WORKDIR /chat-e2ee
-# todo break apart client and server dep installs/builds so that they can be cached b/w builds
-COPY . /chat-e2ee/ 
-
-RUN npm install 
-
-RUN npm run build
-
-# build-service-sdk compiles the service/SDK workspace (was incorrectly called server:build)
-RUN npm run build-service-sdk
-
-# todo - multi part build (lets us slim down container to not unclude all the webpack stuff)
-
-FROM node:lts-alpine
-
-WORKDIR /chat-e2ee
-COPY package*.json /chat-e2ee/
-RUN mkdir -p /chat-e2ee/client/dist
-COPY --from=build  /chat-e2ee/dist /chat-e2ee/dist
-COPY --from=build /chat-e2ee/client/dist /chat-e2ee/client/dist
-
-# dont install dev deps
+FROM node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402 AS runtime
+WORKDIR /app
 ENV NODE_ENV=production
-# dont run scripts to avoid pulling all client build deps + stuff
-RUN npm ci --ignore-scripts=true --omit dev
-
-EXPOSE 3001
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts --workspaces=false
+COPY --from=build /app/dist ./dist
+COPY --from=build /app/client/dist ./client/dist
 USER node
-#Set production mode deployment
-
-CMD [ "npm", "run", "serve" ]
+EXPOSE 3001
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD node -e "fetch('http://127.0.0.1:3001/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+CMD ["node", "dist/index.js"]

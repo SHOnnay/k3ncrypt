@@ -24,8 +24,8 @@ android {
         applicationId = "com.k3ncrypt.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0-beta"
+        versionCode = 3
+        versionName = "0.1.0-beta.3"
         buildConfigField("String", "K3NCRYPT_BACKEND_URL", "\"$configuredBackendUrl\"")
         buildConfigField("String", "K3NCRYPT_SOCKET_URL", "\"$configuredSocketUrl\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -103,7 +103,7 @@ val verifyReleasePackageInputs = tasks.register("verifyReleasePackageInputs") {
     }
 }
 
-tasks.matching { it.name == "packageRelease" }.configureEach {
+tasks.matching { it.name in setOf("packageRelease", "bundleRelease", "signReleaseBundle") }.configureEach {
     dependsOn(verifyReleasePackageInputs)
 }
 

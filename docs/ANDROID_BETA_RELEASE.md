@@ -1,42 +1,33 @@
-# K3NCRYPT Android Beta Release
+# Upcoming Android personal-use beta
 
-| Release | App version | Platform | Stage |
-| --- | --- | --- | --- |
-| `v0.1.0-beta.2` | `0.1.0-beta` (version code `2`) | Android | Experimental beta |
+Release preparation targets **versionName `0.1.0-beta.3`, versionCode `3`**. No public release tag or signed APK/AAB is created by hardening. Previously distributed beta code `2` must upgrade without downgrade flags: every future artifact needs a strictly larger versionCode. Keep APK/AAB variants of one release aligned; record the source commit and artifact SHA-256 before publication.
 
-K3NCRYPT is an open-source, privacy-first messenger. This Android beta includes encrypted messaging, invitation-based contact setup, explicit contact identity verification, and voice calling.
+## External signing inputs
 
-## Download and install
+Provide outside the repository/build context:
 
-Download the APK directly from the official [K3NCRYPT v0.1.0-beta.2 release](https://github.com/SHOnnay/k3ncrypt/releases/tag/v0.1.0-beta.2):
+- `K3NCRYPT_ANDROID_KEYSTORE_PATH`
+- `K3NCRYPT_ANDROID_KEYSTORE_PASSWORD`
+- `K3NCRYPT_ANDROID_KEY_ALIAS`
+- `K3NCRYPT_ANDROID_KEY_PASSWORD`
 
-[Download K3NCRYPT-v0.1.0-beta.2.apk](https://github.com/SHOnnay/k3ncrypt/releases/download/v0.1.0-beta.2/K3NCRYPT-v0.1.0-beta.2.apk)
+Use the original signing identity to update existing installations. Never generate substitute/debug signing credentials for a release, commit a key/password, place it in Docker context, or log its value. Missing inputs stop packaging with a configuration error. Release backend/socket origins are supplied externally and must be real HTTPS origins.
 
-1. Open the downloaded APK on your Android device.
-2. If Android asks, allow your browser or file manager to install this APK, then return to the installer and continue.
-3. Open K3NCRYPT and follow the setup instructions. Keep your device passphrase private.
+```sh
+cd android
+./gradlew :app:processReleaseMainManifest :app:mergeReleaseResources :app:generateReleaseBuildConfig :app:lintRelease --no-daemon
+# Only after authorized external signing inputs and actual production origins are available:
+./gradlew :app:assembleRelease :app:bundleRelease   -Pk3ncryptBackendUrl="$K3NCRYPT_RELEASE_BACKEND_ORIGIN"   -Pk3ncryptSocketUrl="$K3NCRYPT_RELEASE_SOCKET_ORIGIN" --no-daemon
+```
 
-Install only the APK attached to the official K3NCRYPT release. Android may show an unfamiliar-source warning because this beta is distributed directly rather than through an app store.
+Resource preparation is unsigned and does not prove distributable signing. APK output is under `app/build/outputs/apk/release`; AAB output is under `app/build/outputs/bundle/release`. Verify signatures, version, source commit, hashes and upgrade behavior on a preserved identity before publishing.
 
-## Included features
+## Current implementation and publication gate
 
-- End-to-end encrypted messaging
-- Invitation-based contact setup, including QR sharing/scanning
-- Explicit contact identity and fingerprint verification
-- Local vault unlock
-- Voice calling with verified contacts; availability depends on network and device conditions
+Web + Android implement encrypted messaging, invitation/QR setup, explicit verified-and-unchanged authority, audio/video, and secure V2 files/photos/documents. Physical Web↔Android media/file interoperability is still pending. Signing and physical gates must be completed before declaring this upcoming beta ready.
 
-An invitation connects people; it does not verify identity. Compare fingerprints through another trusted channel and confirm them in the app before relying on a contact as verified.
+Files: 8 MiB; 256 KiB; 32 chunks plus manifest; two active transfers; 12 MiB stored/incomplete reservations; 24-hour expiry. Same-session exact-object retry only; process death/cache loss requires restart. Photos use the same encrypted path; no thumbnails or automatic opening. Unknown-size providers are rejected.
 
-## Known beta limitations
+Calls: no bundled TURN/default Android ICE services; direct ICE exposes network information and may fail across NAT/firewalls. Android ends calls on backgrounding; process death does not preserve them. Local Session is experimental/separate. Relay acknowledgements do not establish peer persistence or reading. No anonymity, metadata-free or IP-hidden claim is made.
 
-- This is experimental beta software and is still being tested.
-- Notifications may be limited.
-- Network and device conditions can affect call availability and quality.
-- Video calls, LAN networking, direct/multipath delivery, SAS verification, and peer-persistence receipts are not available.
-
-## Security notes
-
-- Message content is encrypted by the client before relay delivery. The service handles delivery and can observe operational metadata, including routing and connection timing.
-- Relay or transport acknowledgements do not prove that the recipient persisted or displayed a message.
-- Protect your Android device and local vault passphrase. A compromised device or operating system can expose information while it is in use.
+Private app storage is intentionally excluded from cloud backup/device transfer across credential/device-protected domains. Keystore keys remain device-bound; this does not add a new recovery mechanism. Physical backup/transfer/provider behavior remains a device-validation item.

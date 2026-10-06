@@ -14,10 +14,11 @@
     "client:build": "npm run build --workspace=client",
     "lint": "eslint .",
     "serve:dev": "cross-env NODE_ENV=development nodemon --ext ts,json --ignore client --ignore service --exec ts-node index.ts",
-    "serve": "cross-env NODE_ENV=production ts-node index.ts",
-    "migrate": "cross-env NODE_ENV=production ts-node scripts/migrate.ts",
+    "serve": "node scripts/production.cjs serve",
+    "migrate": "node scripts/production.cjs migrate",
     "test": "cross-env NODE_ENV=test jest",
-    "build-service-sdk": "npm run build --workspace=service"
+    "build-service-sdk": "npm run build --workspace=service",
+    "build:backend": "tsc -p tsconfig.backend.json"
   },
   "author": "",
   "license": "Apache-2.0",
@@ -60,7 +61,8 @@
     "engine.io-client": "6.6.6",
     "socket.io-adapter": "2.5.8",
     "socket.io-parser": "4.2.7",
-    "ws": "8.21.3"
+    "ws": "8.21.3",
+    "proxy-addr": "2.0.8"
   },
   "husky": {
     "hooks": {

@@ -1,40 +1,14 @@
-version: '3'
-
+# Backend + Web assets. MongoDB and TLS proxy are operator-managed services.
 services:
-  db:
-    image: mongo:latest
-    container_name: db
-    hostname: chatapp-db
-    restart: unless-stopped
-    env_file: .env
-    environment:
-      - MONGO_INITDB_ROOT_USERNAME=$MONGO_USERNAME
-      - MONGO_INITDB_ROOT_PASSWORD=$MONGO_PASSWORD
-    volumes:     
-      - dbdata:$HOME/db
-    networks:
-      - app-network
-    command: mongod --auth
-
-
-  chatapp:
+  app:
     build:
       context: ..
-      dockerfile: ./docker/Dockerfile
-    image: chatapp
-    container_name: chat-app
-    restart: unless-stopped
-    env_file: .env
-    environment:
-      - MONGO_URI=mongodb://$MONGO_USERNAME:$MONGO_PASSWORD@db:$MONGO_PORT/admin?authSource=admin
+      dockerfile: docker/backend.Dockerfile
+      args:
+        CHATE2EE_API_URL: ${CHATE2EE_API_URL:-}
+        CHATE2EE_ICE_SERVERS: ${CHATE2EE_ICE_SERVERS:-[]}
+        CHATE2EE_ICE_TRANSPORT_POLICY: ${CHATE2EE_ICE_TRANSPORT_POLICY:-all}
+    env_file: ${K3NCRYPT_ENV_FILE:?Set an external production environment file}
     ports:
-      - "3001:3001"
-    networks:
-      - app-network  
-
-networks:
-  app-network:
-    driver: bridge
-
-volumes:
-  dbdata: 
+      - "127.0.0.1:3001:3001"
+    restart: unless-stopped

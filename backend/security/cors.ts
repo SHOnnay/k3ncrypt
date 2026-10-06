@@ -19,3 +19,10 @@ export const corsOrigin = (origin: string | undefined, callback: (error: Error |
   }
   callback(null, allowedCorsOrigins().includes(origin));
 };
+
+/** Android/internal clients omit Origin. Browser origins must exactly match the configured list.
+ * This is admission policy only: every device/room authorization check remains mandatory. */
+export const socketOriginAdmission = (request: import('http').IncomingMessage, callback: (error: string | null, allow: boolean) => void): void => {
+  const origin = request.headers.origin;
+  callback(null, origin === undefined || allowedCorsOrigins().includes(origin));
+};

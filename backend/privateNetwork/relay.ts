@@ -1,7 +1,7 @@
 import type { Server as HttpServer } from 'http';
 import { Server, type Socket } from 'socket.io';
 import { RateLimiter } from '../socket.io/rateLimiter';
-import { allowedCorsOrigins } from '../security/cors';
+import { allowedCorsOrigins, socketOriginAdmission } from '../security/cors';
 import { operationalLog } from '../operations/logger';
 import { markRelayReady } from '../operations/status';
 import { type DeviceAuthorizationProof } from '../security/deviceTrust';
@@ -15,7 +15,7 @@ const opaqueEnvelope = (value: unknown): boolean => !!value && typeof value === 
 
 /** User-hostable blind relay. Peer admission and payload authentication occur inside the encrypted SDK session. */
 export const initPrivateNetworkRelay = (http: HttpServer): Server => {
-  const io = new Server(http, { path: PRIVATE_NETWORK_SOCKET_PATH, maxHttpBufferSize: 200 * 1024, allowEIO3: false, cors: { origin: allowedCorsOrigins(), credentials: false } });
+  const io = new Server(http, { path: PRIVATE_NETWORK_SOCKET_PATH, allowRequest: socketOriginAdmission, maxHttpBufferSize: 200 * 1024, allowEIO3: false, cors: { origin: allowedCorsOrigins(), credentials: false } });
   const routes = new Map<string, Map<string, Socket>>();
   io.on('connection', (socket) => { void (async () => {
     const auth = socket.handshake.auth; if (!validAuth(auth)) { socket.disconnect(true); return; }

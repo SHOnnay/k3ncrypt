@@ -1,11 +1,11 @@
 import type { NextFunction, Request, Response } from 'express';
 
-import { RateLimiter } from '../socket.io/rateLimiter';
+import { HttpRateLimiter } from './httpRateLimiter';
 
 export const createControlRateLimit = (capacity = 20, refillPerSecond = 0.25) => {
-  const limiter = new RateLimiter({ capacity, refillPerSecond });
+  const limiter = new HttpRateLimiter(capacity, refillPerSecond);
   return (req: Request, res: Response, next: NextFunction): void => {
-    const key = `${req.ip}:${req.baseUrl}:${req.route?.path ?? req.path}`;
+    const key = `${req.ip}:control:${req.route?.path ?? "unmatched"}`;
     if (!limiter.consume(key)) {
       res.status(429).send({ error: 'Rate limit exceeded' });
       return;

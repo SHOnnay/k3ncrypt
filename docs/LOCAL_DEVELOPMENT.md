@@ -18,8 +18,9 @@ The browser vault always requires the normal local passphrase unlock. There is n
 ## Commands
 
 ```sh
-npm install
+npm ci
 npm run build-service-sdk
+npm run build:backend
 npm run dev
 npm test -- --runInBand
 npm run lint
@@ -37,3 +38,7 @@ MONGO_URI=mongodb://localhost:27017 MONGO_DB_NAME=k3ncrypt \
 ## Docker
 
 The repository includes `docker/Dockerfile`, `docker/backend.Dockerfile`, `docker/frontend.Dockerfile`, and `docker/docker-compose.yaml`. Use the sample environment file and keep database credentials outside source control.
+
+## Production build/start
+
+Run `npm ci`, `npm run build:backend`, `npm run build-service-sdk`, and `npm run client:build` in this checkout. `npm run serve` and `npm run migrate` use compiled Node artifacts through the production launcher; they require the normal production environment and no development ts-node runtime. Rebuild after source changes. Run migrations before accepting traffic. See [Docker deployment](../docker/README.md) for external Mongo, HTTPS proxy and header/origin requirements. Dependencies must resolve inside this checkout; do not symlink node_modules to another worktree.

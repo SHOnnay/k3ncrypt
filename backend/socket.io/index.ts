@@ -1,6 +1,6 @@
 import { Server, Socket } from "socket.io";
 import connectionListener from "./listeners";
-import { allowedCorsOrigins } from '../security/cors';
+import { allowedCorsOrigins, socketOriginAdmission } from '../security/cors';
 import { markRelayReady } from '../operations/status';
 import { operationalLog } from '../operations/logger';
 
@@ -51,6 +51,7 @@ export const initSocket = (server) => {
   }
 
   io = new Server(server, {
+    allowRequest: socketOriginAdmission,
     allowEIO3: true,
     maxHttpBufferSize: MAX_HTTP_BUFFER_SIZE,
     cors: {

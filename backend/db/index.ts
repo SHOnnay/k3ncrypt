@@ -12,6 +12,7 @@ const uri = process.env.MONGO_URI;
 const dbName = process.env.MONGO_DB_NAME;
 
 let db: Db = null;
+let connectedClient: MongoClient | undefined;
 let inMem = uri ? false : true;
 
 const connectDb = async (): Promise<void> => {
@@ -27,6 +28,7 @@ const connectDb = async (): Promise<void> => {
     });
     if (!client) throw new Error("No client");
     await client.connect();
+    connectedClient = client;
     db = client.db(dbName);
     // Tests and local development get a convenient additive setup. Production
     // deploys run this explicitly via `npm run migrate` before traffic moves.
@@ -40,6 +42,11 @@ const connectDb = async (): Promise<void> => {
     }
     if (process.env.NODE_ENV === 'production') throw new Error('Persistent database is unavailable in production.');
   }
+};
+
+const disconnectDb = async (): Promise<void> => {
+  await connectedClient?.close();
+  connectedClient = undefined; db = null; inMem = true;
 };
 
 const insertInDb = async<T>(data: T, collectionName: string): Promise<T> => {
@@ -162,6 +169,7 @@ export const countOfflineMessages = async (condition: Record<string, unknown>): 
 export default {
   db,
   connectDb,
+  disconnectDb,
   insertInDb,
   findOneFromDB,
   updateOneFromDb,

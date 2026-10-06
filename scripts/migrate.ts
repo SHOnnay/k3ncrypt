@@ -10,4 +10,4 @@ const run = async (): Promise<void> => {
   await applyMigrations(database);
   process.stdout.write('K3NCRYPT migrations applied successfully.\n');
 };
-void run().catch(() => { process.stderr.write('K3NCRYPT migrations failed.\n'); process.exitCode = 1; });
+void run().catch(() => { process.stderr.write('K3NCRYPT migrations failed.\n'); process.exitCode = 1; }).finally(() => db.disconnectDb());
