@@ -8,6 +8,13 @@ const session = (state: CallSession['state'] = 'idle'): CallSession => ({ callId
 describe('call foundation state and permissions', () => {
   it('accepts the valid non-media lifecycle and ends permanently', () => { let current = transitionCall(session(), 'invite', 1); current = transitionCall(current, 'invite', 2); current = transitionCall(current, 'accept', 3); current = transitionCall(current, 'connect', 4); current = transitionCall(current, 'connected', 5); current = transitionCall(current, 'end', 6); expect(current.state).toBe('ended'); expect(() => transitionCall(current, 'invite', 7)).toThrow(); });
   it('rejects invalid, expired and duplicate terminal transitions', () => { expect(() => transitionCall(session(), 'accept')).toThrow(); expect(() => transitionCall(session('ringing'), 'accept', 61_000)).toThrow('expired'); expect(() => transitionCall(session('rejected'), 'reject')).toThrow(); });
+  it('expires calls that have not established, while established calls can outlive the invite deadline', () => {
+    const connecting = { ...session('connecting'), updatedAt: 59_000 };
+    expect(() => transitionCall(connecting, 'connected', 60_000)).toThrow('expired');
+    const established = { ...session('connected'), updatedAt: 59_000 };
+    expect(transitionCall(established, 'end', 120_000).state).toBe('ended');
+    expect(transitionCall(established, 'heartbeat', 120_000).state).toBe('connected');
+  });
   it('tracks permission lifecycle without requesting on initialization', () => { let p = initialCallPermissions(); expect(p).toEqual({ microphone: 'unknown', camera: 'unknown' }); p = transitionPermission(p, 'microphone', 'requested'); p = transitionPermission(p, 'microphone', 'granted'); p = transitionPermission(p, 'microphone', 'active'); p = transitionPermission(p, 'microphone', 'released'); expect(p.microphone).toBe('released'); expect(() => transitionPermission(p, 'camera', 'active')).toThrow(); });
   it('authorizes a call, persists it, and rejects identity changes', async () => {
     const verifier = { isParticipant: async () => true, getVerification: async () => 'verified' as const, identityBinding: async () => 'binding' };
@@ -18,5 +25,16 @@ describe('call foundation state and permissions', () => {
     await expect(service.event(created.callId, 'accept')).resolves.toMatchObject({ state: 'accepted' });
     const changed = new CallAuthorization({ isParticipant: async () => true, getVerification: async () => 'changed-pending-review' as const, identityBinding: async () => 'binding' });
     await expect(changed.assertSession({ ...created, state: 'idle' })).rejects.toThrow('review');
+  });
+  it('serializes duplicate concurrent accepts so only one transition wins', async () => {
+    const verifier = { isParticipant: async () => true, getVerification: async () => 'verified' as const, identityBinding: async () => 'binding' };
+    const repository = new MemoryCallRepository();
+    const service = new CallService(repository, new CallAuthorization(verifier), undefined, () => 1_000);
+    const participants = [{ participantId: 'a', identityId: 'ia', verification: 'verified' as const }, { participantId: 'b', identityId: 'ib', verification: 'verified' as const }] as const;
+    const call = await service.invite('11111111-1111-4111-8111-111111111111', participants, 'binding');
+    const results = await Promise.allSettled([service.event(call.callId, 'accept'), service.event(call.callId, 'accept')]);
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    expect(await service.get(call.callId)).toMatchObject({ state: 'accepted' });
   });
 });

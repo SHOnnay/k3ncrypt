@@ -68,6 +68,16 @@ describe('authenticated bidirectional call flow', () => {
     expect((await alice.service.get(outgoing.callId))?.state).toBe('accepted');
   });
 
+  it('enforces one active call and does not let a second ringing invite replace it', async () => {
+    const transports = connectedTransports();
+    const alice = createAuthenticatedCallComposition({ session: session(), transport: transports.alice, conversationId, localIdentityId: 'alice-id', localParticipantId: 'alice', remoteParticipant: participant('bob', 'bob-id'), identity: identity('alice', 'bob'), deviceTrust });
+    const bob = createAuthenticatedCallComposition({ session: session(), transport: transports.bob, conversationId, localIdentityId: 'bob-id', localParticipantId: 'bob', remoteParticipant: participant('alice', 'alice-id'), identity: identity('bob', 'alice'), deviceTrust });
+    transports.connect(alice.signalTransport, bob.signalTransport);
+    const call = await alice.invite();
+    await expect(bob.invite()).rejects.toThrow('already active');
+    expect(await bob.service.get(call.callId)).toMatchObject({ state: 'ringing' });
+  });
+
   it.each(['alice', 'bob'] as const)('%s hangup sends the existing authenticated end event and ends both peers', async (endingSide) => {
     const transports = connectedTransports();
     const alice = createAuthenticatedCallComposition({ session: session(), transport: transports.alice, conversationId, localIdentityId: 'alice-id', localParticipantId: 'alice', remoteParticipant: participant('bob', 'bob-id'), identity: identity('alice', 'bob'), deviceTrust });
@@ -174,6 +184,23 @@ describe('authenticated bidirectional call flow', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+
+  it('does not resurrect a canceled call when a later invitation reuses its call ID', async () => {
+    const transports = connectedTransports();
+    const alice = createAuthenticatedCallComposition({ session: session(), transport: transports.alice, conversationId, localIdentityId: 'alice-id', localParticipantId: 'alice', remoteParticipant: participant('bob', 'bob-id'), identity: identity('alice', 'bob'), deviceTrust });
+    const bob = createAuthenticatedCallComposition({ session: session(), transport: transports.bob, conversationId, localIdentityId: 'bob-id', localParticipantId: 'bob', remoteParticipant: participant('alice', 'alice-id'), identity: identity('bob', 'alice'), deviceTrust });
+    transports.connect(alice.signalTransport, bob.signalTransport);
+    const call = await alice.invite();
+    await alice.cancel(call.callId);
+    const now = Date.now();
+    const unsigned: Omit<CallSignal, 'payloadDigest'> = {
+      callId: call.callId, conversationId, sender: participant('alice', 'alice-id'), receiverIdentityId: 'bob-id', mediaMode: 'audio',
+      nonce: '22222222-2222-4222-8222-222222222222', event: 'invite', kind: 'control', sequence: 3, timestamp: now,
+      expiresAt: now + 60_000, identityBinding: call.identityBinding,
+    };
+    await alice.signalTransport.send({ ...unsigned, payloadDigest: await signalDigest(unsigned) });
+    expect(await bob.service.get(call.callId)).toMatchObject({ state: 'cancelled' });
   });
 });
 

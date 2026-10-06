@@ -9,6 +9,7 @@ import type { ReplayProtectionStore } from './replayProtection';
 import { SecureCallSignaling } from './signaling';
 import { signalDigest } from './signalBinding';
 import { generateUUID } from '../utils/uuid';
+import { CALL_SIGNAL_LIFETIME_MS } from './callSecurityPolicy';
 
 const TERMINAL_SIGNAL_WAIT_MS = 3_000;
 
@@ -59,6 +60,8 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
   const sequences = new Map<string, number>();
   const endings = new Map<string, Promise<CallSession | undefined>>();
   const expiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const compositionStartedAt = Date.now();
+  let activeCallId: string | undefined;
   const localParticipant: CallParticipant = {
     participantId: input.localParticipantId ?? input.localIdentityId,
     identityId: input.localIdentityId,
@@ -75,6 +78,7 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
     if (event === 'heartbeat' || event === 'expire') {
       throw new Error('Unsupported call signal event.');
     }
+    const now = Date.now();
     const unsigned: Omit<CallSignal, 'payloadDigest'> = {
       callId: session.callId,
       conversationId: session.conversationId,
@@ -87,7 +91,9 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
       payload,
       sequence,
       timestamp: Date.now(),
-      expiresAt: session.expiresAt,
+      // expiresAt is a per-signal freshness bound. The invite itself still
+      // carries the invitation deadline; established calls may outlive it.
+      expiresAt: event === 'invite' ? Math.min(session.expiresAt, now + CALL_SIGNAL_LIFETIME_MS) : now + CALL_SIGNAL_LIFETIME_MS,
       identityBinding: session.identityBinding,
     };
     await signaling.send(session, { ...unsigned, payloadDigest: await signalDigest(unsigned) });
@@ -98,7 +104,8 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
     expiryTimers.delete(callId);
   };
   const notify = (session: CallSession): void => {
-    if (!['inviting', 'ringing'].includes(session.state)) clearExpiry(session.callId);
+    if (!['inviting', 'ringing', 'accepted', 'connecting'].includes(session.state)) clearExpiry(session.callId);
+    if (['ended', 'rejected', 'cancelled', 'expired', 'failed'].includes(session.state) && activeCallId === session.callId) activeCallId = undefined;
     listeners.forEach((listener) => listener(session));
   };
   const scheduleExpiry = (session: CallSession): void => {
@@ -106,7 +113,7 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
     const timer = setTimeout(() => {
       void (async () => {
         const current = await service.get(session.callId);
-        if (!current || !['inviting', 'ringing'].includes(current.state)) return;
+        if (!current || !['inviting', 'ringing', 'accepted', 'connecting'].includes(current.state)) return;
         try {
           const expired = await service.event(session.callId, 'expire');
           notify(expired);
@@ -122,11 +129,41 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
     (timer as unknown as { unref?: () => void }).unref?.();
     expiryTimers.set(session.callId, timer);
   };
+  const sendCompetingResponse = async (signal: CallSignal, event: 'reject' | 'cancel'): Promise<void> => {
+    const session: CallSession = {
+      callId: signal.callId,
+      conversationId: signal.conversationId,
+      participants: [localParticipant, input.remoteParticipant],
+      mediaMode: signal.mediaMode,
+      identityBinding: signal.identityBinding,
+      state: 'ringing',
+      createdAt: signal.timestamp,
+      updatedAt: Date.now(),
+      expiresAt: signal.expiresAt,
+    };
+    await sendEvent(session, event, signal.sequence + 1);
+  };
   const unsubscribeSignals = signaling.onSignal(async (signal) => {
     try { await assertVerifiedContact(); } catch { callSignalDiagnostic('device-trust-rejected'); throw new Error('Call device trust rejected.'); }
     const existing = await repository.get(signal.callId);
     if (!existing) {
-      if (signal.event !== 'invite' || signal.receiverIdentityId !== localParticipant.identityId || signal.mediaMode !== 'audio' && signal.mediaMode !== 'video' || signal.identityBinding !== await input.identity.identityBinding(input.conversationId, [localParticipant, input.remoteParticipant])) { callSignalDiagnostic('invite-binding-rejected'); throw new Error('Unknown call.'); }
+      if (signal.event !== 'invite' || signal.kind !== 'control' || signal.receiverIdentityId !== localParticipant.identityId || signal.mediaMode !== 'audio' && signal.mediaMode !== 'video' || signal.identityBinding !== await input.identity.identityBinding(input.conversationId, [localParticipant, input.remoteParticipant])) return;
+      // Call state is intentionally process-local. Do not turn an invitation
+      // created before this composition existed into a fresh ringing call.
+      if (signal.timestamp < compositionStartedAt) return;
+      if (activeCallId && activeCallId !== signal.callId) {
+        const active = await service.get(activeCallId);
+        const simultaneousOutgoing = active?.state === 'inviting';
+        if (simultaneousOutgoing && active.callId > signal.callId) {
+          await service.event(active.callId, 'cancel').then(notify);
+          const sequence = (sequences.get(active.callId) ?? 1) + 1;
+          sequences.set(active.callId, sequence);
+          try { await sendEvent(active, 'cancel', sequence); } catch { /* the remote may not have seen this competing attempt */ }
+        } else {
+          try { await sendCompetingResponse(signal, 'reject'); } catch { /* busy/collision response is best effort */ }
+          return;
+        }
+      }
       const incoming: CallSession = {
         callId: signal.callId,
         conversationId: signal.conversationId,
@@ -139,12 +176,22 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
         expiresAt: signal.expiresAt,
       };
       const received = await service.receiveInvite(incoming);
+      activeCallId = signal.callId;
       scheduleExpiry(received);
       notify(received);
       return;
     }
+    if (signal.event === 'invite') {
+      // A repeated INVITE can never overwrite a call that already advanced or
+      // resurrect a terminal call with the same ID.
+      if (activeCallId !== signal.callId && ['ended', 'rejected', 'cancelled', 'expired', 'failed'].includes(existing.state)) {
+        try { await sendCompetingResponse(signal, 'reject'); } catch { /* stale attempt */ }
+      }
+      return;
+    }
     if (signal.conversationId !== existing.conversationId || signal.identityBinding !== existing.identityBinding || signal.receiverIdentityId !== localParticipant.identityId || signal.mediaMode !== existing.mediaMode) { callSignalDiagnostic('session-binding-rejected'); throw new Error('Call signal binding rejected.'); }
     if (signal.kind && signal.kind !== 'control') {
+      if (!['accepted', 'connecting', 'connected', 'reconnecting'].includes(existing.state)) return;
       if (mediaListeners.size === 0) { callSignalDiagnostic('media-listener-missing'); throw new Error('Call media handler unavailable.'); }
       try { for (const listener of mediaListeners) await listener(existing, signal); } catch { callSignalDiagnostic('media-handler-rejected'); throw new Error('Call media handler rejected.'); }
       return;
@@ -155,16 +202,22 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
   });
   const invite = async (mediaMode: 'audio' | 'video' = 'audio'): Promise<CallSession> => {
     await assertVerifiedContact();
+    if (activeCallId) throw new Error('Call already active or ringing.');
     const participants: readonly [CallParticipant, CallParticipant] = [
       localParticipant,
       input.remoteParticipant,
     ];
     const binding = await input.identity.identityBinding(input.conversationId, participants);
     const session = await service.invite(input.conversationId, participants, binding, mediaMode);
-    await sendEvent(session, 'invite', 1);
+    activeCallId = session.callId;
     sequences.set(session.callId, 1);
     scheduleExpiry(session);
     notify(session);
+    try { await sendEvent(session, 'invite', 1); }
+    catch (error) {
+      try { const current = await service.get(session.callId); if (current && ['inviting', 'ringing'].includes(current.state)) notify(await service.event(session.callId, 'fail')); } catch { /* preserve original send failure */ }
+      throw error;
+    }
     return session;
   };
   const respond = async (callId: string, event: 'accept' | 'reject' | 'cancel'): Promise<CallSession> => {
@@ -175,7 +228,13 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
     // Commit the local terminal state before waiting for a best-effort remote
     // cancellation delivery. A stalled relay must not leave the UI ringing.
     if (event === 'cancel') notify(session);
-    await sendEvent(session, event, sequence);
+    try { await sendEvent(session, event, sequence); }
+    catch (error) {
+      if (event === 'accept') {
+        try { notify(await service.event(callId, 'fail')); } catch { /* expiry or a remote terminal event already won */ }
+      }
+      throw error;
+    }
     if (event !== 'cancel') notify(session);
     return session;
   };
@@ -209,7 +268,8 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
   };
   const onCallUpdate = (listener: (session: CallSession) => void): (() => void) => { listeners.add(listener); return () => listeners.delete(listener); };
   const sendMediaSignal = async (callId: string, event: 'connect' | 'connected' | 'reconnect', kind: Exclude<CallSignalKind, 'control'>, payload: unknown): Promise<void> => {
-    const session = await repository.get(callId); if (!session) throw new Error('Unknown call.');
+    await assertVerifiedContact();
+    const session = await repository.get(callId); if (!session || !['accepted', 'connecting', 'connected', 'reconnecting'].includes(session.state)) throw new Error('Call is not negotiating or established.');
     const sequence = (sequences.get(callId) ?? 1) + 1; sequences.set(callId, sequence);
     await sendEvent(session, event, sequence, kind, payload);
   };
