@@ -13,4 +13,11 @@ class CallPermissionFeedbackTest {
         assertEquals("Camera permission is required for video calls.", CallPermissionFeedback.denial("video", true, false))
         assertNull(CallPermissionFeedback.denial("audio", true, false))
     }
+
+    @Test fun `settings recovery is offered after a previously requested permanent denial`() {
+        assertEquals(true, CallPermissionFeedback.settingsRecoveryRequired(permissionDenied = true, requestedBefore = true, shouldShowRationale = false))
+        assertEquals(false, CallPermissionFeedback.settingsRecoveryRequired(permissionDenied = true, requestedBefore = false, shouldShowRationale = false))
+        assertEquals(false, CallPermissionFeedback.settingsRecoveryRequired(permissionDenied = true, requestedBefore = true, shouldShowRationale = true))
+        assertEquals(false, CallPermissionFeedback.settingsRecoveryRequired(permissionDenied = false, requestedBefore = true, shouldShowRationale = false))
+    }
 }

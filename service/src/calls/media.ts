@@ -1,36 +1,106 @@
 import { testDiagnosticsEnabled } from '../utils/testDiagnostics';
 import type { CallMediaConnection, IceServer } from './webrtc';
 import type { CallSession } from './contracts';
-import { BrowserCaptureController } from '../privacy/capture';
+import { BrowserCaptureController, BrowserCaptureError } from '../privacy/capture';
 import { beginIceTimingTrace, traceIceHealthSnapshot, traceIceTiming } from './iceTiming';
 
 export type CaptureKind = 'microphone' | 'camera';
+export type LocalTrackKind = 'audio' | 'video';
+export type LocalMediaFailure = 'microphone-unavailable' | 'camera-unavailable';
 export interface MediaCapture { getUserMedia(constraints: MediaStreamConstraints): Promise<MediaStream>; }
 
-/** Requests devices only when explicitly called and always releases every track. */
+const captureFailureMessage = (kind: CaptureKind, error: unknown): string => {
+  const reason = error instanceof BrowserCaptureError ? error.reason
+    : error && typeof error === 'object' && 'name' in error
+      ? ({ NotAllowedError: 'permission-denied', PermissionDeniedError: 'permission-denied', SecurityError: 'permission-denied', NotFoundError: 'device-unavailable', DevicesNotFoundError: 'device-unavailable', OverconstrainedError: 'device-unavailable', NotReadableError: 'device-busy', TrackStartError: 'device-busy', AbortError: 'request-dismissed', InvalidStateError: 'request-dismissed' } as Record<string, string>)[String((error as { name?: unknown }).name)] ?? 'capture-unavailable'
+      : 'capture-unavailable';
+  if (reason === 'permission-denied' || reason === 'request-dismissed') return kind === 'camera'
+    ? 'Camera or microphone permission was denied or dismissed. Allow both permissions and try again.'
+    : 'Microphone permission was denied or dismissed. Allow microphone access and try again.';
+  if (reason === 'device-unavailable') return kind === 'camera' ? 'A camera or microphone is unavailable.' : 'A microphone is unavailable.';
+  if (reason === 'device-busy') return kind === 'camera' ? 'The camera or microphone is in use by another app.' : 'The microphone is in use by another app.';
+  return 'Call media is unavailable. Check the device and page permissions, then retry.';
+};
+
+/** Requests devices only after acceptance/peer acceptance, and releases every track on call cleanup. */
 export class CallMediaController {
   private stream?: MediaStream;
   private generation = 0;
   private readonly browserCapture = new BrowserCaptureController();
   private readonly capture: MediaCapture;
+  private readonly trackListeners = new Map<MediaStreamTrack, () => void>();
+  private readonly endedListeners = new Set<(kind: LocalTrackKind) => void>();
   constructor(capture?: MediaCapture) { this.capture = capture ?? { getUserMedia: (constraints) => this.browserCapture.request(constraints) }; }
   async request(kind: CaptureKind): Promise<MediaStream> {
     if (this.stream) return this.stream;
-    const generation = ++this.generation;
-    try { const stream = await this.capture.getUserMedia(kind === 'camera' ? { audio: true, video: true } : { audio: true, video: false }); if (generation !== this.generation) { stream.getTracks().forEach((track) => track.stop()); throw new Error('Cancelled'); } this.stream = stream; return stream; }
-    catch { if (generation === this.generation) this.release(); throw new Error('Call media permission was denied.'); }
+    const generation = this.generation;
+    try {
+      const stream = await this.capture.getUserMedia(kind === 'camera' ? { audio: true, video: true } : { audio: true, video: false });
+      if (generation !== this.generation) { stream.getTracks().forEach((track) => track.stop()); throw new Error('Call media request was cancelled.'); }
+      this.stream = stream;
+      this.watchTracks(stream);
+      return stream;
+    } catch (error) {
+      if (generation === this.generation) this.release();
+      throw new Error(captureFailureMessage(kind, error));
+    }
   }
   get activeStream(): MediaStream | undefined { return this.stream; }
-  setMicrophoneEnabled(enabled: boolean): void { this.stream?.getAudioTracks().forEach((track) => { track.enabled = enabled; }); }
-  setCameraEnabled(enabled: boolean): void { this.stream?.getVideoTracks().forEach((track) => { track.enabled = enabled; }); }
+  setMicrophoneEnabled(enabled: boolean): void { this.stream?.getAudioTracks().forEach((track) => { if (track.readyState === 'live') track.enabled = enabled; }); }
+  async setCameraEnabled(enabled: boolean): Promise<MediaStreamTrack | undefined> {
+    if (!this.stream) throw new Error('Call media is not active.');
+    const current = this.stream.getVideoTracks().find((track) => track.readyState === 'live');
+    if (!enabled) {
+      if (!current) return undefined;
+      current.enabled = false;
+      this.unwatchTrack(current);
+      this.stream.removeTrack(current);
+      current.stop();
+      return undefined;
+    }
+    if (current) { current.enabled = true; return current; }
+    for (const stale of this.stream.getVideoTracks()) { this.unwatchTrack(stale); this.stream.removeTrack(stale); }
+    const generation = this.generation;
+    let replacement: MediaStream | undefined;
+    try {
+      replacement = await this.capture.getUserMedia({ audio: false, video: true });
+      const track = replacement.getVideoTracks().find((item) => item.readyState === 'live');
+      if (!track) throw new Error('Camera device unavailable.');
+      if (generation !== this.generation || !this.stream) { replacement.getTracks().forEach((item) => item.stop()); throw new Error('Camera request was cancelled.'); }
+      this.stream.addTrack(track);
+      this.watchTrack(track);
+      return track;
+    } catch (error) {
+      replacement?.getTracks().forEach((track) => { if (track.readyState === 'live') track.stop(); });
+      throw new Error(captureFailureMessage('camera', error));
+    }
+  }
   async switchCamera(): Promise<boolean> {
-    const track = this.stream?.getVideoTracks()[0];
+    const track = this.stream?.getVideoTracks().find((item) => item.readyState === 'live');
     if (!track?.applyConstraints) return false;
     const current = track.getSettings?.().facingMode;
-    await track.applyConstraints({ facingMode: current === 'user' ? 'environment' : 'user' });
-    return true;
+    try { await track.applyConstraints({ facingMode: current === 'user' ? 'environment' : 'user' }); return true; }
+    catch { return false; }
   }
-  release(): void { ++this.generation; this.browserCapture.release(); this.stream?.getTracks().forEach((track) => track.stop()); this.stream = undefined; }
+  onTrackEnded(listener: (kind: LocalTrackKind) => void): () => void { this.endedListeners.add(listener); return () => this.endedListeners.delete(listener); }
+  release(): void {
+    ++this.generation;
+    for (const track of this.trackListeners.keys()) this.unwatchTrack(track);
+    this.browserCapture.release();
+    this.stream?.getTracks().forEach((track) => track.stop());
+    this.stream = undefined;
+  }
+  private watchTracks(stream: MediaStream): void { stream.getTracks().forEach((track) => this.watchTrack(track)); }
+  private watchTrack(track: MediaStreamTrack): void {
+    if (this.trackListeners.has(track)) return;
+    const ended = (): void => {
+      if (track.kind === 'video' && this.stream?.getTracks().includes(track)) { this.unwatchTrack(track); this.stream.removeTrack(track); }
+      this.endedListeners.forEach((listener) => listener(track.kind === 'video' ? 'video' : 'audio'));
+    };
+    track.addEventListener?.('ended', ended);
+    this.trackListeners.set(track, () => track.removeEventListener?.('ended', ended));
+  }
+  private unwatchTrack(track: MediaStreamTrack): void { this.trackListeners.get(track)?.(); this.trackListeners.delete(track); }
 }
 
 type PeerFactory = (configuration: RTCConfiguration) => RTCPeerConnection;
@@ -79,6 +149,9 @@ export class BrowserCallMediaConnection implements CallMediaConnection {
   private readonly candidateListeners = new Set<(candidate: unknown) => void>();
   private remoteStream?: MediaStream;
   private readonly remoteListeners = new Set<(stream: MediaStream) => void>();
+  private readonly senders = new Map<'audio' | 'video', RTCRtpSender>();
+  private readonly remoteEndedListeners = new WeakMap<MediaStreamTrack, () => void>();
+  private closed = false;
   constructor(iceServers: readonly IceServer[], factory: PeerFactory = browserPeerFactory, iceTransportPolicy: RTCIceTransportPolicy = 'all') {
     beginIceTimingTrace();
     traceIceTiming('peer-connection-create-start');
@@ -110,11 +183,20 @@ export class BrowserCallMediaConnection implements CallMediaConnection {
       this.candidateListeners.forEach((listener) => listener(candidate.toJSON()));
     };
     this.peer.ontrack = (event) => {
+      if (this.closed) return;
       if (event.track.kind === 'audio') remoteAudioDiagnostic('remote-audio-track-received', 1);
       remoteAudioDiagnostic('remote-audio-ontrack-fired', event.track.kind === 'audio' ? 1 : 0);
       this.remoteStream ??= new MediaStream();
       for (const track of event.streams[0]?.getTracks() ?? [event.track]) {
-        if (!this.remoteStream.getTracks().some((existing) => existing.id === track.id)) this.remoteStream.addTrack(track);
+        if (!this.remoteStream.getTracks().some((existing) => existing.id === track.id)) {
+          this.remoteStream.addTrack(track);
+          const ended = (): void => {
+            this.remoteStream?.removeTrack(track);
+            if (this.remoteStream) this.remoteListeners.forEach((listener) => listener(this.remoteStream!));
+          };
+          track.addEventListener?.('ended', ended, { once: true });
+          this.remoteEndedListeners.set(track, ended);
+        }
       }
       if (event.track.kind === 'audio') remoteAudioDiagnostic('remote-audio-stream-stored', this.remoteStream.getAudioTracks().length);
       this.remoteListeners.forEach((listener) => listener(this.remoteStream!));
@@ -207,8 +289,13 @@ export class BrowserCallMediaConnection implements CallMediaConnection {
       });
     }).catch(() => undefined);
   }
-  addStream(stream: MediaStream): void { stream.getTracks().forEach((track) => this.peer.addTrack(track, stream)); }
-  async close(): Promise<void> { if (this.healthPoll) clearInterval(this.healthPoll); this.healthPoll = undefined; traceIceTiming('peer-connection-closed'); this.peer.close(); this.remoteStream?.getTracks().forEach((track) => track.stop()); this.remoteStream = undefined; this.remoteListeners.clear(); this.listeners.forEach((listener) => listener('closed')); this.listeners.clear(); this.candidateListeners.clear(); }
+  addStream(stream: MediaStream): void { stream.getTracks().forEach((track) => this.senders.set(track.kind === 'video' ? 'video' : 'audio', this.peer.addTrack(track, stream))); }
+  async replaceLocalTrack(kind: 'audio' | 'video', track: MediaStreamTrack | null): Promise<void> {
+    const sender = this.senders.get(kind);
+    if (!sender) { if (track) throw new Error('Call media sender is unavailable.'); return; }
+    await sender.replaceTrack(track);
+  }
+  async close(): Promise<void> { if (this.closed) return; this.closed = true; if (this.healthPoll) clearInterval(this.healthPoll); this.healthPoll = undefined; traceIceTiming('peer-connection-closed'); this.peer.ontrack = null; this.peer.close(); this.remoteStream?.getTracks().forEach((track) => { const ended = this.remoteEndedListeners.get(track); if (ended) track.removeEventListener?.('ended', ended); track.stop(); }); this.remoteStream = undefined; this.remoteListeners.clear(); this.listeners.forEach((listener) => listener('closed')); this.listeners.clear(); this.candidateListeners.clear(); this.senders.clear(); }
   onIceCandidate(listener: (candidate: unknown) => void): () => void { this.candidateListeners.add(listener); return () => this.candidateListeners.delete(listener); }
   onStateChange(listener: (state: 'connecting' | 'connected' | 'reconnecting' | 'failed' | 'closed') => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
   onRemoteStream(listener: (stream: MediaStream) => void): () => void { this.remoteListeners.add(listener); if (this.remoteStream?.getTracks().length) listener(this.remoteStream); return () => this.remoteListeners.delete(listener); }

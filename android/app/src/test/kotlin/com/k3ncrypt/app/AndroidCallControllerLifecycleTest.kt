@@ -39,6 +39,20 @@ class AndroidCallControllerLifecycleTest {
         assertFalse(isCallReconnectOfferOwner("route-b", "route-a"))
     }
 
+    @Test fun `configuration recreation preserves the call but backgrounding stops it`() {
+        assertFalse(shouldEndCallWhenActivityStops(isChangingConfigurations = true))
+        assertTrue(shouldEndCallWhenActivityStops(isChangingConfigurations = false))
+    }
+
+    @Test fun `incoming and outgoing media start only after the correct explicit acceptance`() {
+        assertFalse(shouldStartCallMediaAfterAcceptance(incoming = true, status = "incoming", locallyAccepted = false, remotelyAccepted = false, appForeground = true))
+        assertFalse(shouldStartCallMediaAfterAcceptance(incoming = true, status = "incoming", locallyAccepted = false, remotelyAccepted = true, appForeground = true))
+        assertTrue(shouldStartCallMediaAfterAcceptance(incoming = true, status = "incoming", locallyAccepted = true, remotelyAccepted = false, appForeground = true))
+        assertFalse(shouldStartCallMediaAfterAcceptance(incoming = false, status = "ringing", locallyAccepted = false, remotelyAccepted = false, appForeground = true))
+        assertTrue(shouldStartCallMediaAfterAcceptance(incoming = false, status = "ringing", locallyAccepted = false, remotelyAccepted = true, appForeground = true))
+        assertFalse(shouldStartCallMediaAfterAcceptance(incoming = false, status = "ringing", locallyAccepted = false, remotelyAccepted = true, appForeground = false))
+    }
+
     @Test fun `invalid expiry protocol origin call state or sequence cannot claim replay state`() {
         assertFalse(shouldClaimCallReplay(CallSignalCodec.ProtocolClassification.INVALID, true, true, true))
         assertFalse(shouldClaimCallReplay(CallSignalCodec.ProtocolClassification.LEGACY, true, true, true))

@@ -26,6 +26,7 @@ import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
 import java.util.UUID
 import javax.inject.Inject
+import javax.inject.Singleton
 
 data class AndroidCallUiState(
     val callId: String? = null,
@@ -36,6 +37,7 @@ data class AndroidCallUiState(
     val cameraEnabled: Boolean = true,
     val localVideo: org.webrtc.VideoTrack? = null,
     val remoteVideo: org.webrtc.VideoTrack? = null,
+    val mediaError: String? = null,
     val errorCategory: String? = null,
     val receivedProtocolVersion: Int? = null,
 )
@@ -54,6 +56,11 @@ internal fun shouldKeepOutgoingCallOnCollision(activeCallId: String, incomingCal
 
 internal fun isCallReconnectOfferOwner(localRoutingId: String, peerRoutingId: String): Boolean = localRoutingId < peerRoutingId
 
+internal fun shouldEndCallWhenActivityStops(isChangingConfigurations: Boolean): Boolean = !isChangingConfigurations
+
+internal fun shouldStartCallMediaAfterAcceptance(incoming: Boolean, status: String, locallyAccepted: Boolean, remotelyAccepted: Boolean, appForeground: Boolean): Boolean =
+    appForeground && if (incoming) status == "incoming" && locallyAccepted else status == "ringing" && remotelyAccepted
+
 /** Replay state may change only after protocol, origin, call-state, and sequence admission pass. */
 internal fun shouldClaimCallReplay(
     protocol: CallSignalCodec.ProtocolClassification,
@@ -63,6 +70,7 @@ internal fun shouldClaimCallReplay(
 ): Boolean = protocol == CallSignalCodec.ProtocolClassification.CURRENT && senderIdentityBound && callStateAllowsSignal && sequenceExpected
 
 /** Owns only call/media state. Identity, Vodozemac signaling, and device proof stay in existing repositories. */
+@Singleton
 class AndroidCallController @Inject constructor(
     @ApplicationContext private val context: Context,
     private val messaging: AndroidMessagingRepository,
@@ -80,6 +88,7 @@ class AndroidCallController @Inject constructor(
     private var expiresAt = 0L
     private val controllerStartedAt = System.currentTimeMillis()
     private var callGeneration = 0L
+    private var appForeground = false
     private var nextSequence = 1L
     private val receivedSequences = linkedMapOf<String, Long>()
     private var remoteDescriptionReady = false
@@ -135,6 +144,7 @@ class AndroidCallController @Inject constructor(
         val acceptedCallId = callId ?: error("No incoming call is waiting")
         val acceptedGeneration = callGeneration
         check(current.incoming) { "No incoming call is waiting" }
+        check(shouldStartCallMediaAfterAcceptance(incoming = true, status = current.status, locallyAccepted = true, remotelyAccepted = false, appForeground = appForeground))
         if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("accept-action")
         messaging.requireVerifiedCallConversation().also { check(it == binding) { "Call contact changed" } }
         configuredIceServers = iceServers
@@ -173,10 +183,35 @@ class AndroidCallController @Inject constructor(
     }
 
     fun setMicrophoneEnabled(enabled: Boolean) { peer?.setMicrophoneEnabled(enabled); mutableState.value = mutableState.value.copy(microphoneEnabled = enabled) }
-    fun setCameraEnabled(enabled: Boolean) { peer?.setCameraEnabled(enabled); mutableState.value = mutableState.value.copy(cameraEnabled = enabled) }
-    fun switchCamera() { peer?.switchCamera() }
+    fun setCameraEnabled(enabled: Boolean): Boolean {
+        val engine = peer ?: return false
+        val applied = engine.setCameraEnabled(enabled)
+        mutableState.value = mutableState.value.copy(
+            cameraEnabled = applied && enabled,
+            localVideo = if (applied && enabled) engine.localVideoTrack() else null,
+            mediaError = if (applied) null else "Camera is unavailable. The call can continue with video off.",
+        )
+        return applied
+    }
+    fun switchCamera() {
+        val engine = peer ?: return
+        val ownerCallId = callId
+        val ownerGeneration = callGeneration
+        engine.switchCamera { switched ->
+            if (callId != ownerCallId || callGeneration != ownerGeneration) return@switchCamera
+            if (!switched) mutableState.value = mutableState.value.copy(mediaError = "The other camera is unavailable.")
+            else mutableState.value = mutableState.value.copy(mediaError = null)
+        }
+    }
     fun clearProtocolError() {
         mutableState.value = if (callId == null) AndroidCallUiState() else mutableState.value.copy(errorCategory = null, receivedProtocolVersion = null)
+    }
+
+    fun dismissCallNotice() {
+        val state = mutableState.value
+        if (callId == null && state.status in setOf("verification-required", "ended", "rejected", "cancelled", "timeout", "expired", "failed")) {
+            mutableState.value = AndroidCallUiState()
+        }
     }
 
     private fun showProtocolIncompatibility(signalCallId: String, receivedVersion: Int) {
@@ -188,8 +223,30 @@ class AndroidCallController @Inject constructor(
     }
 
     fun recordApplicationLifecycle(backgrounded: Boolean) {
+        appForeground = !backgrounded
         if (BuildConfig.DEBUG && callId != null) {
             DebugInspectionStore.setCallSignalStage(if (backgrounded) "app-lifecycle-background" else "app-lifecycle-foreground")
+        }
+    }
+
+    /** No foreground call service exists; stop local media when the app leaves the foreground. */
+    fun endForBackground() {
+        val activeCallId = callId ?: return
+        if (peer == null && mutableState.value.status in setOf("incoming", "ringing")) return
+        val activeGeneration = callGeneration
+        peer?.close()
+        peer = null
+        scope.launch {
+            actionMutex.withLock {
+                if (callId != activeCallId || callGeneration != activeGeneration) return@withLock
+                val terminalEvent = when {
+                    mutableState.value.incoming -> "reject"
+                    mutableState.value.status == "ringing" && isInitiator -> "cancel"
+                    else -> "end"
+                }
+                runCatching { send(terminalEvent, "control") }
+                if (callId == activeCallId && callGeneration == activeGeneration) finish("ended")
+            }
         }
     }
 
@@ -285,12 +342,32 @@ class AndroidCallController @Inject constructor(
                 }
             }
             override fun onRemoteVideo(track: org.webrtc.VideoTrack) { if (isCurrentCall()) mutableState.value = mutableState.value.copy(remoteVideo = track) }
+            override fun onRemoteVideoRemoved(track: org.webrtc.VideoTrack) {
+                if (isCurrentCall() && mutableState.value.remoteVideo === track) mutableState.value = mutableState.value.copy(remoteVideo = null)
+            }
+            override fun onMediaFailure(reason: String) {
+                if (!isCurrentCall()) return
+                if (reason == "microphone-unavailable") {
+                    scope.launch {
+                        if (!isCurrentCall()) return@launch
+                        runCatching { send("fail", "control") }
+                        if (isCurrentCall()) finish("failed", "Microphone became unavailable. The call ended.")
+                    }
+                } else {
+                    mutableState.value = mutableState.value.copy(cameraEnabled = false, localVideo = null, mediaError = "Camera became unavailable. The call continues with video off.")
+                }
+            }
         }) } catch (error: Throwable) {
             engine.close()
             throw error
         }
         peer = engine
-        mutableState.value = mutableState.value.copy(localVideo = engine.localVideoTrack())
+        engine.setMicrophoneEnabled(mutableState.value.microphoneEnabled)
+        if (mediaMode == "video" && !mutableState.value.cameraEnabled) engine.setCameraEnabled(false)
+        mutableState.value = mutableState.value.copy(
+            localVideo = if (mutableState.value.cameraEnabled) engine.localVideoTrack() else null,
+            mediaError = null,
+        )
     }
 
     private suspend fun handle(raw: String) {
@@ -376,6 +453,11 @@ class AndroidCallController @Inject constructor(
         }
         when (signal.event) {
             "accept" -> {
+                if (isInitiator && !shouldStartCallMediaAfterAcceptance(incoming = false, status = mutableState.value.status, locallyAccepted = false, remotelyAccepted = true, appForeground = appForeground)) {
+                    runCatching { send("end", "control") }
+                    finish("ended")
+                    return
+                }
                 mutableState.value = mutableState.value.copy(status = "connecting")
                 // Only the originating device creates the initial offer. A callee
                 // waits for that offer and answers it in the connect/offer branch.
@@ -528,7 +610,7 @@ class AndroidCallController @Inject constructor(
         }
     }
 
-    private fun finish(status: String) {
+    private fun finish(status: String, mediaError: String? = null) {
         if (BuildConfig.DEBUG) {
             val cleanupCategory = when (status) {
                 "timeout" -> "call-cleanup-timeout"
@@ -552,7 +634,12 @@ class AndroidCallController @Inject constructor(
         }
         callGeneration += 1
         peer?.close(); peer = null
-        mutableState.value = AndroidCallUiState(status = status)
+        mutableState.value = AndroidCallUiState(
+            status = status,
+            mediaMode = mediaMode,
+            mediaError = mediaError,
+            errorCategory = if (status == "verification-required") "verification-required" else null,
+        )
         callId = null; binding = null; identityBinding = ""; expiresAt = 0
         remoteDescriptionReady = false; queuedIce.clear(); nextSequence = 1
         signalingReady = false; queuedLocalIce.clear()

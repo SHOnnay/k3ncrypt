@@ -56,13 +56,21 @@ interface AndroidCallObserver {
     fun onLocalIce(candidate: IceValue)
     fun onState(state: String)
     fun onRemoteVideo(track: VideoTrack)
+    fun onRemoteVideoRemoved(track: VideoTrack)
+    fun onMediaFailure(reason: String)
 }
 
 /** Native WebRTC adapter only. Identity, authorization, and encrypted signaling stay in existing K3NCRYPT boundaries. */
 class AndroidWebRtcEngine(context: Context) {
     private val appContext = context.applicationContext
     private val egl = EglBase.create()
-    private val audioModule = JavaAudioDeviceModule.builder(appContext).createAudioDeviceModule()
+    private val audioModule = JavaAudioDeviceModule.builder(appContext)
+        .setAudioRecordErrorCallback(object : JavaAudioDeviceModule.AudioRecordErrorCallback {
+            override fun onWebRtcAudioRecordInitError(errorMessage: String) = microphoneFailed()
+            override fun onWebRtcAudioRecordStartError(errorCode: JavaAudioDeviceModule.AudioRecordStartErrorCode, errorMessage: String) = microphoneFailed()
+            override fun onWebRtcAudioRecordError(errorMessage: String) = microphoneFailed()
+        })
+        .createAudioDeviceModule()
     private val factory: PeerConnectionFactory
     private var peer: PeerConnection? = null
     private var capturer: CameraVideoCapturer? = null
@@ -72,6 +80,8 @@ class AndroidWebRtcEngine(context: Context) {
     private var videoSource: VideoSource? = null
     private var videoTrack: VideoTrack? = null
     private var localStream: MediaStream? = null
+    private var cameraCapturing = false
+    private var cameraUnavailable = false
     private var observer: AndroidCallObserver? = null
     private var debugIceDiagnosticSink: ((String) -> Unit)? = null
     private var debugTimingDiagnosticSink: ((String) -> Unit)? = null
@@ -175,7 +185,7 @@ class AndroidWebRtcEngine(context: Context) {
                 if (BuildConfig.DEBUG && stream.audioTracks.isNotEmpty()) audioDiagnostic("remote-audio-on-add-stream", stream.audioTracks.size)
                 stream.videoTracks.firstOrNull()?.let(observer::onRemoteVideo)
             }
-            override fun onRemoveStream(stream: MediaStream) = Unit
+            override fun onRemoveStream(stream: MediaStream) { stream.videoTracks.forEach(observer::onRemoteVideoRemoved) }
             override fun onDataChannel(channel: org.webrtc.DataChannel) { channel.close(); channel.dispose() }
             override fun onRenegotiationNeeded() = Unit
             override fun onAddTrack(receiver: RtpReceiver, streams: Array<out MediaStream>) {
@@ -186,6 +196,7 @@ class AndroidWebRtcEngine(context: Context) {
                 if (BuildConfig.DEBUG && transceiver.receiver.track() is AudioTrack) audioDiagnostic("remote-audio-on-track", 1)
                 (transceiver.receiver.track() as? VideoTrack)?.let(observer::onRemoteVideo)
             }
+            override fun onRemoveTrack(receiver: RtpReceiver) { (receiver.track() as? VideoTrack)?.let(observer::onRemoteVideoRemoved) }
             override fun onConnectionChange(state: PeerConnection.PeerConnectionState) {
                 emitSdpObserverDiagnostic("peer-connection-${state.name.lowercase()}")
                 emitTimingDiagnostic("peer-connection-state-${state.name.lowercase()}")
@@ -203,11 +214,19 @@ class AndroidWebRtcEngine(context: Context) {
                 ?: Camera2Enumerator(appContext).deviceNames.firstOrNull()
                 ?: error("call_camera_unavailable")
             val enumerator = Camera2Enumerator(appContext)
-            capturer = enumerator.createCapturer(camera, null) as? CameraVideoCapturer ?: error("call_camera_unavailable")
+            capturer = enumerator.createCapturer(camera, object : CameraVideoCapturer.CameraEventsHandler {
+                override fun onCameraError(errorDescription: String) = cameraFailed()
+                override fun onCameraDisconnected() = cameraFailed()
+                override fun onCameraFreezed(errorDescription: String) = cameraFailed()
+                override fun onCameraOpening(cameraName: String) = Unit
+                override fun onFirstFrameAvailable() = Unit
+                override fun onCameraClosed() = Unit
+            }) as? CameraVideoCapturer ?: error("call_camera_unavailable")
             videoSource = factory.createVideoSource(false)
             textureHelper = SurfaceTextureHelper.create("k3ncrypt-camera", egl.eglBaseContext)
             capturer!!.initialize(textureHelper, appContext, videoSource!!.capturerObserver)
             capturer!!.startCapture(640, 480, 24)
+            cameraCapturing = true
             videoTrack = factory.createVideoTrack("k3ncrypt-call-video", videoSource).also { stream.addTrack(it) }
         }
         localStream = stream
@@ -235,8 +254,50 @@ class AndroidWebRtcEngine(context: Context) {
     }
 
     fun setMicrophoneEnabled(enabled: Boolean) { audioTrack?.setEnabled(enabled) }
-    fun setCameraEnabled(enabled: Boolean) { videoTrack?.setEnabled(enabled) }
-    fun switchCamera() { capturer?.switchCamera(null) }
+    fun setCameraEnabled(enabled: Boolean): Boolean {
+        val track = videoTrack ?: return false
+        val camera = capturer ?: return false
+        if (enabled && cameraUnavailable) return false
+        if (!enabled) {
+            track.setEnabled(false)
+            if (!cameraCapturing) return true
+            return try {
+                camera.stopCapture()
+                cameraCapturing = false
+                true
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                observer?.onMediaFailure("camera-unavailable")
+                false
+            } catch (_: RuntimeException) {
+                observer?.onMediaFailure("camera-unavailable")
+                false
+            }
+        }
+        if (!cameraCapturing) {
+            try {
+                camera.startCapture(640, 480, 24)
+                cameraCapturing = true
+            } catch (_: RuntimeException) {
+                track.setEnabled(false)
+                observer?.onMediaFailure("camera-unavailable")
+                return false
+            }
+        }
+        track.setEnabled(true)
+        return true
+    }
+
+    fun switchCamera(onResult: (Boolean) -> Unit) {
+        val camera = capturer
+        if (camera == null || !cameraCapturing || cameraUnavailable) { onResult(false); return }
+        try {
+            camera.switchCamera(object : CameraVideoCapturer.CameraSwitchHandler {
+                override fun onCameraSwitchDone(isFrontCamera: Boolean) = onResult(true)
+                override fun onCameraSwitchError(errorDescription: String) = onResult(false)
+            })
+        } catch (_: RuntimeException) { onResult(false) }
+    }
 
     /** Collect aggregate transport/media counters only in debug builds; no addresses or payload data are retained. */
     fun collectPostConnectHealthSnapshot() {
@@ -278,6 +339,7 @@ class AndroidWebRtcEngine(context: Context) {
         closed = true
         emitTimingDiagnostic("peer-connection-closed")
         runCatching { capturer?.stopCapture() }
+        cameraCapturing = false
         capturer?.dispose(); capturer = null
         textureHelper?.dispose(); textureHelper = null
         peer?.close(); peer?.dispose(); peer = null
@@ -299,6 +361,13 @@ class AndroidWebRtcEngine(context: Context) {
 
     private fun peerOrFail() = peer ?: error("call_peer_not_initialized")
     private fun candidateType(candidate: String): String = candidate.substringAfter(" typ ", "").substringBefore(' ').takeIf { it in setOf("host", "srflx", "relay", "prflx") } ?: "unknown"
+    private fun cameraFailed() {
+        cameraCapturing = false
+        cameraUnavailable = true
+        videoTrack?.setEnabled(false)
+        observer?.onMediaFailure("camera-unavailable")
+    }
+    private fun microphoneFailed() { observer?.onMediaFailure("microphone-unavailable") }
     private fun emitIceDiagnostic(stage: String) { if (BuildConfig.DEBUG) debugIceDiagnosticSink?.invoke(stage) }
     private fun emitTimingDiagnostic(stage: String) { if (BuildConfig.DEBUG) debugTimingDiagnosticSink?.invoke(stage) }
     private fun emitSdpObserverDiagnostic(stage: String) { if (BuildConfig.DEBUG) debugSdpObserverDiagnosticSink?.invoke(stage) }

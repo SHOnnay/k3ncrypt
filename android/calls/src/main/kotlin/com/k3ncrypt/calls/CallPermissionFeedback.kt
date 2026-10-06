@@ -6,4 +6,7 @@ object CallPermissionFeedback {
         mediaMode == "video" && !cameraGranted -> "Camera permission is required for video calls."
         else -> null
     }
+
+    fun settingsRecoveryRequired(permissionDenied: Boolean, requestedBefore: Boolean, shouldShowRationale: Boolean): Boolean =
+        permissionDenied && requestedBefore && !shouldShowRationale
 }
