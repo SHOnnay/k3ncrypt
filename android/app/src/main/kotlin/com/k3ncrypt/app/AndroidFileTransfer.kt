@@ -29,7 +29,7 @@ internal class AndroidFileTransfer(private val context: Context, private val mes
     private var job: Job? = null
     @Volatile private var activeOutput: File? = null
     @Volatile private var disposed = false
-    private data class Pending(val uri: Uri, val binding: ConversationInvitation, val ownIdentity: String, val reference: JSONObject, val key: ByteArray, val size: Long, val name: String, val cacheDirectory: File)
+    private data class Pending(val uri: Uri, val binding: ConversationInvitation, val ownIdentity: String, val reference: JSONObject, val key: ByteArray, val size: Long, val name: String, val cacheDirectory: File, val inventory: SealedObjectInventory = SealedObjectInventory())
     @Volatile private var pending: Pending? = null
     private fun fence(g: Long) { check(state.live(g)) { "file-canceled" }; if (job?.isCancelled == true) throw CancellationException() }
     private suspend fun request(p: Pending, path: String, method: String, op: String, json: JSONObject? = null, sealed: SealedAttachmentObject? = null): JSONObject = messaging.fileRequest(path, method, op, p.binding, json, sealed?.ciphertextAndTag, sealed?.nonce?.let(::b64))
@@ -58,6 +58,7 @@ internal class AndroidFileTransfer(private val context: Context, private val mes
                 fence(g); checkStatus(p, created)
                 val manifest = AttachmentAead.decodeManifest(AttachmentAead.encodeManifest(AttachmentManifestV2(c.fileSize, c.chunkSize, c.chunkCount, reference.getLong("createdAt"), reference.getLong("expiresAt"), metadata.first, context.contentResolver.getType(uri) ?: "application/octet-stream")))
                 state.details(g, c.fileSize, manifest.filename)
+                p.inventory.beforeSeal("manifest")
                 cache(p, "manifest", aead.encryptManifest(key, c, manifest)); fence(g)
                 upload(p, g)
             } catch (e: Exception) { failed(g, e) }
@@ -85,6 +86,7 @@ internal class AndroidFileTransfer(private val context: Context, private val mes
             if (indices(status).contains(i)) continue
             var sealed = cached(p, i.toString())
             if (sealed == null) {
+                p.inventory.beforeSeal(i.toString())
                 state.move(g, FilePhase.Encrypting, accepted)
                 val count = minOf(c.chunkSize.toLong(), c.fileSize - i.toLong() * c.chunkSize).toInt()
                 val bytes = readChunk(p.uri, i.toLong() * c.chunkSize, count, p.size, g); fence(g)
@@ -155,10 +157,14 @@ internal class AndroidFileTransfer(private val context: Context, private val mes
     fun dispose() { disposed = true; cancel() }
     private suspend fun release(cancel: Boolean) { val p = pending; pending = null; if (p != null) { p.key.fill(0); p.cacheDirectory.deleteRecursively(); if (cancel) runCatching { request(p, parseContext(p.reference.getJSONObject("context")).transferId, "DELETE", "attachment:delete") } } }
     private fun failed(g: Long, e: Exception) {
-        if (e is CancellationException) return
-        val reason = e.message.orEmpty(); val retry = pending != null && reason == "file-network-unavailable"
-        val failure = when { reason == "file-size-unknown" -> "Document size is unavailable. Select a document that reports its size."; reason == "file-size-limit" -> "File must be between 1 byte and 8 MiB."; e is SecurityException || reason.contains("uri") -> "Document access unavailable. Select the original file again."; reason.contains("expired") -> "File expired."; reason.contains("quota") -> "File storage quota reached."; reason.contains("storage") || e is java.io.IOException -> "Local storage unavailable or full. Select the file again."; reason.contains("verification") || reason.contains("contact") -> "Verify the unchanged contact before sending."; retry -> "Network unavailable. Retry this transfer in this session."; else -> "File transfer rejected. Select the file again to restart." }
-        state.move(g, if (reason.contains("expired")) FilePhase.Expired else FilePhase.Failed, failure = failure, retryable = retry)
+        if (e is CancellationException || !state.live(g)) return
+        val reason = e.message.orEmpty(); val restart = reason == "file-cache-unavailable"; val retry = pending != null && !restart && reason == "file-network-unavailable"
+        val failure = when { restart -> "Sealed file cache was lost. Select the original file again for a new transfer."; reason == "file-size-unknown" -> "Document size is unavailable. Select a document that reports its size."; reason == "file-size-limit" -> "File must be between 1 byte and 8 MiB."; e is SecurityException || reason.contains("uri") -> "Document access unavailable. Select the original file again."; reason.contains("expired") -> "File expired."; reason.contains("quota") -> "File storage quota reached."; reason.contains("storage") || e is java.io.IOException -> "Local storage unavailable or full. Select the file again."; reason.contains("verification") || reason.contains("contact") -> "Verify the unchanged contact before sending."; retry -> "Network unavailable. Retry this transfer in this session."; else -> "File transfer rejected. Select the file again to restart." }
+        state.move(g, if (restart) FilePhase.RestartRequired else if (reason.contains("expired")) FilePhase.Expired else FilePhase.Failed, failure = failure, retryable = retry)
+        if (restart) {
+            val abandoned = pending; pending = null; abandoned?.key?.fill(0); abandoned?.cacheDirectory?.deleteRecursively()
+            if (abandoned != null) scope.launch { runCatching { request(abandoned, parseContext(abandoned.reference.getJSONObject("context")).transferId, "DELETE", "attachment:delete") } }
+        }
     }
     private fun space(required: Long) { check(StatFs(context.cacheDir.path).availableBytes > required + 1024 * 1024) { "file-storage-full" } }
     private fun readChunk(uri: Uri, offset: Long, count: Int, size: Long, g: Long): ByteArray = context.contentResolver.openInputStream(uri)?.use { input -> readFileSlice(input, offset, count, size) { fence(g) } } ?: error("file-uri-unavailable")

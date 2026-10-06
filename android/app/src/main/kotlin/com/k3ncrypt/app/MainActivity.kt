@@ -968,7 +968,7 @@ private fun IdentityAndConversationScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(start = 8.dp),
             )
-            if (fileProgress.phase != com.k3ncrypt.media.FilePhase.RestartRequired) {
+            if ((fileProgress.phase != com.k3ncrypt.media.FilePhase.RestartRequired || fileProgress.failure.isNotEmpty())) {
                 Text("${fileProgress.filename} · ${if (fileProgress.phase == com.k3ncrypt.media.FilePhase.WaitingForRecipient) "Encrypted file stored; waiting for recipient" else fileProgress.phase.name} · ${fileProgress.bytes}/${fileProgress.total} bytes ${fileProgress.failure}")
                 if (!com.k3ncrypt.media.FileTransferState.terminal(fileProgress.phase)) TextButton(onClick = files::cancel) { Text("Cancel") }
                 if (fileProgress.retryable) TextButton(onClick = files::retry) { Text("Retry in this session") }

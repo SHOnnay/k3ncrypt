@@ -49,7 +49,7 @@ Cancel atomically removes chunk payloads/manifest and releases reservations, ret
 
 Both clients use the same conceptual typed phases and legal transitions. Generation fences prevent stale callbacks from changing canceled/failed/expired/superseded state. Upload progress is reconciled from authenticated accepted indices, not only local counters. `WaitingForRecipient` means encrypted storage plus protected local message publication, not Delivered/Opened/Read.
 
-For sender transient failures within the current process, retry queries server state and sends only missing exact cached sealed objects. Existing object nonces/ciphertext are reused verbatim; missing previously unproduced objects get fresh random nonces. There is no raw-key plaintext cache and no re-encryption of a cached logical object during retry.
+For sender transient failures within the current process, retry queries server state and sends only missing exact cached sealed objects. Existing object nonces/ciphertext are reused verbatim; missing previously unproduced objects get fresh random nonces. A process-only produced-object inventory prevents regeneration after cache eviction: missing previously sealed material requires a new transfer and key. At most 33 objects are ever produced under a transfer key. There is no raw-key plaintext cache and no re-encryption of a cached logical object during retry.
 
 Sender restart capability on both platforms: **SAME-SESSION RETRY ONLY / RESTART REQUIRED after process death**. Incomplete uploads whose IDs cannot be recovered expire server-side. Neither client claims durable upload resume.
 
@@ -65,12 +65,12 @@ The reviewed manifest encoder normalizes/sanitizes filenames, controls/bidi/path
 
 ## Validation evidence
 
-- Full Web/service/backend Jest gate: 122 enabled suites / 670 tests passed; opt-in suites remain skipped in the default run; the new isolated Mongo suite is run separately. Final counts are included in the completion report.
-- Foundation vectors and participant-authorization tests retained unchanged. The focused attachment gate passed 17 suites / 48 tests.
+- Full Web/service/backend Jest gate: 122 enabled suites / 671 tests passed; opt-in suites remain skipped in the default run; the new isolated Mongo suite is run separately. Final counts are included in the completion report.
+- Foundation vectors and participant-authorization tests retained unchanged. The focused attachment gate passed 17 suites / 49 tests.
 - Added explicit V2/version stripping, local verification/reset/commit-CAS, geometry/count, filename/MIME, source size, partial-output, quota exhaustion, concurrent duplicate/reservation, cancellation/stale callback and same-session reconciliation tests.
 - Real isolated Mongo tests: concurrent create bounded at two; duplicate accounting stable; database-container restart preserves accepted chunks and incomplete state; quotas remain intact; bounded metadata projection excludes payloads; recipient download works; cancel removes payloads; empty account ledgers do not collide.
 - Shared software fixture verifies Web and JCA sender output byte-for-byte in both directions and opens both on both implementations, covering Web→Android, Android→Web, Web→Web and Android→Android crypto/geometry interpretation. This is not physical interoperability or an Android UI/device/network claim.
-- Android media/content/state/cancel/fixture tests (10) and app JVM tests (40), APK assembly and lint passed; final counts and APK identity are reported separately.
+- Android media/content/state/cancel/fixture tests (11) and app JVM tests (40), APK assembly and lint passed; final counts and APK identity are reported separately.
 - SDK build, production Web build, repository lint, focused modern-target backend TypeScript and diff whitespace checks pass.
 - Root TypeScript remains blocked by the pre-existing @k3ncrypt-vodozemac alias, ES6 replaceAll library, Vite/plugin module resolution and import.meta configuration issues. The feature does not modify root compiler configuration.
 

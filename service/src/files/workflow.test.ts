@@ -7,10 +7,10 @@ const fp = (c: string): string => 'K3 ' + Array(10).fill(c.repeat(4)).join(' ') 
 const binding: FileBinding = { conversationId: randomUUID(), senderParticipantId: randomUUID(), recipientParticipantId: randomUUID(), senderIdentityReference: fp('A'), recipientIdentityReference: fp('B') };
 const recipient: FileBinding = { conversationId: binding.conversationId, senderParticipantId: binding.recipientParticipantId, recipientParticipantId: binding.senderParticipantId, senderIdentityReference: binding.recipientIdentityReference, recipientIdentityReference: binding.senderIdentityReference };
 class Gateway implements FileGateway {
-    file!: FileStatus; objects = new Map<number, WireObject>(); uploads: number[] = []; failAfterAccept = false; gate?: Promise<void>; tamper = false; cancelCount = 0;
+    file!: FileStatus; objects = new Map<number, WireObject>(); uploads: number[] = []; failAfterAccept = false; failBeforeAccept = false; gate?: Promise<void>; tamper = false; cancelCount = 0;
     async create(b: FileBinding, size: number): Promise<FileStatus> { const createdAt = Date.now(); this.file = { version: 2, context: { ...b, transferId: randomUUID(), fileSize: size, chunkSize: L.MAX_CHUNK_SIZE, chunkCount: Math.ceil(size / L.MAX_CHUNK_SIZE) }, createdAt, expiresAt: createdAt + L.TRANSFER_EXPIRY, state: 'incomplete', indices: [] }; return structuredClone(this.file); }
     async status(): Promise<FileStatus> { return structuredClone(this.file); }
-    async put(_id: string, index: 'manifest' | number, v: WireObject): Promise<FileStatus> { if (index === 'manifest') this.file.manifest = v; else { this.uploads.push(index); this.objects.set(index, v); if (!this.file.indices.includes(index)) this.file.indices.push(index); if (this.failAfterAccept) { this.failAfterAccept = false; throw new Error('Network unavailable.'); } } await this.gate; return this.status(); }
+    async put(_id: string, index: 'manifest' | number, v: WireObject): Promise<FileStatus> { if (index === 'manifest') this.file.manifest = v; else { if (this.failBeforeAccept) { this.failBeforeAccept = false; throw new Error('Network unavailable.'); } this.uploads.push(index); this.objects.set(index, v); if (!this.file.indices.includes(index)) this.file.indices.push(index); if (this.failAfterAccept) { this.failAfterAccept = false; throw new Error('Network unavailable.'); } } await this.gate; return this.status(); }
     async complete(): Promise<FileStatus> { this.file.state = 'available'; return this.status(); }
     async chunk(_id: string, index: number): Promise<WireObject> { await this.gate; const value = { ...this.objects.get(index)! }; if (this.tamper) value.ciphertext = (value.ciphertext[0] === 'A' ? 'B' : 'A') + value.ciphertext.slice(1); return value; }
     async cancel(): Promise<void> { this.cancelCount++; this.file.state = 'canceled'; }
@@ -73,4 +73,12 @@ test('full output storage fails once and does not retry forever; new process doe
 });
 test('typed state transitions reject terminal resurrection and obsolete generations', () => {
     const s = new FileTransferState(); const g = s.begin(1); expect(s.move(g, 'Complete')).toBe(false); s.cancel(); expect(s.move(g, 'Uploading')).toBe(false); const next = s.begin(1); expect(s.move(g, 'Encrypting')).toBe(false); s.move(next, 'Failed'); expect(s.move(next, 'Encrypting')).toBe(false);
+});
+
+test('evicted already-produced ciphertext forces restart rather than re-encryption or nonce/object-count expansion', async () => {
+    const gateway = new Gateway(); gateway.failBeforeAccept = true; const src = source(); const disk = cache();
+    const sender = new FileTransferWorkflow(gateway, async () => binding, async () => disk, async () => {});
+    await sender.send(src); expect(sender.state.value).toMatchObject({ phase: 'Failed', retryable: true });
+    const original = disk.get.bind(disk); jest.spyOn(disk, 'get').mockImplementation(async index => index === '0' ? undefined : original(index));
+    await sender.retry(); expect(sender.state.value).toMatchObject({ phase: 'RestartRequired', retryable: false }); expect(src.read).toHaveBeenCalledTimes(1); expect(gateway.uploads).toEqual([]);
 });

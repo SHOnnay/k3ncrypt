@@ -13,7 +13,7 @@ export interface FileGateway {
     chunk(id: string, index: number, signal: AbortSignal): Promise<WireObject>;
     cancel(id: string): Promise<void>;
 }
-interface Pending { source: FileSource; reference: FileReference; key: Uint8Array; cache: SealedFileCache; }
+interface Pending { source: FileSource; reference: FileReference; key: Uint8Array; cache: SealedFileCache; produced: Set<string>; }
 const checkStatus = (r: FileReference, s: FileStatus): void => {
     if (s.version !== 2 || (!sameBinding(s.context, r.context) || s.context.transferId !== r.context.transferId || s.context.fileSize !== r.context.fileSize || s.context.chunkSize !== r.context.chunkSize || s.context.chunkCount !== r.context.chunkCount) || s.createdAt !== r.createdAt || s.expiresAt !== r.expiresAt) throw new Error('File binding rejected.');
     if (s.state === 'expired' || s.expiresAt <= Date.now()) throw new Error('File expired.');
@@ -42,9 +42,10 @@ export class FileTransferWorkflow {
             const reference: FileReference = { version: 2, context: created.context, key: b64(key), createdAt: created.createdAt, expiresAt: created.expiresAt };
             // Strict reference validation also verifies the server's geometry; sender identities must match local authority.
             serializeFileReference(reference); if (!sameBinding(binding, created.context)) throw new Error('File binding rejected.');
-            this.pending = { source, reference, key, cache };
+            this.pending = { source, reference, key, cache, produced: new Set() };
             const manifest = decodeAttachmentManifest(encodeAttachmentManifest({ filename: source.name, mimeType: source.type, fileSize: source.size, chunkSize: created.context.chunkSize, chunkCount: created.context.chunkCount, createdAt: created.createdAt, expiresAt: created.expiresAt }));
             this.state.details(g, source.size, manifest.filename);
+            this.pending.produced.add('manifest');
             await cache.put('manifest', wire(await sealAttachmentManifest(key, created.context, manifest))); this.fence(g);
             await this.upload(g);
         } catch (e) {
@@ -72,6 +73,8 @@ export class FileTransferWorkflow {
             await authorize(); if (status.indices.includes(i)) continue;
             let value = await p.cache.get(String(i)); this.fence(g);
             if (!value) {
+                if (p.produced.has(String(i))) throw new Error('File cache unavailable; restart required.');
+                p.produced.add(String(i));
                 this.state.move(g, 'Encrypting', accepted);
                 const bytes = await p.source.read(i * r.context.chunkSize, Math.min(r.context.chunkSize, r.context.fileSize - i * r.context.chunkSize)); this.fence(g);
                 try { value = wire(await sealAttachmentChunk(p.key, { ...r.context, chunkIndex: i }, bytes)); } finally { bytes.fill(0); }
@@ -118,13 +121,16 @@ export class FileTransferWorkflow {
         } catch (e) { await output?.discard(); this.failed(g, e); return undefined; } finally { this.running = false; }
     }
     private failed(g: number, e: unknown): void {
+        if (!this.state.live(g)) return;
         const reason = e instanceof Error && e.name === 'QuotaExceededError' ? 'Not enough local storage space.' : e instanceof Error ? e.message : 'File operation failed.';
         // Deliberately fixed categories: never reflect server bodies, file keys, URIs or routing credentials.
         const expired = reason.toLowerCase().includes('expired');
+        const restart = reason.toLowerCase().includes('cache unavailable');
         const unsupported = reason === 'Secure file storage unavailable.';
-        const retryable = !!this.pending && !expired && !unsupported && /network|fetch|temporarily|storage unavailable/i.test(reason);
-        const failure = unsupported ? 'This browser cannot safely stream attachments.' : /8 MiB/.test(reason) ? 'File must be between 1 byte and 8 MiB.' : expired ? 'File expired.' : /quota/i.test(reason) ? 'File storage quota reached.' : /space|full|quotaexceeded/i.test(reason) ? 'Not enough local storage.' : /verification|identity|contact|binding/i.test(reason) ? 'Verified unchanged contact required.' : retryable ? 'Network unavailable. Retry this transfer in this session.' : 'File transfer failed. Select the file again to restart.';
-        this.state.move(g, expired ? 'Expired' : 'Failed', undefined, failure, retryable);
+        const retryable = !!this.pending && !expired && !unsupported && !restart && /network|fetch|temporarily|storage unavailable/i.test(reason);
+        const failure = restart ? 'Sealed file cache was lost. Select the original file again to start a new transfer.' : unsupported ? 'This browser cannot safely stream attachments.' : /8 MiB/.test(reason) ? 'File must be between 1 byte and 8 MiB.' : expired ? 'File expired.' : /quota/i.test(reason) ? 'File storage quota reached.' : /space|full|quotaexceeded/i.test(reason) ? 'Not enough local storage.' : /verification|identity|contact|binding/i.test(reason) ? 'Verified unchanged contact required.' : retryable ? 'Network unavailable. Retry this transfer in this session.' : 'File transfer failed. Select the file again to restart.';
+        this.state.move(g, restart ? 'RestartRequired' : expired ? 'Expired' : 'Failed', undefined, failure, retryable);
+        if (restart) void this.release(true).catch(() => undefined);
     }
     cancel(): void { this.state.cancel(); this.controller?.abort(); void this.release(true).catch(() => undefined); }
     private async release(cancel: boolean): Promise<void> { const p = this.pending; this.pending = undefined; if (p) { p.key.fill(0); await p.cache.clear().catch(() => undefined); if (cancel) await this.gateway.cancel(p.reference.context.transferId).catch(() => undefined); } }

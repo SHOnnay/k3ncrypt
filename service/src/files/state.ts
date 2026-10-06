@@ -1,11 +1,11 @@
 export type FilePhase = 'Preparing' | 'Encrypting' | 'Uploading' | 'WaitingForRecipient' | 'Downloading' | 'Verifying' | 'Complete' | 'Canceled' | 'Failed' | 'Expired' | 'RestartRequired';
 export interface FileProgress { phase: FilePhase; bytes: number; total: number; filename?: string; failure?: string; retryable?: boolean; }
 const transitions: Record<FilePhase, readonly FilePhase[]> = {
-    Preparing: ['Encrypting', 'Downloading', 'Canceled', 'Failed', 'Expired'],
-    Encrypting: ['Uploading', 'Canceled', 'Failed', 'Expired'],
-    Uploading: ['Encrypting', 'WaitingForRecipient', 'Canceled', 'Failed', 'Expired'],
-    WaitingForRecipient: [], Downloading: ['Verifying', 'Canceled', 'Failed', 'Expired'],
-    Verifying: ['Downloading', 'Complete', 'Canceled', 'Failed', 'Expired'],
+    Preparing: ['Encrypting', 'Downloading', 'Canceled', 'Failed', 'Expired', 'RestartRequired'],
+    Encrypting: ['Uploading', 'Canceled', 'Failed', 'Expired', 'RestartRequired'],
+    Uploading: ['Encrypting', 'WaitingForRecipient', 'Canceled', 'Failed', 'Expired', 'RestartRequired'],
+    WaitingForRecipient: [], Downloading: ['Verifying', 'Canceled', 'Failed', 'Expired', 'RestartRequired'],
+    Verifying: ['Downloading', 'Complete', 'Canceled', 'Failed', 'Expired', 'RestartRequired'],
     Complete: [], Canceled: [], Failed: [], Expired: [], RestartRequired: [],
 };
 /** A retry gets a new generation. Terminal generations never accept delayed callbacks. */

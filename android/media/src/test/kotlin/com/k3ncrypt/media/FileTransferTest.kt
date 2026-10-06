@@ -28,4 +28,11 @@ class FileTransferTest {
         assertThrows(IllegalStateException::class.java) { readFileSlice(ByteArrayInputStream(ByteArray(20000)), 10000, 1, 20000) { if (++checks > 1) error("canceled") } }
         assertEquals(FilePhase.RestartRequired, FileTransferState().value.phase)
     }
+    @Test fun evictedSealedObjectsCannotBeProducedAgainAndObjectCountStaysBounded() {
+        val inventory = SealedObjectInventory(); inventory.beforeSeal("manifest"); inventory.beforeSeal("0")
+        assertThrows(IllegalStateException::class.java) { inventory.beforeSeal("0") }
+        for (i in 1 until FileTransferLimits.MAX_CHUNKS) inventory.beforeSeal(i.toString())
+        assertThrows(IllegalStateException::class.java) { inventory.beforeSeal("manifest") }
+        val state = FileTransferState(); val g = state.begin(1); assertTrue(state.move(g, FilePhase.RestartRequired)); assertFalse(state.move(g, FilePhase.Encrypting))
+    }
 }

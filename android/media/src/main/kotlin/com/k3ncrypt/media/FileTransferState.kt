@@ -29,7 +29,7 @@ class FileTransferState(private val changed: (FileProgress) -> Unit = {}) {
         fun terminal(phase: FilePhase) = phase in setOf(FilePhase.WaitingForRecipient, FilePhase.Complete, FilePhase.Canceled, FilePhase.Failed, FilePhase.Expired, FilePhase.RestartRequired)
         fun legal(from: FilePhase, to: FilePhase): Boolean {
             if (terminal(from)) return false
-            if (from == to || to in setOf(FilePhase.Failed, FilePhase.Expired, FilePhase.Canceled)) return true
+            if (from == to || to in setOf(FilePhase.Failed, FilePhase.Expired, FilePhase.Canceled, FilePhase.RestartRequired)) return true
             return when (from) {
                 FilePhase.Preparing -> to in setOf(FilePhase.Encrypting, FilePhase.Downloading)
                 FilePhase.Encrypting -> to == FilePhase.Uploading
@@ -39,5 +39,14 @@ class FileTransferState(private val changed: (FileProgress) -> Unit = {}) {
                 else -> false
             }
         }
+    }
+}
+
+/** Process-only marker: a lost sealed object is never regenerated under the same transfer key. */
+class SealedObjectInventory {
+    private val produced = mutableSetOf<String>()
+    @Synchronized fun beforeSeal(index: String) {
+        require(index == "manifest" || index.toIntOrNull()?.let { it in 0 until FileTransferLimits.MAX_CHUNKS } == true)
+        check(produced.size < FileTransferLimits.MAX_CHUNKS + 1 && produced.add(index)) { "file-cache-unavailable" }
     }
 }

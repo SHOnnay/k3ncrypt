@@ -159,7 +159,7 @@ export const ChatFooter: React.FC = () => {
           <SendIcon size={20} />
         </Button>
       </div>
-      {transfer.phase !== 'RestartRequired' && <div className="media-transfer-status" role="status"><span>{transfer.filename} · {transfer.phase === 'WaitingForRecipient' ? 'Encrypted file stored; waiting for recipient' : transfer.phase} · {transfer.bytes}/{transfer.total} bytes{transfer.failure && ` · ${transfer.failure}`}</span>{busy && <button type="button" onClick={cancelTransfer}>Cancel</button>}{transfer.phase === 'Failed' && transfer.retryable && <button type="button" onClick={retryAttachment}>Retry in this session</button>}</div>}
+      {(transfer.phase !== 'RestartRequired' || transfer.failure) && <div className="media-transfer-status" role="status"><span>{transfer.filename} · {transfer.phase === 'WaitingForRecipient' ? 'Encrypted file stored; waiting for recipient' : transfer.phase} · {transfer.bytes}/{transfer.total} bytes{transfer.failure && ` · ${transfer.failure}`}</span>{busy && <button type="button" onClick={cancelTransfer}>Cancel</button>}{transfer.phase === 'Failed' && transfer.retryable && <button type="button" onClick={retryAttachment}>Retry in this session</button>}</div>}
       <div className="composer-feedback">Protected files: up to 8 MiB. Downloads require explicit saving.</div>
       {!verified && <div className="composer-feedback">Verify the unchanged contact before sending a file.</div>}
       {actionMessage && <div className="composer-feedback" role="status">{actionMessage}</div>}
