@@ -10,6 +10,7 @@ plugins {
 
 val configuredBackendUrl = providers.gradleProperty("k3ncryptBackendUrl").orElse("").get().trim()
 val configuredSocketUrl = providers.gradleProperty("k3ncryptSocketUrl").orElse(configuredBackendUrl).get().trim()
+val localVideoInteropEnabled = providers.gradleProperty("k3ncryptLocalVideoInterop").orElse("false").get().toBoolean()
 val releaseKeystorePath = providers.environmentVariable("K3NCRYPT_ANDROID_KEYSTORE_PATH").orNull
 val releaseKeystorePassword = providers.environmentVariable("K3NCRYPT_ANDROID_KEYSTORE_PASSWORD").orNull
 val releaseKeyAlias = providers.environmentVariable("K3NCRYPT_ANDROID_KEY_ALIAS").orNull
@@ -29,6 +30,15 @@ android {
         buildConfigField("String", "K3NCRYPT_BACKEND_URL", "\"$configuredBackendUrl\"")
         buildConfigField("String", "K3NCRYPT_SOCKET_URL", "\"$configuredSocketUrl\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        manifestPlaceholders["k3ncryptNetworkSecurityConfig"] = if (localVideoInteropEnabled) {
+            "@xml/network_security_config_local_interop"
+        } else {
+            "@xml/network_security_config_debug"
+        }
+    }
+
+    if (localVideoInteropEnabled) {
+        sourceSets.getByName("debug").res.srcDir(layout.buildDirectory.dir("generated/localVideoInterop/res"))
     }
 
     signingConfigs {
@@ -48,6 +58,19 @@ android {
 
     buildFeatures { compose = true; buildConfig = true }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
+}
+
+if (localVideoInteropEnabled) {
+    val prepareLocalVideoInteropTls = tasks.register<Exec>("prepareLocalVideoInteropTls") {
+        group = "verification"
+        description = "Generate ignored, LAN-host-scoped local TLS material for the debug app."
+        commandLine("node", "${rootProject.projectDir.parentFile}/scripts/prepare-local-video-interop-tls.mjs")
+        outputs.dir(layout.buildDirectory.dir("generated/localVideoInterop/res"))
+        outputs.upToDateWhen { false }
+    }
+    tasks.matching { it.name == "preDebugBuild" }.configureEach {
+        dependsOn(prepareLocalVideoInteropTls)
+    }
 }
 
 dependencies {
