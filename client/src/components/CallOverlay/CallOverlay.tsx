@@ -11,6 +11,7 @@ import { Avatar } from '../common/Avatar';
 import { startRingtone, stopRingtone } from '../../utils/ringtone';
 import { attachMediaStream } from './mediaStream';
 import { contactDisplayName } from '../../content/copy';
+import { hasLiveEnabledVideoTrack, localVideoPlaceholder, remoteVideoPlaceholder, videoPlaceholderCopy } from '../../calls/callVideoUiState';
 import './CallOverlay.css';
 
 export const CallOverlay: React.FC = () => {
@@ -77,15 +78,18 @@ export const CallOverlay: React.FC = () => {
 
   const isVideo = callMediaMode === 'video';
   const callContact = contactDisplayName(conversations.find((conversation) => conversation.roomId === channelHash)?.label);
+  const localVideoState = localVideoPlaceholder(cameraEnabled, localCallStream);
+  const remoteVideoState = remoteVideoPlaceholder(remoteCallStream);
+  const mediaControlsReady = ['connecting', 'connected'].includes(callLifecycleState);
 
   return (
     <div className="blur-overlay">
       <div className={`call-info ${isVideo ? 'call-info--video' : ''}`}>
         <audio ref={remoteAudio} autoPlay playsInline aria-label="Remote call audio" />
         {isVideo && !isIncomingCall && <div className="call-video-stage">
-          {remoteCallStream ? <video ref={remoteVideo} className="call-video-remote" autoPlay playsInline aria-label="Remote video" /> : <div className="call-video-placeholder">Waiting for remote video</div>}
+          {remoteVideoState === undefined ? <video ref={remoteVideo} className="call-video-remote" autoPlay muted playsInline aria-label="Remote video" /> : <div className="call-video-placeholder" role="status">{videoPlaceholderCopy[remoteVideoState]}</div>}
           <div className="call-video-preview">
-            {localCallStream ? <video ref={localVideo} autoPlay muted playsInline aria-label="Local video preview" /> : <span>Camera starting…</span>}
+            {localVideoState === undefined && hasLiveEnabledVideoTrack(localCallStream) ? <video ref={localVideo} autoPlay muted playsInline aria-label="Local video preview" /> : <span role="status">{videoPlaceholderCopy[localVideoState ?? 'camera-starting']}</span>}
             <span className="call-video-indicator">{cameraEnabled ? 'Camera on' : 'Camera off'}</span>
           </div>
         </div>}
@@ -101,18 +105,18 @@ export const CallOverlay: React.FC = () => {
         {callError && <p className="call-error" role="alert">{callError}</p>}
         {isIncomingCall ? (
           <div className="incoming-call-actions">
-            <Button variant="secondary" size="medium" onClick={handleAcceptCall} title="Accept Call">
+            <Button variant="secondary" size="medium" onClick={handleAcceptCall} title="Accept Call" aria-label="Accept call">
               Accept
             </Button>
-            <Button variant="danger" size="medium" onClick={handleRejectCall} title="Decline Call">
+            <Button variant="danger" size="medium" onClick={handleRejectCall} title="Decline Call" aria-label="Decline call">
               Decline
             </Button>
           </div>
         ) : (
           <div className="call-controls">
-            <div className="call-control"><Button variant="secondary" circle onClick={() => setMicrophoneMuted(!microphoneMuted)} title={microphoneMuted ? 'Unmute microphone' : 'Mute microphone'}><MicIcon size={20} /></Button><span>{microphoneMuted ? 'Unmute' : 'Mute'}</span></div>
-            <div className="call-control"><Button id="end-call-btn" variant="danger" circle size="large" onClick={handleEndCall} title={callLifecycleState === 'ringing' ? 'Cancel Call' : 'End Call'}><EndCallIcon size={27} /></Button><span>{callLifecycleState === 'ringing' ? 'Cancel' : 'End'}</span></div>
-            {isVideo && <div className="call-control"><Button variant="secondary" circle onClick={() => setCameraEnabled(!cameraEnabled)} title={cameraEnabled ? 'Turn camera off' : 'Turn camera on'}><VideoIcon size={20} /></Button><span>{cameraEnabled ? 'Camera off' : 'Camera on'}</span></div>}
+            <div className="call-control"><Button variant="secondary" circle onClick={() => setMicrophoneMuted(!microphoneMuted)} title={microphoneMuted ? 'Unmute microphone' : 'Mute microphone'} aria-label={microphoneMuted ? 'Unmute microphone' : 'Mute microphone'} aria-pressed={microphoneMuted} disabled={!mediaControlsReady}><MicIcon size={20} /></Button><span>{microphoneMuted ? 'Unmute' : 'Mute'}</span></div>
+            <div className="call-control"><Button id="end-call-btn" variant="danger" circle size="large" onClick={handleEndCall} title={callLifecycleState === 'ringing' ? 'Cancel Call' : 'End Call'} aria-label={callLifecycleState === 'ringing' ? 'Cancel call' : 'End call'}><EndCallIcon size={27} /></Button><span>{callLifecycleState === 'ringing' ? 'Cancel' : 'End'}</span></div>
+            {isVideo && <div className="call-control"><Button variant="secondary" circle onClick={() => void setCameraEnabled(!cameraEnabled)} title={cameraEnabled ? 'Turn camera off' : 'Turn camera on'} aria-label={cameraEnabled ? 'Turn camera off' : 'Turn camera on'} aria-pressed={cameraEnabled} disabled={!mediaControlsReady}><VideoIcon size={20} /></Button><span>{cameraEnabled ? 'Camera off' : 'Camera on'}</span></div>}
           </div>
         )}
       </div>

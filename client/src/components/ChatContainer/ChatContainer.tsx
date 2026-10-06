@@ -12,6 +12,7 @@ import { debugError } from '../../utils/debug';
 import { Button } from '../common/Button';
 import { PlusIcon } from '../common/icons';
 import { copy } from '../../content/copy';
+import { callStartFailureMessage, terminalCallStatusMessage } from '../../calls/callLaunchReadiness';
 
 interface ChatContainerProps {
   isHidden: boolean;
@@ -25,6 +26,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ isHidden, onNewCon
   const isCallBusy = ['initiating', 'ringing', 'incoming', 'connecting', 'connected', 'ending'].includes(callLifecycleState);
   const hasActiveConversation = conversations.some((conversation) => conversation.roomId === channelHash)
     || (protocolMode === 'legacy' && Boolean(channelHash));
+  const terminalCallMessage = terminalCallStatusMessage(callLifecycleState);
 
   if (!hasActiveConversation) {
     const hasContacts = conversations.length > 0;
@@ -45,7 +47,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ isHidden, onNewCon
       await startCall();
     } catch (err) {
       debugError('Call start failed', err);
-      setCallError('Could not start the call. Check microphone access and your connection, then retry.');
+      setCallError(callStartFailureMessage(err, 'audio'));
     } finally {
       setIsStartingCall(false);
     }
@@ -58,7 +60,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ isHidden, onNewCon
       await startVideoCall();
     } catch (err) {
       debugError('Video call start failed', err);
-      setCallError('Could not start the video call. Check camera and microphone access, then retry.');
+      setCallError(callStartFailureMessage(err, 'video'));
     } finally {
       setIsStartingCall(false);
     }
@@ -69,6 +71,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ isHidden, onNewCon
       <div id="chat-container" className={`chat-container ${isHidden ? 'hidden' : ''}`}>
         <ChatHeader onStartCall={handleStartCall} onStartVideoCall={handleStartVideoCall} disableStartCall={isCallBusy || isStartingCall} />
         {(callError || remoteCallError) && <div className="chat-call-error" role="alert">{remoteCallError || callError}</div>}
+        {!callError && !remoteCallError && terminalCallMessage && <div className="chat-call-status" role="status">{terminalCallMessage}</div>}
         <MessagesArea />
         <ChatFooter />
       </div>

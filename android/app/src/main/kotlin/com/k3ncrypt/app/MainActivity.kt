@@ -62,11 +62,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Call
@@ -193,6 +196,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         if (vaultReady) backgroundSince = SystemClock.elapsedRealtime()
+        if (this::calls.isInitialized && shouldEndCallWhenActivityStops(isChangingConfigurations)) calls.endForBackground()
         super.onStop()
     }
 
@@ -301,7 +305,9 @@ private fun parseModernInvitation(raw: String): ModernInvitation {
 @androidx.compose.runtime.Composable
 private fun CallVideoSurface(track: VideoTrack, calls: AndroidCallController, mirror: Boolean, height: Int) {
     var renderer by remember(track) { mutableStateOf<SurfaceViewRenderer?>(null) }
-    AndroidView(modifier = Modifier.fillMaxWidth().height(height.dp), factory = { viewContext ->
+    AndroidView(modifier = Modifier.fillMaxWidth().height(height.dp).semantics {
+        contentDescription = if (mirror) "Local video preview" else "Remote video"
+    }, factory = { viewContext ->
         SurfaceViewRenderer(viewContext).apply {
             init(calls.eglContext(), null)
             setEnableHardwareScaler(true)
@@ -395,15 +401,19 @@ private fun IdentityAndConversationScreen(
     var showAdvancedNetwork by remember { mutableStateOf(false) }
     var identityChecked by remember { mutableStateOf(false) }
     val callState by calls.state.collectAsState()
+    val callPresentation = deriveCallUiPresentation(callState)
     val relayConnected by relay.connected.collectAsState()
     var callElapsedSeconds by remember(callState.callId) { mutableStateOf(0) }
-    var pendingCallAction by remember { mutableStateOf<String?>(null) }
+    var pendingCallAction by rememberSaveable { mutableStateOf<String?>(null) }
+    var callPermissionsRequested by rememberSaveable { mutableStateOf(false) }
+    var callPermissionSettingsNeeded by rememberSaveable { mutableStateOf(false) }
     val callPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
         val action = pendingCallAction
         pendingCallAction = null
         val needsCamera = action == "video" || action == "accept-video"
         val denial = CallPermissionFeedback.denial(if (needsCamera) "video" else "audio", granted[android.Manifest.permission.RECORD_AUDIO] == true, granted[android.Manifest.permission.CAMERA] == true)
         if (denial == null) {
+            callPermissionSettingsNeeded = false
             scope.launch {
                 runCatching {
                     when (action) {
@@ -411,15 +421,38 @@ private fun IdentityAndConversationScreen(
                         "video" -> calls.startVideo()
                         "accept-audio", "accept-video" -> calls.accept()
                     }
-                }.onFailure { status = if (it.message?.startsWith("Verification required") == true) it.message!! else "Call could not start. Check permissions and connection, then retry." }
+                }.onFailure {
+                    status = when {
+                        it.message?.startsWith("Verification required") == true -> it.message!!
+                        it.message?.contains("call_camera_unavailable") == true -> "Camera unavailable. Try again with a working camera."
+                        it.message?.contains("permission", ignoreCase = true) == true -> "Call permission was denied. Allow microphone and camera access to retry."
+                        else -> "Call could not start. Check the required devices and try again."
+                    }
+                }
             }
-        } else status = denial
+        } else {
+            status = denial
+            val activity = context as? Activity
+            val requested = buildList {
+                add(android.Manifest.permission.RECORD_AUDIO)
+                if (needsCamera) add(android.Manifest.permission.CAMERA)
+            }
+            callPermissionSettingsNeeded = requested.any { permission ->
+                CallPermissionFeedback.settingsRecoveryRequired(
+                    permissionDenied = granted[permission] != true,
+                    requestedBefore = callPermissionsRequested,
+                    shouldShowRationale = activity?.shouldShowRequestPermissionRationale(permission) == true,
+                )
+            }
+        }
     }
     fun requestCallPermissions(action: String) {
         if (contactVerification != ContactVerificationState.VERIFIED) {
             status = "Verification required: compare and explicitly verify this contact before calling."
             return
         }
+        callPermissionSettingsNeeded = false
+        callPermissionsRequested = true
         pendingCallAction = action
         val permissions = mutableListOf(android.Manifest.permission.RECORD_AUDIO)
         if (action == "video" || action == "accept-video") permissions += android.Manifest.permission.CAMERA
@@ -442,6 +475,10 @@ private fun IdentityAndConversationScreen(
         } else {
             callElapsedSeconds = 0
         }
+    }
+
+    LaunchedEffect(callState.mediaError) {
+        callState.mediaError?.let { status = it }
     }
 
     LaunchedEffect(conversation?.conversationId, conversation?.peerIdentityReference, conversation?.peerRoutingId, pendingPeer?.second, status, messageStatus, chatMessages.size) {
@@ -1234,19 +1271,11 @@ private fun IdentityAndConversationScreen(
        }
       }
       AnimatedVisibility(
-          visible = callState.callId != null || callState.errorCategory == "protocol-incompatible",
+          visible = callPresentation.visible,
           enter = fadeIn(animationSpec = tween(K3ncryptMotion.normal)) + scaleIn(initialScale = 0.97f, animationSpec = tween(K3ncryptMotion.normal)),
           exit = fadeOut(animationSpec = tween(K3ncryptMotion.fast)) + scaleOut(targetScale = 0.98f, animationSpec = tween(K3ncryptMotion.fast)),
       ) {
-          val callLabel = if (callState.errorCategory == "protocol-incompatible") "Incompatible call version" else when (callState.status.lowercase()) {
-              "ringing" -> if (callState.incoming) "Incoming call" else "Calling…"
-              "connecting" -> "Connecting…"
-              "connected" -> "Connected"
-              "completed" -> "Call ended"
-              "reconnecting" -> "Reconnecting…"
-              "failed", "timeout" -> "The call could not connect."
-              else -> "Call in progress"
-          }
+          val callLabel = callPresentation.statusLabel
           Box(
               modifier = Modifier.fillMaxSize().background(Color(0xB80E1216)).padding(16.dp),
               contentAlignment = Alignment.Center,
@@ -1264,33 +1293,37 @@ private fun IdentityAndConversationScreen(
                       verticalArrangement = Arrangement.spacedBy(14.dp),
                   ) {
                       K3ncryptBrandMark()
-                      Text(if (callState.incoming) "Incoming ${if (callState.mediaMode == "audio") "voice" else "video"} call" else "${if (callState.mediaMode == "audio") "Voice" else "Video"} call", style = MaterialTheme.typography.titleLarge)
+                      Text(callPresentation.title, style = MaterialTheme.typography.titleLarge)
                       Text(
                           conversation?.let { active -> savedTrustedConversations.firstOrNull { it.conversationHash == SavedConversationIndex.hash(active.conversationId) }?.label }?.let(::k3ncryptContactName) ?: "Contact",
                           color = MaterialTheme.colorScheme.onSurfaceVariant,
                           maxLines = 2,
                           overflow = TextOverflow.Ellipsis,
                       )
-                      K3ncryptStatus(callLabel, positive = callState.status in setOf("connected", "completed"))
+                      K3ncryptStatus(callLabel, positive = callLabel == "Connected")
                       if (callState.status == "connected") {
                           Text("${callElapsedSeconds / 60}:${(callElapsedSeconds % 60).toString().padStart(2, '0')}", style = MaterialTheme.typography.titleMedium)
                       }
-                      if (callState.errorCategory == "protocol-incompatible") {
-                          Text(
-                              if ((callState.receivedProtocolVersion ?: 1) < CallSignalCodec.CURRENT_PROTOCOL_VERSION) "This contact needs a newer K3NCRYPT version to call." else "This call needs a newer K3NCRYPT version.",
-                              color = MaterialTheme.colorScheme.error,
-                              style = MaterialTheme.typography.bodyMedium,
-                          )
-                      } else if (callState.status == "failed" || callState.errorCategory != null) {
-                          Text("Check your connection and try again.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+                      callPresentation.message?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
+                      if (callPermissionSettingsNeeded) {
+                          OutlinedButton(onClick = {
+                              callPermissionSettingsNeeded = false
+                              context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}")))
+                          }) { Text("Open app settings") }
                       }
-                      if (callState.mediaMode == "video" && !callState.incoming) {
-                          callState.remoteVideo?.let { CallVideoSurface(it, calls, mirror = false, height = 210) }
-                          callState.localVideo?.let { CallVideoSurface(it, calls, mirror = true, height = 100) }
+                      if (callPresentation.showVideo) {
+                          val remoteVideoTrack = callState.remoteVideo
+                          val localVideoTrack = callState.localVideo
+                          if (remoteVideoTrack != null) CallVideoSurface(remoteVideoTrack, calls, mirror = false, height = 210)
+                          else callPresentation.remoteVideoMessage?.let { Text(it, modifier = Modifier.semantics { contentDescription = "Remote video. $it" }, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                          if (localVideoTrack != null) CallVideoSurface(localVideoTrack, calls, mirror = true, height = 100)
+                          else callPresentation.localVideoMessage?.let { Text(it, modifier = Modifier.semantics { contentDescription = "Local camera. $it" }, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                       }
                       if (callState.errorCategory == "protocol-incompatible") {
                           Button(onClick = calls::clearProtocolError) { Text("Dismiss") }
-                      } else if (callState.incoming) {
+                      } else if (callPresentation.dismissible && callState.callId == null) {
+                          Button(onClick = calls::dismissCallNotice) { Text("Dismiss") }
+                      } else if (callPresentation.showIncomingActions) {
                           Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                               Button(onClick = {
                                   if (BuildConfig.DEBUG) DebugInspectionStore.setCallSignalStage("accept-action")
@@ -1303,19 +1336,23 @@ private fun IdentityAndConversationScreen(
                           }
                       } else {
                           Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                              OutlinedButton(onClick = { calls.setMicrophoneEnabled(!callState.microphoneEnabled) }) {
-                                  Text(if (callState.microphoneEnabled) "Mute" else "Unmute")
-                              }
-                              if (callState.mediaMode == "video") {
-                                  OutlinedButton(onClick = { calls.setCameraEnabled(!callState.cameraEnabled) }) {
-                                      Text(if (callState.cameraEnabled) "Camera off" else "Camera on")
+                              if (callState.callId != null) {
+                                  if (callPresentation.showMediaControls) {
+                                      OutlinedButton(onClick = { calls.setMicrophoneEnabled(!callState.microphoneEnabled) }) {
+                                          Text(if (callState.microphoneEnabled) "Mute" else "Unmute")
+                                      }
+                                      if (callState.mediaMode == "video") {
+                                          OutlinedButton(onClick = { calls.setCameraEnabled(!callState.cameraEnabled) }) {
+                                              Text(if (callState.cameraEnabled) "Camera off" else "Camera on")
+                                          }
+                                          OutlinedButton(onClick = calls::switchCamera) { Text("Switch camera") }
+                                      }
                                   }
-                                  OutlinedButton(onClick = calls::switchCamera) { Text("Switch camera") }
+                                  Button(
+                                      colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                                      onClick = { scope.launch { runCatching { calls.hangup() }.onFailure { status = "Call could not end." } } },
+                                  ) { Text(if (callState.status == "ringing") "Cancel call" else "End call") }
                               }
-                              Button(
-                                  colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                                  onClick = { scope.launch { runCatching { calls.hangup() }.onFailure { status = "Call could not end." } } },
-                              ) { Text("End call") }
                           }
                       }
                   }

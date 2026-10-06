@@ -9,6 +9,7 @@ import { CopyIcon, ShareIcon, PhoneIcon, TrashIcon, VideoIcon } from '../common/
 import { Avatar } from '../common/Avatar';
 import { StatusPill } from '../common/StatusPill';
 import { deriveSecurityVisibility } from '../../product/securityVisibility';
+import { callLaunchBlockMessage, getCallLaunchBlockReason } from '../../calls/callLaunchReadiness';
 import './SecurityVisibility.css';
 import './ChatHeader.css';
 import { debugError } from '../../utils/debug';
@@ -29,6 +30,15 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({ onStartCall, onStartVide
     contact: protocolMode === 'modern' ? contactIdentity : undefined,
     sessionHealth: protocolMode === 'modern' ? sessionHealth : undefined,
     protocol: protocolMode,
+  });
+  const callLaunchBlockReason = getCallLaunchBlockReason({
+    hasConversation: Boolean(activeConversation && activeConversation.roomId === channelHash),
+    protocolMode,
+    connected: isConnected,
+    sessionHealth,
+    verification: contactIdentity?.verification,
+    changeStatus: contactIdentity?.changeStatus,
+    callInProgress: disableStartCall,
   });
 
   const handleCopyHash = () => {
@@ -90,6 +100,7 @@ const handleDelete = async () => {
         <p id="participant-info" className="participant-info">
           {activeConversation && (protocolMode === 'modern' && sessionHealth === 'unhealthy' ? 'Review the security update for this conversation before continuing.' : protocolMode === 'modern' && sessionHealth === 'renewal-pending' ? 'Waiting for your contact to review the connection update.' : protocolMode === 'modern' ? 'Messages in this conversation are encrypted.' : 'Messages use the relay path.')}
         </p>
+        {callLaunchBlockReason && <p id="call-launch-reason" className="call-launch-reason" role="status">{callLaunchBlockMessage(callLaunchBlockReason)}</p>}
         {activeConversation && <details className="conversation-security-details">
           <summary>Security details</summary>
           <dl>
@@ -118,7 +129,9 @@ const handleDelete = async () => {
           variant="secondary"
           onClick={onStartCall}
           title="Start Audio Call"
-          disabled={disableStartCall || !isConnected || sessionHealth !== 'healthy'}
+          aria-label="Start audio call"
+          aria-describedby={callLaunchBlockReason ? 'call-launch-reason' : undefined}
+          disabled={Boolean(callLaunchBlockReason)}
         >
           <PhoneIcon size={20} />
         </Button>
@@ -127,7 +140,9 @@ const handleDelete = async () => {
           variant="secondary"
           onClick={onStartVideoCall}
           title="Start Video Call"
-          disabled={disableStartCall || !isConnected || protocolMode === 'modern'}
+          aria-label="Start video call"
+          aria-describedby={callLaunchBlockReason ? 'call-launch-reason' : undefined}
+          disabled={Boolean(callLaunchBlockReason)}
         >
           <VideoIcon size={20} />
         </Button>

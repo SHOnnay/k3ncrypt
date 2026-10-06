@@ -16,6 +16,7 @@ export const Button: React.FC<ButtonProps> = ({
   className = '',
   title,
   id,
+  ...buttonProps
 }) => {
   const baseClass = 'btn';
   const variantClass = `btn--${variant}`;
@@ -26,6 +27,7 @@ export const Button: React.FC<ButtonProps> = ({
 
   return (
     <button
+      {...buttonProps}
       id={id}
       className={classes}
       onClick={onClick}

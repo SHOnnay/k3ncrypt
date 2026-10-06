@@ -53,6 +53,7 @@
 .call-launch-card__actions { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 20px; }
 .call-launch-card__actions button { display: inline-flex; align-items: center; gap: 8px; }
 .workspace-feedback { margin-top: 12px; color: var(--muted); font-size: .75rem; }
+.workspace-call-readiness { margin-top: 11px; color: var(--muted-strong); font-size: .76rem; line-height: 1.45; }
 .calls-note { display: flex; gap: 10px; align-items: flex-start; margin-top: 18px; padding: 13px 15px; border-radius: var(--radius-md); color: var(--muted); background: var(--surface-muted); }
 .calls-note p { font-size: .72rem; line-height: 1.55; }
 .calls-note__dot { width: 8px; height: 8px; flex: 0 0 8px; margin-top: 4px; border-radius: 50%; background: var(--success); }

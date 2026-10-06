@@ -4,6 +4,7 @@ import { Avatar } from '../common/Avatar';
 import { Button } from '../common/Button';
 import { PhoneIcon, PlusIcon, SearchIcon, VideoIcon } from '../common/icons';
 import { contactDisplayName } from '../../content/copy';
+import { callLaunchBlockMessage, callStartFailureMessage, getCallLaunchBlockReason } from '../../calls/callLaunchReadiness';
 import './WorkspaceSection.css';
 
 interface WorkspaceSectionProps {
@@ -14,6 +15,7 @@ interface WorkspaceSectionProps {
 
 export const WorkspaceSection: React.FC<WorkspaceSectionProps> = ({ section, onOpenConversation, onNewConversation }) => {
   const [callMessage, setCallMessage] = useState('');
+  const [startingCall, setStartingCall] = useState<'audio' | 'video'>();
   const [contactQuery, setContactQuery] = useState('');
   const { conversations, channelHash, isConnected, sessionHealth, protocolMode, contactIdentity, startCall, startVideoCall, callLifecycleState, setContactNickname } = useChat();
   const filteredConversations = useMemo(() => {
@@ -23,7 +25,28 @@ export const WorkspaceSection: React.FC<WorkspaceSectionProps> = ({ section, onO
   const active = conversations.find((conversation) => conversation.roomId === channelHash)
     ?? (protocolMode === 'legacy' && channelHash ? { roomId: channelHash, label: 'Private conversation' } : undefined);
   const activeContactVerified = Boolean(active && active.roomId === channelHash && contactIdentity?.verification === 'verified' && contactIdentity.changeStatus === 'unchanged');
-  const callReady = Boolean(active && isConnected && sessionHealth === 'healthy' && callLifecycleState === 'idle');
+  const callLaunchBlockReason = getCallLaunchBlockReason({
+    hasConversation: Boolean(active && active.roomId === channelHash),
+    protocolMode,
+    connected: isConnected,
+    sessionHealth,
+    verification: contactIdentity?.verification,
+    changeStatus: contactIdentity?.changeStatus,
+    callInProgress: callLifecycleState !== 'idle' || startingCall !== undefined,
+  });
+  const launchCall = async (media: 'audio' | 'video'): Promise<void> => {
+    setCallMessage('');
+    setStartingCall(media);
+    try {
+      if (media === 'video') await startVideoCall();
+      else await startCall();
+      setCallMessage(media === 'video' ? 'Starting video call…' : 'Starting audio call…');
+    } catch (error) {
+      setCallMessage(callStartFailureMessage(error, media));
+    } finally {
+      setStartingCall(undefined);
+    }
+  };
 
   if (section === 'contacts') {
     return <main className="workspace-page">
@@ -45,8 +68,9 @@ export const WorkspaceSection: React.FC<WorkspaceSectionProps> = ({ section, onO
   return <main className="workspace-page">
     <header className="workspace-page__header"><div><span className="eyebrow">Private communication</span><h1>Calls</h1><p>Start a voice or video call from a trusted, connected conversation.</p></div></header>
     {active ? <section className="call-launch-card">
-      <div className="call-launch-card__person"><Avatar label={contactDisplayName(active.label)} size="large" /><div><strong>{contactDisplayName(active.label)}</strong><small>{activeContactVerified && sessionHealth === 'healthy' && isConnected ? 'Verified contact · encrypted chat' : contactIdentity ? 'Verify contact before calling' : protocolMode === 'modern' ? 'Verification status unavailable' : 'Contact verification is not available in this conversation'}</small></div></div>
-      <div className="call-launch-card__actions"><Button variant="secondary" disabled={!callReady} onClick={() => void startCall().then(() => setCallMessage('Calling…')).catch(() => setCallMessage('Call could not start. Check the secure connection and microphone permission.'))}><PhoneIcon size={18} /> Voice call</Button><Button variant="primary" disabled={!callReady || protocolMode !== 'legacy'} onClick={() => void startVideoCall().then(() => setCallMessage('Calling…')).catch(() => setCallMessage('Video call could not start. Check the secure connection and device permissions.'))}><VideoIcon size={18} /> Video call</Button></div>
+      <div className="call-launch-card__person"><Avatar label={contactDisplayName(active.label)} size="large" /><div><strong>{contactDisplayName(active.label)}</strong><small>{activeContactVerified ? 'Verified contact · encrypted chat' : contactIdentity?.changeStatus === 'changed-pending-review' ? 'Identity changed · review required' : contactIdentity ? 'Not verified on this device' : 'Verification status unavailable'}</small></div></div>
+      <div className="call-launch-card__actions"><Button variant="secondary" disabled={Boolean(callLaunchBlockReason)} onClick={() => void launchCall('audio')} aria-label="Start audio call"><PhoneIcon size={18} /> Voice call</Button><Button variant="primary" disabled={Boolean(callLaunchBlockReason)} onClick={() => void launchCall('video')} aria-label="Start video call"><VideoIcon size={18} /> Video call</Button></div>
+      {callLaunchBlockReason && <p className="workspace-call-readiness" role="status">{callLaunchBlockMessage(callLaunchBlockReason)}</p>}
       {callMessage && <p className="workspace-feedback" role="status">{callMessage}</p>}
     </section> : <div className="workspace-empty"><span className="workspace-empty__mark"><img src="/branding/k3ncrypt-cluster-white.svg" alt="" /></span><h2>No active conversation</h2><p>Open a verified conversation to start a call.</p></div>}
     <section className="calls-note"><span className="calls-note__dot" /><p>Call history is not saved on this device yet. Microphone or camera access is requested only when you start or accept a call.</p></section>

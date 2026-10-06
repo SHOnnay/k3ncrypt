@@ -9,4 +9,5 @@
 .chat-empty-card p { max-width: 380px; color: var(--muted); font-size: .8rem; line-height: 1.65; overflow-wrap: anywhere; }
 .chat-empty-card > button { display: inline-flex; align-items: center; gap: 8px; margin-top: 16px; }
 .chat-call-error { flex: none; margin: 10px 16px 0; padding: 11px 14px; border: 1px solid color-mix(in srgb, var(--danger) 28%, var(--border)); border-radius: 12px; color: var(--danger); background: var(--danger-soft); font-size: .76rem; line-height: 1.45; animation: notice-in var(--motion-fast) ease-out both; }
+.chat-call-status { flex: none; margin: 10px 16px 0; padding: 9px 12px; border-radius: 10px; color: var(--muted-strong); background: var(--surface-raised); font-size: .74rem; line-height: 1.4; }
 @media (max-width: 620px) { #chat-container, .chat-empty-page { border: 0; border-radius: 0; box-shadow: none; }.chat-empty-page { height: calc(100% - 72px - env(safe-area-inset-bottom)); } }
