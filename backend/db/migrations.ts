@@ -10,6 +10,7 @@ export const applyMigrations = async (database: Db): Promise<void> => {
   await database.collection(OFFLINE_MESSAGE_COLLECTION).createIndex({ dedupeKey: 1 }, { unique: true });
   await database.collection(OFFLINE_MESSAGE_COLLECTION).createIndex({ channel: 1, mailbox: 1, slot: 1 }, { unique: true });
   await database.collection(OFFLINE_MESSAGE_COLLECTION).createIndex({ channel: 1, mailbox: 1, claimedUntil: 1, expiresAt: 1 });
+  await database.collection('file_ledgers_v2').createIndex({ 'transfers.context.transferId': 1 }, { unique: true, partialFilterExpression: { 'transfers.0': { $exists: true } } });
   await database.collection('attachment_metadata').createIndex({ id: 1 }, { unique: true });
   await database.collection('attachment_metadata').createIndex({ expiresAt: 1, status: 1 });
   await database.collection('attachment_chunks').createIndex({ attachmentId: 1, index: 1 }, { unique: true });

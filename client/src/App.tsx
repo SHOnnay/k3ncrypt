@@ -1,3 +1,4 @@
+import { FileProvider } from './context/FileContext';
 /**
  * Main App component
  */
@@ -75,9 +76,9 @@ const AppContent: React.FC = () => {
           window.history.replaceState(null, '', window.location.pathname);
           setShowSetup(false);
         }} isHidden={!showSetup} />
-        {activeSection === 'chats' ? <MediaProvider workflow={mediaWorkflow}>
+        {activeSection === 'chats' ? <MediaProvider workflow={mediaWorkflow}><FileProvider>
           <ChatContainer isHidden={showSetup} onNewConversation={() => { setActiveSection('chats'); setShowSetup(true); }} />
-        </MediaProvider> : !showSetup && <WorkspaceSection section={activeSection} onNewConversation={() => { setActiveSection('chats'); setShowSetup(true); }} onOpenConversation={(roomId) => {
+        </FileProvider></MediaProvider> : !showSetup && <WorkspaceSection section={activeSection} onNewConversation={() => { setActiveSection('chats'); setShowSetup(true); }} onOpenConversation={(roomId) => {
           setActiveSection('chats');
           openConversation(roomId).catch(() => setError('Could not open this saved conversation. Your stored data was not changed.'));
         }} />}

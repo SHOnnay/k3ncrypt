@@ -1,0 +1,50 @@
+import { MongoClient } from 'mongodb';
+import { execFileSync } from 'child_process';
+import { randomUUID } from 'crypto';
+import { FileLedgerService, MongoFileLedgerPersistence, type FileLedger } from './fileLedger';
+import { applyMigrations } from '../db/migrations';
+import { FILE_LIMITS } from '../../service/src/files/protocol';
+import type { AuthenticatedContext } from '../security/authorizationContext';
+const enabled = process.env.K3NCRYPT_FILE_MONGO_PORT;
+const suite = enabled ? describe : describe.skip;
+suite('isolated real Mongo: atomic quotas and backend/database restart', () => {
+    let client: MongoClient; let service: FileLedgerService; const databaseName = 'file_v2_test_' + randomUUID().replace(/-/g, '');
+    const conversationId = randomUUID(), alice = randomUUID(), bob = randomUUID();
+    const fp = (c: string): string => 'K3 ' + Array(10).fill(c.repeat(4)).join(' ') + ' ' + c.repeat(3);
+    const binding = { conversationId, senderParticipantId: alice, recipientParticipantId: bob, senderIdentityReference: fp('A'), recipientIdentityReference: fp('B') };
+    const auth = (account = 'a'): AuthenticatedContext => ({ sessionId: 's', participantId: alice, accountIdentityReference: account, requestId: randomUUID(), conversationId, identityReference: fp('A'), createdAt: 1, expiresAt: Number.MAX_SAFE_INTEGER, permissions: ['attachment:create', 'attachment:write', 'attachment:read', 'attachment:delete'], deviceTrust: { assertTrusted: async () => {} } });
+    const connect = async (): Promise<void> => { const port = process.env.K3NCRYPT_FILE_MONGO_PORT; if (!port || !/^\d{1,5}$/.test(port)) throw new Error('Isolated Mongo port required.'); client = new MongoClient(`mongodb://127.0.0.1:${port}`, { serverSelectionTimeoutMS: 10000 }); await client.connect(); service = new FileLedgerService(new MongoFileLedgerPersistence(client.db(databaseName)), async (_c, p) => p === alice ? fp('A') : p === bob ? fp('B') : undefined); };
+    beforeAll(async () => { await connect(); await applyMigrations(client.db(databaseName)); }, 20000);
+    afterAll(async () => { if (client) { await client.db(databaseName).dropDatabase(); await client.close(); } });
+    test('concurrent create + duplicate chunk commit atomically; real Mongo restart cannot finalize incomplete data', async () => {
+        const attempts = await Promise.allSettled(Array.from({ length: 6 }, () => service.create(auth(), { version: 2, binding, fileSize: 1 })));
+        const files = attempts.filter((v): v is PromiseFulfilledResult<Awaited<ReturnType<FileLedgerService['create']>>> => v.status === 'fulfilled').map(v => v.value);
+        expect(files).toHaveLength(FILE_LIMITS.MAX_ACTIVE_TRANSFERS);
+        const id = files[0].context.transferId; const object = { nonce: Buffer.alloc(12, 1).toString('base64url'), ciphertext: Buffer.alloc(17, 2).toString('base64url') };
+        await Promise.all([service.put(auth(), id, 0, object), service.put(auth(), id, 0, object)]);
+        const before = await client.db(databaseName).collection<FileLedger>('file_ledgers_v2').findOne({ _id: 'a' });
+        await client.close();
+        // Only this disposable test container may be restarted. The interop Mongo is untouched.
+        execFileSync('docker', ['restart', 'k3ncrypt-file-transfer-tests'], { stdio: 'ignore' }); const port = execFileSync('docker', ['inspect', '--format', '{{(index (index .NetworkSettings.Ports "27017/tcp") 0).HostPort}}', 'k3ncrypt-file-transfer-tests'], { encoding: 'utf8' }).trim();
+        process.env.K3NCRYPT_FILE_MONGO_PORT = port; await connect();
+        const status = await service.status(auth(), id); expect(status.state).toBe('incomplete'); expect(status.indices).toEqual([0]);
+        await expect(service.complete(auth(), id)).rejects.toThrow('incomplete');
+        const after = await client.db(databaseName).collection<FileLedger>('file_ledgers_v2').findOne({ _id: 'a' });
+        expect(after!.transfers.map((t: { reserved: number }) => t.reserved)).toEqual(before!.transfers.map((t: { reserved: number }) => t.reserved));
+        await expect(service.create(auth(), { version: 2, binding, fileSize: 1 })).rejects.toThrow('quota');
+        const p = new MongoFileLedgerPersistence(client.db(databaseName));
+        const metadata = await p.read('a'); expect(metadata).not.toHaveProperty('objects');
+        expect(await p.object('a', id, 0)).toEqual(object);
+        await service.put(auth(), id, 'manifest', { nonce: Buffer.alloc(12, 3).toString('base64url'), ciphertext: Buffer.alloc(80, 3).toString('base64url') });
+        await service.complete(auth(), id);
+        const recipient = { ...auth('bob'), participantId: bob, identityReference: fp('B') };
+        expect(await service.chunk(recipient, id, 0)).toEqual(object);
+        await service.cancel(auth(), id); expect(await p.object('a', id, 0)).toBeUndefined();
+        await expect(service.status({ ...auth('mallory'), participantId: randomUUID(), identityReference: fp('M') }, id)).rejects.toThrow('authorization');
+    }, 30000);
+    test('empty account ledgers do not collide in the partial unique transfer index', async () => {
+        const persistence = new MongoFileLedgerPersistence(client.db(databaseName));
+        expect(await persistence.replace(undefined, { _id: 'empty-one', revision: 1, transfers: [] })).toBe(true);
+        expect(await persistence.replace(undefined, { _id: 'empty-two', revision: 1, transfers: [] })).toBe(true);
+    });
+});

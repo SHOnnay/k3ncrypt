@@ -100,3 +100,23 @@ it('call authority reads do not write verification even when a recovery reset is
     expect((await registry.get('contact', false))?.verification).toBe('unverified');
     expect(write).not.toHaveBeenCalled();
 });
+
+it('file publication CAS guards reject a concurrent unverify or recovery reset', async () => {
+    const values = new Map<string, ArrayBuffer>();
+    const storage: SecureStorage = {
+        initializeWithPassphrase: async () => {}, unlock: async () => {}, lock: () => {}, changeUnlockSecret: async () => {}, isLocked: () => false,
+        withVodozemacPickleKey: async callback => callback(new Uint8Array(32)),
+        read: async (type, id) => values.get(`${type}:${id}`),
+        write: async (type, id, value) => { values.set(`${type}:${id}`, value); },
+        delete: async (type, id) => { values.delete(`${type}:${id}`); },
+        compareAndSwapRecords: async updates => {
+            if (updates.some(u => Buffer.compare(Buffer.from(values.get(`${u.recordType}:${u.recordId}`) ?? new ArrayBuffer(0)), Buffer.from(u.expected ?? new ArrayBuffer(0))) !== 0)) return false;
+            for (const u of updates) { if (u.next) values.set(`${u.recordType}:${u.recordId}`, u.next); else values.delete(`${u.recordType}:${u.recordId}`); } return true;
+        },
+    };
+    const registry = new ContactIdentityRegistry(storage); await registry.observe('contact', identity('A')); await registry.markVerified('contact', 'A');
+    const guards = await registry.prepareVerifiedFileGuards('contact', 'A'); await registry.markUnverified('contact'); expect(await storage.compareAndSwapRecords!(guards)).toBe(false);
+    await registry.markVerified('contact', 'A'); const resetGuards = await registry.prepareVerifiedFileGuards('contact', 'A');
+    await storage.write('contact-trust-reset', 'local', new TextEncoder().encode(JSON.stringify({ version: 1, resetAt: Date.now() })).buffer);
+    expect(await storage.compareAndSwapRecords!(resetGuards)).toBe(false); await expect(registry.prepareVerifiedFileGuards('contact', 'A')).rejects.toThrow('Verified unchanged');
+});

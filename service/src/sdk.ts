@@ -706,3 +706,5 @@ export type {
     TransportConnectionState,
     TransportManager,
 } from './core/contracts';
+
+export * from "./files";

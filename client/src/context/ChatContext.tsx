@@ -1,3 +1,4 @@
+import { parseFileReference } from '@chat-e2ee/service';
 /**
  * Chat context provider for explicit legacy and modern service paths.
  */
@@ -37,6 +38,10 @@ const callSetupFailure = (error: unknown): { kind: 'verification-required' | 'me
 };
 
 const displayMessage = (sender: string, text: string, type: Message['type']): Message => {
+  if (text.startsWith('k3ncrypt-file-')) {
+    try { const r = parseFileReference(text); return { ...createMessage(sender, 'Protected file', type), media: { kind: 'file', size: r.context.fileSize, reference: text } }; }
+    catch { return createMessage(sender, 'Protected file unavailable', type); }
+  }
   try {
     const media = parseEncryptedMediaMessage(text);
     if (!media) throw new Error('not media');
@@ -604,9 +609,14 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setPrivacyPreferences((current) => writePrivacyPreferences({ ...current, ...next, analytics: false }));
   }, []);
 
-  const attachmentRequestHeaders = useCallback(async (): Promise<Record<string, string>> => {
+  const attachmentRequestHeaders = useCallback(async (operation: 'attachment:create' | 'attachment:read' | 'attachment:write' | 'attachment:delete' = 'attachment:read'): Promise<Record<string, string>> => {
     if (!modern || protocolMode !== 'modern') throw new Error('Protected media requires a modern private session.');
-    return modern.attachmentAuthorizationHeaders();
+    return modern.attachmentAuthorizationHeaders(operation);
+  }, [modern, protocolMode]);
+
+  const fileTransferBinding = useCallback(async (verified: boolean) => {
+    if (!modern || protocolMode !== 'modern') throw new Error('Verified modern contact required.');
+    return modern.fileTransferBinding(verified);
   }, [modern, protocolMode]);
 
   const clearCallMedia = useCallback((): void => {
@@ -1074,6 +1084,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     updatePrivacyPreferences,
     refreshPermissionStatus,
     attachmentRequestHeaders,
+    fileTransferBinding,
   };
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;

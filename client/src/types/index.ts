@@ -111,7 +111,8 @@ export interface ChatContextType {
   setContactNickname: (roomId: string, nickname: string) => Promise<void>;
   updatePrivacyPreferences: (next: Partial<PrivacyPreferences>) => void;
   refreshPermissionStatus: () => Promise<void>;
-  attachmentRequestHeaders: () => Promise<Record<string, string>>;
+  fileTransferBinding: (verified: boolean) => Promise<import('@chat-e2ee/service').FileBinding>;
+  attachmentRequestHeaders: (operation?: 'attachment:create' | 'attachment:read' | 'attachment:write' | 'attachment:delete') => Promise<Record<string, string>>;
 }
 
 // Common component props

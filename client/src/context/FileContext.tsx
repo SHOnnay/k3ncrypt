@@ -1,0 +1,38 @@
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { FileTransferWorkflow, sameBinding, type FileProgress } from '@chat-e2ee/service';
+import { useChat } from './ChatContext';
+import { getRuntimeConfig } from '../config/runtimeConfig';
+import { HttpFileGateway } from '../media/HttpFileGateway';
+import { clearFileDisk, createFileOutput, createSealedCache, type SavedFile } from '../media/fileDisk';
+interface FileContextValue { transfer: FileProgress; sendFile(file: File): Promise<void>; retry(): Promise<void>; cancel(): void; receive(text: string): Promise<SavedFile | undefined>; }
+const Context = createContext<FileContextValue | undefined>(undefined);
+export const FileProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+    const { fileTransferBinding, attachmentRequestHeaders, sendMessage, channelHash } = useChat();
+    const [diskReady, setDiskReady] = useState(false);
+    const saved = useRef<SavedFile>();
+    const send = useRef(sendMessage); send.current = sendMessage;
+    const [transfer, changed] = useState<FileProgress>({ phase: 'RestartRequired', bytes: 0, total: 0 });
+    const workflow = useMemo(() => new FileTransferWorkflow(new HttpFileGateway(getRuntimeConfig().baseUrl ?? '', attachmentRequestHeaders), fileTransferBinding, createSealedCache, async (reference, binding) => {
+        if (!sameBinding(await fileTransferBinding(true), binding)) throw new Error('File contact identity changed.');
+        await send.current(reference);
+    }, changed), [fileTransferBinding, attachmentRequestHeaders, channelHash]);
+    useEffect(() => {
+        const abort = new AbortController(); let release: (() => void) | undefined; let disposed = false;
+        if (navigator.locks) void navigator.locks.request('k3ncrypt-file-workspace-v2', { signal: abort.signal }, async lock => {
+            if (!lock || disposed) return;
+            await clearFileDisk(); if (disposed) return;
+            setDiskReady(true); await new Promise<void>(resolve => { release = resolve; });
+        }).catch(() => { if (!disposed) setDiskReady(false); });
+        return () => { disposed = true; setDiskReady(false); abort.abort(); release?.(); };
+    }, []);
+    useEffect(() => () => workflow.dispose(), [workflow]);
+    return <Context.Provider value={{ transfer, sendFile: file => { if (!diskReady) { changed({ phase: 'Failed', bytes: 0, total: 0, failure: 'Secure disk workspace unavailable or in use by another tab.' }); return Promise.resolve(); } return workflow.send({ size: file.size, name: file.name, type: file.type, read: async (at, count) => new Uint8Array(await file.slice(at, at + count).arrayBuffer()) }); }, retry: () => workflow.retry(), cancel: () => workflow.cancel(), receive: async text => {
+        if (!diskReady || saved.current) { changed({ phase: 'Failed', bytes: 0, total: 0, failure: 'Save or discard the previous verified output before another download.' }); return undefined; }
+        const result = await workflow.receive(text, createFileOutput);
+        if (!result) return undefined;
+        const original = result.dispose;
+        const tracked = { ...result, dispose: async () => { await original(); if (saved.current === tracked) saved.current = undefined; } };
+        saved.current = tracked; return tracked;
+    } }}>{children}</Context.Provider>;
+};
+export const useFiles = (): FileContextValue => { const value = useContext(Context); if (!value) throw new Error('FileProvider missing.'); return value; };

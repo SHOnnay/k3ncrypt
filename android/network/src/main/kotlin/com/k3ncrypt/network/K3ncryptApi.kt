@@ -74,6 +74,34 @@ class K3ncryptApi(baseUrl: String, private val client: OkHttpClient = OkHttpClie
         Request.Builder().url("${endpoint()}/api/$path").get().apply { headers.forEach { (key, value) -> header(key, value) } }.build(),
     )
 
+    /** Separate bounded ciphertext endpoint; cancellation cancels the actual OkHttp call. */
+    suspend fun fileRequest(path: String, method: String, headers: Map<String, String>, proof: ProofCarrier, json: JSONObject? = null, ciphertext: ByteArray? = null, nonce: String? = null): JSONObject {
+        require(path.matches(Regex("(?:create|[a-f0-9-]{36}(?:/manifest|/complete|/chunks/[0-9]{1,2})?)")))
+        require(ciphertext == null || ciphertext.size <= 262160)
+        val body = ciphertext?.toRequestBody("application/octet-stream".toMediaType()) ?: json?.toString()?.toRequestBody("application/json".toMediaType())
+        val request = Request.Builder().url("${endpoint()}/api/attachments/v2/$path")
+            .header("X-K3ncrypt-File-Version", "2")
+            .header("X-K3ncrypt-Device-Proof", java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(proofJson(proof.deviceAuthorizationProof).toByteArray(Charsets.UTF_8)))
+            .header("X-K3ncrypt-Device-Nonce", proof.proofNonce)
+            .apply { headers.forEach { (key, value) -> header(key, value) }; nonce?.let { header("X-K3ncrypt-File-Nonce", it) } }
+            .method(method, if (method == "POST" || method == "PUT") body ?: ByteArray(0).toRequestBody() else null).build()
+        return suspendCancellableCoroutine { continuation ->
+            val call = client.newCall(request); continuation.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : okhttp3.Callback {
+                override fun onFailure(call: okhttp3.Call, error: java.io.IOException) { if (continuation.isActive) continuation.resumeWith(Result.failure(IllegalStateException("file-network-unavailable"))) }
+                override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
+                    val result = runCatching { response.use {
+                        if (!it.isSuccessful) error(when (it.code) { 429 -> "file-quota"; 410 -> "file-expired"; 503 -> "file-network-unavailable"; else -> "file-rejected" })
+                        val source = it.body?.source() ?: error("file-response-invalid")
+                        source.request(360001); check(source.buffer.size <= 360000) { "file-response-oversize" }
+                        JSONObject(source.readUtf8())
+                    } }
+                    if (continuation.isActive) continuation.resumeWith(result)
+                }
+            })
+        }
+    }
+
     private fun endpoint() = configuredBaseUrl ?: error("backend_endpoint_unconfigured")
 
     private suspend fun execute(request: Request): JSONObject = suspendCancellableCoroutine { continuation ->

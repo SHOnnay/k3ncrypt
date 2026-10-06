@@ -53,7 +53,7 @@ const productionService = () => {
   return service;
 };
 
-const authenticate = async (request: Request): Promise<AuthenticatedContext | undefined> => {
+export const authenticateAttachment = async (request: Request, requiredOperation?: DeviceOperation): Promise<AuthenticatedContext | undefined> => {
   const conversationId = request.get('X-K3ncrypt-Conversation') ?? '';
   const participantId = request.get('X-K3ncrypt-Participant') ?? '';
   const capability = request.get('X-K3ncrypt-Control-Capability') ?? '';
@@ -71,6 +71,7 @@ const authenticate = async (request: Request): Promise<AuthenticatedContext | un
   else if (request.method === 'PUT') operation = 'attachment:write';
   else if (request.method === 'GET') operation = 'attachment:read';
   else if (request.method === 'DELETE') operation = 'attachment:delete';
+  operation = requiredOperation ?? operation;
   if (!operation || !/^[A-Za-z0-9_-]{16,128}$/.test(deviceNonce)) return undefined;
   let deviceProof: DeviceAuthorizationProof;
   try { deviceProof = JSON.parse(Buffer.from(deviceProofText, 'base64url').toString('utf8')) as DeviceAuthorizationProof; } catch { return undefined; }
@@ -92,6 +93,7 @@ const authenticate = async (request: Request): Promise<AuthenticatedContext | un
     permissions: ['attachment:create', 'attachment:write', 'attachment:read', 'attachment:delete'],
     requestId,
     identityReference,
+    accountIdentityReference: trustedDevice.accountIdentityReference,
     createdAt: now,
     expiresAt: now + 30_000,
     deviceTrust: { assertTrusted: async () => {
@@ -102,7 +104,7 @@ const authenticate = async (request: Request): Promise<AuthenticatedContext | un
 
 /** Production-only route: Mongo stores ciphertext; routing proof authenticates the modern device endpoint. */
 export const createProductionAttachmentRouter = (): express.Router => createAttachmentRouter({
-  authenticate,
+  authenticate: authenticateAttachment,
   attachments: {
     createUpload: (...args) => productionService().createUpload(...args),
     storeChunk: (...args) => productionService().storeChunk(...args),

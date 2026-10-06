@@ -1140,3 +1140,28 @@ it('cached call composition denies local unverify without mutating verification 
     expect((await pair.alice.getContact())?.verification).toBe('unverified');
     await pair.alice.close(); await pair.bob.close();
 });
+
+it('file sender authority requires explicit unchanged verification; reset denies new files while pinned receiving remains available', async () => {
+    const pair = await verifiedPeerPair();
+    try {
+        const binding = await pair.alice.fileTransferBinding(true);
+        expect(binding.senderParticipantId).toBe(localAddress); expect(binding.recipientParticipantId).toBe(remoteAddress);
+        expect(binding.recipientIdentityReference).toBe((await pair.alice.getContact())!.identityId);
+        await pair.alice.unverifyContact();
+        await expect(pair.alice.fileTransferBinding(true)).rejects.toThrow('Verified unchanged');
+        await expect(pair.alice.fileTransferBinding(false)).resolves.toEqual(binding);
+        await pair.alice.verifyContact(true); await expect(pair.alice.fileTransferBinding(true)).resolves.toEqual(binding);
+    } finally { await pair.alice.close(); await pair.bob.close(); }
+});
+
+it('V2 reference publication uses protected verification CAS and reset denies re-publication', async () => {
+    const pair = await verifiedPeerPair();
+    try {
+        const { serializeFileReference, b64, FILE_LIMITS } = await import('../files/protocol');
+        const binding = await pair.alice.fileTransferBinding(true); const createdAt = Date.now();
+        const reference = serializeFileReference({ version: 2, context: { ...binding, transferId: crypto.randomUUID(), fileSize: 1, chunkSize: FILE_LIMITS.MAX_CHUNK_SIZE, chunkCount: 1 }, key: b64(new Uint8Array(32)), createdAt, expiresAt: createdAt + FILE_LIMITS.TRANSFER_EXPIRY });
+        await expect(pair.alice.sendWithReceipt(reference)).resolves.toEqual(expect.any(String));
+        await pair.alice.unverifyContact(); const before = pair.aliceTransport.sent.length;
+        await expect(pair.alice.sendWithReceipt(reference)).rejects.toThrow('Verified unchanged'); expect(pair.aliceTransport.sent).toHaveLength(before);
+    } finally { await pair.alice.close(); await pair.bob.close(); }
+});

@@ -105,6 +105,22 @@ class AndroidMessagingRepository(
     internal suspend fun verificationState(binding: ConversationInvitation): ContactVerificationState =
         contactVerification.state(binding.conversationId, binding.peerIdentityReference)
 
+    /** File authority comes from the protected local decision and exact unchanged peer pin. */
+    internal suspend fun fileBinding(verified: Boolean): Pair<ConversationInvitation, String> = mutex.withLock {
+        val binding = conversation?.takeIf(SavedConversationIndex::isTrusted) ?: error("file-verification-required")
+        pinnedBundle(binding)
+        val decision = verificationState(binding)
+        check(decision != ContactVerificationState.UNKNOWN && decision != ContactVerificationState.IDENTITY_CHANGED_PENDING_REVIEW && (!verified || decision == ContactVerificationState.VERIFIED)) { "file-verification-required" }
+        binding to identity.activeState().deviceIdentityReference
+    }
+
+    internal suspend fun fileRequest(path: String, method: String, operation: String, expected: ConversationInvitation, json: JSONObject? = null, bytes: ByteArray? = null, nonce: String? = null): JSONObject {
+        val binding = activeConversation(); check(binding == expected) { "file-contact-changed" }
+        val local = identity.activeState()
+        val proof = proofs.acquire(identity.activeAccount(), local.toProofIdentity(), operation, ProofResource(conversationId = binding.conversationId))
+        return api.fileRequest(path, method, mapOf("X-K3ncrypt-Conversation" to binding.conversationId, "X-K3ncrypt-Participant" to binding.localRoutingId, "X-K3ncrypt-Control-Capability" to binding.controlCapability, "X-K3ncrypt-Routing-Proof" to binding.routingProof, "X-K3ncrypt-Request-Id" to UUID.randomUUID().toString()), proof, json, bytes, nonce)
+    }
+
     internal suspend fun requireVerifiedCallConversation(): ConversationInvitation = mutex.withLock {
         val binding = conversation?.takeIf(SavedConversationIndex::isTrusted) ?: error("Verification required: no pinned contact is open.")
         requireVerifiedCallContact(verificationState(binding))
@@ -466,6 +482,11 @@ class AndroidMessagingRepository(
         require(text.isNotBlank() && text.toByteArray(Charsets.UTF_8).size <= 64 * 1024) { "Message is empty or too large" }
         val local = identity.activeState()
         val account = identity.activeAccount()
+        if (text.startsWith("k3ncrypt-file-")) {
+            pinnedBundle(binding)
+            check(verificationState(binding) == ContactVerificationState.VERIFIED) { "file-verification-required" }
+            AndroidFileTransfer.validateOutgoingReference(text, binding, local.deviceIdentityReference)
+        }
         setStage("proof_request")
         val proof = proofs.acquire(account, local.toProofIdentity(), "relay:message", ProofResource(conversationId = binding.conversationId))
         setStage("prekey_session")
@@ -474,6 +495,7 @@ class AndroidMessagingRepository(
         val frame = MessageFrame.encodeText(text)
         val clientId = UUID.randomUUID().toString()
         var mutated = false
+        var committed = false
         try {
             val olm = crypto.encrypt(session, frame)
             mutated = true
@@ -490,6 +512,7 @@ class AndroidMessagingRepository(
                     SessionState(binding.peerRoutingId, sessionPickle), clientId, envelope,
                     StoredOutboundMessage(clientId, binding.conversationId, binding.localRoutingId, binding.peerRoutingId, text, System.currentTimeMillis()),
                 )
+                committed = true
                 } finally { sessionPickle.fill(0) }
             } finally { pickleKey.fill(0) }
             sessions.remember(binding.peerRoutingId, session)
@@ -500,6 +523,12 @@ class AndroidMessagingRepository(
             observer?.invoke(AndroidChatMessage(clientId, binding.conversationId, binding.localRoutingId, text, receipt.timestamp))
             clientId
         } catch (error: Throwable) {
+            if (committed && text.startsWith(com.k3ncrypt.media.FileTransferLimits.PREFIX)) {
+                // File-reference publication, like Web, is confirmed by the protected outbox commit.
+                // The normal reconnect path retries that exact envelope; this is no peer-delivery claim.
+                observer?.invoke(AndroidChatMessage(clientId, binding.conversationId, binding.localRoutingId, text, System.currentTimeMillis()))
+                return@withLock clientId
+            }
             if (mutated && stateStore.pendingOutbox().none { it.first == clientId }) invalidateAfterMutation()
             throw error
         } finally { frame.fill(0) }

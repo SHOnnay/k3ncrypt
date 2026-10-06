@@ -1,3 +1,4 @@
+import { parseFileReference, sameBinding } from '../files/protocol';
 import { testDiagnosticsEnabled } from '../utils/testDiagnostics';
 import type { EncryptedEnvelope, SecureRecordUpdate, SecureStorage, TransportManager } from '../core/contracts';
 import { VODOZEMAC_ENVELOPE_VERSION, VODOZEMAC_STRATEGY_ID } from '../core/vodozemacCryptoSession';
@@ -574,18 +575,33 @@ export class ModernConversation {
     }
 
     /** Short-lived request proof for the host's authenticated ciphertext attachment adapter. */
-    public async attachmentAuthorizationHeaders(): Promise<Record<string, string>> {
+    public async attachmentAuthorizationHeaders(operation: import('../devices/deviceProofClient').DeviceProofOperation = 'attachment:read'): Promise<Record<string, string>> {
         await this.assertCurrentDeviceTrust();
         if (!this.roomId || !this.capability || !this.localAddress) throw new Error('Attachment authorization is unavailable.');
         const mode = await this.modes.read(this.roomId);
         if (!mode?.routingProof || mode.localAddress !== this.localAddress) throw new Error('Attachment ownership proof is unavailable.');
+        if (!this.durableProofs) throw new Error('Attachment device proof unavailable.');
+        const proof = await this.durableProofs.acquire(operation, { conversationId: this.roomId });
         return {
+            'X-K3ncrypt-Device-Proof': toBase64Url(encoder.encode(JSON.stringify(proof.deviceAuthorizationProof))),
+            'X-K3ncrypt-Device-Nonce': proof.proofNonce,
             'X-K3ncrypt-Conversation': this.roomId,
             'X-K3ncrypt-Participant': this.localAddress,
             'X-K3ncrypt-Control-Capability': this.capability,
             'X-K3ncrypt-Routing-Proof': mode.routingProof,
             'X-K3ncrypt-Request-Id': crypto.randomUUID(),
         };
+    }
+
+    /** File authority uses the same protected canonical contact record as explicit verification. */
+    public async fileTransferBinding(requireVerified: boolean): Promise<import('../files/protocol').FileBinding> {
+        await this.assertCurrentDeviceTrust();
+        if (!this.roomId || !this.capability || !this.localAddress || !this.localIdentityId || !this.remoteAddress) throw new Error('File contact unavailable.');
+        const bundle = validateVodozemacPublicBundle(await fetchVodozemacBundle(this.roomId, this.capability, this.remoteAddress));
+        await this.observe(this.remoteAddress, bundle.identity, this.remoteIdentityCommitment);
+        const contact = await this.registry.get(this.remoteAddress);
+        if (!contact || contact.changeStatus !== 'unchanged' || (requireVerified && contact.verification !== 'verified')) throw new Error('Verified unchanged contact required.');
+        return { conversationId: this.roomId, senderParticipantId: this.localAddress, recipientParticipantId: this.remoteAddress, senderIdentityReference: this.localIdentityId, recipientIdentityReference: contact.identityId };
     }
 
     /** Configures the all-member freshness fence used by every protected operation. */
@@ -717,6 +733,8 @@ export class ModernConversation {
         await this.assertCurrentDeviceTrust();
         const contact = await this.getContact();
         if (contact?.changeStatus !== 'unchanged') throw new Error('Review this contact’s changed identity before sending.');
+        const fileReference = text.startsWith('k3ncrypt-file-') ? parseFileReference(text) : undefined;
+        if (fileReference && (!sameBinding(await this.fileTransferBinding(true), fileReference.context) || fileReference.expiresAt <= Date.now())) throw new Error('File identity binding rejected.');
         const sessionSetup = await this.prepareOutboundSession();
         const clientId = crypto.randomUUID();
         await this.deliveryMutex.runExclusive(async () => {
@@ -746,6 +764,7 @@ export class ModernConversation {
                             updates.push({ recordType: SESSION_RENEWAL_RECORD, recordId: this.roomId!, expected: renewalBytes,
                                 next: asBytes({ ...renewal, clientId } satisfies SessionRenewal) });
                         }
+                        if (fileReference) updates.push(...await this.registry.prepareVerifiedFileGuards(this.remoteAddress!, fileReference.context.recipientIdentityReference));
                         if (prepareHistoryUpdate) updates.push(await prepareHistoryUpdate(clientId));
                         return updates;
                     }, sessionSetup ? { conversationId: this.roomId!, ...sessionSetup } : undefined);

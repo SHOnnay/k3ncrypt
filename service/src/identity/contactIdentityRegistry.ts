@@ -1,4 +1,4 @@
-import type { ContactIdentity, SecureStorage } from '../core/contracts';
+import type { ContactIdentity, SecureRecordUpdate, SecureStorage } from '../core/contracts';
 import { fromBase64Url, toBase64Url } from '../crypto/base64url';
 
 const RECORD_TYPE = 'contact-identity';
@@ -132,6 +132,23 @@ export class ContactIdentityRegistry {
         return this.serialized(async () => {
             const bytes = await this.storage.read(RECORD_TYPE, contactId);
             return bytes ? this.applyRecoveryReset(parseStored(bytes), bytes, persistRecoveryReset) : undefined;
+        });
+    }
+
+    /** No-op CAS guards bind a file reference's outbox commit to the exact local decision and recovery epoch. */
+    public async prepareVerifiedFileGuards(contactId: string, identityId: string): Promise<SecureRecordUpdate[]> {
+        return this.serialized(async () => {
+            if (!this.storage.compareAndSwapRecords) throw new Error('Atomic file verification authority unavailable.');
+            const bytes = await this.storage.read(RECORD_TYPE, contactId);
+            const reset = await this.storage.read('contact-trust-reset', 'local');
+            if (!bytes) throw new Error('File contact verification unavailable.');
+            const current = await this.applyRecoveryReset(parseStored(bytes), bytes);
+            if (current.identityId !== identityId || current.verification !== 'verified' || current.changeStatus !== 'unchanged') throw new Error('Verified unchanged file contact required.');
+            return [
+                { recordType: RECORD_TYPE, recordId: contactId, expected: bytes, next: bytes },
+                // The existing canonical zero epoch represents no reset; initializing it makes an absent-marker CAS safe without adding a crypto scheme.
+                { recordType: 'contact-trust-reset', recordId: 'local', expected: reset, next: reset ?? new TextEncoder().encode(JSON.stringify({ version: 1, resetAt: 0 })).buffer as ArrayBuffer },
+            ];
         });
     }
 

@@ -91,6 +91,7 @@ export const ping = async (): Promise<void> => {
   await db.command({ ping: 1 });
 };
 const requiredIndexes: Record<string, string[]> = {
+  file_ledgers_v2: ['transfers.context.transferId_1'],
   [LINK_COLLECTION]: ['hash_1'],
   [PREKEY_COLLECTION]: ['expiresAt_1', 'channel_1_address_1'],
   [OFFLINE_MESSAGE_COLLECTION]: ['expiresAt_1', 'dedupeKey_1', 'channel_1_mailbox_1_slot_1', 'channel_1_mailbox_1_claimedUntil_1_expiresAt_1'],

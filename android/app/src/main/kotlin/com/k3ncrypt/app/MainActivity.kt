@@ -2,6 +2,7 @@ package com.k3ncrypt.app
 
 import com.k3ncrypt.calls.CallSignalCodec
 
+import androidx.compose.material3.TextButton
 import android.content.Context
 import android.content.Intent
 import android.app.Activity
@@ -342,6 +343,12 @@ private fun IdentityAndConversationScreen(
     onThemeModeChange: (String) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    val files = remember(context, messaging) { AndroidFileTransfer(context, messaging) }
+    val fileProgress by files.progress.collectAsState()
+    val receivedFile by files.received.collectAsState()
+    val filePicker = rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri -> uri?.let(files::send) }
+    val fileSaver = rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/octet-stream")) { uri -> uri?.let(files::save) }
+    DisposableEffect(files) { onDispose { files.dispose() } }
     val clipboard = LocalClipboardManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
     val preferences = remember { context.getSharedPreferences("k3ncrypt-runtime", Context.MODE_PRIVATE) }
@@ -755,7 +762,7 @@ private fun IdentityAndConversationScreen(
                                 }
                                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                     Text(k3ncryptContactName(saved.label), modifier = Modifier.fillMaxWidth(), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
-                                    Text(preview?.text?.take(64) ?: "Start a private conversation", maxLines = 1, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                                    Text(preview?.text?.let { if (it.startsWith("k3ncrypt-file-")) "Protected file" else it.take(64) } ?: "Start a private conversation", maxLines = 1, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                                     Text(if (preview != null) formatChatTime(preview.timestamp) else if (saved.connectionState == "connected") "Relay socket connected here" else "Saved on this device", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
                                 }
                                 K3ncryptStatus("Saved contact", positive = false)
@@ -913,7 +920,10 @@ private fun IdentityAndConversationScreen(
                             tonalElevation = if (sentByThisDevice) 0.dp else 1.dp,
                         ) {
                             Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                                Text(message.text, color = if (sentByThisDevice) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyMedium)
+                                Text(if (message.text.startsWith("k3ncrypt-file-")) "Protected file" else message.text, color = if (sentByThisDevice) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyMedium)
+                                if (!sentByThisDevice && message.text.startsWith(com.k3ncrypt.media.FileTransferLimits.PREFIX)) {
+                                    TextButton(onClick = { files.receive(message.text) }, enabled = com.k3ncrypt.media.FileTransferState.terminal(fileProgress.phase)) { Text("Download and verify file") }
+                                }
                                 Text(
                                     if (sentByThisDevice) "You · ${formatChatTime(message.timestamp)}" else formatChatTime(message.timestamp),
                                     style = MaterialTheme.typography.labelSmall,
@@ -926,8 +936,8 @@ private fun IdentityAndConversationScreen(
             }
             Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
               Row(Modifier.fillMaxWidth().padding(start = 8.dp, end = 7.dp, top = 5.dp, bottom = 5.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                IconButton(enabled = false, onClick = {}, modifier = Modifier.size(40.dp)) {
-                    Icon(Icons.Filled.AttachFile, contentDescription = "Attachments are not available yet", tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
+                IconButton(enabled = contactVerification == ContactVerificationState.VERIFIED && com.k3ncrypt.media.FileTransferState.terminal(fileProgress.phase), onClick = { filePicker.launch(arrayOf("*/*")) }, modifier = Modifier.size(40.dp)) {
+                    Icon(Icons.Filled.AttachFile, contentDescription = "Attach protected file", tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
                 }
                 OutlinedTextField(draft, { draft = it }, placeholder = { Text("Write a message") }, modifier = Modifier.weight(1f), maxLines = 4, shape = RoundedCornerShape(16.dp))
                 IconButton(enabled = false, onClick = {}, modifier = Modifier.size(40.dp)) {
@@ -953,11 +963,17 @@ private fun IdentityAndConversationScreen(
               }
             }
             Text(
-                "File sharing and voice messages are not available in Android chat yet.",
+                "Files: up to 8 MiB; verified unchanged contact required. Voice recording is unavailable.",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(start = 8.dp),
             )
+            if (fileProgress.phase != com.k3ncrypt.media.FilePhase.RestartRequired) {
+                Text("${fileProgress.filename} · ${if (fileProgress.phase == com.k3ncrypt.media.FilePhase.WaitingForRecipient) "Encrypted file stored; waiting for recipient" else fileProgress.phase.name} · ${fileProgress.bytes}/${fileProgress.total} bytes ${fileProgress.failure}")
+                if (!com.k3ncrypt.media.FileTransferState.terminal(fileProgress.phase)) TextButton(onClick = files::cancel) { Text("Cancel") }
+                if (fileProgress.retryable) TextButton(onClick = files::retry) { Text("Retry in this session") }
+            }
+            receivedFile?.let { ready -> Button(onClick = { fileSaver.launch(ready.filename) }) { Text("Save ${ready.filename}") } }
             if (!relayConnected) K3ncryptNotice("Connection interrupted. Saved messages stay on this device while K3NCRYPT tries to reconnect.", K3ncryptNoticeTone.Attention)
             if (messageStatus.isNotBlank()) K3ncryptNotice(messageStatus, k3ncryptNoticeToneFor(messageStatus))
             if (SavedConversationIndex.isTrusted(active)) {

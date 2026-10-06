@@ -8,6 +8,8 @@ export interface AuthenticatedContext {
   permissions: readonly AttachmentPermission[];
   requestId: string;
   identityReference?: string;
+  /** Supplied only by the verified durable device proof, never request body. */
+  accountIdentityReference?: string;
   createdAt: number;
   expiresAt: number;
   /** Phase 6B trust adapter supplied by the authenticated runtime. */

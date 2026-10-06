@@ -16,23 +16,11 @@ interface MediaContextValue {
 const MediaContext = createContext<MediaContextValue | undefined>(undefined);
 
 export const MediaProvider: React.FC<{ children: ReactNode; workflow?: MediaMessageWorkflow }> = ({ children, workflow }) => {
-  const { sendMessage, channelHash, userId, protocolMode } = useChat();
+  const { channelHash, userId, protocolMode } = useChat();
   const [transfer, setTransfer] = useState<MediaTransfer>({ state: 'idle' });
   const context = { conversationId: channelHash, participantId: userId };
 
-  const sendFile = useCallback(async (kind: Exclude<MediaKind, 'voice'>, file: { arrayBuffer: () => Promise<ArrayBuffer>; type: string }) => {
-    if (!workflow || protocolMode !== 'modern' || !context.conversationId || !context.participantId) {
-      setTransfer({ state: 'failed', error: 'Protected media is temporarily unavailable.' });
-      return;
-    }
-    setTransfer({ state: 'uploading' });
-    try {
-      const result = await workflow.sendFile(context, kind, file, async (serialized) => sendMessage(serialized));
-      setTransfer({ state: 'ready', result });
-    } catch {
-      setTransfer({ state: 'failed', error: 'The protected media send could not be confirmed.' });
-    }
-  }, [workflow, protocolMode, context.conversationId, context.participantId, sendMessage]);
+  const sendFile = useCallback(async (_kind: Exclude<MediaKind, 'voice'>, _file: { arrayBuffer: () => Promise<ArrayBuffer>; type: string }) => { throw new Error('Legacy attachment writes disabled.'); }, []);
 
   const receive = useCallback(async (serialized: string) => {
     if (!workflow || protocolMode !== 'modern' || !context.conversationId || !context.participantId) {
@@ -50,19 +38,7 @@ export const MediaProvider: React.FC<{ children: ReactNode; workflow?: MediaMess
     }
   }, [workflow, protocolMode, context.conversationId, context.participantId]);
 
-  const sendVoice = useCallback(async (bytes: Uint8Array, durationMs: number) => {
-    if (!workflow || protocolMode !== 'modern' || !context.conversationId || !context.participantId) {
-      setTransfer({ state: 'failed', error: 'Protected media is temporarily unavailable.' });
-      return;
-    }
-    setTransfer({ state: 'uploading' });
-    try {
-      const result = await workflow.sendVoice(context, bytes, async (serialized) => sendMessage(serialized), durationMs);
-      setTransfer({ state: 'ready', result });
-    } catch {
-      setTransfer({ state: 'failed', error: 'The protected voice message send could not be confirmed.' });
-    }
-  }, [workflow, protocolMode, context.conversationId, context.participantId, sendMessage]);
+  const sendVoice = useCallback(async (_bytes: Uint8Array, _durationMs: number) => { throw new Error('Legacy attachment writes disabled.'); }, []);
 
   const cancelTransfer = () => { workflow?.cancel(); setTransfer({ state: 'idle' }); };
   return <MediaContext.Provider value={{ transfer, sendFile, sendVoice, receive, clearTransfer: () => setTransfer({ state: 'idle' }), cancelTransfer }}>{children}</MediaContext.Provider>;

@@ -8,12 +8,14 @@ import { Button } from '../common/Button';
 import { MicIcon, PaperclipIcon, SendIcon } from '../common/icons';
 import './ChatFooter.css';
 import { debugError } from '../../utils/debug';
-import { useMedia } from '../../context/MediaContext';
+import { useFiles } from '../../context/FileContext';
 import { BrowserCaptureController } from '../../../../service/src/privacy/capture';
 
 export const ChatFooter: React.FC = () => {
-  const { sendMessage, sessionHealth } = useChat();
-  const { sendFile, sendVoice, transfer, cancelTransfer } = useMedia();
+  const { sendMessage, sessionHealth, contactIdentity } = useChat();
+  const { sendFile, retry, transfer, cancel: cancelTransfer } = useFiles();
+  const busy = ['Preparing', 'Encrypting', 'Uploading', 'Downloading', 'Verifying'].includes(transfer.phase);
+  const verified = contactIdentity?.verification === 'verified' && contactIdentity.changeStatus === 'unchanged';
   const [message, setMessage] = useState<string>('');
   const [isSending, setIsSending] = useState<boolean>(false);
   const [actionMessage, setActionMessage] = useState('');
@@ -35,7 +37,6 @@ export const ChatFooter: React.FC = () => {
     document.addEventListener('visibilitychange', hidden);
     return () => { document.removeEventListener('visibilitychange', hidden); cancel(); };
   }, []);
-  const [lastAttachment, setLastAttachment] = useState<{ kind: 'image' | 'video' | 'file'; file: File }>();
 
   useEffect(() => {
     if (!isRecording) { setRecordingSeconds(0); return; }
@@ -64,14 +65,12 @@ export const ChatFooter: React.FC = () => {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
-    const kind = file.type.startsWith('image/') ? 'image' : file.type.startsWith('video/') ? 'video' : 'file';
-    setLastAttachment({ kind, file });
     setActionMessage('');
-    try { await sendFile(kind, file); }
+    try { await sendFile(file); }
     catch { setActionMessage('Could not confirm the protected file send. Check the conversation before retrying.'); }
   };
 
-  const retryAttachment = async () => { if (lastAttachment) await sendFile(lastAttachment.kind, lastAttachment.file); };
+  const retryAttachment = retry;
 
   const toggleRecording = async () => {
     if (isRecording) {
@@ -82,8 +81,12 @@ export const ChatFooter: React.FC = () => {
       discardRecording.current = false;
       const stream = await capture.current.request({ audio: true });
       const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
-      const chunks: Blob[] = [];
-      recorder.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data); };
+      const chunks: Blob[] = []; let recordedBytes = 0;
+      recorder.ondataavailable = (event) => {
+        recordedBytes += event.data.size;
+        if (recordedBytes > 8 * 1024 * 1024) { discardRecording.current = true; if (recorder.state === 'recording') recorder.stop(); setActionMessage('Recording exceeds the 8 MiB file limit.'); return; }
+        if (event.data.size) chunks.push(event.data);
+      };
       recorder.onerror = () => { discardRecording.current = true; capture.current.release(); setIsRecording(false); };
       recorder.onstop = async () => {
         capture.current.release();
@@ -91,11 +94,11 @@ export const ChatFooter: React.FC = () => {
         setIsRecording(false);
         recorderRef.current = null;
         if (discardRecording.current) { discardRecording.current = false; return; }
-        const bytes = new Uint8Array(await new Blob(chunks, { type: recorder.mimeType }).arrayBuffer());
-        try { await sendVoice(bytes, Date.now() - recordingStartedAt.current); setActionMessage('Voice message added to the conversation.'); }
+        const file = new File(chunks, 'voice-message.webm', { type: recorder.mimeType });
+        try { await sendFile(file); setActionMessage('Voice message added to the conversation.'); }
         catch { setActionMessage('Could not confirm the voice message send. Check the conversation before retrying.'); }
       };
-      recorder.start();
+      recorder.start(1000);
       recorderRef.current = recorder;
       recordingStartedAt.current = Date.now();
       setIsRecording(true);
@@ -130,8 +133,8 @@ export const ChatFooter: React.FC = () => {
   return (
     <footer className="chat-footer glass">
       <div className="input-container">
-        <input ref={attachmentInputRef} type="file" hidden accept="image/png,image/jpeg,image/webp,image/gif,video/webm,video/mp4,video/ogg,.pdf,.txt,.zip,.doc,.docx" onChange={handleAttachment} />
-        <button className="composer-tool" type="button" onClick={() => attachmentInputRef.current?.click()} disabled={sessionHealth !== 'healthy' || isSending || transfer.state === 'uploading'} title="Send a protected file" aria-label="Attach a protected file"><PaperclipIcon size={19} /></button>
+        <input ref={attachmentInputRef} type="file" hidden onChange={handleAttachment} />
+        <button className="composer-tool" type="button" onClick={() => attachmentInputRef.current?.click()} disabled={sessionHealth !== 'healthy' || isSending || busy || !verified} title="Send a protected file" aria-label="Attach a protected file"><PaperclipIcon size={19} /></button>
         <input
           ref={inputRef}
           type="text"
@@ -145,7 +148,7 @@ export const ChatFooter: React.FC = () => {
         />
         {isRecording && <span className="recording-indicator" role="status"><span />{Math.floor(recordingSeconds / 60)}:{String(recordingSeconds % 60).padStart(2, '0')}</span>}
         {isRecording && <button className="recording-cancel" type="button" onClick={cancelRecording} aria-label="Discard voice recording">Discard</button>}
-        <button className={`composer-tool${isRecording ? ' is-recording' : ''}`} type="button" onClick={toggleRecording} disabled={sessionHealth !== 'healthy' || transfer.state === 'uploading'} title={isRecording ? 'Stop and send recording' : 'Record a protected voice message'} aria-label={isRecording ? 'Stop and send recording' : 'Record a protected voice message'}><MicIcon size={19} /></button>
+        <button className={`composer-tool${isRecording ? ' is-recording' : ''}`} type="button" onClick={toggleRecording} disabled={sessionHealth !== 'healthy' || busy || !verified} title={isRecording ? 'Stop and send recording' : 'Record a protected voice message'} aria-label={isRecording ? 'Stop and send recording' : 'Record a protected voice message'}><MicIcon size={19} /></button>
         <Button
           id="send-btn"
           variant="primary"
@@ -156,7 +159,9 @@ export const ChatFooter: React.FC = () => {
           <SendIcon size={20} />
         </Button>
       </div>
-      {transfer.state !== 'idle' && <div className="media-transfer-status" role="status"><span>{({ uploading: 'Sending protected file…', downloading: 'Opening protected media…', ready: 'Protected media ready.', failed: 'Protected file send could not be confirmed.', idle: '' } as Record<string, string>)[transfer.state]}</span>{transfer.state === 'uploading' && <button type="button" onClick={cancelTransfer}>Cancel</button>}{transfer.state === 'failed' && lastAttachment && <button type="button" onClick={retryAttachment}>Try again</button>}</div>}
+      {transfer.phase !== 'RestartRequired' && <div className="media-transfer-status" role="status"><span>{transfer.filename} · {transfer.phase === 'WaitingForRecipient' ? 'Encrypted file stored; waiting for recipient' : transfer.phase} · {transfer.bytes}/{transfer.total} bytes{transfer.failure && ` · ${transfer.failure}`}</span>{busy && <button type="button" onClick={cancelTransfer}>Cancel</button>}{transfer.phase === 'Failed' && transfer.retryable && <button type="button" onClick={retryAttachment}>Retry in this session</button>}</div>}
+      <div className="composer-feedback">Protected files: up to 8 MiB. Downloads require explicit saving.</div>
+      {!verified && <div className="composer-feedback">Verify the unchanged contact before sending a file.</div>}
       {actionMessage && <div className="composer-feedback" role="status">{actionMessage}</div>}
     </footer>
   );
