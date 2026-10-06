@@ -345,6 +345,7 @@ private fun IdentityAndConversationScreen(
     val scope = rememberCoroutineScope()
     val files = remember(context, messaging) { AndroidFileTransfer(context, messaging) }
     val fileProgress by files.progress.collectAsState()
+    val fileTransferPresentation = androidFileTransferPresentation(fileProgress)
     val receivedFile by files.received.collectAsState()
     val filePicker = rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri -> uri?.let(files::send) }
     val fileSaver = rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/octet-stream")) { uri -> uri?.let(files::save) }
@@ -403,6 +404,7 @@ private fun IdentityAndConversationScreen(
     }
     var busy by remember { mutableStateOf(false) }
     var showAdvancedVerification by remember { mutableStateOf(false) }
+    var showContactSecurityCode by remember { mutableStateOf(false) }
     var showSecurityVisibilityDetails by remember { mutableStateOf(false) }
     var showAdvancedDeviceDetails by remember { mutableStateOf(false) }
     var showAdvancedNetwork by remember { mutableStateOf(false) }
@@ -455,7 +457,7 @@ private fun IdentityAndConversationScreen(
     }
     fun requestCallPermissions(action: String) {
         if (contactVerification != ContactVerificationState.VERIFIED) {
-            status = "Verification required: compare and explicitly verify this contact before calling."
+            status = "Verify this contact before starting a call."
             return
         }
         callPermissionSettingsNeeded = false
@@ -617,7 +619,7 @@ private fun IdentityAndConversationScreen(
                         K3ncryptBrandMark()
                         Text("Your device is your identity", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            "This device has its own secure identity. An invitation starts contact setup, but does not make someone trusted. Compare fingerprints through a separate trusted channel and confirm before trusting a contact. Names and nicknames are only for recognition.",
+                            "This device has its own secure identity. An invitation starts contact setup but does not make someone trusted. Compare security codes with them using another trusted way before confirming. Names do not prove identity.",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodyMedium,
                         )
@@ -630,7 +632,7 @@ private fun IdentityAndConversationScreen(
             pendingPeer?.let { (route, fingerprint) ->
                 K3ncryptCard {
                     Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        K3ncryptSectionTitle("Contact request", "Review before connecting", "A contact is not trusted until you compare fingerprints through a separate trusted channel and confirm. Messages stay on hold until then. Names and nicknames do not prove identity.")
+                        K3ncryptSectionTitle("Contact request", "Review before connecting", "A contact is not trusted until you compare security codes with them using another trusted way and confirm. Messages stay on hold until then.")
                         Button(enabled = !busy, onClick = { showPeerComparison = !showPeerComparison }) {
                             Text(if (showPeerComparison) "Hide security code" else "View security code")
                         }
@@ -763,14 +765,14 @@ private fun IdentityAndConversationScreen(
                                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                     Text(k3ncryptContactName(saved.label), modifier = Modifier.fillMaxWidth(), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
                                     Text(preview?.text?.let { if (it.startsWith("k3ncrypt-file-")) "Protected file" else it.take(64) } ?: "Start a private conversation", maxLines = 1, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
-                                    Text(if (preview != null) formatChatTime(preview.timestamp) else if (saved.connectionState == "connected") "Relay socket connected here" else "Saved on this device", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
+                                    Text(if (preview != null) formatChatTime(preview.timestamp) else if (saved.connectionState == "connected") "Service connection available" else "Saved on this device", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
                                 }
                                 K3ncryptStatus("Saved contact", positive = false)
                             }
                         }
                     }
                 } else if (state?.lifecycleState == "active" && !showNewConversation) {
-                    K3ncryptEmptyState("No conversations yet", "Create or join an invitation to connect. Compare fingerprints before marking a contact as trusted.")
+                    K3ncryptEmptyState("No conversations yet", "Create or join an invitation to connect. Compare security codes before marking a contact verified.")
                 }
               }
 
@@ -779,7 +781,7 @@ private fun IdentityAndConversationScreen(
                     invitationInput,
                     { invitationInput = it },
                     label = { Text("Private invitation") },
-                    supportingText = { Text("An invitation starts contact setup; it does not verify who sent it. Compare fingerprints and confirm before trusting the contact.") },
+                    supportingText = { Text("An invitation starts contact setup; it does not verify who sent it. Compare security codes with them using another trusted way before confirming.") },
                     modifier = Modifier.fillMaxWidth(),
                     minLines = 2,
                     maxLines = 4,
@@ -787,7 +789,7 @@ private fun IdentityAndConversationScreen(
                 OutlinedButton(enabled = !busy, onClick = ::scanInvitation) { Text("Scan invitation QR") }
                 val invitationFingerprint = runCatching { parseModernInvitation(invitationInput.trim()).peerFingerprint }.getOrNull()
                 if (invitationFingerprint != null) {
-                    K3ncryptNotice("Before trusting this contact, compare fingerprints through a separate trusted channel and confirm verification. Names and nicknames are only for recognition.", K3ncryptNoticeTone.Attention)
+                    K3ncryptNotice("Before trusting this contact, compare security codes using another trusted way and confirm. Names do not prove identity.", K3ncryptNoticeTone.Attention)
                     K3ncryptCard {
                         Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text("Security code to compare", style = MaterialTheme.typography.labelLarge)
@@ -856,7 +858,7 @@ private fun IdentityAndConversationScreen(
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(k3ncryptContactName(savedTrustedConversations.firstOrNull { it.conversationHash == SavedConversationIndex.hash(active.conversationId) }?.label), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
-                        Text(if (SavedConversationIndex.isTrusted(active)) "Identity pinned · ${verificationLabel(contactVerification)}" else "Contact identity not confirmed", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(if (contactVerification == ContactVerificationState.IDENTITY_CHANGED_PENDING_REVIEW) "Identity changed. K3NCRYPT can’t confirm this is the same person or device anymore." else if (contactVerification == ContactVerificationState.VERIFIED) "Verified on this device" else "Not verified yet · verify before calling or sending files", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     K3ncryptStatus(verificationLabel(contactVerification), positive = contactVerification == ContactVerificationState.VERIFIED)
                 }
@@ -963,27 +965,31 @@ private fun IdentityAndConversationScreen(
               }
             }
             Text(
-                "Files: up to 8 MiB; verified unchanged contact required. Voice recording is unavailable.",
+                "Photos and files up to 8 MiB. Choose when to save a download. Voice messages are not available yet.",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(start = 8.dp),
             )
             if ((fileProgress.phase != com.k3ncrypt.media.FilePhase.RestartRequired || fileProgress.failure.isNotEmpty())) {
-                Text("${fileProgress.filename} · ${if (fileProgress.phase == com.k3ncrypt.media.FilePhase.WaitingForRecipient) "Encrypted file stored; waiting for recipient" else fileProgress.phase.name} · ${fileProgress.bytes}/${fileProgress.total} bytes ${fileProgress.failure}")
-                if (!com.k3ncrypt.media.FileTransferState.terminal(fileProgress.phase)) TextButton(onClick = files::cancel) { Text("Cancel") }
-                if (fileProgress.retryable) TextButton(onClick = files::retry) { Text("Retry in this session") }
+                Text(fileTransferPresentation.label, modifier = Modifier.semantics { contentDescription = fileTransferPresentation.label }, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                fileTransferPresentation.progress?.let { progress -> LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth()) }
+                if (fileTransferPresentation.active) TextButton(onClick = files::cancel) { Text("Cancel") }
+                if (fileProgress.retryable) TextButton(onClick = files::retry) { Text("Retry") }
             }
             receivedFile?.let { ready -> Button(onClick = { fileSaver.launch(ready.filename) }) { Text("Save ${ready.filename}") } }
             if (!relayConnected) K3ncryptNotice("Connection interrupted. Saved messages stay on this device while K3NCRYPT tries to reconnect.", K3ncryptNoticeTone.Attention)
             if (messageStatus.isNotBlank()) K3ncryptNotice(messageStatus, k3ncryptNoticeToneFor(messageStatus))
             if (SavedConversationIndex.isTrusted(active)) {
                 K3ncryptCard {
-                    K3ncryptSectionTitle("Contact verification", verificationLabel(contactVerification), "Compare the exact fingerprint through a separate trusted channel. Verification is local to this device and separate from the saved identity pin.")
+                    K3ncryptSectionTitle("Contact verification", verificationLabel(contactVerification), "Compare this security code with your contact using another trusted way. Verification is saved only on this device.")
+                    OutlinedButton(onClick = { showContactSecurityCode = !showContactSecurityCode }) { Text(if (showContactSecurityCode) "Hide security code" else "Show security code to compare") }
+                    if (showContactSecurityCode) {
+                    Text("Contact security code", style = MaterialTheme.typography.labelLarge)
                     Text(active.peerIdentityReference, style = MaterialTheme.typography.bodySmall)
                     if (contactVerification == ContactVerificationState.IDENTITY_CHANGED_PENDING_REVIEW) {
-                        Text("A different identity was observed. Existing identity pins and encrypted sessions are not replaced here. Review the new identity through a fresh invitation before verifying it.")
+                        Text("Identity changed. K3NCRYPT can’t confirm this is the same person or device anymore. Compare the new security code using another trusted way before you verify again. Calls and file sending stay blocked until then.")
                     }
-                    OutlinedTextField(fingerprintConfirmation, { fingerprintConfirmation = it }, label = { Text("Enter the fingerprint you compared") }, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(fingerprintConfirmation, { fingerprintConfirmation = it }, label = { Text("Enter the security code you compared") }, modifier = Modifier.fillMaxWidth())
                     Button(enabled = !busy && fingerprintConfirmation.trim() == active.peerIdentityReference, onClick = {
                         busy = true
                         scope.launch {
@@ -992,7 +998,8 @@ private fun IdentityAndConversationScreen(
                                 .onFailure { status = "Verification was not recorded. Review the current contact identity." }
                             busy = false
                         }
-                    }) { Text("I have verified this fingerprint") }
+                    }) { Text("I compared the code and verified this contact") }
+                    }
                     OutlinedButton(enabled = !busy, onClick = {
                         scope.launch { runCatching { messaging.unverifyCurrentContact(active) }.onSuccess { status = "Contact marked unverified on this device." }.onFailure { status = "Could not reset contact verification." } }
                     }) { Text("Mark unverified") }

@@ -10,17 +10,19 @@ import './ChatFooter.css';
 import { debugError } from '../../utils/debug';
 import { useFiles } from '../../context/FileContext';
 import { BrowserCaptureController } from '../../../../service/src/privacy/capture';
+import { fileTransferCopy } from '../../product/fileTransferCopy';
 
 export const ChatFooter: React.FC = () => {
   const { sendMessage, sessionHealth, contactIdentity } = useChat();
   const { sendFile, retry, transfer, cancel: cancelTransfer } = useFiles();
-  const busy = ['Preparing', 'Encrypting', 'Uploading', 'Downloading', 'Verifying'].includes(transfer.phase);
+  const transferStatus = fileTransferCopy(transfer);
+  const busy = transferStatus.active;
   const verified = contactIdentity?.verification === 'verified' && contactIdentity.changeStatus === 'unchanged';
   const [message, setMessage] = useState<string>('');
   const [isSending, setIsSending] = useState<boolean>(false);
   const [actionMessage, setActionMessage] = useState('');
   const [recordingSeconds, setRecordingSeconds] = useState(0);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const recordingStartedAt = useRef<number>(0);
@@ -124,7 +126,7 @@ export const ChatFooter: React.FC = () => {
   }, [isRecording]);
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       handleSend();
     }
@@ -134,13 +136,14 @@ export const ChatFooter: React.FC = () => {
     <footer className="chat-footer glass">
       <div className="input-container">
         <input ref={attachmentInputRef} type="file" hidden onChange={handleAttachment} />
-        <button className="composer-tool" type="button" onClick={() => attachmentInputRef.current?.click()} disabled={sessionHealth !== 'healthy' || isSending || busy || !verified} title="Send a protected file" aria-label="Attach a protected file"><PaperclipIcon size={19} /></button>
-        <input
+        <button className="composer-tool" type="button" onClick={() => attachmentInputRef.current?.click()} disabled={sessionHealth !== 'healthy' || isSending || busy || !verified} title="Attach a photo or file (up to 8 MiB)" aria-label="Attach a photo or file, up to 8 MiB"><PaperclipIcon size={19} /></button>
+        <textarea
           ref={inputRef}
-          type="text"
           id="msg-input"
           className="message-input"
           placeholder="Write a message"
+          aria-label="Write a message"
+          rows={1}
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           onKeyDown={handleKeyPress}
@@ -155,12 +158,13 @@ export const ChatFooter: React.FC = () => {
           circle
           onClick={handleSend}
           disabled={sessionHealth === 'unhealthy' || !message.trim() || isSending}
+          aria-label="Send message"
         >
           <SendIcon size={20} />
         </Button>
       </div>
-      {(transfer.phase !== 'RestartRequired' || transfer.failure) && <div className="media-transfer-status" role="status"><span>{transfer.filename} · {transfer.phase === 'WaitingForRecipient' ? 'Encrypted file stored; waiting for recipient' : transfer.phase} · {transfer.bytes}/{transfer.total} bytes{transfer.failure && ` · ${transfer.failure}`}</span>{busy && <button type="button" onClick={cancelTransfer}>Cancel</button>}{transfer.phase === 'Failed' && transfer.retryable && <button type="button" onClick={retryAttachment}>Retry in this session</button>}</div>}
-      <div className="composer-feedback">Protected files: up to 8 MiB. Downloads require explicit saving.</div>
+      {transfer.phase !== 'RestartRequired' && <div className="media-transfer-status" role="status" aria-live="polite"><span>{transferStatus.label}</span>{transferStatus.progress !== undefined && <progress max={100} value={transferStatus.progress} aria-label="File transfer progress" />}{busy && <button type="button" onClick={cancelTransfer}>Cancel</button>}{transfer.phase === 'Failed' && transfer.retryable && <button type="button" onClick={retryAttachment}>Retry</button>}</div>}
+      <div className="composer-feedback">Photos and files up to 8 MiB. You choose when to save a download.</div>
       {!verified && <div className="composer-feedback">Verify the unchanged contact before sending a file.</div>}
       {actionMessage && <div className="composer-feedback" role="status">{actionMessage}</div>}
     </footer>

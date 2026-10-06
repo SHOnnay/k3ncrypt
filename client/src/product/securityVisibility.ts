@@ -64,7 +64,7 @@ export const deriveMessageDeliveryVisibility = (
   if (delivery === 'pending') {
     return {
       state: 'pending',
-      label: 'Pending',
+      label: 'Pending on this device',
       explanation: 'This message remains pending on this device. The available state does not show whether the relay accepted it or whether the recipient received it.',
     };
   }
@@ -78,7 +78,7 @@ export const deriveMessageDeliveryVisibility = (
   if (delivery === 'accepted') {
     return {
       state: 'relay-accepted-outcome-unknown',
-      label: 'Accepted by relay',
+      label: 'Sent · recipient not confirmed',
       explanation: 'The relay acknowledged this message. This client does not distinguish live recipient acceptance from mailbox storage, and has no authenticated peer receipt.',
     };
   }

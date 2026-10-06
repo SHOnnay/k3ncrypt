@@ -61,7 +61,7 @@ export const WorkspaceSection: React.FC<WorkspaceSectionProps> = ({ section, onO
           const next = window.prompt('Contact nickname (saved only on this device; helps recognition and does not verify identity)', contact.label);
           if (next !== null) void setContactNickname(contact.roomId, next).catch(() => window.alert('Could not save this contact nickname.'));
         }}>Edit name</button>
-      </div>)}</div> : conversations.length > 0 ? <div className="workspace-empty workspace-empty--compact"><h2>No matching contact</h2><p>Try another search.</p></div> : <div className="workspace-empty"><span className="workspace-empty__mark"><img src="/branding/k3ncrypt-cluster-white.svg" alt="" /></span><h2>Your contacts will appear here</h2><p>Create or join an invitation. Compare fingerprints before marking a contact as verified.</p></div>}
+      </div>)}</div> : conversations.length > 0 ? <div className="workspace-empty workspace-empty--compact"><h2>No matching contact</h2><p>Try another search.</p></div> : <div className="workspace-empty"><span className="workspace-empty__mark"><img src="/branding/k3ncrypt-cluster-white.svg" alt="" /></span><h2>Your contacts will appear here</h2><p>Create or join an invitation. Compare security codes before marking a contact verified.</p></div>}
     </main>;
   }
 

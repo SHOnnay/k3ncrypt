@@ -3,7 +3,7 @@ import { FileProvider } from './context/FileContext';
  * Main App component
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { MediaMessageWorkflow } from '@chat-e2ee/service';
 import { useChat } from './context/ChatContext';
 import { SetupOverlay } from './components/SetupOverlay/SetupOverlay';
@@ -23,18 +23,27 @@ const AppContent: React.FC = () => {
   const { initializeChat, joinChannel, openConversation, attachmentRequestHeaders, privacyPreferences } = useChat();
   const [showSetup, setShowSetup] = useState(true);
   const [error, setError] = useState<string>('');
+  const [initializationError, setInitializationError] = useState<string>('');
+  const [isInitializing, setIsInitializing] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
   const [activeSection, setActiveSection] = useState<'chats' | 'contacts' | 'calls'>('chats');
   const [backgrounded, setBackgrounded] = useState(false);
   const mediaWorkflow = useMemo(() => new MediaMessageWorkflow(new HttpAttachmentGateway(getRuntimeConfig().baseUrl ?? '', attachmentRequestHeaders)), [attachmentRequestHeaders]);
 
-  // Initialize chat on mount
-  useEffect(() => {
-    initializeChat().catch((err) => {
-      setError('Failed to initialize chat. Please refresh the page.');
+  const retryInitialization = useCallback(async () => {
+    setIsInitializing(true);
+    setInitializationError('');
+    try {
+      await initializeChat();
+    } catch (err) {
+      setInitializationError('Couldn’t connect to K3NCRYPT yet. Check your connection and try again.');
       debugError('Initialization failed', err);
-    });
+    } finally {
+      setIsInitializing(false);
+    }
   }, [initializeChat]);
+
+  useEffect(() => { void retryInitialization(); }, [retryInitialization]);
 
   useEffect(() => {
     const update = () => setBackgrounded(document.visibilityState !== 'visible');
@@ -85,9 +94,10 @@ const AppContent: React.FC = () => {
       </section>
       <SettingsPanel isOpen={showSettings} onClose={() => setShowSettings(false)} />
       <CallOverlay />
-      {error && (
+      {(initializationError || error) && (
         <div className="app-error" role="alert">
-          {error}
+          {initializationError || error}
+          {initializationError && <button className="app-error__retry" type="button" disabled={isInitializing} onClick={() => void retryInitialization()}>{isInitializing ? 'Connecting…' : 'Try again'}</button>}
         </div>
       )}
     </div>

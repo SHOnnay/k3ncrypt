@@ -45,12 +45,12 @@ describe('ChatHeader call launch controls', () => {
     const unverified = renderHeader({ contactIdentity: { verification: 'unverified', changeStatus: 'unchanged' } });
     expect(buttonMarkup(unverified, 'Start audio call')).toContain('disabled');
     expect(buttonMarkup(unverified, 'Start video call')).toContain('disabled');
-    expect(unverified).toContain('Verified contact required before calling.');
+    expect(unverified).toContain('Verify this contact before calling.');
     expect(buttonMarkup(unverified, 'Start video call')).toContain('aria-describedby="call-launch-reason"');
 
     const changed = renderHeader({ contactIdentity: { verification: 'verified', changeStatus: 'changed-pending-review' } });
     expect(buttonMarkup(changed, 'Start video call')).toContain('disabled');
-    expect(changed).toContain('identity changed');
+    expect(changed.toLowerCase()).toContain('identity changed');
   });
 
   it('reports upgrade, connection, and active-call blocks separately', () => {
@@ -59,7 +59,7 @@ describe('ChatHeader call launch controls', () => {
     expect(legacy).toContain('Call requires a newer K3NCRYPT version.');
 
     const disconnected = renderHeader({ isConnected: false });
-    expect(disconnected).toContain('Connect to this verified contact');
+    expect(disconnected).toContain('Reconnect to this verified contact');
 
     mockUseChat.mockReturnValue({ ...verifiedState } as unknown as ChatContextType);
     const busy = renderToStaticMarkup(React.createElement(ChatHeader, { onStartCall: () => undefined, onStartVideoCall: () => undefined, disableStartCall: true }));

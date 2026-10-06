@@ -97,8 +97,8 @@ const handleDelete = async () => {
             {hashCopied && <span className="copy-feedback-small">Copied!</span>}
           </div>
         )}
-        <p id="participant-info" className="participant-info">
-          {activeConversation && (protocolMode === 'modern' && sessionHealth === 'unhealthy' ? 'Review the security update for this conversation before continuing.' : protocolMode === 'modern' && sessionHealth === 'renewal-pending' ? 'Waiting for your contact to review the connection update.' : protocolMode === 'modern' ? 'Messages in this conversation are encrypted.' : 'Messages use the relay path.')}
+        <p id="participant-info" className="participant-info" role={securityVisibility.identityChange === 'changed-pending-review' ? 'alert' : undefined}>
+          {securityVisibility.identityChange === 'changed-pending-review' ? 'Identity changed. K3NCRYPT can’t confirm this is the same person or device anymore. Compare the new security code before verifying again.' : activeConversation && (protocolMode === 'modern' && sessionHealth === 'unhealthy' ? 'Review the security update for this conversation before continuing.' : protocolMode === 'modern' && sessionHealth === 'renewal-pending' ? 'Waiting for your contact to review the connection update.' : protocolMode === 'modern' ? 'Messages in this conversation are protected.' : 'This private conversation is open.')}
         </p>
         {callLaunchBlockReason && <p id="call-launch-reason" className="call-launch-reason" role="status">{callLaunchBlockMessage(callLaunchBlockReason)}</p>}
         {activeConversation && <details className="conversation-security-details">

@@ -25,12 +25,12 @@ describe('deriveSecurityVisibility', () => {
 describe('deriveMessageDeliveryVisibility', () => {
   it('keeps pending messages neutral and does not invent an active retry state', () => {
     expect(deriveMessageDeliveryVisibility('pending', 'modern'))
-      .toMatchObject({ state: 'pending', label: 'Pending' });
+      .toMatchObject({ state: 'pending', label: 'Pending on this device' });
   });
 
   it('distinguishes a relay acknowledgement from a recipient-acceptance report', () => {
     expect(deriveMessageDeliveryVisibility('accepted', 'legacy'))
-      .toMatchObject({ state: 'relay-accepted-outcome-unknown', label: 'Accepted by relay' });
+      .toMatchObject({ state: 'relay-accepted-outcome-unknown', label: 'Sent · recipient not confirmed' });
     expect(deriveMessageDeliveryVisibility('accepted', 'modern'))
       .toMatchObject({ state: 'recipient-app-accepted-relay-reported', label: 'Recipient app accepted · relay report' });
   });

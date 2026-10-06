@@ -24,13 +24,13 @@ class AndroidSecurityVisibilityTest {
 
     @Test fun relayAcknowledgementDoesNotClaimRecipientReceipt() {
         val visibility = deriveAndroidMessageDeliveryVisibility(AndroidSendAttemptState.RELAY_ACKNOWLEDGED)
-        assertTrue(visibility.label.contains("recipient status unknown"))
-        assertTrue(visibility.explanation.contains("mailbox storage"))
+        assertTrue(visibility.label.contains("recipient not confirmed"))
+        assertTrue(visibility.explanation.contains("could not confirm"))
         assertFalse(visibility.label.contains("Delivered"))
     }
 
     @Test fun failedAndInProgressSendStatesRemainNeutral() {
-        assertEquals("Sending through relay…", deriveAndroidMessageDeliveryVisibility(AndroidSendAttemptState.SENDING).label)
-        assertTrue(deriveAndroidMessageDeliveryVisibility(AndroidSendAttemptState.COULD_NOT_CONFIRM).label.startsWith("Could not confirm"))
+        assertEquals("Sending…", deriveAndroidMessageDeliveryVisibility(AndroidSendAttemptState.SENDING).label)
+        assertEquals("Couldn’t confirm sending", deriveAndroidMessageDeliveryVisibility(AndroidSendAttemptState.COULD_NOT_CONFIRM).label)
     }
 }

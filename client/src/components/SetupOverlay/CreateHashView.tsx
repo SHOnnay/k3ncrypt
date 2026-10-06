@@ -65,7 +65,7 @@ export const CreateHashView: React.FC<CreateHashViewProps> = ({
         {copied && <span className="copy-feedback">Invitation copied</span>}
       </div>
 
-      <p className="invite-note">This invitation starts contact setup; it does not verify who sent it. Compare fingerprints and confirm before trusting the contact. Names and nicknames are only for recognition.</p>
+      <p className="invite-note">This invitation starts contact setup; it does not verify who sent it. Compare security codes with them using another trusted way before you mark the contact verified.</p>
       {inviteLink && <InvitationQr invitation={inviteLink} />}
 
       {onShareClick && inviteLink && <Button variant="secondary" size="medium" onClick={onShareClick}>

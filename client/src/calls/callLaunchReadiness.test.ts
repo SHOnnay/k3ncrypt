@@ -36,14 +36,14 @@ describe('call launch readiness', () => {
   });
 
   it('gives users a distinct verification-required and upgrade-required message', () => {
-    expect(callLaunchBlockMessage('verification-required')).toMatch(/Verified contact required/);
+    expect(callLaunchBlockMessage('verification-required')).toMatch(/Verify this contact before calling/);
     expect(callLaunchBlockMessage('identity-change-pending-review')).toMatch(/identity changed/i);
     expect(callLaunchBlockMessage('upgrade-required')).toMatch(/newer K3NCRYPT version/);
   });
 
   it('does not mislabel protocol, verification, or permission failures as network failures', () => {
     expect(callStartFailureMessage(new Error('protocol incompatible'), 'video')).toMatch(/newer K3NCRYPT version/);
-    expect(callStartFailureMessage(new Error('verification required'), 'audio')).toMatch(/Verified contact required/);
+    expect(callStartFailureMessage(new Error('verification required'), 'audio')).toMatch(/Verify this contact before calling/);
     expect(callStartFailureMessage(new Error('camera permission denied'), 'video')).toMatch(/permission was denied/);
     expect(callStartFailureMessage(new Error('microphone unavailable'), 'audio')).toMatch(/Microphone is unavailable/);
   });

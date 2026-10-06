@@ -37,10 +37,10 @@ export const callLaunchBlockMessage = (reason: CallLaunchBlockReason): string =>
   switch (reason) {
     case 'no-conversation': return 'Open a verified conversation to call.';
     case 'upgrade-required': return 'Call requires a newer K3NCRYPT version.';
-    case 'identity-change-pending-review': return 'This contact’s identity changed. Review and verify it before calling.';
-    case 'verification-unavailable': return 'Verification status is unavailable. Check this contact before calling.';
-    case 'verification-required': return 'Verified contact required before calling.';
-    case 'connection-unavailable': return 'Connect to this verified contact and resolve the security update before calling.';
+    case 'identity-change-pending-review': return 'Identity changed. K3NCRYPT can’t confirm this is the same person or device anymore. Review the new security code before calling.';
+    case 'verification-unavailable': return 'K3NCRYPT could not check this contact’s verification. Review the contact before calling.';
+    case 'verification-required': return 'Verify this contact before calling.';
+    case 'connection-unavailable': return 'Reconnect to this verified contact before calling.';
     case 'call-in-progress': return 'A call is already in progress.';
   }
 };
@@ -51,7 +51,7 @@ export const callStartFailureMessage = (error: unknown, media: 'audio' | 'video'
     return 'Call requires a newer K3NCRYPT version.';
   }
   if (source.includes('verification') || source.includes('identity') || source.includes('review')) {
-    return 'Verified contact required. Review or reverify this contact before calling.';
+    return 'Verify this contact before calling. Review its security code if it changed.';
   }
   if (source.includes('permission') || source.includes('denied') || source.includes('dismissed')) {
     return media === 'video'
@@ -75,7 +75,7 @@ export const terminalCallStatusMessage = (state: CallLifecycleState): string | u
     case 'no-peer': return 'Contact unavailable for a call.';
     case 'media-denied': return 'Call ended because media permission was denied.';
     case 'media-failed': return 'Call ended because required media was unavailable.';
-    case 'signaling-failed': return 'Call signaling failed.';
+    case 'signaling-failed': return 'The call could not connect. Check your connection and try again.';
     case 'ice-failed': return 'Call failed.';
     default: return undefined;
   }

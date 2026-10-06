@@ -11,6 +11,7 @@ import { formatMessageTime } from '../../utils/messageHandling';
 import { useMedia } from '../../context/MediaContext';
 import { useChat } from '../../context/ChatContext';
 import { deriveMessageDeliveryVisibility } from '../../product/securityVisibility';
+import { fileTransferCopy } from '../../product/fileTransferCopy';
 import './SecurityVisibility.css';
 import './MessageBubble.css';
 
@@ -30,7 +31,9 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
   const [mediaError, setMediaError] = useState(false);
   const [isOpening, setIsOpening] = useState(false);
   const deliveryVisibility = deriveMessageDeliveryVisibility(message.delivery, protocolMode);
+  const fileProgress = fileTransferCopy(files.transfer);
   useEffect(() => () => { if (mediaUrl) URL.revokeObjectURL(mediaUrl); }, [mediaUrl]);
+  const formatFileSize = (size: number): string => size < 1024 * 1024 ? `${Math.max(1, Math.round(size / 1024))} KB` : `${(size / (1024 * 1024)).toFixed(1)} MB`;
   const openMedia = async () => {
     if (!media?.reference || isOpening) return;
     setIsOpening(true);
@@ -49,10 +52,10 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
   return (
     <div className={`message ${message.type}`}>
       <div className="message-text">{message.text}</div>
-      {isFile && media?.size && <div className="message-meta">Protected file · {media.size} bytes</div>}
+      {isFile && media?.size !== undefined && <div className="message-meta">Protected file · {formatFileSize(media.size)}</div>}
       {media?.reference && !mediaUrl && <button className="message-media-action" type="button" onClick={openMedia} disabled={isOpening}>{isOpening ? 'Downloading and verifying…' : isFile ? 'Download protected file' : `Open protected ${media.kind}`}</button>}
-      {isFile && isOpening && <div role="status">{files.transfer.phase} · {files.transfer.bytes} bytes <button onClick={files.cancel}>Cancel</button></div>}
-      {mediaError && <div className="message-media-error" role="status">Unable to open this attachment.</div>}
+      {isFile && isOpening && <div role="status" aria-live="polite">{fileProgress.label}{fileProgress.progress !== undefined && <progress max={100} value={fileProgress.progress} aria-label="File download progress" />} <button type="button" onClick={files.cancel}>Cancel</button></div>}
+      {mediaError && <div className="message-media-error" role="status">Couldn’t open this file. Check your connection or ask your contact to send it again.</div>}
       {mediaUrl && media?.kind === 'image' && <img className="message-media-preview" src={mediaUrl} alt="Protected image" />}
       {mediaUrl && media?.kind === 'voice' && <audio className="message-media-audio" controls src={mediaUrl} />}
       {mediaUrl && media?.kind === 'video' && <video className="message-media-preview" controls src={mediaUrl} />}

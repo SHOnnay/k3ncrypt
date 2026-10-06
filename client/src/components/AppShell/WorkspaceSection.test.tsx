@@ -45,11 +45,11 @@ describe('Calls workspace launch controls', () => {
 
   it('blocks unverified, changed, unhealthy, disconnected, and incompatible contacts', () => {
     const states: Array<[Record<string, unknown>, string]> = [
-      [{ contactIdentity: { verification: 'unverified', changeStatus: 'unchanged' } }, 'Verified contact required'],
+      [{ contactIdentity: { verification: 'unverified', changeStatus: 'unchanged' } }, 'Verify this contact before calling.'],
       [{ contactIdentity: { verification: 'verified', changeStatus: 'changed-pending-review' } }, 'identity changed'],
-      [{ contactIdentity: undefined }, 'Verification status is unavailable'],
-      [{ isConnected: false }, 'Connect to this verified contact'],
-      [{ sessionHealth: 'renewal-pending' }, 'Connect to this verified contact'],
+      [{ contactIdentity: undefined }, 'K3NCRYPT could not check this contact’s verification'],
+      [{ isConnected: false }, 'Reconnect to this verified contact'],
+      [{ sessionHealth: 'renewal-pending' }, 'Reconnect to this verified contact'],
       [{ protocolMode: 'legacy' }, 'newer K3NCRYPT version'],
       [{ callLifecycleState: 'connected' }, 'already in progress'],
     ];
@@ -57,7 +57,7 @@ describe('Calls workspace launch controls', () => {
       const markup = renderCalls(overrides);
       expect(buttonMarkup(markup, 'Start audio call')).toContain('disabled');
       expect(buttonMarkup(markup, 'Start video call')).toContain('disabled');
-      expect(markup).toContain(message);
+      expect(markup.toLowerCase()).toContain(message.toLowerCase());
     }
   });
 });
