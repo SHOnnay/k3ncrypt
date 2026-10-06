@@ -50,6 +50,8 @@ export const encryptAttachment = async (bytes: Uint8Array, key: Uint8Array, atta
 
 export const decryptAttachment = async (reference: AttachmentReference, chunks: EncryptedAttachmentChunk[], key: Uint8Array): Promise<Uint8Array> => {
     if (key.byteLength !== KEY_BYTES || chunks.length !== reference.chunkCount) throw new Error('Attachment integrity check failed.');
+    if ('conversationId' in reference || 'senderIdentityReference' in reference || 'recipientIdentityReference' in reference) throw new Error('Unsupported unbound attachment context.');
+    await decryptAttachmentMetadata(reference, key);
     const ordered = [...chunks].sort((a, b) => a.index - b.index);
     if (ordered.some((chunk, index) => chunk.attachmentId !== reference.id || chunk.index !== index || chunk.total !== reference.chunkCount)) throw new Error('Attachment chunk ordering is invalid.');
     const cryptoKey = await importKey(key);
@@ -63,4 +65,17 @@ export const decryptAttachment = async (reference: AttachmentReference, chunks: 
     for (const part of parts) { result.set(part, offset); offset += part.byteLength; }
     if (result.byteLength !== reference.size) throw new Error('Attachment size check failed.');
     return result;
+};
+
+/** Opens and validates the authenticated v1 metadata before any plaintext file bytes are returned. */
+export const decryptAttachmentMetadata = async (reference: AttachmentReference, key: Uint8Array): Promise<{ size: number; chunkCount: number; createdAt: number; expiresAt: number }> => {
+    if (key.byteLength !== KEY_BYTES || reference.encryptedMetadata.nonce.byteLength !== NONCE_BYTES || reference.encryptedMetadata.ciphertext.byteLength < 17) throw new Error('Attachment integrity check failed (manifest authentication).');
+    try {
+        const plaintext = await cryptoApi().subtle.decrypt({ name: 'AES-GCM', iv: asArrayBuffer(reference.encryptedMetadata.nonce), additionalData: asArrayBuffer(encoder.encode(`k3ncrypt-attachment-metadata-v1:${reference.id}`)) }, await importKey(key), asArrayBuffer(reference.encryptedMetadata.ciphertext));
+        const value: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(plaintext));
+        if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error();
+        const item = value as Record<string, unknown>;
+        if (Object.keys(item).sort().join(',') !== 'chunkCount,createdAt,expiresAt,size' || !Number.isSafeInteger(item.size) || !Number.isSafeInteger(item.chunkCount) || !Number.isSafeInteger(item.createdAt) || !Number.isSafeInteger(item.expiresAt) || item.size !== reference.size || item.chunkCount !== reference.chunkCount || (reference.createdAt !== 0 && item.createdAt !== reference.createdAt) || (reference.expiresAt !== Number.MAX_SAFE_INTEGER && item.expiresAt !== reference.expiresAt)) throw new Error();
+        return item as { size: number; chunkCount: number; createdAt: number; expiresAt: number };
+    } catch { throw new Error('Attachment integrity check failed (manifest authentication).'); }
 };

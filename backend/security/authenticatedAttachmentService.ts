@@ -6,9 +6,10 @@ export class AuthenticatedAttachmentService {
   constructor(private readonly authorization: ConversationAuthorizationService, private readonly attachments: AttachmentService, private readonly access: AttachmentAccessStore) {}
 
   async createUpload(context: AuthenticatedContext, input: CreateAttachmentUpload): Promise<CreatedAttachmentUpload> {
-    await this.authorization.authorizeConversation(context, context.conversationId, 'attachment:create');
+    if (input.recipientParticipantId && input.recipientIdentityReference) await this.authorization.authorizeTransferCreation(context, input.recipientParticipantId, input.recipientIdentityReference);
+    else await this.authorization.authorizeConversation(context, context.conversationId, 'attachment:create');
     const created = await this.attachments.createUpload({ conversationId: context.conversationId, participantId: context.participantId }, input);
-    await this.access.register(created.id, { conversationId: context.conversationId, ownerParticipantId: context.participantId });
+    await this.access.register(created.id, { conversationId: context.conversationId, ownerParticipantId: context.participantId, recipientParticipantId: input.recipientParticipantId, senderIdentityReference: context.identityReference, recipientIdentityReference: input.recipientIdentityReference });
     return created;
   }
 

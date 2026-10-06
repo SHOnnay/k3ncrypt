@@ -1,7 +1,7 @@
 import { ATTACHMENT_LIMITS, type AttachmentId, type EncryptedAttachmentChunk, type EncryptedAttachmentMetadata } from './contracts';
 
 export type AttachmentStatus = 'uploading' | 'complete' | 'expired' | 'deleted';
-export interface AttachmentDeliveryRecord { id: AttachmentId; encryptedMetadata: EncryptedAttachmentMetadata; chunkCount: number; size: number; createdAt: number; expiresAt: number; status: AttachmentStatus; }
+export interface AttachmentDeliveryRecord { id: AttachmentId; encryptedMetadata: EncryptedAttachmentMetadata; recipientParticipantId?: string; recipientIdentityReference?: string; chunkCount: number; size: number; createdAt: number; expiresAt: number; status: AttachmentStatus; }
 export interface AttachmentStatusView extends AttachmentDeliveryRecord { receivedChunks: number; }
 export interface AttachmentMetadataStore {
     initializeUpload(record: AttachmentDeliveryRecord, accessToken: string): Promise<void>;

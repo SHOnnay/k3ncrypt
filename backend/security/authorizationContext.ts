@@ -7,6 +7,7 @@ export interface AuthenticatedContext {
   conversationId: string;
   permissions: readonly AttachmentPermission[];
   requestId: string;
+  identityReference?: string;
   createdAt: number;
   expiresAt: number;
   /** Phase 6B trust adapter supplied by the authenticated runtime. */
@@ -15,11 +16,15 @@ export interface AuthenticatedContext {
 
 export interface ConversationMembershipStore {
   isMember(conversationId: string, participantId: string): Promise<boolean>;
+  identityReference?(conversationId: string, participantId: string): Promise<string | undefined>;
 }
 
 export interface AttachmentAccessRecord {
   conversationId: string;
   ownerParticipantId: string;
+  recipientParticipantId?: string;
+  senderIdentityReference?: string;
+  recipientIdentityReference?: string;
 }
 
 export interface AttachmentAccessStore {
@@ -47,12 +52,23 @@ export class ConversationAuthorizationService {
     this.consumeRequest(context.requestId);
   }
 
+  async authorizeTransferCreation(context: AuthenticatedContext, recipientParticipantId: string, recipientIdentityReference: string): Promise<void> {
+    this.validateContext(context);
+    await context.deviceTrust.assertTrusted();
+    if (context.participantId === recipientParticipantId || !context.identityReference || !/^K3 (?:[A-Z0-9_-]{4} ){10}[A-Z0-9_-]{3}$/.test(context.identityReference) || !/^K3 (?:[A-Z0-9_-]{4} ){10}[A-Z0-9_-]{3}$/.test(recipientIdentityReference) || !context.permissions.includes('attachment:create') || !(await this.memberships.isMember(context.conversationId, context.participantId)) || !(await this.memberships.isMember(context.conversationId, recipientParticipantId))) throw fail();
+    const actual = await this.memberships.identityReference?.(context.conversationId, recipientParticipantId);
+    if (!actual || actual !== recipientIdentityReference) throw fail();
+    this.consumeRequest(context.requestId);
+  }
+
   async authorizeAttachment(context: AuthenticatedContext, attachmentId: string, permission: Exclude<AttachmentPermission, 'attachment:create'>): Promise<AttachmentAccessRecord> {
     this.validateContext(context);
     await context.deviceTrust.assertTrusted();
     let record: AttachmentAccessRecord | undefined;
     try { record = await this.attachments.lookup(attachmentId); } catch { throw fail(); }
     if (!record || record.conversationId !== context.conversationId || !context.permissions.includes(permission) || !(await this.memberships.isMember(record.conversationId, context.participantId))) throw fail();
+    if ((permission === 'attachment:write' || permission === 'attachment:delete') && (context.participantId !== record.ownerParticipantId || (record.senderIdentityReference && context.identityReference !== record.senderIdentityReference))) throw fail();
+    if (permission === 'attachment:read' && record.recipientParticipantId && (context.participantId !== record.recipientParticipantId || !record.recipientIdentityReference || context.identityReference !== record.recipientIdentityReference)) throw fail();
     this.consumeRequest(context.requestId);
     return record;
   }

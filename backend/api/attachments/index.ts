@@ -18,8 +18,9 @@ export const createAttachmentRouter = (dependencies: AttachmentRouteDependencies
             const body = req.body ?? {};
             const encryptedMetadata = body.encryptedMetadata;
             const nonce = bytes(encryptedMetadata?.nonce); const ciphertext = bytes(encryptedMetadata?.ciphertext);
-            if (Object.keys(body).some((key) => !['id', 'size', 'chunkCount', 'encryptedMetadata', 'expiresAt'].includes(key)) || !Number.isSafeInteger(body.size) || !Number.isSafeInteger(body.chunkCount) || !Number.isSafeInteger(body.expiresAt) || !nonce || !ciphertext) return unavailable(res);
-            const created = await dependencies.attachments.createUpload(auth, { id: typeof body.id === 'string' ? body.id : undefined, size: body.size, chunkCount: body.chunkCount, encryptedMetadata: { nonce, ciphertext }, expiresAt: body.expiresAt });
+            const hasRecipientBinding = Object.prototype.hasOwnProperty.call(body, 'recipientParticipantId') || Object.prototype.hasOwnProperty.call(body, 'recipientIdentityReference');
+            if (Object.keys(body).some((key) => !['id', 'size', 'chunkCount', 'encryptedMetadata', 'expiresAt', 'recipientParticipantId', 'recipientIdentityReference'].includes(key)) || !Number.isSafeInteger(body.size) || !Number.isSafeInteger(body.chunkCount) || !Number.isSafeInteger(body.expiresAt) || !nonce || !ciphertext || (hasRecipientBinding && (typeof body.recipientParticipantId !== 'string' || typeof body.recipientIdentityReference !== 'string'))) return unavailable(res);
+            const created = await dependencies.attachments.createUpload(auth, { id: typeof body.id === 'string' ? body.id : undefined, size: body.size, chunkCount: body.chunkCount, encryptedMetadata: { nonce, ciphertext }, expiresAt: body.expiresAt, recipientParticipantId: typeof body.recipientParticipantId === 'string' ? body.recipientParticipantId : undefined, recipientIdentityReference: typeof body.recipientIdentityReference === 'string' ? body.recipientIdentityReference : undefined });
             return res.status(201).json(created);
         } catch { return unavailable(res); }
     });

@@ -33,4 +33,5 @@ it('fails closed for missing context and wrong conversation', async () => {
     const app = setup();
     await request(app).post('/attachments/create').set('X-Test-Participant', 'unknown').send({}).expect(404, { error: 'Attachment unavailable' });
     await request(app).post('/attachments/create').set('X-Test-Conversation', '33333333-3333-4333-8333-333333333333').send({}).expect(404, { error: 'Attachment unavailable' });
+    await request(app).post('/attachments/create').send({ size: 1, chunkCount: 1, expiresAt: Date.now() + 10_000, encryptedMetadata: { nonce: Array(12).fill(1), ciphertext: Array(17).fill(2) }, recipientParticipantId: 42, recipientIdentityReference: null }).expect(404, { error: 'Attachment unavailable' });
 });

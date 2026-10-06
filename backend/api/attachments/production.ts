@@ -11,6 +11,7 @@ import type { AttachmentAccessRecord, AttachmentAccessStore, AuthenticatedContex
 import { createAttachmentRouter } from './index';
 import { type DeviceAuthorizationProof, type DeviceOperation } from '../../security/deviceTrust';
 import { durableDeviceTrustAuthority } from '../../security/durableDeviceTrust';
+import { fingerprintVodozemacIdentity, type VodozemacPublicIdentity } from '../../../service/src/identity/vodozemacIdentity';
 
 const ADDRESS = /^[0-9a-f-]{36}$/i;
 const PROOF = /^[A-Za-z0-9_-]{43}$/;
@@ -27,7 +28,7 @@ class MongoAttachmentAccessStore implements AttachmentAccessStore {
   async register(attachmentId: string, record: AttachmentAccessRecord): Promise<void> { await this.records.insertOne({ attachmentId, ...record }); }
   async lookup(attachmentId: string): Promise<AttachmentAccessRecord | undefined> {
     const record = await this.records.findOne({ attachmentId });
-    return record ? { conversationId: record.conversationId, ownerParticipantId: record.ownerParticipantId } : undefined;
+    return record ? { conversationId: record.conversationId, ownerParticipantId: record.ownerParticipantId, recipientParticipantId: record.recipientParticipantId, senderIdentityReference: record.senderIdentityReference, recipientIdentityReference: record.recipientIdentityReference } : undefined;
   }
 }
 
@@ -40,9 +41,11 @@ const productionService = () => {
     const accessCollection = database.collection<AccessDocument>('attachment_access');
     const access = new MongoAttachmentAccessStore(accessCollection);
     const memberships: ConversationMembershipStore = {
-      isMember: async (conversationId, participantId) => {
-        const record = await database.collection(PREKEY_COLLECTION).findOne({ channel: conversationId, address: participantId, expiresAt: { $gt: new Date() } });
-        return !!record;
+      isMember: async (conversationId, participantId) => !!(await database.collection(PREKEY_COLLECTION).findOne({ channel: conversationId, address: participantId, expiresAt: { $gt: new Date() } })),
+      identityReference: async (conversationId, participantId) => {
+        const published = await database.collection<{ bundle?: { identity?: VodozemacPublicIdentity } }>(PREKEY_COLLECTION).findOne({ channel: conversationId, address: participantId, expiresAt: { $gt: new Date() } });
+        if (!published?.bundle?.identity) return undefined;
+        try { return await fingerprintVodozemacIdentity(published.bundle.identity); } catch { return undefined; }
       },
     };
     service = createProductionAuthenticatedAttachmentService({ memberships, access }, new PersistentAttachmentDeliveryStore(persistence));
@@ -60,10 +63,11 @@ const authenticate = async (request: Request): Promise<AuthenticatedContext | un
   const deviceNonce = request.get('X-K3ncrypt-Device-Nonce') ?? '';
   if (!isValidRoomId(conversationId) || !ADDRESS.test(participantId) || !isValidControlCapability(capability) || !PROOF.test(proof) || !UUID.test(requestId)) return undefined;
   if (!await authorizeRoomControl(conversationId, capability)) return undefined;
-  const record = await db.findOneFromDB<{ renewalProofHash: string; expiresAt: Date }>({ channel: conversationId, address: participantId }, PREKEY_COLLECTION);
+  const record = await db.findOneFromDB<{ renewalProofHash: string; expiresAt: Date; bundle?: { identity?: VodozemacPublicIdentity } }>({ channel: conversationId, address: participantId }, PREKEY_COLLECTION);
   if (!record || !(record.expiresAt instanceof Date) || record.expiresAt.getTime() <= Date.now() || !proofMatches(proof, record.renewalProofHash)) return undefined;
   let operation: DeviceOperation | undefined;
   if (request.method === 'POST' && request.path === '/create') operation = 'attachment:create';
+  else if (request.method === 'POST' && request.path.endsWith('/complete')) operation = 'attachment:write';
   else if (request.method === 'PUT') operation = 'attachment:write';
   else if (request.method === 'GET') operation = 'attachment:read';
   else if (request.method === 'DELETE') operation = 'attachment:delete';
@@ -72,7 +76,12 @@ const authenticate = async (request: Request): Promise<AuthenticatedContext | un
   try { deviceProof = JSON.parse(Buffer.from(deviceProofText, 'base64url').toString('utf8')) as DeviceAuthorizationProof; } catch { return undefined; }
   const authority = durableDeviceTrustAuthority(db.getDatabase());
   if (!authority || deviceProof.nonce !== deviceNonce) return undefined;
-  try { await authority.verify(deviceProof, operation, { conversationId }); } catch { return undefined; }
+  let trustedDevice;
+  try { trustedDevice = await authority.verify(deviceProof, operation, { conversationId }); } catch { return undefined; }
+  if (!record.bundle?.identity) return undefined;
+  let identityReference: string;
+  try { identityReference = await fingerprintVodozemacIdentity(record.bundle.identity); } catch { return undefined; }
+  if (trustedDevice.deviceIdentityReference !== identityReference || deviceProof.deviceIdentityReference !== identityReference) return undefined;
   productionService();
   const now = Date.now();
   const verifiedDevice = { deviceId: deviceProof.deviceId, accountIdentityReference: deviceProof.accountIdentityReference, trustEpoch: deviceProof.trustEpoch, operation, expiresAt: deviceProof.expiresAt };
@@ -82,6 +91,7 @@ const authenticate = async (request: Request): Promise<AuthenticatedContext | un
     conversationId,
     permissions: ['attachment:create', 'attachment:write', 'attachment:read', 'attachment:delete'],
     requestId,
+    identityReference,
     createdAt: now,
     expiresAt: now + 30_000,
     deviceTrust: { assertTrusted: async () => {

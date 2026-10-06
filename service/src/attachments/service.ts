@@ -2,7 +2,7 @@ import type { AttachmentDeliveryRecord, AttachmentDeliveryStore } from './delive
 import { ATTACHMENT_LIMITS, type AttachmentId, type EncryptedAttachmentChunk, type EncryptedAttachmentMetadata } from './contracts';
 
 export interface AttachmentConversationContext { conversationId: string; participantId: string; }
-export interface CreateAttachmentUpload { id?: AttachmentId; size: number; chunkCount: number; encryptedMetadata: EncryptedAttachmentMetadata; expiresAt: number; }
+export interface CreateAttachmentUpload { id?: AttachmentId; size: number; chunkCount: number; encryptedMetadata: EncryptedAttachmentMetadata; expiresAt: number; recipientParticipantId?: string; recipientIdentityReference?: string; }
 export interface CreatedAttachmentUpload { id: AttachmentId; capability: string; expiresAt: number; }
 
 const randomCapability = (): string => {
@@ -17,11 +17,11 @@ export class AttachmentService {
 
     async createUpload(context: AttachmentConversationContext, input: CreateAttachmentUpload): Promise<CreatedAttachmentUpload> {
         this.validateContext(context);
-        if (input.size < 1 || input.size > ATTACHMENT_LIMITS.maxBytes || input.chunkCount < 1 || input.chunkCount > ATTACHMENT_LIMITS.maxChunks || input.expiresAt <= Date.now() || input.expiresAt - Date.now() > ATTACHMENT_LIMITS.ttlMs) throw new Error('Invalid attachment upload.');
+        if ((input.recipientParticipantId === undefined) !== (input.recipientIdentityReference === undefined) || (input.recipientParticipantId !== undefined && (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input.recipientParticipantId) || input.recipientParticipantId === context.participantId || !/^K3 (?:[A-Z0-9_-]{4} ){10}[A-Z0-9_-]{3}$/.test(input.recipientIdentityReference!))) || input.size < 1 || input.size > ATTACHMENT_LIMITS.maxBytes || input.chunkCount < 1 || input.chunkCount > ATTACHMENT_LIMITS.maxChunks || input.expiresAt <= Date.now() || input.expiresAt - Date.now() > ATTACHMENT_LIMITS.ttlMs) throw new Error('Invalid attachment upload.');
         const id = input.id ?? globalThis.crypto.randomUUID();
         if (!/^[0-9a-f-]{36}$/i.test(id)) throw new Error('Invalid attachment upload.');
         const capability = randomCapability();
-        const record: AttachmentDeliveryRecord = { id, encryptedMetadata: input.encryptedMetadata, chunkCount: input.chunkCount, size: input.size, createdAt: Date.now(), expiresAt: input.expiresAt, status: 'uploading' };
+        const record: AttachmentDeliveryRecord = { id, encryptedMetadata: input.encryptedMetadata, recipientParticipantId: input.recipientParticipantId, recipientIdentityReference: input.recipientIdentityReference, chunkCount: input.chunkCount, size: input.size, createdAt: Date.now(), expiresAt: input.expiresAt, status: 'uploading' };
         await this.store.initializeUpload(record, `${context.conversationId}:${context.participantId}:${capability}`);
         return { id, capability, expiresAt: input.expiresAt };
     }
