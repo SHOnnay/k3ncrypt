@@ -18,7 +18,7 @@ export class CallMediaController {
     if (this.stream) return this.stream;
     const generation = ++this.generation;
     try { const stream = await this.capture.getUserMedia(kind === 'camera' ? { audio: true, video: true } : { audio: true, video: false }); if (generation !== this.generation) { stream.getTracks().forEach((track) => track.stop()); throw new Error('Cancelled'); } this.stream = stream; return stream; }
-    catch { this.release(); throw new Error('Call media permission was denied.'); }
+    catch { if (generation === this.generation) this.release(); throw new Error('Call media permission was denied.'); }
   }
   get activeStream(): MediaStream | undefined { return this.stream; }
   setMicrophoneEnabled(enabled: boolean): void { this.stream?.getAudioTracks().forEach((track) => { track.enabled = enabled; }); }
@@ -208,7 +208,7 @@ export class BrowserCallMediaConnection implements CallMediaConnection {
     }).catch(() => undefined);
   }
   addStream(stream: MediaStream): void { stream.getTracks().forEach((track) => this.peer.addTrack(track, stream)); }
-  async close(): Promise<void> { if (this.healthPoll) clearInterval(this.healthPoll); this.healthPoll = undefined; traceIceTiming('peer-connection-closed'); this.peer.close(); this.listeners.forEach((listener) => listener('closed')); this.listeners.clear(); this.candidateListeners.clear(); }
+  async close(): Promise<void> { if (this.healthPoll) clearInterval(this.healthPoll); this.healthPoll = undefined; traceIceTiming('peer-connection-closed'); this.peer.close(); this.remoteStream?.getTracks().forEach((track) => track.stop()); this.remoteStream = undefined; this.remoteListeners.clear(); this.listeners.forEach((listener) => listener('closed')); this.listeners.clear(); this.candidateListeners.clear(); }
   onIceCandidate(listener: (candidate: unknown) => void): () => void { this.candidateListeners.add(listener); return () => this.candidateListeners.delete(listener); }
   onStateChange(listener: (state: 'connecting' | 'connected' | 'reconnecting' | 'failed' | 'closed') => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
   onRemoteStream(listener: (stream: MediaStream) => void): () => void { this.remoteListeners.add(listener); if (this.remoteStream?.getTracks().length) listener(this.remoteStream); return () => this.remoteListeners.delete(listener); }

@@ -17,7 +17,7 @@ describe('production WebRTC negotiation boundary', () => {
     const media = new CallMediaController({ getUserMedia: jest.fn(async () => stream) });
     const transport = { connect: jest.fn(async () => connection) };
     const negotiator = new ProductionCallNegotiator(calls, transport, async () => ({ iceServers: [], iceTransportPolicy: 'relay' }), media);
-    return { current: () => current, receiver: () => receiver!, service, calls, connection, transport, negotiator };
+    return { current: () => current, setCurrent: (value: CallSession) => { current = value; }, receiver: () => receiver!, service, calls, connection, transport, negotiator };
   };
 
   it('rejects malformed SDP before it reaches the peer connection', async () => {
@@ -54,6 +54,23 @@ describe('production WebRTC negotiation boundary', () => {
     await test.receiver()(test.current(), signal('answer', { type: 'answer', sdp: 'v=0' }));
     expect(test.connection.acceptAnswer).toHaveBeenCalled();
     expect(test.connection.addIceCandidate).toHaveBeenCalledWith(ice);
+  });
+
+  it('does not report connected when an SDP answer is applied without PeerConnection connectivity', async () => {
+    const test = setup(); await test.negotiator.prepareOutgoing(test.current());
+    await test.receiver()(test.current(), signal('answer', { type: 'answer', sdp: 'v=0' }));
+    expect(test.connection.acceptAnswer).toHaveBeenCalled();
+    expect(test.service.event).not.toHaveBeenCalledWith('call-1', 'connected');
+    expect(test.current().state).toBe('accepted');
+  });
+
+  it('ignores callbacks from a terminated PeerConnection after cleanup', async () => {
+    const test = setup(); await test.negotiator.prepareOutgoing(test.current());
+    await test.negotiator.end('call-1');
+    test.connection.state('failed');
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(test.service.event).toHaveBeenCalledTimes(1);
+    expect(test.service.event).toHaveBeenCalledWith('call-1', 'end');
   });
 
   it('offers only after explicit media preparation and sends authenticated SDP', async () => {
@@ -99,6 +116,7 @@ describe('production WebRTC negotiation boundary', () => {
     await test.negotiator.prepareOutgoing(test.current());
     await test.negotiator.end('call-1');
     const nextCall = { ...test.current(), callId: 'call-2', state: 'accepted' as const };
+    test.setCurrent(nextCall);
 
     await test.negotiator.prepareOutgoing(nextCall);
 

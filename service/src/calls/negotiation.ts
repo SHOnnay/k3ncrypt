@@ -45,6 +45,13 @@ export class ProductionCallNegotiator {
   private readonly remoteStreams = new Map<string, MediaStream>();
   private readonly firstRemoteCandidateTimed = new Set<string>();
   private readonly ending = new Map<string, Promise<void>>();
+  private readonly listenerCleanup = new Map<string, Array<() => void>>();
+  private readonly reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly restartAttempted = new Set<string>();
+  private readonly pendingOffers = new Set<string>();
+  private readonly preparing = new Map<string, Promise<void>>();
+  private readonly generations = new Map<string, number>();
+  private readonly cleanups = new Map<string, Promise<void>>();
   private readonly mediaListeners = new Set<(value: { callId: string; local?: MediaStream; remote?: MediaStream; state?: import('./webrtc').CallMediaState }) => void>();
   constructor(private readonly calls: AuthenticatedCallComposition, private readonly transport: CallTransport, private readonly config: WebRtcConfigProvider, private readonly media = new CallMediaController()) {
     this.unsubscribe = calls.onMediaSignal((session, signal) => this.receive(session, signal));
@@ -61,12 +68,17 @@ export class ProductionCallNegotiator {
   onMediaUpdate(listener: (value: { callId: string; local?: MediaStream; remote?: MediaStream; state?: import('./webrtc').CallMediaState }) => void): () => void { this.mediaListeners.add(listener); return () => this.mediaListeners.delete(listener); }
   setMicrophoneEnabled(enabled: boolean): void { this.media.setMicrophoneEnabled(enabled); }
   setCameraEnabled(enabled: boolean): void { this.media.setCameraEnabled(enabled); }
+  releaseUnboundMedia(): void { this.media.release(); }
   async switchCamera(): Promise<boolean> { return this.media.switchCamera(); }
   async beginOffer(callId: string, restart = false): Promise<void> {
     const session = await this.require(callId); const connection = this.connections.get(callId);
-    if (!connection) throw new Error('Call media is not prepared.');
+    if (!connection) {
+      if (session.state === 'accepted') { this.pendingOffers.add(callId); return; }
+      throw new Error('Call media is not prepared.');
+    }
     if (session.state === 'accepted') await this.calls.service.event(callId, 'connect');
-    else if (restart && session.state === 'connected') await this.calls.service.event(callId, 'reconnect');
+    else if (restart && session.state === 'connected') { await this.calls.service.event(callId, 'reconnect'); await this.calls.service.event(callId, 'connect'); }
+    else if (session.state === 'reconnecting') await this.calls.service.event(callId, 'connect');
     const offer = await connection.createOffer(restart);
     if (!description(offer, 'offer')) throw new Error('WebRTC offer rejected.');
     await this.calls.sendMediaSignal(callId, restart ? 'reconnect' : 'connect', 'offer', offer);
@@ -94,7 +106,7 @@ export class ProductionCallNegotiator {
     if (signal.kind === 'offer') {
       if (!description(signal.payload, 'offer')) { callNegotiationDiagnostic('offer-payload-invalid'); throw new Error('WebRTC offer rejected.'); }
       if (!connection) { callNegotiationDiagnostic('peer-missing-for-offer'); throw new Error('WebRTC offer rejected.'); }
-      if (session.state === 'accepted') await this.calls.service.event(session.callId, 'connect');
+      if (session.state === 'accepted' || session.state === 'reconnecting') await this.calls.service.event(session.callId, 'connect');
       this.remoteDescriptionReady.delete(session.callId);
       const answer = await connection.acceptOffer(signal.payload);
       this.remoteDescriptionReady.add(session.callId);
@@ -112,7 +124,7 @@ export class ProductionCallNegotiator {
       await connection.acceptAnswer(signal.payload);
       this.remoteDescriptionReady.add(session.callId);
       callNegotiationDiagnostic('answer-applied'); await this.flush(session.callId, connection);
-      const current = await this.require(session.callId); if (current.state === 'connecting') await this.calls.service.event(session.callId, 'connected');
+      // Applying an SDP answer is not proof that ICE/media connectivity exists.
       return;
     }
     if (!candidate(signal.payload)) { callNegotiationDiagnostic('candidate-payload-invalid'); throw new Error('WebRTC candidate rejected.'); }
@@ -131,28 +143,74 @@ export class ProductionCallNegotiator {
     try { await connection.addIceCandidate(signal.payload); } catch { callNegotiationDiagnostic('candidate-add-failed'); throw new Error('WebRTC candidate rejected.'); }
   }
   private async prepare(session: CallSession, kind: CaptureKind): Promise<void> {
+    const current = this.preparing.get(session.callId);
+    if (current) return current;
+    const preparation = this.prepareOnce(session, kind);
+    this.preparing.set(session.callId, preparation);
+    try { await preparation; }
+    finally { if (this.preparing.get(session.callId) === preparation) this.preparing.delete(session.callId); }
+  }
+  private async prepareOnce(session: CallSession, kind: CaptureKind): Promise<void> {
     await this.calls.assertVerifiedContact?.();
+    await Promise.all([...this.ending.values()].map((ending) => ending.catch(() => undefined)));
+    await Promise.all([...this.cleanups.values()].map((cleanup) => cleanup.catch(() => undefined)));
+    const latest = await this.calls.service.get(session.callId);
+    if (!latest || !['ringing', 'accepted', 'connecting'].includes(latest.state) || latest.expiresAt <= Date.now()) throw new Error('Call attempt is no longer active.');
     if (this.connections.has(session.callId)) return;
+    const generation = (this.generations.get(session.callId) ?? 0) + 1;
+    this.generations.set(session.callId, generation);
     const connection = await this.transport.connect(session, await this.config(session));
     try {
+      if (this.generations.get(session.callId) !== generation) { await connection.close(); return; }
       const stream = await this.requestMedia(kind);
+      if (this.generations.get(session.callId) !== generation) { await connection.close(); return; }
       (connection as CallMediaConnection & { addStream?: (value: MediaStream) => void }).addStream?.(stream);
-      connection.onIceCandidate((value) => {
+      const cleanups = this.listenerCleanup.get(session.callId) ?? [];
+      cleanups.push(connection.onIceCandidate((value) => {
+        if (this.connections.get(session.callId) !== connection) return;
         if (!candidate(value)) return;
         void this.calls.sendMediaSignal(session.callId, 'connected', 'ice-candidate', value)
           .then(() => iceStageDiagnostic(`ice-local-candidate-${iceCandidateType(value.candidate)}-relay-acknowledged`))
           .catch(() => iceStageDiagnostic(`ice-local-candidate-${iceCandidateType(value.candidate)}-relay-failed`));
-      });
+      }));
       const local = this.media.activeStream;
       if (local) this.localStreams.set(session.callId, local);
-      connection.onRemoteStream?.((remote) => { this.remoteStreams.set(session.callId, remote); this.mediaListeners.forEach((listener) => listener({ callId: session.callId, local, remote })); });
-      connection.onStateChange((state) => { this.mediaListeners.forEach((listener) => listener({ callId: session.callId, local, remote: this.remoteStreams.get(session.callId), state })); if (state === 'reconnecting') void this.beginOffer(session.callId, true).catch(() => this.fail(session.callId)); if (state === 'failed') void this.fail(session.callId); if (state === 'connected') void this.connected(session.callId); });
+      if (connection.onRemoteStream) cleanups.push(connection.onRemoteStream((remote) => { if (this.connections.get(session.callId) !== connection) return; this.remoteStreams.set(session.callId, remote); this.mediaListeners.forEach((listener) => listener({ callId: session.callId, local, remote })); }));
+      cleanups.push(connection.onStateChange((state) => {
+        if (this.connections.get(session.callId) !== connection) return;
+        this.mediaListeners.forEach((listener) => listener({ callId: session.callId, local, remote: this.remoteStreams.get(session.callId), state }));
+        if (state === 'reconnecting') {
+          const localParticipant = session.participants[0]?.participantId;
+          const remoteParticipant = session.participants[1]?.participantId;
+          const ownsRestart = !!localParticipant && !!remoteParticipant && localParticipant < remoteParticipant;
+          if (ownsRestart && !this.restartAttempted.has(session.callId)) {
+            this.restartAttempted.add(session.callId);
+            void this.beginOffer(session.callId, true).catch(() => this.fail(session.callId));
+          }
+          if (!this.reconnectTimers.has(session.callId)) {
+            const timer = setTimeout(() => { void this.fail(session.callId); }, 30_000);
+            this.reconnectTimers.set(session.callId, timer);
+          }
+        }
+        if (state === 'failed') void this.fail(session.callId);
+        if (state === 'connected') { const timer = this.reconnectTimers.get(session.callId); if (timer) clearTimeout(timer); this.reconnectTimers.delete(session.callId); void this.connected(session.callId); }
+      }));
+      this.listenerCleanup.set(session.callId, cleanups);
       this.connections.set(session.callId, connection);
+      if (this.pendingOffers.delete(session.callId)) void this.beginOffer(session.callId).catch(() => this.fail(session.callId));
     } catch (error) { await connection.close().catch(() => undefined); this.media.release(); throw error; }
   }
   private async connected(callId: string): Promise<void> { const session = await this.require(callId); if (session.state === 'connecting') await this.calls.service.event(callId, 'connected'); }
   private async fail(callId: string): Promise<void> { callStabilityDiagnostic('failure-handler-entered', 'peer-failed'); const session = await this.calls.service.get(callId); if (session && !['ended', 'failed', 'cancelled', 'rejected', 'expired'].includes(session.state)) await this.calls.service.event(callId, 'fail'); callStabilityDiagnostic('cleanup-trigger', 'peer-failed'); await this.cleanup(callId); }
-  private async cleanup(callId: string): Promise<void> { const connection = this.connections.get(callId); this.connections.delete(callId); this.queued.delete(callId); this.remoteDescriptionReady.delete(callId); this.firstRemoteCandidateTimed.delete(callId); await connection?.close(); this.localStreams.delete(callId); this.remoteStreams.delete(callId); this.media.release(); this.mediaListeners.forEach((listener) => listener({ callId })); }
+  private async cleanup(callId: string): Promise<void> {
+    const existing = this.cleanups.get(callId);
+    if (existing) return existing;
+    const cleaning = this.cleanupOnce(callId);
+    this.cleanups.set(callId, cleaning);
+    try { await cleaning; }
+    finally { if (this.cleanups.get(callId) === cleaning) this.cleanups.delete(callId); }
+  }
+  private async cleanupOnce(callId: string): Promise<void> { this.generations.set(callId, (this.generations.get(callId) ?? 0) + 1); const connection = this.connections.get(callId); this.connections.delete(callId); this.pendingOffers.delete(callId); this.restartAttempted.delete(callId); this.queued.delete(callId); this.remoteDescriptionReady.delete(callId); this.firstRemoteCandidateTimed.delete(callId); const timer = this.reconnectTimers.get(callId); if (timer) clearTimeout(timer); this.reconnectTimers.delete(callId); this.listenerCleanup.get(callId)?.forEach((cleanup) => cleanup()); this.listenerCleanup.delete(callId); await connection?.close(); this.localStreams.delete(callId); this.remoteStreams.delete(callId); this.media.release(); this.mediaListeners.forEach((listener) => listener({ callId })); }
   private async flush(callId: string, connection: CallMediaConnection): Promise<void> { const list = this.queued.get(callId) ?? []; this.queued.delete(callId); for (const item of list) await connection.addIceCandidate(item); }
-  private async require(callId: string): Promise<CallSession> { const session = await this.calls.service.get(callId); if (!session || session.expiresAt <= Date.now()) throw new Error('Call has expired.'); return session; }
+  private async require(callId: string): Promise<CallSession> { const session = await this.calls.service.get(callId); if (!session || (session.expiresAt <= Date.now() && ['idle', 'inviting', 'ringing', 'accepted', 'connecting'].includes(session.state))) throw new Error('Call has expired.'); return session; }
 }

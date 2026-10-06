@@ -165,7 +165,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setModernCallComposition(composition);
       callSupportConversation.current = conversation;
       callMediaUnsubscribe.current = callNegotiator.current.onMediaUpdate((update) => {
-      if (update.callId !== modernCallId && modernCallId) return;
+      if (update.callId !== modernCallIdRef.current) return;
       setLocalCallStream(update.local);
       // Empty updates are emitted by negotiator cleanup/disposal as well as
       // terminal paths. Preserve the active renderer until a real call end.
@@ -177,18 +177,23 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       });
       callStateUnsubscribe.current = composition.onCallUpdate((session) => {
       const terminal = ['rejected', 'cancelled', 'ended', 'expired', 'failed'].includes(session.state);
+      modernCallIdRef.current = terminal ? undefined : session.callId;
       setModernCallId(terminal ? undefined : session.callId);
       setCallMediaMode(session.mediaMode);
-      setCallLifecycleState(session.state === 'inviting' ? 'ringing' : session.state === 'rejected' ? 'rejected' : session.state === 'cancelled' ? 'cancelled' : session.state === 'expired' ? 'timeout' : session.state === 'ended' ? 'ended' : session.state === 'accepted' ? 'connecting' : 'ringing');
+      setCallLifecycleState(session.state === 'inviting' || session.state === 'ringing' ? 'ringing' : session.state === 'accepted' || session.state === 'connecting' || session.state === 'reconnecting' ? 'connecting' : session.state === 'connected' ? 'connected' : session.state === 'rejected' ? 'rejected' : session.state === 'cancelled' ? 'cancelled' : session.state === 'expired' ? 'timeout' : session.state === 'ended' ? 'ended' : 'ice-failed');
       setIsIncomingCall(session.state === 'ringing');
       setCallActive(!terminal);
-      setCallStatus(session.state === 'ringing' ? 'Incoming Call...' : session.state.charAt(0).toUpperCase() + session.state.slice(1));
+      setCallStatus(session.state === 'ringing' ? 'Incoming Call...' : session.state === 'inviting' ? 'Ringing...' : ['accepted', 'connecting'].includes(session.state) ? 'Connecting...' : session.state === 'reconnecting' ? 'Reconnecting...' : session.state === 'connected' ? 'Connected' : terminal ? `Call ${session.state}` : 'Calling...');
       if (terminal) {
         void callNegotiator.current?.end(session.callId).catch(() => undefined);
         clearCallMedia();
       }
       if (session.state === 'accepted' && !locallyAcceptedCalls.current.delete(session.callId)) {
-        void callNegotiator.current?.beginOffer(session.callId).catch(() => { setCallStatus('Connection Failed'); });
+        void callNegotiator.current?.prepareOutgoing(session).then(() => callNegotiator.current?.beginOffer(session.callId)).catch(() => {
+          setCallLifecycleState('ice-failed');
+          setCallStatus('Connection Failed');
+          void callNegotiator.current?.end(session.callId).catch(() => undefined);
+        });
       }
       });
     })();
@@ -240,8 +245,13 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }, async (contact) => {
         setContactIdentity(contact);
         if (contact.verification !== 'verified' || contact.changeStatus !== 'unchanged') {
+          callMediaUnsubscribe.current?.();
+          callMediaUnsubscribe.current = null;
+          callStateUnsubscribe.current?.();
+          callStateUnsubscribe.current = null;
           await callNegotiator.current?.dispose();
           callNegotiator.current = undefined;
+          callSupportConversation.current = null;
           setModernCallComposition(null);
           setCallActive(false);
           setIsIncomingCall(false);
@@ -383,6 +393,10 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const unverifyContact = useCallback(async (): Promise<void> => {
     if (!modern) throw new Error('No modern contact is open.');
     await modern.unverifyContact();
+    callMediaUnsubscribe.current?.();
+    callMediaUnsubscribe.current = null;
+    callStateUnsubscribe.current?.();
+    callStateUnsubscribe.current = null;
     await callNegotiator.current?.dispose();
     callNegotiator.current = undefined;
     callSupportConversation.current = null;
@@ -564,6 +578,15 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, [reflectCallMedia]);
 
   useEffect(() => () => { if (callMediaPoll.current) clearInterval(callMediaPoll.current); }, []);
+  useEffect(() => () => {
+    callMediaUnsubscribe.current?.();
+    callMediaUnsubscribe.current = null;
+    callStateUnsubscribe.current?.();
+    callStateUnsubscribe.current = null;
+    callNegotiator.current?.dispose();
+    callNegotiator.current = undefined;
+    callSupportConversation.current = null;
+  }, []);
 
   // Start call
   const startCall = useCallback(async () => {
@@ -572,14 +595,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const composition = modernCallComposition ?? await modern.createAuthenticatedCallComposition();
       setModernCallComposition(composition);
       if (!callNegotiator.current) throw new Error('Authenticated call media is not ready. Reverify this contact.');
-      await callNegotiator.current.requestMedia('microphone');
-      const call = await composition.invite();
-      await callNegotiator.current?.prepareOutgoing(call);
-      setModernCallId(call.callId);
-      setCallActive(true);
-      setIsIncomingCall(false);
-      setCallLifecycleState('ringing');
-      setCallStatus('Ringing...');
+      await composition.invite();
       return;
     }
     throw new Error('Verification required: legacy conversations have no local contact verification authority.');
@@ -591,16 +607,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const composition = modernCallComposition ?? await modern.createAuthenticatedCallComposition();
       setModernCallComposition(composition);
       if (!callNegotiator.current) throw new Error('Authenticated call media is not ready. Reverify this contact.');
-      await callNegotiator.current.requestMedia('camera');
-      const call = await composition.invite('video');
-      try { await callNegotiator.current.prepareOutgoing(call, 'camera'); }
-      catch (error) { await composition.cancel(call.callId).catch(() => undefined); throw error; }
-      setModernCallId(call.callId);
-      setCallActive(true);
-      setIsIncomingCall(false);
-      setCallMediaMode('video');
-      setCallLifecycleState('ringing');
-      setCallStatus('Ringing...');
+      await composition.invite('video');
       return;
     }
     throw new Error('Verification required: legacy conversations have no local contact verification authority.');
@@ -611,9 +618,15 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (!modernCallComposition || !modernCallId) throw new Error('No authenticated incoming call is available.');
       const incoming = await modernCallComposition.service.get(modernCallId);
       if (!incoming) throw new Error('Incoming call is unavailable.');
-      await callNegotiator.current?.acceptIncoming(incoming);
-      locallyAcceptedCalls.current.add(modernCallId);
-      await modernCallComposition.accept(modernCallId);
+      try {
+        await callNegotiator.current?.acceptIncoming(incoming);
+        locallyAcceptedCalls.current.add(modernCallId);
+        await modernCallComposition.accept(modernCallId);
+      } catch (error) {
+        locallyAcceptedCalls.current.delete(modernCallId);
+        await callNegotiator.current?.end(modernCallId).catch(() => undefined);
+        throw error;
+      }
       return;
     }
     if (!chat) throw new Error('Chat not initialized');
