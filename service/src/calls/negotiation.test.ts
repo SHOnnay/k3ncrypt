@@ -14,20 +14,21 @@ describe('production WebRTC negotiation boundary', () => {
     const service = { get: jest.fn(async () => current), event: jest.fn(async (_id: string, event: string) => { current = { ...current, state: event === 'connect' ? 'connecting' : event === 'connected' ? 'connected' : event === 'reconnect' ? 'reconnecting' : event === 'fail' ? 'failed' : event === 'end' ? 'ended' : current.state, updatedAt: Date.now() }; return current; }) };
     const calls: any = { service, end: jest.fn(async (id: string) => service.event(id, 'end')), onMediaSignal: jest.fn((listener) => { receiver = listener; return () => undefined; }), sendMediaSignal: jest.fn(async () => undefined) };
     const connection: CallMediaConnection & { addStream: jest.Mock; state: (value: any) => void } = { createOffer: jest.fn(async () => ({ type: 'offer', sdp: 'v=0' })), acceptOffer: jest.fn(async () => ({ type: 'answer', sdp: 'v=0' })), acceptAnswer: jest.fn(async () => undefined), addIceCandidate: jest.fn(async () => undefined), close: jest.fn(async () => undefined), onIceCandidate: jest.fn(() => () => undefined), onStateChange: jest.fn((listener) => { connection.state = listener; return () => undefined; }), addStream: jest.fn(), state: () => undefined };
-    const media = new CallMediaController({ getUserMedia: jest.fn(async () => stream) });
+    const getUserMedia = jest.fn(async () => stream);
+    const media = new CallMediaController({ getUserMedia });
     const transport = { connect: jest.fn(async () => connection) };
     const negotiator = new ProductionCallNegotiator(calls, transport, async () => ({ iceServers: [], iceTransportPolicy: 'relay' }), media);
-    return { current: () => current, setCurrent: (value: CallSession) => { current = value; }, receiver: () => receiver!, service, calls, connection, transport, negotiator };
+    return { current: () => current, setCurrent: (value: CallSession) => { current = value; }, receiver: () => receiver!, service, calls, connection, transport, negotiator, media, getUserMedia };
   };
 
   it('rejects malformed SDP before it reaches the peer connection', async () => {
-    const test = setup(); await test.negotiator.acceptIncoming(test.current());
+    const test = setup(); test.setCurrent({ ...test.current(), state: 'ringing' }); await test.negotiator.acceptIncoming(test.current());
     await expect(test.receiver()(test.current(), signal('offer', { type: 'offer', sdp: '' }))).rejects.toThrow('offer rejected');
     expect(test.connection.acceptOffer).not.toHaveBeenCalled();
   });
 
   it('buffers ICE candidates until the remote offer is applied', async () => {
-    const test = setup(); await test.negotiator.acceptIncoming(test.current());
+    const test = setup(); test.setCurrent({ ...test.current(), state: 'ringing' }); await test.negotiator.acceptIncoming(test.current());
     const ice = { candidate: 'candidate:1 1 udp 2122260223 192.0.2.1 5000 typ host', sdpMid: '0', sdpMLineIndex: 0 };
     await test.receiver()(test.current(), signal('ice-candidate', ice));
     expect(test.connection.addIceCandidate).not.toHaveBeenCalled();
@@ -37,7 +38,7 @@ describe('production WebRTC negotiation boundary', () => {
   });
 
   it('does not flush pre-peer ICE candidates until the remote description is applied', async () => {
-    const test = setup();
+    const test = setup(); test.setCurrent({ ...test.current(), state: 'ringing' });
     const ice = { candidate: 'candidate:1 1 udp 2122260223 192.0.2.1 5000 typ host', sdpMid: '0', sdpMLineIndex: 0 };
     await test.receiver()(test.current(), signal('ice-candidate', ice));
     await test.negotiator.acceptIncoming(test.current());
@@ -73,10 +74,40 @@ describe('production WebRTC negotiation boundary', () => {
     expect(test.service.event).toHaveBeenCalledWith('call-1', 'end');
   });
 
+  it('keeps an incoming invitation capture-free until explicit acceptance', async () => {
+    const test = setup();
+    test.setCurrent({ ...test.current(), state: 'ringing', mediaMode: 'video' });
+    expect(test.media.activeStream).toBeUndefined();
+    expect(test.getUserMedia).not.toHaveBeenCalled();
+
+    await test.negotiator.acceptIncoming(test.current());
+
+    expect(test.getUserMedia).toHaveBeenCalledWith({ audio: true, video: true });
+    expect(test.connection.addStream).toHaveBeenCalledWith(stream);
+  });
+
+  it('does not prepare outgoing media while the invitation is still ringing', async () => {
+    const test = setup();
+    test.setCurrent({ ...test.current(), state: 'ringing' });
+
+    await expect(test.negotiator.prepareOutgoing(test.current())).rejects.toThrow('required call state');
+
+    expect(test.getUserMedia).not.toHaveBeenCalled();
+    expect(test.transport.connect).not.toHaveBeenCalled();
+  });
+
   it('offers only after explicit media preparation and sends authenticated SDP', async () => {
     const test = setup(); await test.negotiator.prepareOutgoing(test.current()); await test.negotiator.beginOffer('call-1');
+    expect(test.getUserMedia).toHaveBeenCalledWith({ audio: true, video: false });
     expect(test.connection.addStream).toHaveBeenCalledWith(stream);
     expect(test.calls.sendMediaSignal).toHaveBeenCalledWith('call-1', 'connect', 'offer', { type: 'offer', sdp: 'v=0' });
+  });
+
+  it('preserves outgoing video intent without upgrading an audio invitation', async () => {
+    const test = setup();
+    test.setCurrent({ ...test.current(), mediaMode: 'video', state: 'accepted' });
+    await test.negotiator.prepareOutgoing(test.current());
+    expect(test.getUserMedia).toHaveBeenCalledWith({ audio: true, video: true });
   });
 
   it('fails closed and releases capture on an ICE failure', async () => {
@@ -97,6 +128,18 @@ describe('production WebRTC negotiation boundary', () => {
     expect(test.calls.end).toHaveBeenCalledWith('call-1');
     expect(test.connection.close).toHaveBeenCalledTimes(1);
     expect(track.stop as jest.Mock).toHaveBeenCalled();
+    expect(test.negotiator.getStreams('call-1')).toEqual({ local: undefined, remote: undefined });
+  });
+
+  it('locally terminates media idempotently without sending a terminal signal', async () => {
+    jest.clearAllMocks();
+    const test = setup();
+    await test.negotiator.prepareOutgoing(test.current());
+    await test.negotiator.terminateLocally('call-1');
+    await test.negotiator.terminateLocally('call-1');
+    expect(test.connection.close).toHaveBeenCalledTimes(1);
+    expect(track.stop as jest.Mock).toHaveBeenCalledTimes(1);
+    expect(test.calls.end).not.toHaveBeenCalled();
     expect(test.negotiator.getStreams('call-1')).toEqual({ local: undefined, remote: undefined });
   });
 
@@ -128,7 +171,7 @@ describe('production WebRTC negotiation boundary', () => {
   });
 
   it('does not begin media when permission is denied', async () => {
-    const base = setup(); const denied = new ProductionCallNegotiator(base.calls, { connect: jest.fn(async () => base.connection) }, async () => ({ iceServers: [] }), new CallMediaController({ getUserMedia: async () => { throw new Error('denied'); } }));
+    const base = setup(); base.setCurrent({ ...base.current(), state: 'ringing' }); const denied = new ProductionCallNegotiator(base.calls, { connect: jest.fn(async () => base.connection) }, async () => ({ iceServers: [] }), new CallMediaController({ getUserMedia: async () => { throw Object.assign(new Error('denied'), { name: 'NotAllowedError' }); } }));
     await expect(denied.acceptIncoming(base.current())).rejects.toThrow('permission was denied');
     expect(base.connection.close).toHaveBeenCalled();
   });

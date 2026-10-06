@@ -7,6 +7,7 @@ import { traceIceTiming } from './iceTiming';
 
 type Description = { type: 'offer' | 'answer'; sdp: string };
 type Candidate = { candidate: string; sdpMid?: string | null; sdpMLineIndex?: number | null; usernameFragment?: string };
+export type CallMediaUpdate = { callId: string; local?: MediaStream; remote?: MediaStream; state?: import('./webrtc').CallMediaState; mediaFailure?: 'microphone-unavailable' | 'camera-unavailable' };
 const description = (value: unknown, type: Description['type']): value is Description => !!value && typeof value === 'object' && (value as Description).type === type && typeof (value as Description).sdp === 'string' && (value as Description).sdp.length > 0 && (value as Description).sdp.length <= 65_536;
 const candidate = (value: unknown): value is Candidate => !!value && typeof value === 'object' && typeof (value as Candidate).candidate === 'string' && (value as Candidate).candidate.length > 0 && (value as Candidate).candidate.length <= 8_192;
 const iceCandidateType = (value: string): 'host' | 'srflx' | 'relay' | 'prflx' | 'unknown' => {
@@ -52,7 +53,7 @@ export class ProductionCallNegotiator {
   private readonly preparing = new Map<string, Promise<void>>();
   private readonly generations = new Map<string, number>();
   private readonly cleanups = new Map<string, Promise<void>>();
-  private readonly mediaListeners = new Set<(value: { callId: string; local?: MediaStream; remote?: MediaStream; state?: import('./webrtc').CallMediaState }) => void>();
+  private readonly mediaListeners = new Set<(value: CallMediaUpdate) => void>();
   constructor(private readonly calls: AuthenticatedCallComposition, private readonly transport: CallTransport, private readonly config: WebRtcConfigProvider, private readonly media = new CallMediaController()) {
     this.unsubscribe = calls.onMediaSignal((session, signal) => this.receive(session, signal));
   }
@@ -62,12 +63,27 @@ export class ProductionCallNegotiator {
     try { await this.calls.assertVerifiedContact?.(); return stream; }
     catch (error) { this.media.release(); throw error; }
   }
-  async prepareOutgoing(session: CallSession, kind: CaptureKind = session.mediaMode === 'video' ? 'camera' : 'microphone'): Promise<void> { await this.prepare(session, kind); }
-  async acceptIncoming(session: CallSession, kind: CaptureKind = session.mediaMode === 'video' ? 'camera' : 'microphone'): Promise<void> { await this.prepare(session, kind); }
+  async prepareOutgoing(session: CallSession, kind: CaptureKind = session.mediaMode === 'video' ? 'camera' : 'microphone'): Promise<void> { await this.prepare(session, kind, ['accepted', 'connecting']); }
+  async acceptIncoming(session: CallSession, kind: CaptureKind = session.mediaMode === 'video' ? 'camera' : 'microphone'): Promise<void> { await this.prepare(session, kind, ['ringing']); }
   getStreams(callId: string): { local?: MediaStream; remote?: MediaStream } { return { local: this.localStreams.get(callId), remote: this.remoteStreams.get(callId) }; }
-  onMediaUpdate(listener: (value: { callId: string; local?: MediaStream; remote?: MediaStream; state?: import('./webrtc').CallMediaState }) => void): () => void { this.mediaListeners.add(listener); return () => this.mediaListeners.delete(listener); }
+  onMediaUpdate(listener: (value: CallMediaUpdate) => void): () => void { this.mediaListeners.add(listener); return () => this.mediaListeners.delete(listener); }
   setMicrophoneEnabled(enabled: boolean): void { this.media.setMicrophoneEnabled(enabled); }
-  setCameraEnabled(enabled: boolean): void { this.media.setCameraEnabled(enabled); }
+  async setCameraEnabled(callId: string, enabled: boolean): Promise<boolean> {
+    const connection = this.connections.get(callId);
+    if (!connection?.replaceLocalTrack || !this.localStreams.has(callId)) return false;
+    if (!enabled) {
+      await connection.replaceLocalTrack('video', null);
+      await this.media.setCameraEnabled(false);
+    } else {
+      const track = await this.media.setCameraEnabled(true);
+      if (!track) return false;
+      try { await connection.replaceLocalTrack('video', track); }
+      catch (error) { await this.media.setCameraEnabled(false); throw error; }
+    }
+    const local = this.media.activeStream;
+    if (local) { this.localStreams.set(callId, local); this.mediaListeners.forEach((listener) => listener({ callId, local, remote: this.remoteStreams.get(callId) })); }
+    return true;
+  }
   releaseUnboundMedia(): void { this.media.release(); }
   async switchCamera(): Promise<boolean> { return this.media.switchCamera(); }
   async beginOffer(callId: string, restart = false): Promise<void> {
@@ -82,6 +98,10 @@ export class ProductionCallNegotiator {
     const offer = await connection.createOffer(restart);
     if (!description(offer, 'offer')) throw new Error('WebRTC offer rejected.');
     await this.calls.sendMediaSignal(callId, restart ? 'reconnect' : 'connect', 'offer', offer);
+  }
+  async terminateLocally(callId: string): Promise<void> {
+    callStabilityDiagnostic('cleanup-trigger', 'local-end');
+    await this.cleanup(callId);
   }
   async end(callId: string): Promise<void> {
     const ongoing = this.ending.get(callId);
@@ -142,20 +162,20 @@ export class ProductionCallNegotiator {
     }
     try { await connection.addIceCandidate(signal.payload); } catch { callNegotiationDiagnostic('candidate-add-failed'); throw new Error('WebRTC candidate rejected.'); }
   }
-  private async prepare(session: CallSession, kind: CaptureKind): Promise<void> {
+  private async prepare(session: CallSession, kind: CaptureKind, allowedStates: readonly CallSession['state'][]): Promise<void> {
     const current = this.preparing.get(session.callId);
     if (current) return current;
-    const preparation = this.prepareOnce(session, kind);
+    const preparation = this.prepareOnce(session, kind, allowedStates);
     this.preparing.set(session.callId, preparation);
     try { await preparation; }
     finally { if (this.preparing.get(session.callId) === preparation) this.preparing.delete(session.callId); }
   }
-  private async prepareOnce(session: CallSession, kind: CaptureKind): Promise<void> {
+  private async prepareOnce(session: CallSession, kind: CaptureKind, allowedStates: readonly CallSession['state'][]): Promise<void> {
     await this.calls.assertVerifiedContact?.();
     await Promise.all([...this.ending.values()].map((ending) => ending.catch(() => undefined)));
     await Promise.all([...this.cleanups.values()].map((cleanup) => cleanup.catch(() => undefined)));
     const latest = await this.calls.service.get(session.callId);
-    if (!latest || !['ringing', 'accepted', 'connecting'].includes(latest.state) || latest.expiresAt <= Date.now()) throw new Error('Call attempt is no longer active.');
+    if (!latest || !allowedStates.includes(latest.state) || latest.expiresAt <= Date.now()) throw new Error('Call media cannot start before the required call state.');
     if (this.connections.has(session.callId)) return;
     const generation = (this.generations.get(session.callId) ?? 0) + 1;
     this.generations.set(session.callId, generation);
@@ -197,6 +217,19 @@ export class ProductionCallNegotiator {
       }));
       this.listenerCleanup.set(session.callId, cleanups);
       this.connections.set(session.callId, connection);
+      cleanups.push(this.media.onTrackEnded((kind) => {
+        if (this.connections.get(session.callId) !== connection) return;
+        if (kind === 'audio') {
+          this.mediaListeners.forEach((listener) => listener({ callId: session.callId, local: this.localStreams.get(session.callId), remote: this.remoteStreams.get(session.callId), mediaFailure: 'microphone-unavailable' }));
+          void this.fail(session.callId);
+        } else {
+          void connection.replaceLocalTrack?.('video', null).catch(() => undefined).then(() => {
+            if (this.connections.get(session.callId) !== connection) return;
+            const local = this.localStreams.get(session.callId);
+            this.mediaListeners.forEach((listener) => listener({ callId: session.callId, local, remote: this.remoteStreams.get(session.callId), mediaFailure: 'camera-unavailable' }));
+          });
+        }
+      }));
       if (this.pendingOffers.delete(session.callId)) void this.beginOffer(session.callId).catch(() => this.fail(session.callId));
     } catch (error) { await connection.close().catch(() => undefined); this.media.release(); throw error; }
   }

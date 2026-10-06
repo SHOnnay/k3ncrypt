@@ -20,6 +20,22 @@ import { prepareMessageAcceptance, readMessages, writeMessages } from '../produc
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
 
+const callSetupFailure = (error: unknown): { kind: 'verification-required' | 'media-denied' | 'media-failed' | 'signaling-failed'; message: string } => {
+  const source = error instanceof Error ? error.message.toLowerCase() : '';
+  if (source.includes('verification') || source.includes('identity') || source.includes('review')) {
+    return { kind: 'verification-required', message: 'Verification required. Reverify this contact before calling.' };
+  }
+  if (source.includes('permission') || source.includes('denied') || source.includes('dismissed')) {
+    return { kind: 'media-denied', message: 'Microphone or camera permission was denied or dismissed. Allow the required permission and retry.' };
+  }
+  if (source.includes('camera')) return { kind: 'media-failed', message: 'Camera is unavailable. Check the camera and try again.' };
+  if (source.includes('microphone')) return { kind: 'media-failed', message: 'Microphone is unavailable. Check the microphone and try again.' };
+  if (source.includes('media') || source.includes('capture') || source.includes('device')) {
+    return { kind: 'media-failed', message: 'Call media is unavailable. Check the microphone and camera, then retry.' };
+  }
+  return { kind: 'signaling-failed', message: 'Call negotiation could not start. Check your connection and retry.' };
+};
+
 const displayMessage = (sender: string, text: string, type: Message['type']): Message => {
   try {
     const media = parseEncryptedMediaMessage(text);
@@ -55,9 +71,13 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const acceptedDeliveries = useRef(new Set<string>());
   const endCallRef = useRef<() => Promise<void>>(async () => undefined);
   const callNegotiator = useRef<ProductionCallNegotiator>();
+  const modernCallCompositionRef = useRef<AuthenticatedCallComposition | null>(modernCallComposition);
+  const verificationTerminationRef = useRef<() => Promise<void>>(async () => undefined);
+  const verificationTerminationPending = useRef<Promise<void>>();
   const callSupportConversation = useRef<ModernConversation | null>(null);
   const callSupportInstallation = useRef<Promise<void> | null>(null);
   const callMediaUnsubscribe = useRef<(() => void) | null>(null);
+  const callMediaFailureRef = useRef<'microphone-unavailable' | 'camera-unavailable' | undefined>();
   const callStateUnsubscribe = useRef<(() => void) | null>(null);
   const callProtocolUnsubscribe = useRef<(() => void) | null>(null);
   const locallyAcceptedCalls = useRef(new Set<string>());
@@ -80,6 +100,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const modernCallIdRef = useRef(modernCallId);
   callActiveRef.current = callActive;
   modernCallIdRef.current = modernCallId;
+  modernCallCompositionRef.current = modernCallComposition;
   const activeLegacyCall = useRef<IE2ECall>();
   const callMediaPoll = useRef<ReturnType<typeof setInterval>>();
   useEffect(() => { privacyPreferencesRef.current = privacyPreferences; }, [privacyPreferences]);
@@ -174,6 +195,14 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       // terminal paths. Preserve the active renderer until a real call end.
       if (update.remote) setRemoteCallStream(update.remote);
       if (update.local) setCameraEnabledState(update.local.getVideoTracks().some((track) => track.enabled && track.readyState === 'live'));
+      if (update.mediaFailure === 'camera-unavailable') {
+        callMediaFailureRef.current = update.mediaFailure;
+        setCameraEnabledState(false);
+        setCallError('Camera became unavailable. The call continues with video turned off.');
+      } else if (update.mediaFailure === 'microphone-unavailable') {
+        callMediaFailureRef.current = update.mediaFailure;
+        setCallError('Microphone became unavailable. The call ended to stop media safely.');
+      }
       if (update.state === 'connected') { setCallLifecycleState('connected'); setCallStatus('Connected'); }
       if (update.state === 'reconnecting') { setCallLifecycleState('connecting'); setCallStatus('Reconnecting...'); }
       if (update.state === 'failed') { setCallLifecycleState('ice-failed'); setCallStatus('Connection Failed'); }
@@ -183,19 +212,30 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       modernCallIdRef.current = terminal ? undefined : session.callId;
       setModernCallId(terminal ? undefined : session.callId);
       setCallMediaMode(session.mediaMode);
-      setCallLifecycleState(session.state === 'inviting' || session.state === 'ringing' ? 'ringing' : session.state === 'accepted' || session.state === 'connecting' || session.state === 'reconnecting' ? 'connecting' : session.state === 'connected' ? 'connected' : session.state === 'rejected' ? 'rejected' : session.state === 'cancelled' ? 'cancelled' : session.state === 'expired' ? 'timeout' : session.state === 'ended' ? 'ended' : 'ice-failed');
+      const failedMedia = session.state === 'failed' ? callMediaFailureRef.current : undefined;
+      setCallLifecycleState(failedMedia === 'microphone-unavailable' ? 'media-failed' : session.state === 'inviting' || session.state === 'ringing' ? 'ringing' : session.state === 'accepted' || session.state === 'connecting' || session.state === 'reconnecting' ? 'connecting' : session.state === 'connected' ? 'connected' : session.state === 'rejected' ? 'rejected' : session.state === 'cancelled' ? 'cancelled' : session.state === 'expired' ? 'timeout' : session.state === 'ended' ? 'ended' : 'ice-failed');
       setIsIncomingCall(session.state === 'ringing');
       setCallActive(!terminal);
-      setCallStatus(session.state === 'ringing' ? 'Incoming Call...' : session.state === 'inviting' ? 'Ringing...' : ['accepted', 'connecting'].includes(session.state) ? 'Connecting...' : session.state === 'reconnecting' ? 'Reconnecting...' : session.state === 'connected' ? 'Connected' : terminal ? `Call ${session.state}` : 'Calling...');
+      setCallStatus(failedMedia === 'microphone-unavailable' ? 'Call ended: microphone unavailable' : session.state === 'ringing' ? 'Incoming Call...' : session.state === 'inviting' ? 'Ringing...' : ['accepted', 'connecting'].includes(session.state) ? 'Connecting...' : session.state === 'reconnecting' ? 'Reconnecting...' : session.state === 'connected' ? 'Connected' : terminal ? `Call ${session.state}` : 'Calling...');
       if (terminal) {
+        callMediaFailureRef.current = undefined;
         void callNegotiator.current?.end(session.callId).catch(() => undefined);
         clearCallMedia();
       }
       if (session.state === 'accepted' && !locallyAcceptedCalls.current.delete(session.callId)) {
-        void callNegotiator.current?.prepareOutgoing(session).then(() => callNegotiator.current?.beginOffer(session.callId)).catch(() => {
-          setCallLifecycleState('ice-failed');
-          setCallStatus('Connection Failed');
-          void callNegotiator.current?.end(session.callId).catch(() => undefined);
+        const negotiator = callNegotiator.current;
+        if (negotiator) void negotiator.prepareOutgoing(session).then(() => negotiator.beginOffer(session.callId).catch(async (error: unknown) => {
+          const failure = callSetupFailure(error);
+          setCallError(failure.message);
+          await negotiator.end(session.callId).catch(() => undefined);
+          setCallLifecycleState(failure.kind);
+          setCallStatus(failure.kind === 'verification-required' ? 'Verification required' : failure.kind === 'signaling-failed' ? 'Call negotiation failed' : 'Call media could not start');
+        })).catch(async (error: unknown) => {
+          const failure = callSetupFailure(error);
+          setCallError(failure.message);
+          await negotiator.end(session.callId).catch(() => undefined);
+          setCallLifecycleState(failure.kind);
+          setCallStatus(failure.kind === 'verification-required' ? 'Verification required' : failure.kind === 'signaling-failed' ? 'Call negotiation failed' : 'Call media could not start');
         });
       }
       });
@@ -254,19 +294,21 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }, async (contact) => {
         setContactIdentity(contact);
         if (contact.verification !== 'verified' || contact.changeStatus !== 'unchanged') {
-          callMediaUnsubscribe.current?.();
-          callMediaUnsubscribe.current = null;
-          callStateUnsubscribe.current?.();
-          callStateUnsubscribe.current = null;
-          callProtocolUnsubscribe.current?.();
-          callProtocolUnsubscribe.current = null;
-          await callNegotiator.current?.dispose();
-          callNegotiator.current = undefined;
-          callSupportConversation.current = null;
-          setModernCallComposition(null);
-          setCallActive(false);
-          setIsIncomingCall(false);
-          setModernCallId(undefined);
+          if (callActiveRef.current) {
+            await verificationTerminationRef.current();
+          } else {
+            callMediaUnsubscribe.current?.();
+            callMediaUnsubscribe.current = null;
+            callStateUnsubscribe.current?.();
+            callStateUnsubscribe.current = null;
+            callProtocolUnsubscribe.current?.();
+            callProtocolUnsubscribe.current = null;
+            await callNegotiator.current?.dispose();
+            callNegotiator.current = undefined;
+            callSupportConversation.current = null;
+            setModernCallComposition(null);
+            setModernCallId(undefined);
+          }
         }
         if (contact.contactId && (!descriptor.remoteAddress || descriptor.remoteAddress !== contact.contactId || descriptor.remoteIdentityCommitment !== contact.identityId)) {
           const latestDescriptor = (await readConversationDescriptors(secureVault))
@@ -404,21 +446,25 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const unverifyContact = useCallback(async (): Promise<void> => {
     if (!modern) throw new Error('No modern contact is open.');
     await modern.unverifyContact();
-    callMediaUnsubscribe.current?.();
-    callMediaUnsubscribe.current = null;
-    callStateUnsubscribe.current?.();
-    callStateUnsubscribe.current = null;
-    callProtocolUnsubscribe.current?.();
-    callProtocolUnsubscribe.current = null;
-    await callNegotiator.current?.dispose();
-    callNegotiator.current = undefined;
-    callSupportConversation.current = null;
-    setModernCallComposition(null);
     setContactIdentity(await modern.getContact());
+    if (callActiveRef.current) await verificationTerminationRef.current();
+    else {
+      callMediaUnsubscribe.current?.();
+      callMediaUnsubscribe.current = null;
+      callStateUnsubscribe.current?.();
+      callStateUnsubscribe.current = null;
+      callProtocolUnsubscribe.current?.();
+      callProtocolUnsubscribe.current = null;
+      await callNegotiator.current?.dispose();
+      callNegotiator.current = undefined;
+      callSupportConversation.current = null;
+      setModernCallComposition(null);
+    }
   }, [modern]);
 
   const acceptChangedIdentity = useCallback(async (): Promise<void> => {
     if (!modern) throw new Error('No modern contact is open.');
+    if (callActiveRef.current) await verificationTerminationRef.current();
     await modern.acceptChangedIdentity();
     setContactIdentity(await modern.getContact());
     setModernCallComposition(null);
@@ -572,6 +618,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setMicrophoneMutedState(false);
     setCameraEnabledState(false);
     setCallMediaMode('audio');
+    callMediaFailureRef.current = undefined;
   }, []);
 
   const reflectCallMedia = useCallback((call: IE2ECall): void => {
@@ -641,8 +688,11 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         await modernCallComposition.accept(modernCallId);
       } catch (error) {
         locallyAcceptedCalls.current.delete(modernCallId);
+        const failure = callSetupFailure(error);
+        setCallError(failure.message);
         await callNegotiator.current?.end(modernCallId).catch(() => undefined);
-        throw error;
+        setCallLifecycleState(failure.kind);
+        setCallStatus(failure.kind === 'verification-required' ? 'Verification required' : failure.kind === 'signaling-failed' ? 'Call negotiation failed' : 'Call media could not start');
       }
       return;
     }
@@ -726,6 +776,46 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   }, [chat, clearCallMedia, modernCallComposition, modernCallId, protocolMode]);
   endCallRef.current = endCall;
+  verificationTerminationRef.current = async (): Promise<void> => {
+    if (verificationTerminationPending.current) return verificationTerminationPending.current;
+    const callId = modernCallIdRef.current;
+    const composition = modernCallCompositionRef.current;
+    const termination = (async (): Promise<void> => {
+      setCallError('Verification required: this contact must be reverified before calling.');
+      setCallActive(false);
+      callActiveRef.current = false;
+      setIsIncomingCall(false);
+      setCallDuration(0);
+      if (callId && composition) {
+        await composition.terminateLocally(callId).catch(() => undefined);
+        await callNegotiator.current?.terminateLocally(callId).catch(() => undefined);
+      }
+      callMediaUnsubscribe.current?.();
+      callMediaUnsubscribe.current = null;
+      callStateUnsubscribe.current?.();
+      callStateUnsubscribe.current = null;
+      callProtocolUnsubscribe.current?.();
+      callProtocolUnsubscribe.current = null;
+      await callNegotiator.current?.dispose();
+      callNegotiator.current = undefined;
+      callSupportConversation.current = null;
+      modernCallCompositionRef.current = null;
+      setModernCallComposition(null);
+      setModernCallId(undefined);
+      modernCallIdRef.current = undefined;
+      setCallLifecycleState('verification-required');
+      setCallStatus('Verification required');
+      clearCallMedia();
+    })();
+    verificationTerminationPending.current = termination;
+    try { await termination; }
+    finally { if (verificationTerminationPending.current === termination) verificationTerminationPending.current = undefined; }
+  };
+
+  useEffect(() => {
+    if (!callActive || protocolMode !== 'modern' || !modernCallId || !modernCallComposition) return;
+    return modernCallComposition.watchVerification(() => verificationTerminationRef.current());
+  }, [callActive, modernCallComposition, modernCallId, protocolMode]);
 
   useEffect(() => {
     if (!modern) return;
@@ -758,10 +848,20 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setMicrophoneMutedState(muted);
   }, [protocolMode]);
 
-  const setCameraEnabled = useCallback((enabled: boolean): void => {
+  const setCameraEnabled = useCallback(async (enabled: boolean): Promise<void> => {
     if (protocolMode === 'modern') {
-      callNegotiator.current?.setCameraEnabled(enabled);
-      setCameraEnabledState(enabled);
+      const activeCallId = modernCallIdRef.current;
+      if (!activeCallId) return;
+      try {
+        const applied = await callNegotiator.current?.setCameraEnabled(activeCallId, enabled);
+        if (!applied) throw new Error('Camera control is unavailable for this call.');
+        const local = callNegotiator.current?.getStreams(activeCallId).local;
+        setLocalCallStream(local);
+        setCameraEnabledState(enabled);
+      } catch (error) {
+        setCameraEnabledState(false);
+        setCallError(error instanceof Error ? error.message : 'Camera could not be changed.');
+      }
       return;
     }
     const call = activeLegacyCall.current;
@@ -814,7 +914,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (update.state === 'incoming') {
         setCallActive(true);
       }
-      if (['ended', 'rejected', 'timeout', 'cancelled', 'no-peer', 'media-denied', 'signaling-failed', 'ice-failed'].includes(update.state)) {
+      if (['ended', 'verification-required', 'rejected', 'timeout', 'cancelled', 'no-peer', 'media-denied', 'media-failed', 'signaling-failed', 'ice-failed'].includes(update.state)) {
         if (update.state === 'timeout') deliverNotification({ kind: 'missed-call', conversationId: channelHash || 'legacy' }, privacyPreferencesRef.current);
         setCallActive(false);
         setIsIncomingCall(false);
@@ -858,9 +958,11 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       connected: 'Connected',
       ending: 'Ending...',
       ended: 'Call Ended',
+      'verification-required': 'Verification Required',
       rejected: 'Call Rejected',
       'no-peer': 'No Peer Available',
       'media-denied': 'Microphone Permission Denied',
+      'media-failed': 'Call Media Failed',
       'signaling-failed': 'Signaling Failed',
       'ice-failed': 'Connection Failed',
       timeout: 'Call Timed Out',

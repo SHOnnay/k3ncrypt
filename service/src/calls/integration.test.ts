@@ -51,6 +51,67 @@ const identity = (local: string, remote: string) => new VerifiedCallIdentityVeri
 );
 
 describe('authenticated bidirectional call flow', () => {
+  it('watches only the pinned peer verification and terminates locally when it is lost', async () => {
+    jest.useFakeTimers();
+    try {
+      let peerVerification: 'verified' | 'unverified' | 'unknown' = 'verified';
+      let unrelatedVerification: 'verified' | 'unverified' = 'verified';
+      const queried: string[] = [];
+      const dynamicIdentity = {
+        isParticipant: async (_conversation: string, id: string) => ['alice', 'bob', 'charlie'].includes(id),
+        getVerification: async (id: string) => {
+          queried.push(id);
+          return id === 'bob' ? peerVerification : id === 'charlie' ? unrelatedVerification : 'verified';
+        },
+        identityBinding,
+      };
+      const sendEnvelope = jest.fn(async () => ({}));
+      const transport: TransportManager = { start: async () => undefined, stop: async () => undefined, join: () => undefined, sendEnvelope, activeTransport: () => undefined };
+      const caller = createAuthenticatedCallComposition({ session: session(), transport, conversationId, localIdentityId: 'alice-id', localParticipantId: 'alice', remoteParticipant: participant('bob', 'bob-id'), identity: dynamicIdentity, deviceTrust });
+      const call = await caller.invite();
+      const invalid = jest.fn(async () => { await caller.terminateLocally(call.callId); });
+      const stop = caller.watchVerification(invalid, 100);
+      await jest.advanceTimersByTimeAsync(100);
+      expect(invalid).not.toHaveBeenCalled();
+      unrelatedVerification = 'unverified';
+      await jest.advanceTimersByTimeAsync(100);
+      expect(invalid).not.toHaveBeenCalled();
+      expect(queried).not.toContain('unrelated-contact');
+      expect(queried).not.toContain('charlie');
+      peerVerification = 'unverified';
+      await jest.advanceTimersByTimeAsync(100);
+      stop();
+      expect(invalid).toHaveBeenCalledTimes(1);
+      expect(await caller.service.get(call.callId)).toMatchObject({ state: 'failed' });
+      expect(sendEnvelope).toHaveBeenCalledTimes(1);
+    } finally { jest.useRealTimers(); }
+  });
+  it('terminates after the pinned identity changes even when the call snapshot claims the peer is verified', async () => {
+    jest.useFakeTimers();
+    try {
+      let samePinnedIdentity = true;
+      const authority = {
+        isParticipant: async (_conversation: string, id: string) => id === 'alice' || (id === 'bob' && samePinnedIdentity),
+        getVerification: async () => 'verified' as const,
+        identityBinding,
+      };
+      const sendEnvelope = jest.fn(async () => ({}));
+      const transport: TransportManager = { start: async () => undefined, stop: async () => undefined, join: () => undefined, sendEnvelope, activeTransport: () => undefined };
+      const caller = createAuthenticatedCallComposition({ session: session(), transport, conversationId, localIdentityId: 'alice-id', localParticipantId: 'alice', remoteParticipant: participant('bob', 'bob-id'), identity: authority, deviceTrust });
+      const call = await caller.invite();
+      expect(call.participants[1].verification).toBe('verified');
+      const invalid = jest.fn(async () => { await caller.terminateLocally(call.callId); });
+      const stop = caller.watchVerification(invalid, 100);
+      await jest.advanceTimersByTimeAsync(0);
+      expect(invalid).not.toHaveBeenCalled();
+      samePinnedIdentity = false;
+      await jest.advanceTimersByTimeAsync(100);
+      stop();
+      expect(invalid).toHaveBeenCalledTimes(1);
+      expect(await caller.service.get(call.callId)).toMatchObject({ state: 'failed' });
+      expect(sendEnvelope).toHaveBeenCalledTimes(1);
+    } finally { jest.useRealTimers(); }
+  });
   it('delivers invite and accept only through encrypted authenticated signaling', async () => {
     const transports = connectedTransports();
     const aliceIdentity = identity('alice', 'bob');

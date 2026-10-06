@@ -103,7 +103,7 @@ export interface ChatContextType {
   cancelCall: () => Promise<void>;
   endCall: () => Promise<void>;
   setMicrophoneMuted: (muted: boolean) => void;
-  setCameraEnabled: (enabled: boolean) => void;
+  setCameraEnabled: (enabled: boolean) => Promise<void>;
   addMessage: (message: Message) => void;
   setCallDuration: (duration: number) => void;
   deleteChannel: () => Promise<void>;

@@ -42,8 +42,12 @@ export interface AuthenticatedCallComposition {
   readonly cancel: (callId: string) => Promise<CallSession>;
   /** Ends an established call with the existing authenticated terminal event. */
   readonly end: (callId: string) => Promise<CallSession | undefined>;
+  /** Ends a call locally without attempting unauthenticated terminal signaling. */
+  readonly terminateLocally: (callId: string) => Promise<CallSession | undefined>;
   readonly onCallUpdate: (listener: (session: CallSession) => void) => () => void;
   readonly onProtocolIssue: (listener: (issue: CallProtocolIssue) => void) => () => void;
+  /** Polls only this composition's pinned local contact/device authority while a call is active. */
+  readonly watchVerification: (onInvalid: () => void | Promise<void>, intervalMs?: number) => () => void;
   readonly sendMediaSignal: (callId: string, event: 'connect' | 'connected' | 'reconnect', kind: Exclude<CallSignalKind, 'control'>, payload: unknown) => Promise<void>;
   readonly onMediaSignal: (listener: (session: CallSession, signal: CallSignal) => Promise<void>) => () => void;
 }
@@ -271,8 +275,38 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
     void ending.finally(() => { if (endings.get(callId) === ending) endings.delete(callId); }).catch(() => undefined);
     return ending;
   };
+  const terminateLocally = async (callId: string): Promise<CallSession | undefined> => {
+    const current = await service.get(callId);
+    if (!current || ['ended', 'rejected', 'cancelled', 'expired', 'failed'].includes(current.state)) return current;
+    try {
+      const failed = await service.event(callId, 'fail');
+      notify(failed);
+      return failed;
+    } catch { return service.get(callId); }
+  };
   const onCallUpdate = (listener: (session: CallSession) => void): (() => void) => { listeners.add(listener); return () => listeners.delete(listener); };
   const onProtocolIssue = (listener: (issue: CallProtocolIssue) => void): (() => void) => { protocolIssueListeners.add(listener); return () => protocolIssueListeners.delete(listener); };
+  const watchVerification = (onInvalid: () => void | Promise<void>, intervalMs = 500): (() => void) => {
+    let active = true;
+    let checking = false;
+    let notified = false;
+    const check = async (): Promise<void> => {
+      if (!active || checking || notified) return;
+      checking = true;
+      try {
+        if (!await input.identity.isParticipant(input.conversationId, input.remoteParticipant.participantId) || await input.identity.getVerification(input.remoteParticipant.participantId) !== 'verified') throw new Error('Contact verification changed.');
+      }
+      catch {
+        if (active && !notified) {
+          notified = true;
+          try { await onInvalid(); } catch { /* a failed cleanup is handled by the call owner */ }
+        }
+      } finally { checking = false; }
+    };
+    const timer = setInterval(() => { void check(); }, Math.max(100, Math.min(intervalMs, 10_000)));
+    void check();
+    return () => { active = false; clearInterval(timer); };
+  };
   signalTransport.onProtocolIssue((issue) => protocolIssueListeners.forEach((listener) => listener(issue)));
   const sendMediaSignal = async (callId: string, event: 'connect' | 'connected' | 'reconnect', kind: Exclude<CallSignalKind, 'control'>, payload: unknown): Promise<void> => {
     await assertVerifiedContact();
@@ -283,5 +317,5 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
   const onMediaSignal = (listener: (session: CallSession, signal: CallSignal) => Promise<void>): (() => void) => { mediaListeners.add(listener); return () => mediaListeners.delete(listener); };
   // Keep the transport listener alive for the lifetime of the composition.
   void unsubscribeSignals;
-  return Object.freeze({ assertVerifiedContact, service, signaling, signalTransport, repository, invite, accept: (id: string) => respond(id, 'accept'), reject: (id: string) => respond(id, 'reject'), cancel: (id: string) => respond(id, 'cancel'), end, onCallUpdate, onProtocolIssue, sendMediaSignal, onMediaSignal });
+  return Object.freeze({ assertVerifiedContact, service, signaling, signalTransport, repository, invite, accept: (id: string) => respond(id, 'accept'), reject: (id: string) => respond(id, 'reject'), cancel: (id: string) => respond(id, 'cancel'), end, terminateLocally, onCallUpdate, onProtocolIssue, watchVerification, sendMediaSignal, onMediaSignal });
 };
