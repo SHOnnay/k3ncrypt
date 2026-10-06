@@ -13,6 +13,8 @@ Provide outside the repository/build context:
 
 Use the original signing identity to update existing installations. Never generate substitute/debug signing credentials for a release, commit a key/password, place it in Docker context, or log its value. Missing inputs stop packaging with a configuration error. Release backend/socket origins are supplied externally and must be real HTTPS origins.
 
+The owner must create or select the production Android signing keystore and keep the keystore file outside the repository and build context. Store its passwords and alias in an owner-controlled secret manager, and keep a separate secure backup of the keystore and recovery details. Loss of this signing identity can prevent upgrades for users of the signed beta.
+
 ```sh
 cd android
 ./gradlew :app:processReleaseMainManifest :app:mergeReleaseResources :app:generateReleaseBuildConfig :app:lintRelease --no-daemon
