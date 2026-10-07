@@ -12,11 +12,24 @@ async function idle(page: Page) {
   await expect(page.getByRole('button', { name: 'Start audio call', exact: true })).toBeEnabled();
   await expect(page.getByText('A call is already in progress.', { exact: true })).not.toBeVisible();
 }
+async function acceptIncoming(receiver: Page, caller: Page, label: string) {
+  try { await receiver.getByRole('button', { name: 'Accept call', exact: true }).waitFor({ state: 'visible', timeout: 30000 }); }
+  catch (error) {
+    const callerState = await caller.locator('#call-status').innerText().catch(() => 'none');
+    const receiverState = await receiver.locator('#call-status').innerText().catch(() => 'none');
+    const callerError = await caller.locator('.call-error').innerText().catch(() => 'none');
+    const receiverError = await receiver.locator('.call-error').innerText().catch(() => 'none');
+    console.log('CALL_INCOMING_FAILURE', `case=${label};caller=${callerState};receiver=${receiverState};callerError=${callerError};receiverError=${receiverError}`);
+    throw error;
+  }
+  await receiver.getByRole('button', { name: 'Accept call', exact: true }).click();
+}
 test('voice/video both directions, terminal cleanup, immediate second calls and local history', async ({ browser }) => {
   test.setTimeout(240000);
   const { a, b, alice, bob } = await connectedPair(browser);
-  for (const [caller, receiver, mode] of [[alice, bob, 'audio'], [bob, alice, 'audio'], [alice, bob, 'video'], [bob, alice, 'video']] as const) {
-    await launch(caller, mode); await receiver.getByRole('button', { name: 'Accept call', exact: true }).click();
+  for (const [caller, receiver, mode, direction] of [[alice, bob, 'audio', 'A-to-B'], [bob, alice, 'audio', 'B-to-A'], [alice, bob, 'video', 'A-to-B'], [bob, alice, 'video', 'B-to-A']] as const) {
+    console.log('CALL_CASE', `${direction}:${mode}:connect`);
+    await launch(caller, mode); await acceptIncoming(receiver, caller, `${direction}:${mode}:connect`);
     await expect(caller.locator('#call-status')).toHaveText('Connected', { timeout: 20000 });
     await expect(receiver.locator('#call-status')).toHaveText('Connected', { timeout: 20000 });
     if (mode === 'video') { await expect(caller.getByLabel('Remote video', { exact: true })).toBeVisible(); await expect(receiver.getByLabel('Remote video', { exact: true })).toBeVisible(); }
@@ -24,19 +37,22 @@ test('voice/video both directions, terminal cleanup, immediate second calls and 
     await idle(caller); await idle(receiver);
     for (const page of [caller, receiver]) { await page.getByRole('button', { name: 'Chats', exact: true }).click(); await expect(page.locator('[aria-label="Local call history"]').filter({ hasText: mode === 'video' ? 'Video call' : 'Voice call' })).not.toHaveCount(0); }
   }
-  for (const [caller, receiver, mode] of [[alice, bob, 'audio'], [bob, alice, 'video']] as const) {
+  for (const [caller, receiver, mode, direction] of [[alice, bob, 'audio', 'A-to-B'], [bob, alice, 'video', 'B-to-A']] as const) {
+    console.log('CALL_CASE', `${direction}:${mode}:decline-cancel`);
     await launch(caller, mode); await receiver.getByRole('button', { name: 'Decline call', exact: true }).click();
     await idle(caller); await idle(receiver);
-    await launch(caller, mode); await expect(receiver.getByRole('button', { name: 'Accept call', exact: true })).toBeVisible(); await caller.getByRole('button', { name: 'Cancel call', exact: true }).click();
+    await launch(caller, mode); await receiver.getByRole('button', { name: 'Accept call', exact: true }).waitFor({ state: 'visible', timeout: 30000 }); await caller.getByRole('button', { name: 'Cancel call', exact: true }).click();
     await idle(caller); await idle(receiver);
   }
   // Exercise the real permission-denial cleanup path without needing real hardware.
   await bob.evaluate(() => { const media = navigator.mediaDevices; const original = media.getUserMedia.bind(media); Object.assign(window, { restoreTestCapture: () => { media.getUserMedia = original; } }); media.getUserMedia = async () => { throw new DOMException('Permission denied', 'NotAllowedError'); }; });
-  await launch(alice, 'audio'); await bob.getByRole('button', { name: 'Accept call', exact: true }).click();
+  console.log('CALL_CASE', 'A-to-B:audio:media-denied');
+  await launch(alice, 'audio'); await acceptIncoming(bob, alice, 'A-to-B:audio:media-denied');
   await idle(alice); await idle(bob);
   await bob.getByRole('button', { name: 'Chats', exact: true }).click(); await expect(bob.getByLabel('Local call history').filter({ hasText: 'Failed call' })).not.toHaveCount(0);
   await bob.evaluate(() => { (window as Window & { restoreTestCapture?: () => void }).restoreTestCapture?.(); });
-  await launch(bob, 'audio'); await alice.getByRole('button', { name: 'Accept call', exact: true }).click();
+  console.log('CALL_CASE', 'B-to-A:audio:second-call');
+  await launch(bob, 'audio'); await acceptIncoming(alice, bob, 'B-to-A:audio:second-call');
   await expect(bob.locator('#call-status')).toHaveText('Connected', { timeout: 20000 }); await bob.getByRole('button', { name: 'End call', exact: true }).click();
   await idle(alice); await idle(bob);
   for (const page of [alice, bob]) { await page.getByRole('button', { name: 'Chats', exact: true }).click(); await expect(page.getByLabel('Local call history').filter({ hasText: 'Declined call' })).not.toHaveCount(0); await expect(page.getByLabel('Local call history').filter({ hasText: 'Canceled call' })).not.toHaveCount(0); }

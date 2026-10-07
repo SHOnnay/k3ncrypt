@@ -106,7 +106,7 @@ export interface ChatContextType {
   endCall: () => Promise<void>;
   setMicrophoneMuted: (muted: boolean) => void;
   setCameraEnabled: (enabled: boolean) => Promise<void>;
-  addMessage: (message: Message) => void;
+  addMessage: (roomId: string, message: Message) => void;
   setCallDuration: (duration: number) => void;
   deleteChannel: () => Promise<void>;
   updateProfileDisplayName: (name: string) => Promise<void>;

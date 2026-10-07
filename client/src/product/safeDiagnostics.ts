@@ -1,7 +1,7 @@
 export const SAFE_DIAGNOSTIC_CODES = [
   'FILE_RATE_LIMITED', 'FILE_PREFLIGHT_FAILED', 'FILE_CREATE_FAILED', 'FILE_MANIFEST_UPLOAD_FAILED', 'FILE_CHUNK_UPLOAD_FAILED', 'FILE_FINALIZE_FAILED', 'FILE_REFERENCE_SEND_FAILED', 'FILE_RECIPIENT_FETCH_FAILED', 'FILE_DOWNLOAD_FAILED', 'FILE_AUTHENTICATION_FAILED', 'FILE_SAVE_FAILED', 'FILE_SERVER_STATE_CONFLICT', 'FILE_TRANSFER_EXPIRED', 'FILE_TRANSFER_CANCELED', 'FILE_AUTHORIZATION_FAILED', 'FILE_QUOTA_EXCEEDED',
   'CONVERSATION_RECORD_INVALID', 'CONVERSATION_INVITATION_UNACCEPTED', 'CONVERSATION_INVITATION_EXPIRED', 'CONVERSATION_STATE_INCOMPLETE', 'CONVERSATION_RESTORE_FAILED',
-  'CONVERSATION_SESSION_MISSING', 'CONVERSATION_ROOM_MISSING', 'CONTACT_REGISTRY_MISSING',
+  'CONVERSATION_SESSION_MISSING', 'CONVERSATION_ROOM_MISSING', 'CONTACT_REGISTRY_MISSING', 'MESSAGE_HISTORY_ENTRY_QUARANTINED',
   'PINNED_IDENTITY_MISSING', 'PINNED_IDENTITY_CHANGED', 'VERIFICATION_RECORD_MISSING',
   'VERIFICATION_RESET_LOCAL', 'CURRENT_IDENTITY_UNAVAILABLE', 'ROOM_MEMBERSHIP_MISMATCH',
   'RECIPIENT_AUTHORITY_MISSING', 'RECIPIENT_AUTHORITY_CHANGED', 'FILE_RECIPIENT_BINDING_MISMATCH',
@@ -26,6 +26,11 @@ export const classifySafeDiagnostic = (context: DiagnosticContext, error: unknow
     if ((error as { restoreFailureCategory?: unknown }).restoreFailureCategory === 'session-record-missing') return 'CONVERSATION_SESSION_MISSING';
   }
   const message = error instanceof Error ? error.message.toLowerCase() : typeof error === 'string' ? error.toLowerCase() : '';
+  const status = error && typeof error === 'object' && 'status' in error ? (error as { status?: unknown }).status : undefined;
+  if (context === 'conversation-open' && typeof status === 'number') {
+    if (status === 408 || status === 425 || status === 429 || status >= 500 && status <= 599) return 'NETWORK_FAILURE';
+    if (status === 404 && (message.includes('pre-key') || message.includes('prekey'))) return 'CONTACT_REGISTRY_MISSING';
+  }
   if (context === 'conversation-open' && message.includes('saved conversation') && message.includes('invalid')) return 'CONVERSATION_RECORD_INVALID';
   if (message.includes('session') && (message.includes('missing') || message.includes('not found'))) return 'CONVERSATION_SESSION_MISSING';
   if (message.includes('conversation') && (message.includes('unavailable') || message.includes('not found'))) return 'CONVERSATION_ROOM_MISSING';

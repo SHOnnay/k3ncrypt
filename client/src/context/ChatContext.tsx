@@ -44,6 +44,28 @@ const callSetupFailure = (error: unknown): { kind: 'verification-required' | 'me
   return { kind: 'signaling-failed', message: 'Call negotiation could not start. Check your connection and retry.' };
 };
 
+const callStartDiagnostic = (stage: 'conversation' | 'support' | 'composition' | 'invite', error?: unknown): void => {
+  const diagnostics = globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean };
+  if (process.env.NODE_ENV !== 'production' && diagnostics.__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ === true) {
+    const message = error instanceof Error ? error.message.toLowerCase() : '';
+    const reason = message.includes('device') && message.includes('trust') ? 'device-trust'
+      : message.includes('identity') || message.includes('verification') ? 'identity-authority'
+        : message.includes('session') ? 'session'
+          : message.includes('closed') || message.includes('not ready') || message.includes('unavailable') ? 'not-ready'
+            : message.includes('socket') || message.includes('transport') || message.includes('network') || message.includes('fetch') || message.includes('send') ? 'transport'
+              : message.includes('call') || message.includes('state') ? 'call-state' : 'unknown';
+    console.info(`k3ncrypt-call-start-failed:${stage}:${reason}`);
+  }
+};
+
+const conversationOpenStage = (stage: 'started' | 'same-room' | 'eligible' | 'candidate-started' | 'history-loaded' | 'candidate-connect-started' | 'session-connected' | 'connected' | 'failed'): void => {
+  const diagnostics = globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean };
+  if (process.env.NODE_ENV !== 'production' && diagnostics.__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ === true && typeof document !== 'undefined') {
+    document.documentElement.dataset.k3ncryptConversationOpen = stage;
+    console.info(`k3ncrypt-conversation-open:${stage}`);
+  }
+};
+
 const displayMessage = (sender: string, text: string, type: Message['type']): Message => {
   if (text.startsWith('k3ncrypt-file-')) {
     try { const r = parseFileReference(text); return { ...createMessage(sender, 'Protected file', type), media: { kind: 'file', size: r.context.fileSize, reference: text } }; }
@@ -99,11 +121,21 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const locallyAcceptedCalls = useRef(new Set<string>());
   const [userId, setUserId] = useState<string>('');
   const [channelHash, setChannelHash] = useState<string>('');
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messagesByRoom, setMessagesByRoom] = useState<Record<string, Message[]>>({});
+  const messages = channelHash ? messagesByRoom[channelHash] ?? [] : [];
+  const setRoomMessages = useCallback((roomId: string, update: Message[] | ((current: Message[]) => Message[])) => {
+    setMessagesByRoom((current) => {
+      const previous = current[roomId] ?? [];
+      const next = typeof update === 'function' ? update(previous) : update;
+      return next === previous ? current : { ...current, [roomId]: next };
+    });
+  }, []);
+  const addMessage = useCallback((roomId: string, message: Message) => {
+    setRoomMessages(roomId, (current) => [...current, message]);
+  }, [setRoomMessages]);
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const localCallHistory = useRef(new LocalCallHistory());
   const historyVault = useRef(vault); historyVault.current = vault;
-  const historyRoom = useRef(channelHash); historyRoom.current = channelHash;
   const [callActive, setCallActive] = useState<boolean>(false);
   const [callStatus, setCallStatus] = useState<string>('');
   const [callDuration, setCallDuration] = useState<number>(0);
@@ -180,19 +212,19 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return vault;
   };
 
-  const installModernCallSupport = async (conversation: ModernConversation): Promise<void> => {
+  const installModernCallSupport = async (conversation: ModernConversation, refreshSessionBinding = false): Promise<void> => {
     // Call signaling uses the conversation's established encrypted session.
     // Preparing call UI must not create an outbound messaging session before
     // the first peer message establishes the matching inbound session.
     if (!conversation.hasEstablishedSession()) return;
-    if (callSupportConversation.current === conversation && callNegotiator.current) return;
+    if (!refreshSessionBinding && callSupportConversation.current === conversation && callNegotiator.current) return;
     if (callSupportInstallation.current) {
       await callSupportInstallation.current;
-      if (callSupportConversation.current === conversation && callNegotiator.current) return;
+      if (!refreshSessionBinding && callSupportConversation.current === conversation && callNegotiator.current) return;
     }
     const installation = (async () => {
-      const composition = await conversation.createAuthenticatedCallComposition();
-      if (callSupportConversation.current === conversation && callNegotiator.current) return;
+      const composition = await conversation.createAuthenticatedCallComposition(refreshSessionBinding);
+      if (!refreshSessionBinding && callSupportConversation.current === conversation && callNegotiator.current) return;
 
       // Replacing call support is only valid when the conversation changes. Tear
       // down the old subscriptions before disposal so its empty cleanup update
@@ -230,7 +262,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const event = localCallHistory.current.observe(session);
       if (event && historyVault.current) {
         void writeMessages(historyVault.current, session.conversationId, [event]).then(() => {
-          if (historyRoom.current === session.conversationId) setMessages(current => current.some(item => item.id === event.id) ? current : [...current, event]);
+          setRoomMessages(session.conversationId, current => current.some(item => item.id === event.id) ? current : [...current, event]);
         }).catch(() => undefined);
       }
       const terminal = ['rejected', 'cancelled', 'ended', 'expired', 'failed'].includes(session.state);
@@ -288,7 +320,10 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const profile = await readLocalProfile(storage);
     if (!profile || !contact || contact.changeStatus !== 'unchanged' || sentProfiles.current.get(conversation) === profile.revision) return;
     sentProfiles.current.set(conversation, profile.revision);
-    try { await conversation.sendWithReceipt(encodeProfileMessage({ version: 1, ...profile, identityFingerprint: fingerprint })); }
+    try {
+      await conversation.sendWithReceipt(encodeProfileMessage({ version: 1, ...profile, identityFingerprint: fingerprint }));
+      if (!callActiveRef.current && selectedConversation.current === conversation) await installModernCallSupport(conversation, true);
+    }
     catch { sentProfiles.current.delete(conversation); }
   };
 
@@ -298,16 +333,18 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return index;
   };
 
-  const modernProjection = { setCallError, setChannelHash, setContactIdentity, setDeviceLifecycleState, setIsConnected, setMessages, setModern, setModernCallComposition, setModernCallId, setOwnFingerprint, setPendingDeviceApproval, setPendingDeviceEnrollment, setProtocolMode, setSessionError, setSessionHealth, setSyncStatus, setUserId };
+  const modernProjection = { setCallError, setChannelHash, setContactIdentity, setDeviceLifecycleState, setIsConnected, setModern, setModernCallComposition, setModernCallId, setOwnFingerprint, setPendingDeviceApproval, setPendingDeviceEnrollment, setProtocolMode, setSessionError, setSessionHealth, setSyncStatus, setUserId };
   const resolveModern = async (secureVault: BrowserSecureStorage, descriptor: ConversationDescriptor, sendJoinIntroduction = false): Promise<{ ownFingerprint: string; ownAddress: string; contact?: StoredContactIdentity }> => {
+    conversationOpenStage('candidate-started');
     await readMessages(secureVault, descriptor.roomId).catch(() => { throw conversationFailure('CONVERSATION_STATE_INCOMPLETE'); });
+    conversationOpenStage('history-loaded');
     const conversation = new ModernConversation(secureVault, loadVodozemacBindings);
     const setCallError: typeof modernProjection.setCallError = value => { if (selectedConversation.current === conversation) modernProjection.setCallError(value); };
     const setChannelHash: typeof modernProjection.setChannelHash = value => { if (selectedConversation.current === conversation) modernProjection.setChannelHash(value); };
     const setContactIdentity: typeof modernProjection.setContactIdentity = value => { if (selectedConversation.current === conversation) modernProjection.setContactIdentity(value); };
     const setDeviceLifecycleState: typeof modernProjection.setDeviceLifecycleState = value => { if (selectedConversation.current === conversation) modernProjection.setDeviceLifecycleState(value); };
     const setIsConnected: typeof modernProjection.setIsConnected = value => { if (selectedConversation.current === conversation) modernProjection.setIsConnected(value); };
-    const setMessages: typeof modernProjection.setMessages = value => { if (selectedConversation.current === conversation) modernProjection.setMessages(value); };
+    const setMessages = (value: Message[] | ((current: Message[]) => Message[])) => setRoomMessages(descriptor.roomId, value);
     const setModern: typeof modernProjection.setModern = value => { if (selectedConversation.current === conversation) modernProjection.setModern(value); };
     const setModernCallComposition: typeof modernProjection.setModernCallComposition = value => { if (selectedConversation.current === conversation) modernProjection.setModernCallComposition(value); };
     const setModernCallId: typeof modernProjection.setModernCallId = value => { if (selectedConversation.current === conversation) modernProjection.setModernCallId(value); };
@@ -339,6 +376,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setMessages((current) => current.map((message) => message.id === clientId ? { ...message, delivery: state } : message));
     });
     try {
+      conversationOpenStage('candidate-connect-started');
       const details = await conversation.connect(descriptor.roomId, descriptor.controlCapability, descriptor.remoteAddress, descriptor.remoteIdentityCommitment, async (text, envelopeId) => {
         if (text.startsWith(PROFILE_PREFIX)) {
           const peer = await conversation.getContact();
@@ -364,8 +402,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             deliverNotification({ kind: 'message', conversationId: descriptor.roomId, preview: message.text }, privacyPreferencesRef.current);
             if (selectedConversation.current === conversation && conversation.hasEstablishedSession()) {
               const contact = await conversation.getContact();
-              if (contact?.verification === 'verified' && contact.changeStatus === 'unchanged') {
-                await installModernCallSupport(conversation).catch(() => setCallError('Call signaling is unavailable for this saved contact.'));
+              if (!callActiveRef.current && contact?.verification === 'verified' && contact.changeStatus === 'unchanged') {
+                await installModernCallSupport(conversation, true).catch(() => setCallError('Call signaling is unavailable for this saved contact.'));
               }
             }
           }
@@ -403,12 +441,13 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           await refreshConversations(secureVault);
         }
         if (selectedConversation.current === conversation && !await conversationEligibility(secureVault, (await readConversationDescriptors(secureVault)).find(item => item.roomId === descriptor.roomId))) {
-          setChannelHash(descriptor.roomId); setMessages(await readMessages(secureVault, descriptor.roomId));
+          setChannelHash(descriptor.roomId); setRoomMessages(descriptor.roomId, await readMessages(secureVault, descriptor.roomId));
         }
       }, (event: DeviceControlEvent) => {
         if (event.type === 'enrollment-request') setPendingDeviceEnrollment(event.payload as EnrollmentRequest);
         if (event.type === 'enrollment-approval') setPendingDeviceApproval(event.payload as EnrollmentApprovalPacket);
       }, { sendJoinIntroduction });
+      conversationOpenStage('session-connected');
       const restoredContact = await conversation.getContact();
       const lifecycle = await conversation.getDeviceLifecycleState();
       const trust = await conversation.getDeviceTrust();
@@ -416,34 +455,39 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const finalHistory = await readMessages(secureVault, descriptor.roomId);
       const previous = selectedConversation.current;
       selectedConversation.current = conversation;
-      if (previous && previous !== conversation) await previous.close(false).catch(() => undefined);
-      setCallError(undefined); setMessages(finalHistory);
+      setRoomMessages(descriptor.roomId, current => {
+        const merged = new Map(finalHistory.map(message => [message.id, message]));
+        current.forEach(message => merged.set(message.id, message));
+        return [...merged.values()].sort((left, right) => left.timestamp.getTime() - right.timestamp.getTime());
+      });
+      setCallError(undefined);
       profileFingerprint = details.ownFingerprint;
       setModern(conversation);
-      scheduleProfile();
       const restoredSessionHealth = conversation.getSessionHealth();
       setSessionHealth(restoredSessionHealth);
       setModernCallComposition(null);
       setModernCallId(undefined);
       setProtocolMode('modern');
       setChannelHash(descriptor.roomId);
-      setOwnFingerprint(details.ownFingerprint);
       // Mailbox replay is deliberately requested after authenticated join.
       // An inbound first message can establish an unverified contact during
       // that replay, so read the final durable contact state rather than
       // overwriting it with connect()'s pre-replay snapshot.
       setContactIdentity(restoredContact);
-      if (restoredContact?.verification === 'verified' && restoredContact.changeStatus === 'unchanged' && conversation.hasEstablishedSession()) {
-        await installModernCallSupport(conversation).catch(() => setCallError('Call signaling is unavailable for this saved contact.'));
-      }
+      setChannelHash(descriptor.roomId);
+      setOwnFingerprint(details.ownFingerprint);
       setUserId(details.ownAddress);
       setDeviceLifecycleState(lifecycle);
-
       setIsConnected(true);
       setSyncStatus(restoredSessionHealth !== 'healthy' ? 'blocked' : trust === 'trusted' ? 'ready' : 'blocked');
       setSessionError(restoredSessionHealth === 'unhealthy'
         ? 'This conversation’s encrypted session is missing. Your identity, verification, and saved messages remain available; sending and calls are paused until verified renewal.'
         : restoredSessionHealth === 'renewal-pending' ? 'Verified renewal awaits accepted encrypted delivery.' : undefined);
+      if (previous && previous !== conversation) void previous.close(false).catch(() => undefined);
+      scheduleProfile();
+      if (restoredContact?.verification === 'verified' && restoredContact.changeStatus === 'unchanged' && conversation.hasEstablishedSession()) {
+        await installModernCallSupport(conversation).catch(() => setCallError('Call signaling is unavailable for this saved contact.'));
+      }
       return details;
     } catch (error) {
       await conversation.close(false).catch(() => undefined);
@@ -455,8 +499,9 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     selections.current.run(() => resolveModern(storage, descriptor, introduce), async () => undefined);
 
   useEffect(() => {
-    if (vault && channelHash && protocolMode === 'modern') void writeMessages(vault, channelHash, messages).catch((error) => debugError('Message history persistence failed', error));
-  }, [channelHash, messages, protocolMode, vault]);
+    const history = channelHash ? messagesByRoom[channelHash] : undefined;
+    if (vault && channelHash && protocolMode === 'modern' && history) void writeMessages(vault, channelHash, history).catch((error) => debugError('Message history persistence failed', error));
+  }, [channelHash, messagesByRoom, protocolMode, vault]);
 
   const createModernChannel = useCallback(async (passphrase: string, displayName?: string): Promise<string> => {
     if (!chat) throw new Error('Chat not initialized');
@@ -537,15 +582,19 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, [modern]);
 
   const openConversation = useCallback(async (roomId: string): Promise<void> => {
-    if (roomId === channelHash && modern) return;
+    conversationOpenStage('started');
+    if (roomId === channelHash && modern) { conversationOpenStage('same-room'); return; }
     if (!vault) throw new Error('Unlock this device before opening a conversation.');
     const descriptor = conversations.find((item) => item.roomId === roomId);
     if (!descriptor) throw new Error('Conversation is unavailable.');
     try {
       const failure = await conversationEligibility(vault, descriptor, probeConversationRoom);
       if (failure) throw conversationFailure(failure);
+      conversationOpenStage('eligible');
       await connectModern(vault, descriptor);
+      conversationOpenStage('connected');
     } catch (error) {
+      conversationOpenStage('failed');
       const code = classifySafeDiagnostic('conversation-open', error);
       if (['CONVERSATION_RECORD_INVALID', 'CONVERSATION_INVITATION_UNACCEPTED', 'CONVERSATION_INVITATION_EXPIRED', 'CONVERSATION_SESSION_MISSING', 'CONVERSATION_ROOM_MISSING', 'CONTACT_REGISTRY_MISSING', 'ROOM_MEMBERSHIP_MISMATCH', 'CONVERSATION_STATE_INCOMPLETE', 'CONVERSATION_RESTORE_FAILED'].includes(code)) {
         setConversations(current => current.filter(item => item.roomId !== roomId));
@@ -657,7 +706,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         setIsConnected(true);
 
         // Setup listeners
-        setupChatListeners(chat);
+        setupChatListeners(chat, roomId);
 
         // Check for existing users
         await checkExistingUsers(chat);
@@ -673,46 +722,50 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const sendMessage = useCallback(
     async (text: string) => {
       if (!userId || (protocolMode === 'legacy' && !chat) || (protocolMode === 'modern' && (!modern || !vault || !channelHash))) throw new Error('Chat not ready');
+      const ownerRoomId = channelHash || 'legacy';
       const outgoing = { ...displayMessage(userId, text, 'sent'), delivery: 'pending' as const };
       try {
         if (protocolMode === 'modern') {
+          const roomId = ownerRoomId;
+          const activeConversation = modern!;
           const clientId = await modern!.sendWithReceipt(text, async (id) =>
-            prepareMessageAcceptance(vault!, channelHash, { ...outgoing, id }));
+            prepareMessageAcceptance(vault!, roomId, { ...outgoing, id }));
           const accepted = acceptedDeliveries.current.delete(clientId);
-          addMessage({ ...outgoing, id: clientId, delivery: accepted ? 'accepted' : 'pending' });
-          const contact = await modern!.getContact();
-          if (modern!.hasEstablishedSession() && contact?.verification === 'verified' && contact.changeStatus === 'unchanged') {
-            await installModernCallSupport(modern!).catch(() => setCallError('Call signaling is unavailable for this saved contact.'));
+          addMessage(roomId, { ...outgoing, id: clientId, delivery: accepted ? 'accepted' : 'pending' });
+          const contact = await activeConversation.getContact();
+          if (!callActiveRef.current && activeConversation.hasEstablishedSession() && contact?.verification === 'verified' && contact.changeStatus === 'unchanged' && selectedConversation.current === activeConversation) {
+            await installModernCallSupport(activeConversation, true).catch(() => setCallError('Call signaling is unavailable for this saved contact.'));
           }
           return;
         }
         await chat!.encrypt({ text, image: '' }).send();
-        addMessage({ ...outgoing, delivery: 'accepted' });
+        addMessage(ownerRoomId, { ...outgoing, delivery: 'accepted' });
       } catch (err) {
-        addMessage({ ...outgoing, delivery: 'failed' });
+        addMessage(ownerRoomId, { ...outgoing, delivery: 'failed' });
         debugError('Message send failed', err);
         throw err;
       }
     },
-    [channelHash, chat, modern, protocolMode, userId, vault]
+    [addMessage, channelHash, chat, modern, protocolMode, userId, vault]
   );
 
   const retryMessage = useCallback(async (messageId: string): Promise<void> => {
     const failed = messages.find((message) => message.id === messageId && message.type === 'sent');
     if (!failed) throw new Error('Message retry is unavailable.');
-    setMessages((current) => current.map((message) => message.id === messageId ? { ...message, delivery: 'pending' } : message));
+    const roomId = channelHash;
+    setRoomMessages(roomId, (current) => current.map((message) => message.id === messageId ? { ...message, delivery: 'pending' } : message));
     try {
       if (protocolMode === 'modern') await modern?.retryPending();
       else {
         if (!chat) throw new Error('Chat is unavailable.');
         await chat.encrypt({ text: failed.text, image: '' }).send();
-        setMessages((current) => current.map((message) => message.id === messageId ? { ...message, delivery: 'accepted' } : message));
+        setRoomMessages(roomId, (current) => current.map((message) => message.id === messageId ? { ...message, delivery: 'accepted' } : message));
       }
     } catch (error) {
-      setMessages((current) => current.map((message) => message.id === messageId ? { ...message, delivery: 'failed' } : message));
+      setRoomMessages(roomId, (current) => current.map((message) => message.id === messageId ? { ...message, delivery: 'failed' } : message));
       throw error;
     }
-  }, [chat, messages, modern, protocolMode]);
+  }, [channelHash, chat, messages, modern, protocolMode, setRoomMessages]);
 
   useEffect(() => {
     const retry = () => { if (modern) void modern.retryPending(); };
@@ -779,28 +832,46 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const startCall = useCallback(async () => {
     if (protocolMode === 'modern') {
       setCallError(undefined);
-      if (!modern) throw new Error('Modern conversation is not ready for calling.');
-      const composition = modernCallComposition ?? await modern.createAuthenticatedCallComposition();
+      const conversation = modern;
+      if (!conversation || selectedConversation.current !== conversation) { callStartDiagnostic('conversation'); throw new Error('Modern conversation is not ready for calling.'); }
+      if (callActiveRef.current) throw new Error('A call is already active.');
+      try { await installModernCallSupport(conversation, true); }
+      catch (error) { callStartDiagnostic('support', error); throw error; }
+      if (selectedConversation.current !== conversation || callSupportConversation.current !== conversation || !callNegotiator.current) {
+        callStartDiagnostic('support'); throw new Error('Authenticated call media is not ready. Reverify this contact.');
+      }
+      let composition;
+      try { composition = await conversation.createAuthenticatedCallComposition(); }
+      catch (error) { callStartDiagnostic('composition', error); throw error; }
       setModernCallComposition(composition);
-      if (!callNegotiator.current) throw new Error('Authenticated call media is not ready. Reverify this contact.');
-      await composition.invite();
+      try { await composition.invite(); }
+      catch (error) { callStartDiagnostic('invite', error); throw error; }
       return;
     }
     throw new Error('Verification required: legacy conversations have no local contact verification authority.');
-  }, [chat, modern, modernCallComposition, protocolMode]);
+  }, [modern, protocolMode]);
 
   const startVideoCall = useCallback(async () => {
     if (protocolMode === 'modern') {
       setCallError(undefined);
-      if (!modern) throw new Error('Modern conversation is not ready for calling.');
-      const composition = modernCallComposition ?? await modern.createAuthenticatedCallComposition();
+      const conversation = modern;
+      if (!conversation || selectedConversation.current !== conversation) { callStartDiagnostic('conversation'); throw new Error('Modern conversation is not ready for calling.'); }
+      if (callActiveRef.current) throw new Error('A call is already active.');
+      try { await installModernCallSupport(conversation, true); }
+      catch (error) { callStartDiagnostic('support', error); throw error; }
+      if (selectedConversation.current !== conversation || callSupportConversation.current !== conversation || !callNegotiator.current) {
+        callStartDiagnostic('support'); throw new Error('Authenticated call media is not ready. Reverify this contact.');
+      }
+      let composition;
+      try { composition = await conversation.createAuthenticatedCallComposition(); }
+      catch (error) { callStartDiagnostic('composition', error); throw error; }
       setModernCallComposition(composition);
-      if (!callNegotiator.current) throw new Error('Authenticated call media is not ready. Reverify this contact.');
-      await composition.invite('video');
+      try { await composition.invite('video'); }
+      catch (error) { callStartDiagnostic('invite', error); throw error; }
       return;
     }
     throw new Error('Verification required: legacy conversations have no local contact verification authority.');
-  }, [chat, modern, modernCallComposition, protocolMode]);
+  }, [modern, protocolMode]);
 
   const acceptCall = useCallback(async () => {
     if (protocolMode === 'modern') {
@@ -997,12 +1068,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, [protocolMode]);
 
   // Add message to state
-  const addMessage = useCallback((message: Message) => {
-    setMessages((prev) => [...prev, message]);
-  }, []);
-
   // Setup chat listeners
-  const setupChatListeners = (chatInstance: IChatE2EE) => {
+  const setupChatListeners = (chatInstance: IChatE2EE, roomId: string) => {
     chatInstance.on('on-alice-join', () => {
       playBeep();
       setIsConnected(true);
@@ -1019,8 +1086,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     // this fires — `msg.message` is plaintext.
     chatInstance.on('chat-message', (msg: any) => {
       const message = displayMessage(msg.sender, msg.message, 'received');
-      addMessage(message);
-      deliverNotification({ kind: 'message', conversationId: channelHash || 'legacy', preview: message.text }, privacyPreferencesRef.current);
+      addMessage(roomId, message);
+      deliverNotification({ kind: 'message', conversationId: roomId || 'legacy', preview: message.text }, privacyPreferencesRef.current);
     });
 
     chatInstance.on('call-added', (call: IE2ECall) => {
@@ -1120,7 +1187,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setModernCallId(undefined);
       setProtocolMode('legacy');
       setChannelHash('');
-      setMessages([]);
+      if (channelHash) setRoomMessages(channelHash, []);
       return;
     }
     if (!chat) return;
@@ -1128,7 +1195,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       await chat.delete();
       setIsConnected(false);
       setChannelHash('');
-      setMessages([]);
+      if (channelHash) setRoomMessages(channelHash, []);
     } catch (err) {
       debugError('Conversation deletion failed', err);
       throw err;

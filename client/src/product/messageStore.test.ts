@@ -36,3 +36,22 @@ it('does not let stale UI history erase an atomically accepted inbound M1 messag
     expect.objectContaining({ id: 'v1:accepted', text: 'received' }),
   ]));
 });
+
+it('quarantines one invalid history entry atomically and restores the valid room messages', async () => {
+  const store = new MemoryStore();
+  const valid = { id: 'kept-message', sender: 'alice', text: 'kept safely', type: 'sent', timestamp: '2026-01-01T00:00:00.000Z', delivery: 'accepted' };
+  const invalid = { id: 'bad-message', sender: 'alice', text: 42, type: 'sent', timestamp: 'not-a-date' };
+  await store.write('product-messages', 'room', new TextEncoder().encode(JSON.stringify([valid, invalid])).buffer as ArrayBuffer);
+
+  const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+  const restored = await readMessages(store, 'room');
+  expect(restored).toHaveLength(1);
+  expect(restored[0]).toMatchObject({ id: 'kept-message', text: 'kept safely' });
+  expect(await readMessages(store, 'room')).toHaveLength(1);
+  const repaired = JSON.parse(new TextDecoder().decode(new Uint8Array((await store.read('product-messages', 'room'))!)));
+  const quarantine = JSON.parse(new TextDecoder().decode(new Uint8Array((await store.read('product-message-quarantine', 'room'))!)));
+  expect(repaired).toHaveLength(1);
+  expect(quarantine).toMatchObject({ version: 1, entries: [{ index: 1, value: invalid, reason: 'invalid-message-entry' }] });
+  expect(warn).toHaveBeenCalledWith('[K3NCRYPT]', { event: 'conversation_open_failed', reason: 'MESSAGE_HISTORY_ENTRY_QUARANTINED' });
+  warn.mockRestore();
+});

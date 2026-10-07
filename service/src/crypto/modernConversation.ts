@@ -54,7 +54,6 @@ const JOIN_INTRODUCTION_SEEN_RECORD = 'conversation-join-introduction-seen';
 const JOIN_INTRODUCTION_MAGIC = new Uint8Array([0x00, 0x4b, 0x33, 0x4e, 0x43, 0x49, 0x01]);
 const MAX_PENDING = 32;
 const MAX_SEEN = 1024;
-
 type SessionAudit = {
     version: 1;
     classification: 'unused-outbound' | 'retired-unused-outbound' | 'session-with-message-history' | 'active-established' | 'legacy-unclassified';
@@ -268,6 +267,7 @@ export class ModernConversation {
     private inboundDiagnosticEvents: InboundDiagnosticEvent[] = [];
     /** A replay can arrive while connect() owns the conversation tab lock. */
     private connecting = false;
+    private readonly inboundLockAbort = new AbortController();
     private localAddress?: string;
     private localIdentityId?: string;
     private userScope?: string;
@@ -333,7 +333,7 @@ export class ModernConversation {
                 }
                 return this.connecting
                     ? this.receive(message.envelope, message.senderRoutingId)
-                    : this.withTabLock(this.roomId ?? 'unknown', () => this.receive(message.envelope, message.senderRoutingId));
+                    : this.withTabLock(this.roomId ?? 'unknown', () => this.receive(message.envelope, message.senderRoutingId), false, this.inboundLockAbort.signal);
             });
         this.transport = transportManager ?? new DefaultTransportManager(relay!);
         // Message envelopes use the relay-only delivery boundary. Call
@@ -349,7 +349,9 @@ export class ModernConversation {
     public async connect(roomId: string, capability: string, remoteAddress?: string, remoteIdentityCommitment?: string, onMessage?: (text: string, envelopeId: string) => InboundMessageAcceptancePlan | Promise<InboundMessageAcceptancePlan>, onContactChange?: (contact: StoredContactIdentity) => void | Promise<void>, onDeviceControl?: (message: DeviceControlEvent) => void, options?: { sendJoinIntroduction?: boolean }): Promise<ModernConnectionDetails> {
         const details = await this.withTabLock(roomId, async () => {
             this.connecting = true;
-            try { return await this.connectUnlocked(roomId, capability, remoteAddress, remoteIdentityCommitment, onMessage, onContactChange, onDeviceControl, options); }
+            try {
+                return await this.connectUnlocked(roomId, capability, remoteAddress, remoteIdentityCommitment, onMessage, onContactChange, onDeviceControl, options);
+            }
             finally { this.connecting = false; }
         }, true);
         const activeTransport = this.transport.activeTransport();
@@ -711,7 +713,14 @@ export class ModernConversation {
         text: string,
         prepareHistoryUpdate?: (clientId: string) => Promise<SecureRecordUpdate>,
     ): Promise<string> {
-        if (this.roomId) return this.withTabLock(this.roomId, () => this.sendUnlocked(text, prepareHistoryUpdate));
+        if (this.roomId) {
+            const clientId = await this.withTabLock(this.roomId, () => this.sendUnlocked(text, prepareHistoryUpdate));
+            // Durable encrypted enqueue is the acceptance boundary. Relay I/O
+            // must not retain the room lock and block another conversation
+            // instance from restoring the same room.
+            try { await this.retryPending(); } catch { /* Reconnect retries the committed ciphertext. */ }
+            return clientId;
+        }
         throw new Error('The private contact is not ready.');
     }
 
@@ -773,10 +782,6 @@ export class ModernConversation {
             } finally { plaintext.fill(0); }
         });
         if (sessionSetup) this.lastConnectionFailureCategory = undefined;
-        // The sender transaction is the acceptance boundary. A later local
-        // read or relay attempt cannot turn its durable pending send into a
-        // caller-visible failure that might encourage re-encryption.
-        try { await this.retryPending(); } catch { /* Reconnect retries the committed ciphertext. */ }
         return clientId;
     }
 
@@ -950,7 +955,7 @@ export class ModernConversation {
      * verified contact are all required; legacy conversations cannot reach
      * this boundary because they do not own a ModernConversation instance.
      */
-    public async createAuthenticatedCallComposition(): Promise<AuthenticatedCallComposition> {
+    public async createAuthenticatedCallComposition(refreshSessionBinding = false): Promise<AuthenticatedCallComposition> {
         if (this.sessionHealth !== 'healthy') throw new Error('The encrypted session needs verified renewal before calling.');
         if (!this.roomId || !this.localAddress || !this.localIdentityId || !this.remoteAddress) {
             throw new Error('Modern conversation is not ready for calling.');
@@ -960,7 +965,7 @@ export class ModernConversation {
         if (!contact || contact.changeStatus !== 'unchanged' || contact.verification !== 'verified') {
             throw new Error('Verify this contact before starting a call.');
         }
-        if (this.callComposition) return this.callComposition;
+        if (this.callComposition && !refreshSessionBinding) return this.callComposition;
         // Calls use the established conversation session for encrypted
         // signaling. Do not create an outbound session just to prepare call
         // support: both peers may do so independently before the first
@@ -1095,6 +1100,10 @@ export class ModernConversation {
         this.syncRelay?.close();
         if (this.retryTimer) clearInterval(this.retryTimer);
         await this.transport.stop();
+        // A transport may already have delivered more envelopes than the old
+        // conversation can drain. Cancel only its queued receive lock requests
+        // so a newly selected instance is not starved by a retired listener.
+        this.inboundLockAbort.abort();
         this.runtime.close();
         this.callComposition = undefined;
         this.callSignalTransport = undefined;
@@ -1603,8 +1612,8 @@ export class ModernConversation {
         }
     }
 
-    private async withTabLock<T>(conversationId: string, operation: () => Promise<T>, persistLease = false): Promise<T> {
-        const locks = (globalThis as typeof globalThis & { navigator?: { locks?: { request: (name: string, callback: () => Promise<T>) => Promise<T> } } }).navigator?.locks;
+    private async withTabLock<T>(conversationId: string, operation: () => Promise<T>, persistLease = false, signal?: AbortSignal): Promise<T> {
+        const locks = (globalThis as typeof globalThis & { navigator?: { locks?: { request: (name: string, options: { signal?: AbortSignal }, callback: () => Promise<T>) => Promise<T> } } }).navigator?.locks;
         if (typeof (globalThis as typeof globalThis & { window?: unknown }).window === 'undefined') return operation();
         const browser = globalThis as typeof globalThis & { localStorage?: Storage };
         if (!browser.localStorage) {
@@ -1612,6 +1621,7 @@ export class ModernConversation {
             throw new Error('Secure conversation requires a browser tab lock.');
         }
         const key = `k3ncrypt-tab-lease:${conversationId}`;
+        const lockName = `k3ncrypt-modern:${conversationId}`;
         const now = Date.now();
         const current = browser.localStorage.getItem(key);
         const [owner, expires] = current?.split(':') ?? [];
@@ -1621,7 +1631,7 @@ export class ModernConversation {
             this.fallbackLeaseKey = key;
         }
         try {
-            const result = locks ? await locks.request(`k3ncrypt-modern:${conversationId}`, operation) : await operation();
+            const result = locks ? await locks.request(lockName, { ...(signal ? { signal } : {}) }, operation) : await operation();
             if (persistLease) {
                 if (this.fallbackLeaseTimer) clearInterval(this.fallbackLeaseTimer);
                 this.fallbackLeaseTimer = setInterval(() => this.refreshFallbackLease(browser.localStorage!, key), TAB_LEASE_MS / 3);
