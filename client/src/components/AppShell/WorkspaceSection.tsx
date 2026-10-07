@@ -20,10 +20,10 @@ export const WorkspaceSection: React.FC<WorkspaceSectionProps> = ({ section, onO
   const { conversations, channelHash, isConnected, sessionHealth, protocolMode, contactIdentity, startCall, startVideoCall, callLifecycleState, setContactNickname } = useChat();
   const filteredConversations = useMemo(() => {
     const query = contactQuery.trim().toLocaleLowerCase();
-    return conversations.filter((item) => !query || item.label.toLocaleLowerCase().includes(query));
+    return conversations.filter((item) => !query || contactDisplayName(item.label, item.roomId, item.remoteDisplayName, item.localNickname).toLocaleLowerCase().includes(query));
   }, [contactQuery, conversations]);
   const active = conversations.find((conversation) => conversation.roomId === channelHash)
-    ?? (protocolMode === 'legacy' && channelHash ? { roomId: channelHash, label: 'Private conversation' } : undefined);
+    ?? (protocolMode === 'legacy' && channelHash ? { roomId: channelHash, label: 'Private conversation', remoteDisplayName: undefined, localNickname: undefined } : undefined);
   const activeContactVerified = Boolean(active && active.roomId === channelHash && contactIdentity?.verification === 'verified' && contactIdentity.changeStatus === 'unchanged');
   const callLaunchBlockReason = getCallLaunchBlockReason({
     hasConversation: Boolean(active && active.roomId === channelHash),
@@ -54,8 +54,8 @@ export const WorkspaceSection: React.FC<WorkspaceSectionProps> = ({ section, onO
       {conversations.length > 0 && <label className="workspace-search"><SearchIcon size={17} /><input value={contactQuery} onChange={(event) => setContactQuery(event.target.value)} placeholder="Search saved contacts" aria-label="Search saved contacts" /></label>}
       {filteredConversations.length ? <div className="workspace-contact-list">{filteredConversations.map((contact) => <div className="workspace-contact-shell" key={contact.roomId}>
         <button className="workspace-contact" onClick={() => onOpenConversation(contact.roomId)} type="button">
-          <Avatar label={contactDisplayName(contact.label, contact.roomId)} size="large" />
-          <span className="workspace-contact__copy"><strong>{contactDisplayName(contact.label, contact.roomId)}</strong><small>{contact.roomId === channelHash && sessionHealth !== 'healthy' ? 'Security update required' : contact.roomId === channelHash ? 'Relay conversation open' : 'Saved on this device'}</small></span>
+          <Avatar label={contactDisplayName(contact.label, contact.roomId, contact.remoteDisplayName, contact.localNickname)} size="large" />
+          <span className="workspace-contact__copy"><strong>{contactDisplayName(contact.label, contact.roomId, contact.remoteDisplayName, contact.localNickname)}</strong><small>{contact.roomId === channelHash && sessionHealth !== 'healthy' ? 'Security update required' : contact.roomId === channelHash ? 'Relay conversation open' : 'Saved on this device'}</small></span>
         </button>
         <button className="workspace-contact__edit" type="button" aria-label={`Edit nickname for ${contact.label}`} onClick={() => {
           const next = window.prompt('Contact nickname (saved only on this device; helps recognition and does not verify identity)', contact.label);
@@ -68,7 +68,7 @@ export const WorkspaceSection: React.FC<WorkspaceSectionProps> = ({ section, onO
   return <main className="workspace-page">
     <header className="workspace-page__header"><div><span className="eyebrow">Private communication</span><h1>Calls</h1><p>Start a voice or video call from a trusted, connected conversation.</p></div></header>
     {active ? <section className="call-launch-card">
-      <div className="call-launch-card__person"><Avatar label={contactDisplayName(active.label)} size="large" /><div><strong>{contactDisplayName(active.label)}</strong><small>{activeContactVerified ? 'Verified contact · encrypted chat' : contactIdentity?.changeStatus === 'changed-pending-review' ? 'Identity changed · review required' : contactIdentity ? 'Not verified on this device' : 'Verification status unavailable'}</small></div></div>
+      <div className="call-launch-card__person"><Avatar label={contactDisplayName(active.label, active.roomId, active.remoteDisplayName, active.localNickname)} size="large" /><div><strong>{contactDisplayName(active.label, active.roomId, active.remoteDisplayName, active.localNickname)}</strong><small>{activeContactVerified ? 'Verified contact · encrypted chat' : contactIdentity?.changeStatus === 'changed-pending-review' ? 'Identity changed · review required' : contactIdentity ? 'Not verified on this device' : 'Verification status unavailable'}</small></div></div>
       <div className="call-launch-card__actions"><Button variant="secondary" disabled={Boolean(callLaunchBlockReason)} onClick={() => void launchCall('audio')} aria-label="Start audio call"><PhoneIcon size={18} /> Voice call</Button><Button variant="primary" disabled={Boolean(callLaunchBlockReason)} onClick={() => void launchCall('video')} aria-label="Start video call"><VideoIcon size={18} /> Video call</Button></div>
       {callLaunchBlockReason && <p className="workspace-call-readiness" role="status">{callLaunchBlockMessage(callLaunchBlockReason)}</p>}
       {callMessage && <p className="workspace-feedback" role="status">{callMessage}</p>}

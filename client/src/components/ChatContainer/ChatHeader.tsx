@@ -25,8 +25,8 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({ onStartCall, onStartVide
   const { isConnected, channelHash, deleteChannel, protocolMode, sessionHealth, conversations, contactIdentity } = useChat();
   const [hashCopied, setHashCopied] = useState(false);
   const activeConversation = conversations.find((conversation) => conversation.roomId === channelHash)
-    ?? (protocolMode === 'legacy' && channelHash ? { roomId: channelHash, label: 'Private conversation' } : undefined);
-  const contactLabel = contactDisplayName(activeConversation?.label, activeConversation?.roomId);
+    ?? (protocolMode === 'legacy' && channelHash ? { roomId: channelHash, label: 'Private conversation', remoteDisplayName: undefined, localNickname: undefined } : undefined);
+  const contactLabel = contactDisplayName(activeConversation?.label, activeConversation?.roomId, activeConversation?.remoteDisplayName, activeConversation?.localNickname);
   const securityVisibility = deriveSecurityVisibility({
     contact: protocolMode === 'modern' ? contactIdentity : undefined,
     sessionHealth: protocolMode === 'modern' ? sessionHealth : undefined,

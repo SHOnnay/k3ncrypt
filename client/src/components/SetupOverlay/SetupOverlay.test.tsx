@@ -35,7 +35,7 @@ describe('first-run and returning-account setup', () => {
   it('labels first-use account creation distinctly from adding a contact', () => {
     expect(renderSetup('new')).toContain('Create your private account');
     const returning = renderSetup('ready');
-    expect(returning).toContain('Add a contact');
+    expect(returning).toContain('Bring someone in');
     expect(returning).not.toContain('Create your private account');
   });
 });

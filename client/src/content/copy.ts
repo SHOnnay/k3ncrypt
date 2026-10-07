@@ -25,9 +25,11 @@ export const copy = {
 
 const genericContactLabels = new Set(['contact', 'private contact', 'trusted contact', 'new contact', 'private conversation', 'conversation']);
 
-export const contactDisplayName = (label?: string | null, roomId?: string): string => {
+export const contactDisplayName = (label?: string | null, roomId?: string, remoteDisplayName?: string, localNickname?: string): string => {
+  if (localNickname?.trim()) return localNickname.trim();
   const trimmed = label?.trim();
   if (trimmed && !genericContactLabels.has(trimmed.toLocaleLowerCase())) return trimmed;
+  if (remoteDisplayName?.trim()) return remoteDisplayName.trim();
   const shortId = roomId?.replace(/[^a-z0-9]/gi, '').slice(-4).toLocaleUpperCase();
   return shortId ? `Contact · ${shortId}` : 'Contact';
 };

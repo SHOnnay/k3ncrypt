@@ -35,7 +35,7 @@ export { conversationCreationPolicy, modeForNewConversation, resolveConversation
 export * from './calls';
 export * from './privateNetwork';
 export type { ConversationCreationPolicy, PersistedConversationMode } from './crypto/conversationPolicy';
-export { encodeVerificationQrPayload, decodeVerificationQrPayload, verificationStateForContact } from './identity/verificationFoundation';
+export { encodeVerificationQrPayload, decodeVerificationQrPayload, verificationStateForContact, deriveHumanVerificationCode, verificationQrMatches } from './identity/verificationFoundation';
 export type { CanonicalVerificationQrPayload, VerificationState } from './identity/verificationFoundation';
 export type {
     VodozemacBindings,

@@ -17,6 +17,19 @@ const assertFingerprint = (fingerprint: string): void => {
     }
 };
 
+/** 96 comparison bits from both complete public fingerprints; never a trust decision. */
+export const deriveHumanVerificationCode = async (left: string, right: string): Promise<string> => {
+    assertFingerprint(left); assertFingerprint(right);
+    const ordered = [left, right].sort();
+    const input = new TextEncoder().encode(`k3ncrypt:relationship-comparison:v1\0${JSON.stringify(ordered)}`);
+    const digest = new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', input));
+    return Array.from({ length: 6 }, (_, index) => String((digest[index * 2] << 8) | digest[index * 2 + 1]).padStart(5, '0')).join(' · ');
+};
+
+export const verificationQrMatches = (encoded: string, pinnedFingerprint: string): boolean => {
+    try { return decodeVerificationQrPayload(encoded).fingerprint === pinnedFingerprint; } catch { return false; }
+};
+
 /**
  * Produces a deterministic, public-only QR payload. This is a data boundary,
  * not a verification decision: callers must still compare out of band and

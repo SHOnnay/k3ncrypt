@@ -1,27 +1,20 @@
 import type { ProductSecureStorage } from './sessionStore';
-
-const RECORD_TYPE = 'product-profile';
-const RECORD_ID = 'local';
-const encoder = new TextEncoder();
-const decoder = new TextDecoder();
-
-const normalizeName = (value: unknown): string => {
-  if (typeof value !== 'string') throw new Error('Display name is invalid.');
-  const trimmed = value.trim();
-  if (!trimmed || trimmed.length > 40 || /[\u0000-\u001f\u007f]/.test(trimmed)) throw new Error('Display name must be 1–40 characters.');
-  const name = trimmed.replace(/\s+/g, ' ');
-  return name;
-};
-
-export const readProfileName = async (storage: ProductSecureStorage): Promise<string | undefined> => {
-  const bytes = await storage.read(RECORD_TYPE, RECORD_ID);
+import { normalizeDisplayName } from './profileMetadata';
+const TYPE = 'product-profile';
+const ID = 'local';
+export const readLocalProfile = async (storage: ProductSecureStorage): Promise<{ displayName: string; revision: number } | undefined> => {
+  const bytes = await storage.read(TYPE, ID);
   if (!bytes) return undefined;
-  const parsed: unknown = JSON.parse(decoder.decode(new Uint8Array(bytes)));
-  return normalizeName(parsed);
+  const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
+  if (typeof parsed === 'string') return { displayName: normalizeDisplayName(parsed), revision: 1 };
+  if (!parsed || typeof parsed !== 'object' || !('displayName' in parsed) || !('revision' in parsed) || !Number.isSafeInteger(parsed.revision)) throw new Error('Saved profile is invalid.');
+  return { displayName: normalizeDisplayName(parsed.displayName), revision: parsed.revision as number };
 };
-
+export const readProfileName = async (storage: ProductSecureStorage): Promise<string | undefined> => (await readLocalProfile(storage))?.displayName;
 export const writeProfileName = async (storage: ProductSecureStorage, value: string): Promise<string> => {
-  const name = normalizeName(value);
-  await storage.write(RECORD_TYPE, RECORD_ID, encoder.encode(JSON.stringify(name)).buffer as ArrayBuffer);
-  return name;
+  const displayName = normalizeDisplayName(value);
+  const previous = await readLocalProfile(storage);
+  const revision = Math.max(Date.now(), (previous?.revision ?? 0) + 1);
+  await storage.write(TYPE, ID, new TextEncoder().encode(JSON.stringify({ displayName, revision })).buffer as ArrayBuffer);
+  return displayName;
 };

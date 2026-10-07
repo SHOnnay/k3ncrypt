@@ -65,6 +65,7 @@ router.post('/', controlRateLimit, asyncHandler(async (req, res) => {
   const channel = req.params.channel;
   const capability = readControlCapability(req);
   if (!await authorize(channel, capability) || !validBundle(req.body)) return res.status(400).send({ error: 'Invalid pre-key bundle' });
+  if (!await db.reserveInvitationPublication(channel)) return res.status(410).send({ error: 'Invitation expired or already accepted' });
   const address = randomUUID();
   const renewalProof = randomBytes(32).toString('base64url');
   await db.insertInDb({ channel, address, bundle: req.body, renewalProofHash: proofHash(renewalProof), createdAt: new Date(), expiresAt: new Date(Date.now() + PREKEY_BUNDLE_TTL_MS) }, PREKEY_COLLECTION);

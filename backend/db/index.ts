@@ -91,6 +91,26 @@ export const claimOneTimeKey = async <T>(condition, keyId: string, collectionNam
 };
 
 export const prekeyStorageReady = (): boolean => process.env.NODE_ENV !== 'production' || !inMem;
+
+/** New invitations allow only the creator and one joining peer. Room operations remain available after join. */
+export const reserveInvitationPublication = async (channel: string, now = Date.now()): Promise<boolean> => {
+  if (inMem) {
+    const room = _findOneFromDB({ hash: channel }, LINK_COLLECTION) as { invitationExpiresAt?: Date; invitationPublications?: number; deleted?: boolean; expired?: boolean } | undefined;
+    if (!room || room.deleted || room.expired) return false;
+    if (room.invitationExpiresAt === undefined) return true; // Existing rooms retain their established compatibility contract.
+    if (!(room.invitationExpiresAt instanceof Date) || room.invitationExpiresAt.getTime() <= now ||
+        !Number.isSafeInteger(room.invitationPublications) || room.invitationPublications! >= 2) return false;
+    room.invitationPublications! += 1;
+    return true;
+  }
+  const result = await db.collection(LINK_COLLECTION).updateOne(
+    { hash: channel, deleted: false, expired: false, invitationExpiresAt: { $gt: new Date(now) }, invitationPublications: { $gte: 0, $lt: 2 } },
+    { $inc: { invitationPublications: 1 } },
+  );
+  if (result.modifiedCount === 1) return true;
+  const legacy = await db.collection(LINK_COLLECTION).findOne({ hash: channel, deleted: false, expired: false, invitationExpiresAt: { $exists: false } });
+  return !!legacy;
+};
 export const persistentStorageReady = (): boolean => !inMem;
 export const getDatabase = (): Db | undefined => inMem || !db ? undefined : db;
 export const ping = async (): Promise<void> => {
@@ -175,6 +195,7 @@ export default {
   updateOneFromDb,
   claimOneTimeKey,
   prekeyStorageReady,
+  reserveInvitationPublication,
   cleanupExpiredPrekeyBundles,
   storeOfflineMessage,
   claimOfflineMessage,

@@ -10,13 +10,16 @@ import './ChatFooter.css';
 import { debugError } from '../../utils/debug';
 import { useFiles } from '../../context/FileContext';
 import { BrowserCaptureController } from '../../../../service/src/privacy/capture';
+import { contactDisplayName } from '../../content/copy';
 import { fileTransferCopy } from '../../product/fileTransferCopy';
 import { classifySafeDiagnostic, logSafeFailure, safeFailureCopy, type SafeDiagnosticCode } from '../../product/safeDiagnostics';
 import { SafeDiagnosticDetails } from '../common/SafeDiagnosticDetails';
 
 export const ChatFooter: React.FC<{ onVerifyContact: () => void }> = ({ onVerifyContact }) => {
-  const { sendMessage, sessionHealth, contactIdentity } = useChat();
+  const { sendMessage, sessionHealth, contactIdentity, conversations, channelHash } = useChat();
   const { sendFile, retry, transfer, cancel: cancelTransfer } = useFiles();
+  const activeContact = conversations?.find((item) => item.roomId === channelHash);
+  const contactLabel = contactDisplayName(activeContact?.label, activeContact?.roomId, activeContact?.remoteDisplayName, activeContact?.localNickname);
   const transferStatus = fileTransferCopy(transfer);
   const busy = transferStatus.active;
   const verified = contactIdentity?.verification === 'verified' && contactIdentity.changeStatus === 'unchanged';
@@ -185,7 +188,7 @@ export const ChatFooter: React.FC<{ onVerifyContact: () => void }> = ({ onVerify
       </div>
       {transfer.phase !== 'RestartRequired' && <div className="media-transfer-status" role="status" aria-live="polite"><span>{transferStatus.label}</span>{transferStatus.progress !== undefined && <progress max={100} value={transferStatus.progress} aria-label="File transfer progress" />}{busy && <button type="button" onClick={cancelTransfer}>Cancel</button>}{transfer.phase === 'Failed' && transfer.retryable && <button type="button" onClick={retryAttachment}>Retry</button>}</div>}
       <div className="composer-feedback">Photos and files up to 8 MiB. You choose when to save a download.</div>
-      {!verified && contactIdentity && <div className="composer-feedback"><strong>Invitation accepted</strong><p>Verify this contact before sharing files.</p><button type="button" className="btn btn--secondary" onClick={onVerifyContact}>Verify this contact</button></div>}
+      {!verified && contactIdentity && <div className="composer-feedback"><strong>Invitation accepted</strong><p>Verify this contact before sharing files.</p><button type="button" className="btn btn--secondary" onClick={onVerifyContact}>Verify {contactLabel}</button></div>}
       {actionMessage && <div className="composer-feedback" role="status">{actionMessage}<SafeDiagnosticDetails code={actionDiagnostic} /></div>}
     </footer>
   );

@@ -18,7 +18,7 @@ export const InitialActions: React.FC<InitialActionsProps> = ({ onCreateAccountC
   return (
     <div id="initial-actions" className="initial-actions">
       <Button id="show-create-account" variant="primary" size="large" onClick={onCreateAccountClick} disabled={disabled}>
-        {mode === 'new' ? 'Create your private account' : 'Add a contact'}
+        {mode === 'new' ? 'Create your private account' : 'Bring someone in'}
       </Button>
       <Button id="show-join-hash" variant="secondary" size="large" onClick={onJoinClick} disabled={disabled}>
         I have an invitation

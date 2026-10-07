@@ -43,6 +43,13 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onM
   const [showPassphrase, setShowPassphrase] = useState(false);
   const [startupSlow, setStartupSlow] = useState(false);
   const [modernInvite, setModernInvite] = useState('');
+  const [displayName, setDisplayName] = useState('');
+
+  useEffect(() => {
+    if (!isHidden) return;
+    setView('initial'); setInvite(null); setModernInvite(''); setJoinInput('');
+    setStatus(''); setPassphrase(''); setPassphraseConfirmation(''); setDisplayName('');
+  }, [isHidden]);
 
   useEffect(() => {
     if (accountState !== 'checking') { setStartupSlow(false); return; }
@@ -122,12 +129,14 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onM
   const handleJoinNext = async () => {
     const modern = parseModernInviteInput(joinInput);
     if (modern) {
-      const passphrase = passphraseRef.current?.value ?? '';
+      const localPassphrase = accountState === 'new' ? passphrase : passphraseRef.current?.value ?? '';
+      if (accountState === 'checking') return;
+      if (accountState === 'new' && (!displayName.trim() || localPassphrase.length < 12 || localPassphrase !== passphraseConfirmation)) { setStatus('Choose your display name and confirm a passphrase of at least 12 characters.'); return; }
       if (passphraseRef.current) passphraseRef.current.value = '';
       try {
         setIsLoading(true);
         setStatus('Opening your private contact…');
-        await joinModernChannel(modern.roomId, modern.controlCapability, modern.address, modern.identityCommitment, passphrase);
+        await joinModernChannel(modern.roomId, modern.controlCapability, modern.address, modern.identityCommitment, localPassphrase, accountState === 'new' ? displayName : undefined);
         onModernSetupComplete();
         setStatus('');
       } catch { setStatus('Could not open this contact. Check the invitation and local passphrase.'); }
@@ -158,11 +167,11 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onM
 
   const handleModernCreate = async () => {
     const localPassphrase = passphrase;
-    if (localPassphrase.length < 12) {
+    if (accountState !== 'ready' && localPassphrase.length < 12) {
       setStatus('Choose a passphrase with at least 12 characters.');
       return;
     }
-    if (accountState === 'new' && localPassphrase !== passphraseConfirmation) {
+    if (accountState === 'new' && (!displayName.trim() || localPassphrase !== passphraseConfirmation)) {
       setStatus('The passphrases do not match yet. Check both entries and try again.');
       return;
     }
@@ -171,7 +180,7 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onM
     try {
       setIsLoading(true);
       setStatus('Creating your private contact…');
-      const link = await createModernChannel(localPassphrase);
+      const link = await createModernChannel(localPassphrase, accountState === 'new' ? displayName : undefined);
       setModernInvite(link);
       setStatus('Share this invitation with one person you trust.');
     } catch (error) { setStatus(setupErrorMessage(error, 'contact')); }
@@ -205,7 +214,7 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onM
       : view === 'join'
       ? 'Paste the private invitation they shared with you. You’ll compare identities before the conversation is trusted.'
       : view === 'modern'
-          ? accountState === 'ready' ? 'Enter your local passphrase to create a private invitation. Your passphrase stays on this device and is never shared with your contact.' : 'Your account and encrypted data are stored on this device. Choose a passphrase you can remember; it is never shared with contacts.'
+          ? accountState === 'ready' ? 'Create an invitation using your unlocked account. Share it privately with one person; it expires for new connections after 24 hours.' : 'Your account and encrypted data are stored on this device. Choose a passphrase you can remember; it is never shared with contacts.'
         : view === 'restore'
             ? 'Enter the local passphrase to unlock this device’s encrypted vault and restore its identity and saved conversations.'
         : 'This invitation is no longer available.';
@@ -241,7 +250,7 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onM
           accountState === 'checking' ? <div className="setup-status" role="status" aria-live="polite">
             <span>Connecting to K3NCRYPT…</span>
             {startupSlow && <span>This is taking longer than usual. The service may be starting; keep this page open.</span>}
-          </div> : accountState === 'locked' ? <button className="btn btn--primary" type="button" onClick={() => setView('restore')}>Unlock this device</button> : <InitialActions
+          </div> : accountState === 'locked' ? <><button className="btn btn--primary" type="button" onClick={() => setView('restore')}>Unlock this device</button><button id="show-join-hash" className="btn btn--secondary" type="button" onClick={handleJoinClick}>{typeof window !== 'undefined' && parseModernInviteInput(window.location.hash) ? 'Unlock and accept invitation' : 'I have an invitation'}</button></> : <InitialActions
             mode={accountState === 'ready' ? 'ready' : 'new'}
             onCreateAccountClick={() => setView('modern')}
             onCreateClick={handleCreateClick}
@@ -264,22 +273,30 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onM
         {view === 'join' && (
           <>
             <JoinHashView inviteInput={joinInput} onInviteInputChange={setJoinInput} onBack={handleBack} onJoin={handleJoinNext} isLoading={isLoading} />
-            {parseModernInviteInput(joinInput) && <label className="input-group">Local passphrase<input ref={passphraseRef} type="password" autoComplete="current-password" minLength={12} aria-describedby="passphrase-help" /><span id="passphrase-help" className="invite-note">At least 12 characters. It unlocks this device’s encrypted data and is not shared with your contact.</span></label>}
+            {parseModernInviteInput(joinInput) && accountState === 'ready' && <p>Use your existing unlocked account to accept this invitation.</p>}
+            {parseModernInviteInput(joinInput) && accountState === 'new' && <>
+              <p>Create your account on this device, then accept this invitation.</p>
+              <label className="input-group">Display name<input aria-label="Display name" maxLength={40} value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></label>
+              <label className="input-group">Choose a passphrase<input aria-label="Choose a passphrase" type="password" value={passphrase} onChange={(event) => setPassphrase(event.target.value)} autoComplete="new-password" /></label>
+              <label className="input-group">Confirm your passphrase<input aria-label="Confirm your passphrase" type="password" value={passphraseConfirmation} onChange={(event) => setPassphraseConfirmation(event.target.value)} autoComplete="new-password" /></label>
+            </>}
+            {parseModernInviteInput(joinInput) && accountState === 'locked' && <label className="input-group">Local passphrase<input ref={passphraseRef} type="password" autoComplete="current-password" minLength={12} aria-describedby="passphrase-help" /><span id="passphrase-help" className="invite-note">At least 12 characters. It unlocks this device’s encrypted data and is not shared with your contact.</span></label>}
           </>
         )}
 
         {view === 'modern' && <div className="create-hash-view">
           <p className="invite-note">Your account and encrypted data are stored on this device. Use at least 12 characters and keep the passphrase private; you will need it to unlock this device.</p>
           <details className="invite-note"><summary>What is shared?</summary><p>The K3NCRYPT service receives public connection details and carries encrypted messages. Your passphrase is used only on this device and is never sent to contacts.</p></details>
-          <label className="input-group" htmlFor="local-passphrase">{accountState === 'ready' ? 'Confirm your local passphrase' : 'Choose a passphrase'}
-            <input id="local-passphrase" ref={passphraseRef} type={showPassphrase ? 'text' : 'password'} value={passphrase} onChange={(event) => setPassphrase(event.target.value)} autoComplete={accountState === 'ready' ? 'current-password' : 'new-password'} minLength={12} aria-describedby="local-passphrase-help" />
+          {accountState === 'new' && <label className="input-group">Display name<input aria-label="Display name" maxLength={40} value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></label>}
+          {accountState !== 'ready' && <><label className="input-group" htmlFor="local-passphrase">Choose a passphrase
+            <input id="local-passphrase" ref={passphraseRef} type={showPassphrase ? 'text' : 'password'} value={passphrase} onChange={(event) => setPassphrase(event.target.value)} autoComplete="new-password" minLength={12} aria-describedby="local-passphrase-help" />
             <span id="local-passphrase-help" className="invite-note">At least 12 characters. It stays on this device and is never sent to contacts.</span>
           </label>
-          <button className="btn btn--secondary" type="button" aria-pressed={showPassphrase} onClick={() => setShowPassphrase((shown) => !shown)}>{showPassphrase ? 'Hide passphrase' : 'Show passphrase'}</button>
+          <button className="btn btn--secondary" type="button" aria-pressed={showPassphrase} onClick={() => setShowPassphrase((shown) => !shown)}>{showPassphrase ? 'Hide passphrase' : 'Show passphrase'}</button></>}
           {accountState === 'new' && <label className="input-group" htmlFor="local-passphrase-confirm">Confirm your passphrase
             <input id="local-passphrase-confirm" type={showPassphrase ? 'text' : 'password'} value={passphraseConfirmation} onChange={(event) => setPassphraseConfirmation(event.target.value)} autoComplete="new-password" minLength={12} />
           </label>}
-          {modernInvite ? <><p className="invite-note">Share this invitation only with the intended person. It does not verify who they are. Compare security codes with them before marking the contact verified.</p><InvitationQr invitation={modernInvite} /><input className="message-input" readOnly value={modernInvite} aria-label="Private invitation" /><button className="btn btn--secondary" type="button" onClick={() => void shareInvitation(modernInvite, async () => { await navigator.clipboard.writeText(modernInvite); })}>Share invitation</button><button className="btn btn--secondary" type="button" onClick={() => void navigator.clipboard.writeText(modernInvite).then(() => setStatus('Invitation copied. Share it privately.')).catch(() => setStatus('Clipboard is unavailable. Select and copy the invitation manually.'))}>Copy invitation</button><button className="btn btn--primary" type="button" onClick={() => onModernSetupComplete()}>Continue to your chats</button></> : <button className="btn btn--primary" type="button" disabled={isLoading || passphrase.length < 12 || (accountState === 'new' && (!passphraseConfirmation || passphrase !== passphraseConfirmation))} onClick={handleModernCreate}>{isLoading ? (accountState === 'ready' ? 'Preparing invitation…' : 'Creating your account…') : accountState === 'ready' ? 'Create invitation' : 'Create secure account'}</button>}
+          {modernInvite ? <><p className="invite-note">Share this invitation only with the intended person. It does not verify who they are. Compare security codes with them before marking the contact verified.</p><InvitationQr invitation={modernInvite} /><input className="message-input" readOnly value={modernInvite} aria-label="Private invitation" /><button className="btn btn--secondary" type="button" onClick={() => void shareInvitation(modernInvite, async () => { await navigator.clipboard.writeText(modernInvite); })}>Share invitation</button><button className="btn btn--secondary" type="button" onClick={() => void navigator.clipboard.writeText(modernInvite).then(() => setStatus('Invitation copied. Share it privately.')).catch(() => setStatus('Clipboard is unavailable. Select and copy the invitation manually.'))}>Copy invitation</button><button className="btn btn--primary" type="button" onClick={() => onModernSetupComplete()}>Continue to your chats</button></> : <button className="btn btn--primary" type="button" disabled={isLoading || (accountState !== 'ready' && passphrase.length < 12) || (accountState === 'new' && (!displayName.trim() || !passphraseConfirmation || passphrase !== passphraseConfirmation))} onClick={handleModernCreate}>{isLoading ? (accountState === 'ready' ? 'Preparing invitation…' : 'Creating your account…') : accountState === 'ready' ? 'Create invitation' : 'Create secure account'}</button>}
           <button className="btn btn--secondary" type="button" onClick={handleBack}>Back</button>
         </div>}
 

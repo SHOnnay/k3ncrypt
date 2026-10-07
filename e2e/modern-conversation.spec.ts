@@ -45,6 +45,7 @@ test('modern private contact works after offline recipient and both browser rest
   test.setTimeout(120_000);
   const bob = await open(browser);
   await bob.page.getByRole('button', { name: 'Create your private account' }).click();
+  await bob.page.getByRole('textbox', { name: 'Display name', exact: true }).fill('Bob');
   await bob.page.locator('#local-passphrase').fill(PASSPHRASE);
   await bob.page.locator('#local-passphrase-confirm').fill(PASSPHRASE);
   const creation = bob.page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/chat-link');
@@ -59,7 +60,9 @@ test('modern private contact works after offline recipient and both browser rest
   const alice = await open(browser, link);
   await alice.page.getByRole('button', { name: 'I have an invitation' }).click();
   await expect(alice.page.locator('#channel-hash')).toHaveValue(/modern=/);
-  await alice.page.locator('input[type="password"]').fill(PASSPHRASE);
+  await alice.page.getByRole('textbox', { name: 'Display name', exact: true }).fill('Alice');
+  await alice.page.getByLabel('Choose a passphrase', { exact: true }).fill(PASSPHRASE);
+  await alice.page.getByLabel('Confirm your passphrase', { exact: true }).fill(PASSPHRASE);
   await alice.page.getByRole('button', { name: 'Continue' }).click();
   await expect(alice.page.locator('#chat-container')).toBeVisible();
   await expect(alice.page.locator('.chat-header')).toContainText(/Contact · [A-F0-9]{4}/);
@@ -70,7 +73,7 @@ test('modern private contact works after offline recipient and both browser rest
   await expect(bobReturned.locator('#messages-area')).toContainText('hello while you were away', { timeout: 20_000 });
   await bobReturned.getByRole('button', { name: 'Open settings' }).click();
   await bobReturned.getByRole('button', { name: 'Security' }).click();
-  await expect(bobReturned.locator('.verification-view')).toContainText('Make sure you are really talking to this person.');
+  await expect(bobReturned.locator('.verification-view')).toContainText('Make sure you are really talking to Alice.');
   await expect(bobReturned.locator('.verification-view')).toContainText('Unverified');
   const bobFingerprint = await bobReturned.locator('.verification-code').first().textContent();
   await alice.page.getByRole('button', { name: 'Open settings' }).click();

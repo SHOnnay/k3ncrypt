@@ -75,3 +75,17 @@ button.settings-row:focus-visible, .settings-row input:focus-visible, .quiet-ico
 .settings-panel .quiet-icon-button { border-radius: var(--radius-md); }
 @media (max-width: 620px) { .settings-panel { width: 100%; border-left: 0; }.settings-panel__header { padding-top: calc(16px + env(safe-area-inset-top)); }.settings-panel__body { padding-bottom: calc(90px + env(safe-area-inset-bottom)); } }
 @media (max-width: 420px) { .settings-panel__body { padding: 18px 14px calc(90px + env(safe-area-inset-bottom)); }.settings-row { grid-template-columns: 32px minmax(0, 1fr) auto; gap: 8px; padding-inline: 9px; }.settings-row__copy small { white-space: normal; overflow-wrap: anywhere; }.settings-group, .preference-list { overflow: visible; }.verification-actions { align-items: stretch; }.verification-actions > button { flex: 1 1 140px; } }
+
+.human-verification-code {
+  display: block;
+  font-size: 1.15rem;
+  line-height: 1.8;
+  padding: 16px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  background: var(--surface-raised);
+  border-radius: 12px;
+}
+.verification-security-details { margin-top: 20px; }
+.verification-security-details textarea { display: block; width: 100%; min-height: 72px; }
+.verification-view video { max-width: 100%; }

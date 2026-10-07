@@ -14,10 +14,12 @@ import { debugError } from '../utils/debug';
 import { bindPageHideCallTermination } from '../calls/pagehideTermination';
 import { loadVodozemacBindings } from '../crypto/vodozemacModule';
 import { readConversationDescriptors, removeConversationDescriptor, saveConversationDescriptor, type ConversationDescriptor } from '../product/sessionStore';
-import { readProfileName, writeProfileName } from '../product/profileStore';
+import { readProfileName, readLocalProfile, writeProfileName } from '../product/profileStore';
 import { readPrivacyPreferences, writePrivacyPreferences, type PrivacyPreferences } from '../product/preferences';
 import { deliverNotification } from '../product/notifications';
 import { prepareMessageAcceptance, readMessages, writeMessages } from '../product/messageStore';
+
+import { PROFILE_PREFIX, decodeProfileMessage, encodeProfileMessage, prepareProfileAcceptance } from '../product/profileMetadata';
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
 
@@ -65,6 +67,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [pendingDeviceApproval, setPendingDeviceApproval] = useState<EnrollmentApprovalPacket>();
   const [vault, setVault] = useState<BrowserSecureStorage>();
   const [conversations, setConversations] = useState<ConversationDescriptor[]>([]);
+  const sentProfiles = useRef(new WeakMap<ModernConversation, number>());
   const [profileDisplayName, setProfileDisplayNameState] = useState('You');
   const [accountState, setAccountState] = useState<'checking' | 'new' | 'locked' | 'ready'>('checking');
   const [sessionError, setSessionError] = useState<string>();
@@ -258,12 +261,25 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
+  const shareProfile = async (conversation: ModernConversation, storage: BrowserSecureStorage, fingerprint?: string): Promise<void> => {
+    if (!fingerprint || !conversation.hasEstablishedSession() || conversation.getSessionHealth() !== 'healthy') return;
+    const contact = await conversation.getContact();
+    const profile = await readLocalProfile(storage);
+    if (!profile || !contact || contact.changeStatus !== 'unchanged' || sentProfiles.current.get(conversation) === profile.revision) return;
+    sentProfiles.current.set(conversation, profile.revision);
+    try { await conversation.sendWithReceipt(encodeProfileMessage({ version: 1, ...profile, identityFingerprint: fingerprint })); }
+    catch { sentProfiles.current.delete(conversation); }
+  };
+
   const connectModern = async (secureVault: BrowserSecureStorage, descriptor: ConversationDescriptor, sendJoinIntroduction = false): Promise<{ ownFingerprint: string; ownAddress: string; contact?: StoredContactIdentity }> => {
     setCallError(undefined);
     if (modern) await modern.close(false);
     setSyncStatus('recovering');
     setMessages(await readMessages(secureVault, descriptor.roomId));
     const conversation = new ModernConversation(secureVault, loadVodozemacBindings);
+    let profileFingerprint: string | undefined;
+    let receivedPeerProfile = false;
+    const scheduleProfile = () => { window.setTimeout(() => { void shareProfile(conversation, secureVault, profileFingerprint).catch(() => undefined); }, 0); };
     conversation.onSessionHealthUpdate((health) => {
       setSessionHealth(health);
       setSessionError(health === 'healthy' ? undefined : health === 'renewal-pending'
@@ -281,6 +297,21 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     });
     try {
       const details = await conversation.connect(descriptor.roomId, descriptor.controlCapability, descriptor.remoteAddress, descriptor.remoteIdentityCommitment, async (text, envelopeId) => {
+        if (text.startsWith(PROFILE_PREFIX)) {
+          const peer = await conversation.getContact();
+          const updates = await prepareProfileAcceptance(secureVault, descriptor.roomId, text, peer?.changeStatus === 'unchanged' ? peer.identityId : undefined);
+          return { updates, afterCommit: async () => {
+            // The first encrypted frame may establish the route in this same commit.
+            // Reply once after that binding exists, so a peer whose initial profile
+            // arrived before its contact record can safely republish it.
+            const bound = await conversation.getContact();
+            const profile = decodeProfileMessage(text);
+            if (!receivedPeerProfile && profile && bound?.changeStatus === 'unchanged' && profile.identityFingerprint === bound.identityId) {
+              receivedPeerProfile = true; sentProfiles.current.delete(conversation);
+            }
+            setConversations(await readConversationDescriptors(secureVault)); scheduleProfile();
+          } };
+        }
         const message = { ...displayMessage('contact', text, 'received'), id: envelopeId };
         const historyUpdate = await prepareMessageAcceptance(secureVault, descriptor.roomId, message);
         return {
@@ -298,6 +329,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         };
       }, async (contact) => {
         setContactIdentity(contact);
+        scheduleProfile();
         if (contact.verification !== 'verified' || contact.changeStatus !== 'unchanged') {
           if (callActiveRef.current) {
             await verificationTerminationRef.current();
@@ -330,7 +362,9 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         if (event.type === 'enrollment-request') setPendingDeviceEnrollment(event.payload as EnrollmentRequest);
         if (event.type === 'enrollment-approval') setPendingDeviceApproval(event.payload as EnrollmentApprovalPacket);
       }, { sendJoinIntroduction });
+      profileFingerprint = details.ownFingerprint;
       setModern(conversation);
+      scheduleProfile();
       const restoredSessionHealth = conversation.getSessionHealth();
       setSessionHealth(restoredSessionHealth);
       setModernCallComposition(null);
@@ -374,38 +408,63 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (vault && channelHash && protocolMode === 'modern') void writeMessages(vault, channelHash, messages).catch((error) => debugError('Message history persistence failed', error));
   }, [channelHash, messages, protocolMode, vault]);
 
-  const createModernChannel = useCallback(async (passphrase: string): Promise<string> => {
+  const createModernChannel = useCallback(async (passphrase: string, displayName?: string): Promise<string> => {
     if (!chat) throw new Error('Chat not initialized');
     const invite = await chat.getLink();
-    const secureVault = await openModernVault(passphrase);
+    const secureVault = vault ?? await openModernVault(passphrase);
+    if (displayName !== undefined) setProfileDisplayNameState(await writeProfileName(secureVault, displayName));
     const descriptor: ConversationDescriptor = { version: 1, roomId: invite.hash, controlCapability: invite.controlCapability, label: 'Private contact', updatedAt: Date.now() };
     const details = await connectModern(secureVault, descriptor);
     setConversations(await saveConversationDescriptor(secureVault, descriptor));
     const fragment = `modern=${encodeURIComponent(invite.hash)}&control=${encodeURIComponent(invite.controlCapability)}&address=${encodeURIComponent(details.ownAddress)}&identity=${encodeURIComponent(details.ownFingerprint)}`;
     return `${window.location.origin}${window.location.pathname}#${fragment}`;
-  }, [chat, modern]);
+  }, [chat, modern, vault]);
 
-  const joinModernChannel = useCallback(async (roomId: string, capability: string, address: string, identityCommitment: string, passphrase: string): Promise<void> => {
-    const secureVault = await openModernVault(passphrase);
+  const joinModernChannel = useCallback(async (roomId: string, capability: string, address: string, identityCommitment: string, passphrase: string, displayName?: string): Promise<void> => {
+    const secureVault = vault ?? await openModernVault(passphrase);
+    if (displayName !== undefined) setProfileDisplayNameState(await writeProfileName(secureVault, displayName));
     const descriptor: ConversationDescriptor = { version: 1, roomId, controlCapability: capability, remoteAddress: address, remoteIdentityCommitment: identityCommitment, label: 'Private contact', updatedAt: Date.now() };
-    await connectModern(secureVault, descriptor, true);
-    setConversations(await saveConversationDescriptor(secureVault, descriptor));
-  }, [modern]);
+    const existing = (await readConversationDescriptors(secureVault)).find((item) => item.roomId === roomId);
+    if (existing && existing.remoteIdentityCommitment && existing.remoteIdentityCommitment !== identityCommitment) throw new Error('The invitation identity differs from the saved contact.');
+    if (!(existing && roomId === channelHash && modern)) await connectModern(secureVault, existing ?? descriptor, !existing);
+    setConversations(await saveConversationDescriptor(secureVault, existing ?? descriptor));
+  }, [modern, vault, channelHash]);
 
   const updateProfileDisplayName = useCallback(async (name: string): Promise<void> => {
     if (!vault) throw new Error('Unlock this device before editing your profile.');
     const saved = await writeProfileName(vault, name);
     setProfileDisplayNameState(saved);
-  }, [vault]);
+    // Publish to each existing protected relationship without selecting it in the UI.
+    // The normal message consumer still persists every replayed message atomically.
+    void (async () => {
+      const contacts = await readConversationDescriptors(vault);
+      for (const descriptor of contacts) {
+        if (descriptor.roomId === channelHash && modern) { await shareProfile(modern, vault, ownFingerprint); continue; }
+        if (!descriptor.remoteAddress || !descriptor.remoteIdentityCommitment) continue;
+        const background = new ModernConversation(vault, loadVodozemacBindings);
+        try {
+          const details = await background.connect(descriptor.roomId, descriptor.controlCapability, descriptor.remoteAddress, descriptor.remoteIdentityCommitment, async (text, id) => {
+            if (text.startsWith(PROFILE_PREFIX)) {
+              const peer = await background.getContact();
+              return { updates: await prepareProfileAcceptance(vault, descriptor.roomId, text, peer?.changeStatus === 'unchanged' ? peer.identityId : undefined), afterCommit: async () => { setConversations(await readConversationDescriptors(vault)); } };
+            }
+            return { updates: [await prepareMessageAcceptance(vault, descriptor.roomId, { ...displayMessage('contact', text, 'received'), id })] };
+          });
+          await shareProfile(background, vault, details.ownFingerprint);
+        } catch { /* Keep the local name; reconnect retries the durable profile outbox or republishes it. */ }
+        finally { await background.close(false).catch(() => undefined); }
+      }
+    })().catch(() => undefined);
+  }, [vault, modern, channelHash, ownFingerprint]);
 
   const setContactNickname = useCallback(async (roomId: string, nickname: string): Promise<void> => {
     if (!vault) throw new Error('Unlock this device before editing contacts.');
     const existing = conversations.find((item) => item.roomId === roomId);
     if (!existing) throw new Error('Saved contact is unavailable.');
     const trimmed = nickname.trim();
-    if (!trimmed || trimmed.length > 80 || /[\u0000-\u001f\u007f]/.test(trimmed)) throw new Error('Contact name must be 1–80 characters.');
-    const label = trimmed.replace(/\s+/g, ' ');
-    setConversations(await saveConversationDescriptor(vault, { ...existing, label, updatedAt: Date.now() }));
+    if (trimmed.length > 80 || /[\u0000-\u001f\u007f]/.test(trimmed)) throw new Error('Contact name must be 1–80 characters.');
+    const label = trimmed.replace(/\s+/g, ' ') || 'Private contact';
+    setConversations(await saveConversationDescriptor(vault, { ...existing, label, localNickname: trimmed || undefined, updatedAt: Date.now() }));
   }, [conversations, vault]);
 
   const restoreSession = useCallback(async (passphrase: string): Promise<void> => {

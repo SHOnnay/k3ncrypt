@@ -7,6 +7,8 @@ export type LinkType = {
   expired: boolean,
   deleted: boolean,
   controlCapabilityHash: string,
+  invitationExpiresAt?: Date,
+  invitationPublications?: number,
 }
 
 /**
@@ -29,6 +31,8 @@ const generateHash = (controlCapabilityHash: string): LinkType => {
     expired: false,
     deleted: false,
     controlCapabilityHash,
+    invitationExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+    invitationPublications: 0,
   };
 };
 

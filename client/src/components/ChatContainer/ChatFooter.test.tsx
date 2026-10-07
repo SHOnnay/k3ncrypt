@@ -26,6 +26,6 @@ describe('Web chat composer', () => {
     mockUseFiles.mockReturnValue({ transfer: { phase: 'RestartRequired', bytes: 0, total: 0 }, sendFile: jest.fn(), retry: jest.fn(), cancel: jest.fn(), receive: jest.fn() });
     const markup = renderToStaticMarkup(createElement(ChatFooter, { onVerifyContact: () => undefined }));
     expect(markup).toContain('Invitation accepted');
-    expect(markup).toContain('Verify this contact');
+    expect(markup).toContain('Verify Contact');
   });
 });
