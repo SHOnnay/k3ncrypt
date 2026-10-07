@@ -1,6 +1,6 @@
 .sidebar {
-  width: 304px;
-  min-width: 304px;
+  width: 280px;
+  min-width: 280px;
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -26,7 +26,7 @@
 .primary-navigation button:hover, .primary-navigation button.active { color: var(--brand-strong); background: var(--brand-soft); }
 .primary-navigation button.active { box-shadow: inset 2px 0 var(--brand); }
 .approved-icon { display: inline-block; flex: 0 0 auto; background: currentColor; mask-position: center; mask-repeat: no-repeat; mask-size: contain; -webkit-mask-position: center; -webkit-mask-repeat: no-repeat; -webkit-mask-size: contain; }
-.conversation-section { flex: 1 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 18px 1px 12px; }
+.conversation-section { flex: 1 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; padding: 18px 1px 12px; }
 .section-label { margin: 0 8px 10px; color: var(--muted); font-size: .64rem; font-weight: 750; letter-spacing: .1em; text-transform: uppercase; }
 .conversation-row { width: 100%; min-width: 0; display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 11px; align-items: center; padding: 10px; border-radius: var(--radius-md); text-align: left; transition: background var(--motion-fast), box-shadow var(--motion-fast); }
 .conversation-row:hover { background: color-mix(in srgb, var(--surface-muted) 68%, transparent); }
@@ -36,9 +36,15 @@
 .conversation-name { overflow: hidden; font-size: .8rem; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 .conversation-name-row time { color: var(--muted); font-size: .61rem; font-variant-numeric: tabular-nums; }
 .conversation-preview { overflow: hidden; color: var(--muted); font-size: .7rem; text-overflow: ellipsis; white-space: nowrap; }
-.conversation-placeholder { display: flex; flex-direction: column; gap: 6px; margin: 4px; padding: 16px 13px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-muted); }
-.conversation-placeholder strong { color: var(--ink-soft); font-family: var(--font-display); font-size: .86rem; font-weight: 600; }
-.conversation-placeholder span { color: var(--muted); font-size: .7rem; line-height: 1.45; }
+.conversation-recovery { flex: none; margin: 0 2px 10px; padding: 9px 10px; border: 1px solid var(--border); border-radius: var(--radius-md); color: var(--muted-strong); background: var(--surface-muted); font-size: .72rem; }
+.conversation-recovery > summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; cursor: pointer; list-style: none; }
+.conversation-recovery > summary::-webkit-details-marker { display: none; }
+.conversation-recovery__action { flex: none; color: var(--brand-strong); font-weight: 700; }
+.conversation-recovery p { margin-top: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+.conversation-recovery__advanced { margin-top: 9px; padding-top: 8px; border-top: 1px solid var(--border); }
+.conversation-recovery__advanced summary { color: var(--muted); cursor: pointer; }
+.conversation-recovery__advanced ul { display: grid; gap: 5px; padding-left: 16px; margin-top: 8px; overflow-wrap: anywhere; }
+.conversation-recovery code { overflow-wrap: anywhere; }
 
 .sidebar-profile { flex: 0 0 auto; display: grid; grid-template-columns: 34px minmax(0, 1fr) 36px; align-items: center; gap: 10px; margin-top: 10px; padding: 14px 7px 0; border-top: 1px solid color-mix(in srgb, var(--border) 76%, transparent); }
 .sidebar-profile > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
@@ -48,16 +54,28 @@
 .conversation-row:focus-visible, .sidebar-settings:focus-visible, .new-conversation:focus-visible, .primary-navigation button:focus-visible { outline: 3px solid var(--focus-outline); outline-offset: 2px; }
 
 @media (max-width: 900px) {
-  .sidebar { width: 260px; min-width: 260px; padding: 20px 14px 14px; }
+  .sidebar { width: 244px; min-width: 244px; padding: 16px 12px 12px; }
   .brand-row { padding-bottom: 20px; }
   .primary-navigation { padding-top: 16px; }
   .conversation-section { padding-top: 18px; }
 }
 
+@media (min-width: 901px) {
+  .conversation-workspace { padding: 12px; }
+}
+
+@media (max-width: 768px) and (min-width: 621px) {
+  .conversation-workspace { padding: 8px; }
+  .sidebar { width: 220px; min-width: 220px; }
+}
+
 @media (max-width: 620px) {
   .sidebar { position: fixed; z-index: 40; left: 0; right: 0; bottom: 0; top: auto; width: 100%; min-width: 100%; height: calc(72px + env(safe-area-inset-bottom)); padding: 5px 12px calc(5px + env(safe-area-inset-bottom)); flex-direction: row; align-items: center; justify-content: center; border: 0; border-top: 1px solid var(--border); box-shadow: 0 -8px 28px rgba(20, 20, 20, .05); }
   .brand-row, .new-conversation, .conversation-section, .sidebar-profile { display: none; }
-  .primary-navigation { width: 100%; padding: 0; flex-direction: row; justify-content: space-around; gap: 4px; }
-  .primary-navigation button { width: auto; min-width: 64px; height: 56px; flex: 1; flex-direction: column; justify-content: center; gap: 3px; padding: 3px 0; border-radius: 12px; font-size: .62rem; }
+  .primary-navigation { position: absolute; left: 12px; right: 12px; width: auto; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); padding: 0; gap: 4px; }
+  .primary-navigation button { width: 100%; min-width: 0; height: 56px; min-height: 48px; display: flex; flex-direction: column; justify-content: center; gap: 3px; padding: 3px 0; border-radius: 12px; font-size: .62rem; }
   .primary-navigation button.active { box-shadow: none; }
+  .conversation-recovery { position: fixed; z-index: 39; left: 12px; right: 12px; bottom: calc(80px + env(safe-area-inset-bottom)); max-height: 36dvh; overflow-y: auto; padding: 8px 10px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-raised); box-shadow: var(--shadow-md); }
+  .conversation-recovery > summary { overflow: hidden; font-size: .72rem; text-overflow: ellipsis; white-space: nowrap; }
+  .sidebar--setup .conversation-recovery { display: none; }
 }

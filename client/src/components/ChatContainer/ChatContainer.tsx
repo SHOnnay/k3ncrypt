@@ -36,7 +36,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ isHidden, onNewCon
         <span className="chat-empty-mark" aria-hidden="true"><img src="/branding/k3ncrypt-cluster-white.svg" alt="" /></span>
         <h1>{hasContacts ? 'Choose a conversation' : copy.contactsEmpty.title}</h1>
         <p>{hasContacts ? 'Select a saved contact from the list to open your conversation.' : copy.contactsEmpty.description}</p>
-        {!hasContacts && <Button variant="primary" onClick={onNewConversation}><PlusIcon size={17} /> Create or join an invitation</Button>}
+        {!hasContacts && <Button variant="primary" onClick={onNewConversation}><PlusIcon size={17} /> Invite someone</Button>}
       </div>
     </main>;
   }

@@ -77,6 +77,7 @@ export const CreateHashView: React.FC<CreateHashViewProps> = ({
           Back
         </Button>
         <Button id="join-btn" variant="primary" onClick={onNext} disabled={!inviteLink || isLoading}>
+          {isLoading && <span className="three-node-wait" aria-hidden="true"><i /><i /><i /></span>}
           {isLoading ? 'Preparing your conversation…' : 'Continue'}
         </Button>
         {!inviteLink && onRetry && <Button id="retry-invitation-btn" variant="primary" onClick={onRetry}>

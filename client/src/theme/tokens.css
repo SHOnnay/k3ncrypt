@@ -4,6 +4,8 @@
   --space-xs: 4px;
   --space-sm: 8px;
   --space-md: 16px;
+  --space-3: 12px;
+  --space-5: 20px;
   --space-lg: 24px;
   --space-xl: 32px;
   --space-xxl: 48px;
@@ -15,7 +17,7 @@
   --focus-outline: color-mix(in srgb, var(--brand) 42%, transparent);
   --focus-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 17%, transparent);
   --motion-fast: 120ms;
-  --motion-normal: 240ms;
+  --motion-normal: 200ms;
   --motion-slow: 400ms;
 }
 

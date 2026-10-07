@@ -23,6 +23,8 @@ describe('first-run and returning-account setup', () => {
   it('shows connection progress instead of actions while startup is unresolved', () => {
     const markup = renderSetup('checking');
     expect(markup).toContain('Connecting to K3NCRYPT');
+    expect(markup).toContain('three-node-wait');
+    expect(markup).toContain('role="status"');
     expect(markup).not.toContain('Create your private account');
   });
 
@@ -35,7 +37,7 @@ describe('first-run and returning-account setup', () => {
   it('labels first-use account creation distinctly from adding a contact', () => {
     expect(renderSetup('new')).toContain('Create your private account');
     const returning = renderSetup('ready');
-    expect(returning).toContain('Bring someone in');
+    expect(returning).toContain('Invite someone');
     expect(returning).not.toContain('Create your private account');
   });
 });

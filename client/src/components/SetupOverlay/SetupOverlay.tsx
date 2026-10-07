@@ -27,7 +27,7 @@ const setupErrorMessage = (error: unknown, action: 'invitation' | 'contact'): st
   if (error instanceof TypeError) return 'Could not reach the K3NCRYPT backend. Check your connection, then retry.';
   return action === 'invitation'
     ? 'Could not create an invitation. Retry after checking the K3NCRYPT backend.'
-    : 'Could not create this contact. Use a passphrase of at least 12 characters, then retry.';
+    : 'Could not finish setup on this device. Please try again.';
 };
 
 export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onModernSetupComplete, isHidden }) => {
@@ -200,7 +200,7 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onM
       const category = error && typeof error === 'object' && 'restoreFailureCategory' in error
         ? (error as { restoreFailureCategory?: unknown }).restoreFailureCategory : undefined;
       setStatus(category === 'session-record-missing'
-        ? 'The vault unlocked, but this conversation’s saved encrypted session is missing. Keep this device’s data intact while you check for an encrypted backup.'
+        ? 'Your account is unlocked, but this conversation can’t be opened right now. Keep this device’s data intact while you check for a backup.'
         : 'Could not unlock this account. Check the local passphrase and try again.');
     }
     finally { setIsLoading(false); }
@@ -248,6 +248,7 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onM
 
         {view === 'initial' && (
           accountState === 'checking' ? <div className="setup-status" role="status" aria-live="polite">
+            <span className="three-node-wait" aria-hidden="true"><i /><i /><i /></span>
             <span>Connecting to K3NCRYPT…</span>
             {startupSlow && <span>This is taking longer than usual. The service may be starting; keep this page open.</span>}
           </div> : accountState === 'locked' ? <><button className="btn btn--primary" type="button" onClick={() => setView('restore')}>Unlock this device</button><button id="show-join-hash" className="btn btn--secondary" type="button" onClick={handleJoinClick}>{typeof window !== 'undefined' && parseModernInviteInput(window.location.hash) ? 'Unlock and accept invitation' : 'I have an invitation'}</button></> : <InitialActions
@@ -296,14 +297,14 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onM
           {accountState === 'new' && <label className="input-group" htmlFor="local-passphrase-confirm">Confirm your passphrase
             <input id="local-passphrase-confirm" type={showPassphrase ? 'text' : 'password'} value={passphraseConfirmation} onChange={(event) => setPassphraseConfirmation(event.target.value)} autoComplete="new-password" minLength={12} />
           </label>}
-          {modernInvite ? <><p className="invite-note">Share this invitation only with the intended person. It does not verify who they are. Compare security codes with them before marking the contact verified.</p><InvitationQr invitation={modernInvite} /><input className="message-input" readOnly value={modernInvite} aria-label="Private invitation" /><button className="btn btn--secondary" type="button" onClick={() => void shareInvitation(modernInvite, async () => { await navigator.clipboard.writeText(modernInvite); })}>Share invitation</button><button className="btn btn--secondary" type="button" onClick={() => void navigator.clipboard.writeText(modernInvite).then(() => setStatus('Invitation copied. Share it privately.')).catch(() => setStatus('Clipboard is unavailable. Select and copy the invitation manually.'))}>Copy invitation</button><button className="btn btn--primary" type="button" onClick={() => onModernSetupComplete()}>Continue to your chats</button></> : <button className="btn btn--primary" type="button" disabled={isLoading || (accountState !== 'ready' && passphrase.length < 12) || (accountState === 'new' && (!displayName.trim() || !passphraseConfirmation || passphrase !== passphraseConfirmation))} onClick={handleModernCreate}>{isLoading ? (accountState === 'ready' ? 'Preparing invitation…' : 'Creating your account…') : accountState === 'ready' ? 'Create invitation' : 'Create secure account'}</button>}
+          {modernInvite ? <><p className="invite-note">Share this invitation only with the intended person. It does not verify who they are. Compare security codes with them before marking the contact verified.</p><InvitationQr invitation={modernInvite} /><input className="message-input" readOnly value={modernInvite} aria-label="Private invitation" /><button className="btn btn--secondary" type="button" onClick={() => void shareInvitation(modernInvite, async () => { await navigator.clipboard.writeText(modernInvite); })}>Share invitation</button><button className="btn btn--secondary" type="button" onClick={() => void navigator.clipboard.writeText(modernInvite).then(() => setStatus('Invitation copied. Share it privately.')).catch(() => setStatus('Clipboard is unavailable. Select and copy the invitation manually.'))}>Copy invitation</button><button className="btn btn--primary" type="button" onClick={() => onModernSetupComplete()}>Continue to your chats</button></> : <button className="btn btn--primary" type="button" disabled={isLoading || (accountState !== 'ready' && passphrase.length < 12) || (accountState === 'new' && (!displayName.trim() || !passphraseConfirmation || passphrase !== passphraseConfirmation))} onClick={handleModernCreate}>{isLoading && <span className="three-node-wait" aria-hidden="true"><i /><i /><i /></span>}{isLoading ? (accountState === 'ready' ? 'Preparing invitation…' : 'Creating your account…') : accountState === 'ready' ? 'Create invitation' : 'Create secure account'}</button>}
           <button className="btn btn--secondary" type="button" onClick={handleBack}>Back</button>
         </div>}
 
         {view === 'restore' && <div className="create-hash-view">
           <label className="input-group">Local passphrase<input ref={passphraseRef} type="password" autoComplete="current-password" minLength={12} /></label>
           <p className="invite-note">Your passphrase unlocks the encrypted vault on this device. It is never your contact’s identity or verification.</p>
-          <button className="btn btn--primary" type="button" disabled={isLoading} onClick={handleRestore}>{isLoading ? 'Unlocking…' : 'Unlock account'}</button>
+          <button className="btn btn--primary" type="button" disabled={isLoading} onClick={handleRestore}>{isLoading && <span className="three-node-wait" aria-hidden="true"><i /><i /><i /></span>}{isLoading ? 'Unlocking…' : 'Unlock account'}</button>
           <button className="btn btn--secondary" type="button" onClick={handleBack}>Back</button>
         </div>}
 

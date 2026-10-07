@@ -26,7 +26,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection
   const latest = messages.at(-1);
 
   return (
-    <aside className="sidebar" aria-label="K3ncrypt navigation">
+    <aside className={`sidebar ${isWelcomeActive ? 'sidebar--setup' : ''}`} aria-label="K3ncrypt navigation">
       <div className="brand-row">
         <div className="brand-mark" aria-hidden="true"><img src="/branding/k3ncrypt-cluster-white.svg" alt="" /></div>
         <div>
@@ -58,12 +58,15 @@ export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection
             </span>
           </button>
         ))}
-        {conversations.length === 0 && (
-          <div className="conversation-placeholder"><strong>{copy.contactsEmpty.title}</strong><span>{copy.contactsEmpty.description}</span></div>
-        )}
       </div>
 
-      {unavailableConversations.length > 0 && <details className="conversation-recovery"><summary>Unavailable conversations</summary><p>Some saved entries are not ready to open. Their encrypted data remains on this device.</p><p>Pending invitations appear in Chats only after someone accepts.</p></details>}
+      {unavailableConversations.length > 0 && <details className="conversation-recovery">
+        <summary><span>{unavailableConversations.length} unavailable {unavailableConversations.length === 1 ? 'conversation' : 'conversations'}</span><span className="conversation-recovery__action">Review</span></summary>
+        <p>These conversations can’t be opened right now. Their saved encrypted data has not been deleted.</p>
+        <details className="conversation-recovery__advanced"><summary>Advanced details</summary>
+          <ul>{unavailableConversations.map((code, index) => <li key={`${code}-${index}`}>Diagnostic code: <code>{code}</code></li>)}</ul>
+        </details>
+      </details>}
       <div className="sidebar-profile">
         <Avatar label={profileDisplayName} size="small" />
         <span><strong>{profileDisplayName}</strong><small>Your profile · this device</small></span>

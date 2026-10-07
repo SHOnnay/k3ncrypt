@@ -54,6 +54,7 @@ export const JoinHashView: React.FC<JoinHashViewProps> = ({
           Back
         </Button>
         <Button id="join-btn" variant="primary" onClick={onJoin} disabled={!inviteInput.trim() || isLoading}>
+          {isLoading && <span className="three-node-wait" aria-hidden="true"><i /><i /><i /></span>}
           {isLoading ? 'Opening conversation…' : 'Continue'}
         </Button>
       </div>

@@ -10,3 +10,18 @@
 @media (max-width: 420px) { .call-info { max-height: calc(100dvh - 20px); padding: 32px 18px 24px; }.call-controls { grid-template-columns: repeat(3, minmax(58px, 68px)); gap: 7px; } }
 @media (max-width: 560px) { .blur-overlay { padding: 10px; }.call-info--video { padding: 12px; }.call-video-preview { right: 9px; bottom: 9px; width: 34%; }.call-controls { grid-template-columns: repeat(3, minmax(58px, 68px)); } }
 @media (max-width: 360px) { .call-info { padding-inline: 16px; }.incoming-call-actions { gap: 8px; }.incoming-call-actions .btn { min-width: 0; flex: 1; } }
+@media (max-width: 620px) {
+  .call-info { gap: 8px; padding: 22px 18px 20px; border-radius: 22px; }
+  .call-info--video { width: 100%; padding: var(--space-sm); }
+  .call-video-stage { max-height: 42dvh; aspect-ratio: 4 / 3; }
+  .call-duration { margin-bottom: 12px; }
+  .call-controls { grid-template-columns: repeat(3, minmax(64px, 76px)); gap: 12px; }
+  .call-control .btn { width: 48px; height: 48px; }
+  .call-control .btn--large { width: 58px; height: 58px; }
+}
+@media (max-width: 360px) {
+  .blur-overlay { padding: 8px; }
+  .call-info { width: 100%; padding: 18px 12px 16px; }
+  .call-info--video { padding: var(--space-sm); }
+  .call-controls { grid-template-columns: repeat(3, minmax(58px, 68px)); gap: 6px; }
+}

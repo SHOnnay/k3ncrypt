@@ -55,7 +55,7 @@ export const WorkspaceSection: React.FC<WorkspaceSectionProps> = ({ section, onO
       {filteredConversations.length ? <div className="workspace-contact-list">{filteredConversations.map((contact) => <div className="workspace-contact-shell" key={contact.roomId}>
         <button className="workspace-contact" onClick={() => onOpenConversation(contact.roomId)} type="button">
           <Avatar label={contactDisplayName(contact.label, contact.roomId, contact.remoteDisplayName, contact.localNickname)} size="large" />
-          <span className="workspace-contact__copy"><strong>{contactDisplayName(contact.label, contact.roomId, contact.remoteDisplayName, contact.localNickname)}</strong><small>{contact.roomId === channelHash && sessionHealth !== 'healthy' ? 'Security update required' : contact.roomId === channelHash ? 'Relay conversation open' : 'Saved on this device'}</small></span>
+          <span className="workspace-contact__copy"><strong>{contactDisplayName(contact.label, contact.roomId, contact.remoteDisplayName, contact.localNickname)}</strong><small>{contact.roomId === channelHash && sessionHealth !== 'healthy' ? 'Review connection security' : contact.roomId === channelHash ? 'Conversation open' : 'Saved on this device'}</small></span>
         </button>
         <button className="workspace-contact__edit" type="button" aria-label={`Edit nickname for ${contact.label}`} onClick={() => {
           const next = window.prompt('Contact nickname (saved only on this device; helps recognition and does not verify identity)', contact.label);
