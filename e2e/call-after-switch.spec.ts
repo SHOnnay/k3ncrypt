@@ -83,10 +83,12 @@ test('audio call support follows the selected contact and decline permits a call
   await enableSafeCallDiagnostics(cara, callDiagnostics);
   await openContact(alice, 'Bob');
   await alice.getByRole('button', { name: 'Calls', exact: true }).click();
+  const callSetupStartedAt = Date.now();
   await alice.getByRole('button', { name: 'Start audio call', exact: true }).click();
   await bob.getByRole('button', { name: 'Accept call', exact: true }).click({ timeout: 30000 });
   await expect(alice.locator('#call-status')).toHaveText('Connected', { timeout: 20000 });
   await expect(bob.locator('#call-status')).toHaveText('Connected', { timeout: 20000 });
+  console.log('MUX_TIMING', `call-setup-alice-bob elapsedMs=${Date.now() - callSetupStartedAt}`);
   await expect(alice.locator('.call-contact-name')).toHaveText('Bob');
   await expect(alice.locator('#call-status')).toHaveText('Connected');
   await bob.getByRole('button', { name: 'End call', exact: true }).click();

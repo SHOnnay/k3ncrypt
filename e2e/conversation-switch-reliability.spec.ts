@@ -9,21 +9,30 @@ type SafeMetrics = {
   socketsOpened: number;
   socketsClosed: number;
   stages: Map<string, number>;
+  timings: Map<string, { count: number; totalMs: number; maxMs: number }>;
 };
 
 const safePathCategory = (url: string): string => {
   const path = new URL(url).pathname;
   if (path.includes('/device-trust/proof')) return 'device-proof';
   if (path.includes('/prekeys')) return 'prekey';
-  if (path.includes('/chat-link/')) return 'eligibility-or-room-control';
+  if (path.includes('/chat-link/status/')) return 'room-eligibility';
+  if (path.includes('/chat-link/')) return 'room-control';
   if (path.includes('/attachments/')) return 'attachment';
   if (path.includes('/health') || path === '/api') return 'health';
   return 'other-api';
 };
 
 function instrument(page: Page): SafeMetrics {
-  const metrics: SafeMetrics = { startedAt: Date.now(), requests: new Map(), socketsOpened: 0, socketsClosed: 0, stages: new Map() };
+  const metrics: SafeMetrics = { startedAt: Date.now(), requests: new Map(), socketsOpened: 0, socketsClosed: 0, stages: new Map(), timings: new Map() };
   const starts = new WeakMap<object, number>();
+  const stageStarts = new Map<string, number[]>();
+  let openStartedAt: number | undefined;
+  const recordTiming = (name: string, elapsedMs: number) => {
+    const bucket = metrics.timings.get(name) ?? { count: 0, totalMs: 0, maxMs: 0 };
+    bucket.count += 1; bucket.totalMs += elapsedMs; bucket.maxMs = Math.max(bucket.maxMs, elapsedMs);
+    metrics.timings.set(name, bucket);
+  };
   page.on('request', request => {
     if (new URL(request.url()).pathname.startsWith('/api/')) starts.set(request, Date.now());
   });
@@ -55,15 +64,33 @@ function instrument(page: Page): SafeMetrics {
   });
   page.on('console', message => {
     const text = message.text();
+    const mailboxReplay = /^k3ncrypt-mailbox-replay:completed elapsedMs=(\d+)$/.exec(text);
+    if (mailboxReplay) { recordTiming('mailbox-replay-ack', Number(mailboxReplay[1])); return; }
     const match = /^k3ncrypt-(conversation-open|call-stage|delivery-stage):([a-z-]+)(?::([a-z-]+))?$/.exec(text);
     if (match) {
       const key = [match[1], match[2], match[3]].filter(Boolean).join(':');
       metrics.stages.set(key, (metrics.stages.get(key) ?? 0) + 1);
+      const stage = match[1] === 'conversation-open' ? match[2] : undefined;
+      const now = Date.now();
+      const take = (from: string, timing: string) => {
+        const pending = stageStarts.get(from);
+        const startedAt = pending?.shift();
+        if (pending?.length === 0) stageStarts.delete(from);
+        if (startedAt !== undefined) recordTiming(timing, now - startedAt);
+      };
+      if (stage === 'started') openStartedAt = now;
+      if (stage === 'candidate-connect-started') stageStarts.set('candidate-connect-started', [...(stageStarts.get('candidate-connect-started') ?? []), now]);
+      if (stage === 'session-connected') take('candidate-connect-started', 'candidate-connect-including-replay');
+      if (stage === 'session-connected') stageStarts.set('session-connected', [...(stageStarts.get('session-connected') ?? []), now]);
+      if (stage === 'connected') take('session-connected', 'promotion');
     }
   });
   page.on('websocket', socket => {
     metrics.socketsOpened += 1;
-    socket.on('close', () => { metrics.socketsClosed += 1; });
+    socket.on('close', () => {
+      metrics.socketsClosed += 1;
+      if (openStartedAt !== undefined) { recordTiming('switch-to-prior-socket-close', Date.now() - openStartedAt); openStartedAt = undefined; }
+    });
   });
   return metrics;
 }
@@ -71,7 +98,7 @@ function instrument(page: Page): SafeMetrics {
 function reportMetrics(metrics: SafeMetrics, label: string): void {
   console.log('MUX_SAFE_METRICS', JSON.stringify({ label, elapsedMs: Date.now() - metrics.startedAt,
     requests: Object.fromEntries(metrics.requests), socketsOpened: metrics.socketsOpened,
-    socketsClosed: metrics.socketsClosed, stages: Object.fromEntries(metrics.stages) }));
+    socketsClosed: metrics.socketsClosed, stages: Object.fromEntries(metrics.stages), timings: Object.fromEntries(metrics.timings) }));
 }
 
 async function timed<T>(label: string, operation: () => Promise<T>): Promise<T> {
@@ -101,10 +128,14 @@ async function sendText(sender: Page, recipient: Page, wrongPeer: Page, text: st
 async function fileTransfer(sender: Page, recipient: Page, file: Buffer, output: string) {
   const filename = 'switch-20k.jpg';
   const before = await recipient.getByRole('button', { name: 'Download protected file', exact: true }).count();
-  await timed('file-preparation+upload', async () => {
-    await sender.locator('input[type=file]').setInputFiles({ name: filename, mimeType: 'image/jpeg', buffer: file });
-    await expect(sender.locator('.media-transfer-status')).toContainText('Sent', { timeout: 180000 });
-  });
+  const preparationStartedAt = Date.now();
+  await sender.locator('input[type=file]').setInputFiles({ name: filename, mimeType: 'image/jpeg', buffer: file });
+  const status = sender.locator('.media-transfer-status');
+  await expect(status).toContainText('Sending', { timeout: 180000 });
+  console.log('MUX_TIMING', `file-preparation elapsedMs=${Date.now() - preparationStartedAt}`);
+  const uploadStartedAt = Date.now();
+  await expect(status).toContainText('Sent', { timeout: 180000 });
+  console.log('MUX_TIMING', `file-upload elapsedMs=${Date.now() - uploadStartedAt}`);
   const buttons = recipient.getByRole('button', { name: 'Download protected file', exact: true });
   await expect(buttons).toHaveCount(before + 1, { timeout: 30000 });
   await timed('file-download+verification', async () => {

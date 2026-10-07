@@ -128,7 +128,12 @@ export class SocketIoRelayTransport implements Transport {
     /** Called only after the conversation transition has released its local lock. */
     public async requestMailboxReplay(): Promise<void> {
         if (!this.isCurrentChannelJoined()) throw new Error('Authenticated relay channel join is required before mailbox replay.');
-        await this.emitWithAck<{ status: 'accepted' }>('mailbox-replay', {});
+        const startedAt = Date.now();
+        try {
+            await this.emitWithAck<{ status: 'accepted' }>('mailbox-replay', {});
+        } finally {
+            if (testDiagnosticsEnabled()) console.info(`k3ncrypt-mailbox-replay:completed elapsedMs=${Date.now() - startedAt}`);
+        }
     }
 
     public async sendEnvelope(

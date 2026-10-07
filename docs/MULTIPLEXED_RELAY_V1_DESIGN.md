@@ -419,3 +419,29 @@ user cannot change the visible room while the live call overlay is open. The
 existing `CallOverlay` unit test confirms the call contact remains tied to its
 room if selected-room state changes. The room-binding finding above remains a
 blocker for mux-v1 regardless of these Stage 0 results.
+
+An instrumented rerun after that investigation completed both Playwright tests
+in 9.3 minutes. The 20 switch rounds again passed, followed by refresh/unlock,
+the four 20 KiB transfers with matching SHA-256 hashes, and three decline
+cleanup cycles. The exact status endpoint was identified as room eligibility:
+41 requests returned 200, with a 26 ms maximum observed response. Device-proof
+requests reached 47 ms maximum; pre-key GETs reached 73 ms maximum. Mailbox
+replay acknowledgements completed 41 times in 326 ms total, with a 16 ms maximum.
+The measured candidate-connect interval including replay reached 8.2 seconds;
+the old-socket close interval reached 8.24 seconds. The measured connected
+Alice/Bob call setup was 1.135 seconds. File preparation took 4.9–8.9 seconds,
+upload took 15.9–20.0 seconds, and download plus verification took 5.0–9.0
+seconds. Switches varied from sub-second to about 9.1 seconds.
+
+The rerun refined the earlier 429 diagnosis. Alice's pre-key GETs returned 65
+429 responses: 59 with `Retry-After: 4`, identifying the stricter
+pre-key/room-control route limiter (capacity 20, refill 0.25 requests/second
+per IP), and 6 with `Retry-After: 1`, identifying the broad API limiter
+(capacity 120, refill 2 requests/second per IP). A pre-key POST also returned
+one broad-limiter 429. Alice's device-proof POSTs returned 13 broad-limiter
+429s; Bob and Carol returned 2 and 15 respectively. The three browser profiles
+share the test IP. This confirms two independent quota pressures: opening
+saved rooms repeatedly re-fetches pre-keys despite an existing session, and
+every new relay connection obtains a fresh device proof. Do not weaken proof
+freshness or authorization to reduce the counts; review request policy and
+limit budgets before background multiplexing.
