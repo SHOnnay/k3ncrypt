@@ -13,6 +13,7 @@ import { callLaunchBlockMessage, getCallLaunchBlockReason } from '../../calls/ca
 import './SecurityVisibility.css';
 import './ChatHeader.css';
 import { debugError } from '../../utils/debug';
+import { contactDisplayName } from '../../content/copy';
 
 interface ChatHeaderProps {
   onStartCall: () => void;
@@ -25,7 +26,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({ onStartCall, onStartVide
   const [hashCopied, setHashCopied] = useState(false);
   const activeConversation = conversations.find((conversation) => conversation.roomId === channelHash)
     ?? (protocolMode === 'legacy' && channelHash ? { roomId: channelHash, label: 'Private conversation' } : undefined);
-  const contactLabel = activeConversation?.label ?? 'Conversation';
+  const contactLabel = contactDisplayName(activeConversation?.label, activeConversation?.roomId);
   const securityVisibility = deriveSecurityVisibility({
     contact: protocolMode === 'modern' ? contactIdentity : undefined,
     sessionHealth: protocolMode === 'modern' ? sessionHealth : undefined,

@@ -11,7 +11,7 @@ import { formatMessageTime } from '../../utils/messageHandling';
 import { useMedia } from '../../context/MediaContext';
 import { useChat } from '../../context/ChatContext';
 import { deriveMessageDeliveryVisibility } from '../../product/securityVisibility';
-import { fileTransferCopy } from '../../product/fileTransferCopy';
+import { fileDownloadForReference, fileTransferCopy } from '../../product/fileTransferCopy';
 import './SecurityVisibility.css';
 import './MessageBubble.css';
 
@@ -31,7 +31,8 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
   const [mediaError, setMediaError] = useState(false);
   const [isOpening, setIsOpening] = useState(false);
   const deliveryVisibility = deriveMessageDeliveryVisibility(message.delivery, protocolMode);
-  const fileProgress = fileTransferCopy(files.transfer);
+  const downloadTransfer = fileDownloadForReference(files.download, media?.reference);
+  const fileProgress = downloadTransfer ? fileTransferCopy(downloadTransfer) : undefined;
   useEffect(() => () => { if (mediaUrl) URL.revokeObjectURL(mediaUrl); }, [mediaUrl]);
   const formatFileSize = (size: number): string => size < 1024 * 1024 ? `${Math.max(1, Math.round(size / 1024))} KB` : `${(size / (1024 * 1024)).toFixed(1)} MB`;
   const openMedia = async () => {
@@ -54,7 +55,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
       <div className="message-text">{message.text}</div>
       {isFile && media?.size !== undefined && <div className="message-meta">Protected file · {formatFileSize(media.size)}</div>}
       {media?.reference && !mediaUrl && <button className="message-media-action" type="button" onClick={openMedia} disabled={isOpening}>{isOpening ? 'Downloading and verifying…' : isFile ? 'Download protected file' : `Open protected ${media.kind}`}</button>}
-      {isFile && isOpening && <div role="status" aria-live="polite">{fileProgress.label}{fileProgress.progress !== undefined && <progress max={100} value={fileProgress.progress} aria-label="File download progress" />} <button type="button" onClick={files.cancel}>Cancel</button></div>}
+      {isFile && isOpening && fileProgress?.active && <div role="status" aria-live="polite">{fileProgress.label}{fileProgress.progress !== undefined && <progress max={100} value={fileProgress.progress} aria-label="File download progress" />} <button type="button" onClick={files.cancel}>Cancel</button></div>}
       {mediaError && <div className="message-media-error" role="status">Couldn’t open this file. Check your connection or ask your contact to send it again.</div>}
       {mediaUrl && media?.kind === 'image' && <img className="message-media-preview" src={mediaUrl} alt="Protected image" />}
       {mediaUrl && media?.kind === 'voice' && <audio className="message-media-audio" controls src={mediaUrl} />}
@@ -66,7 +67,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
         {message.type === 'sent' && message.delivery === 'failed' && <button type="button" title={deliveryVisibility.explanation} onClick={() => retryMessage(message.id)}>Could not confirm · Retry</button>}
         {message.type === 'sent' && message.delivery !== 'failed' && message.delivery && (
           <details className="message-delivery-details">
-            <summary aria-label={`Message status: ${deliveryVisibility.label}`}>{deliveryVisibility.label}</summary>
+            <summary aria-label={`Message status: ${deliveryVisibility.summaryLabel}`}>{deliveryVisibility.summaryLabel}</summary>
             <p>{deliveryVisibility.explanation}</p>
           </details>
         )}

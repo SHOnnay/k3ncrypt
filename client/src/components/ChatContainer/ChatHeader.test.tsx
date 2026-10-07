@@ -36,6 +36,7 @@ const buttonMarkup = (markup: string, label: string): string => {
 describe('ChatHeader call launch controls', () => {
   it('exposes accessible audio and video launches for a verified, connected modern contact', () => {
     const markup = renderHeader();
+    expect(markup).toContain('Contact · OOM1');
     expect(buttonMarkup(markup, 'Start audio call')).not.toContain('disabled');
     expect(buttonMarkup(markup, 'Start video call')).not.toContain('disabled');
     expect(markup).not.toContain('call-launch-reason');

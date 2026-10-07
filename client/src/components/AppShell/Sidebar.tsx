@@ -51,9 +51,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection
         <p className="section-label">Conversations</p>
         {conversations.map((conversation) => (
           <button key={conversation.roomId} className={`conversation-row ${!isWelcomeActive && channelHash === conversation.roomId ? 'active' : ''}`} type="button" onClick={() => onOpenConversation(conversation.roomId)}>
-            <Avatar label={contactDisplayName(conversation.label)} size="medium" />
+            <Avatar label={contactDisplayName(conversation.label, conversation.roomId)} size="medium" />
             <span className="conversation-copy">
-              <span className="conversation-name-row"><span className="conversation-name">{contactDisplayName(conversation.label)}</span><time>{channelHash === conversation.roomId ? formatSidebarTime(latest?.timestamp) : ''}</time></span>
+              <span className="conversation-name-row"><span className="conversation-name">{contactDisplayName(conversation.label, conversation.roomId)}</span><time>{channelHash === conversation.roomId ? formatSidebarTime(latest?.timestamp) : ''}</time></span>
               <span className="conversation-preview">{channelHash === conversation.roomId && protocolMode === 'modern' && sessionHealth !== 'healthy' ? 'Review connection' : channelHash === conversation.roomId && latest?.text ? latest.text : syncStatus === 'blocked' ? 'Review connection' : channelHash === conversation.roomId ? 'Conversation open' : 'Saved on this device'}</span>
             </span>
           </button>

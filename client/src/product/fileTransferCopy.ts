@@ -6,6 +6,14 @@ export interface FileTransferCopy {
   active: boolean;
 }
 
+export interface ScopedFileDownload {
+  reference: string;
+  transfer: FileProgress;
+}
+
+export const fileDownloadForReference = (download: ScopedFileDownload | undefined, reference: string | undefined): FileProgress | undefined =>
+  download && download.reference === reference ? download.transfer : undefined;
+
 const safeFailureCopy = (failure: string): string => {
   const reason = failure.toLocaleLowerCase();
   if (/8 mib|file size/.test(reason)) return 'Files must be 8 MiB or smaller.';

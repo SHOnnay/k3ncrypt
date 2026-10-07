@@ -1,4 +1,4 @@
-import { fileTransferCopy } from './fileTransferCopy';
+import { fileDownloadForReference, fileTransferCopy } from './fileTransferCopy';
 
 describe('file transfer wording', () => {
   it('translates protocol phases to progress a person can follow', () => {
@@ -16,5 +16,12 @@ describe('file transfer wording', () => {
     const copy = fileTransferCopy({ phase: 'Downloading', bytes: 25, total: 100, filename: 'photo.jpg' });
     expect(copy.label).toBe('photo.jpg · Downloading… 25%');
     expect(copy.label).not.toMatch(/25\/100|k3ncrypt-file|transferid/i);
+  });
+
+  it('only projects download progress onto the matching file reference', () => {
+    const download = { reference: 'file-reference-a', transfer: { phase: 'Downloading' as const, bytes: 25, total: 100 } };
+    expect(fileDownloadForReference(download, 'file-reference-a')).toBe(download.transfer);
+    expect(fileDownloadForReference(download, 'file-reference-b')).toBeUndefined();
+    expect(fileDownloadForReference(undefined, 'file-reference-a')).toBeUndefined();
   });
 });

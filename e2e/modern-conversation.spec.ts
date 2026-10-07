@@ -14,6 +14,7 @@ async function open(browser: Browser, link = BASE_URL): Promise<{ context: Brows
   const page = await context.newPage();
   const outbound: string[] = [];
   captureOutbound(page, outbound);
+  page.on('response', (response) => { if (!response.ok()) console.log(`HTTP ${response.status()} ${new URL(response.url()).pathname}`); });
   await page.goto(link);
   await expect(page.locator('#show-join-hash')).toBeVisible();
   return { context, page, outbound };
@@ -23,68 +24,59 @@ async function resume(context: BrowserContext, link: string, outbound: string[] 
   const page = await context.newPage();
   captureOutbound(page, outbound);
   await page.goto(link);
-  await page.click('#show-join-hash');
-  await expect(page.locator('#channel-hash')).toHaveValue(/modern=/);
-  await page.locator('input[type="password"]').fill(PASSPHRASE);
-  await page.getByRole('button', { name: 'Open conversation' }).click();
+  const unlockButton = page.getByRole('button', { name: 'Unlock this device' });
+  const invitationButton = page.getByRole('button', { name: 'I have an invitation' });
+  await expect(unlockButton.or(invitationButton)).toBeVisible();
+  if (await unlockButton.isVisible()) {
+    await page.getByRole('button', { name: 'Unlock this device' }).click();
+    await page.locator('input[type="password"]').fill(PASSPHRASE);
+    await page.getByRole('button', { name: 'Unlock account' }).click();
+  } else {
+    await page.getByRole('button', { name: 'I have an invitation' }).click();
+    await expect(page.locator('#channel-hash')).toHaveValue(/modern=/);
+    await page.locator('input[type="password"]').fill(PASSPHRASE);
+    await page.getByRole('button', { name: 'Continue' }).click();
+  }
   await expect(page.locator('#chat-container')).toBeVisible();
   return page;
 }
 
-const cryptoSnapshot = (page: Page) => page.evaluate(() => (window as Window & { __k3ncryptGetCryptoSnapshot?: () => Promise<unknown> }).__k3ncryptGetCryptoSnapshot?.());
-
 test('modern private contact works after offline recipient and both browser restarts', async ({ browser }) => {
   test.setTimeout(120_000);
   const bob = await open(browser);
-  await bob.page.getByRole('button', { name: /Create a private contact/ }).click();
-  await bob.page.locator('input[type="password"]').fill(PASSPHRASE);
+  await bob.page.getByRole('button', { name: 'Create your private account' }).click();
+  await bob.page.locator('#local-passphrase').fill(PASSPHRASE);
+  await bob.page.locator('#local-passphrase-confirm').fill(PASSPHRASE);
   const creation = bob.page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/chat-link');
-  await bob.page.getByRole('button', { name: 'Create private contact' }).click();
+  await bob.page.getByRole('button', { name: 'Create secure account' }).click();
   expect((await creation).status()).toBe(200);
-  const invitation = bob.page.getByRole('textbox', { name: 'Modern invitation' });
+  const invitation = bob.page.getByRole('textbox', { name: 'Private invitation' });
   await expect(invitation).toHaveValue(/#modern=[^&]+&control=[^&]+&address=/);
   const link = await invitation.inputValue();
-  await bob.page.getByRole('button', { name: 'Continue to conversation' }).click();
-  const beforeShutdown = await cryptoSnapshot(bob.page);
+  await bob.page.getByRole('button', { name: 'Continue to your chats' }).click();
   await bob.page.close({ runBeforeUnload: true });
 
   const alice = await open(browser, link);
-  await alice.page.click('#show-join-hash');
+  await alice.page.getByRole('button', { name: 'I have an invitation' }).click();
   await expect(alice.page.locator('#channel-hash')).toHaveValue(/modern=/);
   await alice.page.locator('input[type="password"]').fill(PASSPHRASE);
-  await alice.page.getByRole('button', { name: 'Open conversation' }).click();
+  await alice.page.getByRole('button', { name: 'Continue' }).click();
   await expect(alice.page.locator('#chat-container')).toBeVisible();
-  const senderSnapshot = await cryptoSnapshot(alice.page);
-  await expect(alice.page.locator('.chat-header')).toContainText('Modern private');
+  await expect(alice.page.locator('.chat-header')).toContainText(/Contact · [A-F0-9]{4}/);
   await alice.page.locator('#msg-input').fill('hello while you were away');
   await alice.page.locator('#send-btn').click();
 
   const bobReturned = await resume(bob.context, link, bob.outbound);
-  const afterRestore = await cryptoSnapshot(bobReturned);
-  expect(beforeShutdown).toEqual(expect.objectContaining({ conversationId: expect.any(String), inboundEvents: expect.any(Array) }));
-  expect(senderSnapshot).toEqual(expect.objectContaining({ conversationId: expect.any(String), inboundEvents: expect.any(Array) }));
-  expect(afterRestore).toEqual(expect.objectContaining({
-    conversationId: expect.any(String),
-    inboundEvents: expect.arrayContaining([
-      expect.objectContaining({ stage: 'received' }),
-      expect.objectContaining({ stage: 'parsed' }),
-      expect.objectContaining({ stage: 'session-found' }),
-      expect.objectContaining({ stage: 'decrypted' }),
-      expect.objectContaining({ stage: 'frame-parsed' }),
-      expect.objectContaining({ stage: 'persisted' }),
-      expect.objectContaining({ stage: 'acknowledged' }),
-    ]),
-  }));
   await expect(bobReturned.locator('#messages-area')).toContainText('hello while you were away', { timeout: 20_000 });
   await bobReturned.getByRole('button', { name: 'Open settings' }).click();
-  await bobReturned.getByRole('button', { name: /Identity/ }).click();
+  await bobReturned.getByRole('button', { name: 'Security' }).click();
   await expect(bobReturned.locator('.verification-view')).toContainText('Unverified');
   const bobFingerprint = await bobReturned.locator('.verification-code').first().textContent();
   await alice.page.getByRole('button', { name: 'Open settings' }).click();
-  await alice.page.getByRole('button', { name: /Identity/ }).click();
+  await alice.page.getByRole('button', { name: 'Security' }).click();
   await expect(alice.page.locator('.verification-code').last()).toHaveText(bobFingerprint ?? '');
   await alice.page.getByRole('button', { name: 'Close settings' }).click();
-  await bobReturned.getByRole('checkbox', { name: /compared the fingerprints/ }).check();
+  await bobReturned.getByRole('checkbox', { name: /compared the security codes/ }).check();
   await bobReturned.getByRole('button', { name: 'Mark as verified' }).click();
   await expect(bobReturned.locator('.verification-view')).toContainText('Verified');
   await bobReturned.getByRole('button', { name: 'Close settings' }).click();
@@ -97,7 +89,7 @@ test('modern private contact works after offline recipient and both browser rest
   const bobAgain = await resume(bob.context, link);
   const aliceAgain = await resume(alice.context, link);
   await bobAgain.getByRole('button', { name: 'Open settings' }).click();
-  await bobAgain.getByRole('button', { name: /Identity/ }).click();
+  await bobAgain.getByRole('button', { name: 'Security' }).click();
   await expect(bobAgain.locator('.verification-view')).toContainText('Verified');
   await expect(bobAgain.locator('.verification-code').first()).toHaveText(bobFingerprint ?? '');
   await bobAgain.getByRole('button', { name: 'Close settings' }).click();

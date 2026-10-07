@@ -4,7 +4,7 @@ import { useChat } from './ChatContext';
 import { getRuntimeConfig } from '../config/runtimeConfig';
 import { HttpFileGateway } from '../media/HttpFileGateway';
 import { clearFileDisk, createFileOutput, createSealedCache, type SavedFile } from '../media/fileDisk';
-interface FileContextValue { transfer: FileProgress; sendFile(file: File): Promise<void>; retry(): Promise<void>; cancel(): void; receive(text: string): Promise<SavedFile | undefined>; }
+interface FileContextValue { transfer: FileProgress; download?: { reference: string; transfer: FileProgress }; sendFile(file: File): Promise<void>; retry(): Promise<void>; cancel(): void; receive(text: string): Promise<SavedFile | undefined>; }
 const Context = createContext<FileContextValue | undefined>(undefined);
 export const FileProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
     const { fileTransferBinding, attachmentRequestHeaders, sendMessage, channelHash } = useChat();
@@ -12,10 +12,12 @@ export const FileProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const saved = useRef<SavedFile>();
     const send = useRef(sendMessage); send.current = sendMessage;
     const [transfer, changed] = useState<FileProgress>({ phase: 'RestartRequired', bytes: 0, total: 0 });
+    const activeDownload = useRef<string>();
+    const [download, setDownload] = useState<FileContextValue['download']>();
     const workflow = useMemo(() => new FileTransferWorkflow(new HttpFileGateway(getRuntimeConfig().baseUrl ?? '', attachmentRequestHeaders), fileTransferBinding, createSealedCache, async (reference, binding) => {
         if (!sameBinding(await fileTransferBinding(true), binding)) throw new Error('File contact identity changed.');
         await send.current(reference);
-    }, changed), [fileTransferBinding, attachmentRequestHeaders, channelHash]);
+    }, progress => { changed(progress); if (activeDownload.current) setDownload({ reference: activeDownload.current, transfer: progress }); }), [fileTransferBinding, attachmentRequestHeaders, channelHash]);
     useEffect(() => {
         const abort = new AbortController(); let release: (() => void) | undefined; let disposed = false;
         if (navigator.locks) void navigator.locks.request('k3ncrypt-file-workspace-v2', { signal: abort.signal }, async lock => {
@@ -26,9 +28,13 @@ export const FileProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         return () => { disposed = true; setDiskReady(false); abort.abort(); release?.(); };
     }, []);
     useEffect(() => () => workflow.dispose(), [workflow]);
-    return <Context.Provider value={{ transfer, sendFile: file => { if (!diskReady) { changed({ phase: 'Failed', bytes: 0, total: 0, failure: 'Secure disk workspace unavailable or in use by another tab.' }); return Promise.resolve(); } return workflow.send({ size: file.size, name: file.name, type: file.type, read: async (at, count) => new Uint8Array(await file.slice(at, at + count).arrayBuffer()) }); }, retry: () => workflow.retry(), cancel: () => workflow.cancel(), receive: async text => {
+    return <Context.Provider value={{ transfer, download, sendFile: file => { if (!diskReady) { changed({ phase: 'Failed', bytes: 0, total: 0, failure: 'Secure disk workspace unavailable or in use by another tab.' }); return Promise.resolve(); } return workflow.send({ size: file.size, name: file.name, type: file.type, read: async (at, count) => new Uint8Array(await file.slice(at, at + count).arrayBuffer()) }); }, retry: () => workflow.retry(), cancel: () => workflow.cancel(), receive: async text => {
         if (!diskReady || saved.current) { changed({ phase: 'Failed', bytes: 0, total: 0, failure: 'Save or discard the previous verified output before another download.' }); return undefined; }
-        const result = await workflow.receive(text, createFileOutput);
+        activeDownload.current = text;
+        setDownload(undefined);
+        let result: SavedFile | undefined;
+        try { result = await workflow.receive(text, createFileOutput); }
+        finally { activeDownload.current = undefined; }
         if (!result) return undefined;
         const original = result.dispose;
         const tracked = { ...result, dispose: async () => { await original(); if (saved.current === tracked) saved.current = undefined; } };

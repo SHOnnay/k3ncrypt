@@ -28,6 +28,7 @@ export type MessageVisibilityState =
 export interface MessageDeliveryVisibility {
   state: MessageVisibilityState;
   label: string;
+  summaryLabel: string;
   explanation: string;
 }
 
@@ -65,6 +66,7 @@ export const deriveMessageDeliveryVisibility = (
     return {
       state: 'pending',
       label: 'Pending on this device',
+      summaryLabel: 'Sending…',
       explanation: 'This message remains pending on this device. The available state does not show whether the relay accepted it or whether the recipient received it.',
     };
   }
@@ -72,6 +74,7 @@ export const deriveMessageDeliveryVisibility = (
     return {
       state: 'recipient-app-accepted-relay-reported',
       label: 'Recipient app accepted · relay report',
+      summaryLabel: 'Sent',
       explanation: 'The relay reports that the recipient application accepted this message. This is not a signed peer receipt and does not show that it was displayed or read.',
     };
   }
@@ -79,6 +82,7 @@ export const deriveMessageDeliveryVisibility = (
     return {
       state: 'relay-accepted-outcome-unknown',
       label: 'Sent · recipient not confirmed',
+      summaryLabel: 'Sent',
       explanation: 'The relay acknowledged this message. This client does not distinguish live recipient acceptance from mailbox storage, and has no authenticated peer receipt.',
     };
   }
@@ -86,12 +90,14 @@ export const deriveMessageDeliveryVisibility = (
     return {
       state: 'could-not-confirm',
       label: 'Could not confirm · Retry',
+      summaryLabel: 'Failed · Retry',
       explanation: 'The send operation did not complete with a confirmed result. A timeout can leave the relay outcome unknown.',
     };
   }
   return {
     state: 'unknown',
     label: 'Status unavailable',
+    summaryLabel: 'Status unavailable',
     explanation: 'No delivery state is available for this message.',
   };
 };

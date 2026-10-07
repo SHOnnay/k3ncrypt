@@ -25,14 +25,21 @@ describe('deriveSecurityVisibility', () => {
 describe('deriveMessageDeliveryVisibility', () => {
   it('keeps pending messages neutral and does not invent an active retry state', () => {
     expect(deriveMessageDeliveryVisibility('pending', 'modern'))
-      .toMatchObject({ state: 'pending', label: 'Pending on this device' });
+      .toMatchObject({ state: 'pending', label: 'Pending on this device', summaryLabel: 'Sending…' });
   });
 
   it('distinguishes a relay acknowledgement from a recipient-acceptance report', () => {
     expect(deriveMessageDeliveryVisibility('accepted', 'legacy'))
       .toMatchObject({ state: 'relay-accepted-outcome-unknown', label: 'Sent · recipient not confirmed' });
     expect(deriveMessageDeliveryVisibility('accepted', 'modern'))
-      .toMatchObject({ state: 'recipient-app-accepted-relay-reported', label: 'Recipient app accepted · relay report' });
+      .toMatchObject({ state: 'recipient-app-accepted-relay-reported', label: 'Recipient app accepted · relay report', summaryLabel: 'Sent' });
+  });
+
+  it('keeps technical acceptance evidence available for optional message details', () => {
+    const visibility = deriveMessageDeliveryVisibility('accepted', 'modern');
+    expect(visibility.summaryLabel).toBe('Sent');
+    expect(visibility.explanation).toMatch(/relay reports.*not a signed peer receipt/i);
+    expect(visibility.label).toBe('Recipient app accepted · relay report');
   });
 
   it('does not call relay-reported acceptance delivered or persisted by the peer', () => {
