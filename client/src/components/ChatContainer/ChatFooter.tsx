@@ -11,8 +11,10 @@ import { debugError } from '../../utils/debug';
 import { useFiles } from '../../context/FileContext';
 import { BrowserCaptureController } from '../../../../service/src/privacy/capture';
 import { fileTransferCopy } from '../../product/fileTransferCopy';
+import { classifySafeDiagnostic, logSafeFailure, safeFailureCopy, type SafeDiagnosticCode } from '../../product/safeDiagnostics';
+import { SafeDiagnosticDetails } from '../common/SafeDiagnosticDetails';
 
-export const ChatFooter: React.FC = () => {
+export const ChatFooter: React.FC<{ onVerifyContact: () => void }> = ({ onVerifyContact }) => {
   const { sendMessage, sessionHealth, contactIdentity } = useChat();
   const { sendFile, retry, transfer, cancel: cancelTransfer } = useFiles();
   const transferStatus = fileTransferCopy(transfer);
@@ -21,6 +23,8 @@ export const ChatFooter: React.FC = () => {
   const [message, setMessage] = useState<string>('');
   const [isSending, setIsSending] = useState<boolean>(false);
   const [actionMessage, setActionMessage] = useState('');
+  const [actionDiagnostic, setActionDiagnostic] = useState<SafeDiagnosticCode>();
+  const loggedFileFailure = useRef<SafeDiagnosticCode>();
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
@@ -39,6 +43,16 @@ export const ChatFooter: React.FC = () => {
     document.addEventListener('visibilitychange', hidden);
     return () => { document.removeEventListener('visibilitychange', hidden); cancel(); };
   }, []);
+
+  useEffect(() => {
+    if (transfer.phase !== 'Failed') { loggedFileFailure.current = undefined; return; }
+    const code = classifySafeDiagnostic('file-send', transfer.failure ?? '');
+    if (loggedFileFailure.current === code) return;
+    loggedFileFailure.current = code;
+    logSafeFailure('file_send_failed', code);
+    setActionDiagnostic(code);
+    setActionMessage(safeFailureCopy('file-send'));
+  }, [transfer.failure, transfer.phase]);
 
   useEffect(() => {
     if (!isRecording) { setRecordingSeconds(0); return; }
@@ -69,7 +83,13 @@ export const ChatFooter: React.FC = () => {
     if (!file) return;
     setActionMessage('');
     try { await sendFile(file); }
-    catch { setActionMessage('Could not confirm the protected file send. Check the conversation before retrying.'); }
+    catch (error) {
+      const code = classifySafeDiagnostic('file-send', error);
+      if (loggedFileFailure.current !== code) logSafeFailure('file_send_failed', code);
+      loggedFileFailure.current = code;
+      setActionDiagnostic(code);
+      setActionMessage(safeFailureCopy('file-send'));
+    }
   };
 
   const retryAttachment = retry;
@@ -165,8 +185,8 @@ export const ChatFooter: React.FC = () => {
       </div>
       {transfer.phase !== 'RestartRequired' && <div className="media-transfer-status" role="status" aria-live="polite"><span>{transferStatus.label}</span>{transferStatus.progress !== undefined && <progress max={100} value={transferStatus.progress} aria-label="File transfer progress" />}{busy && <button type="button" onClick={cancelTransfer}>Cancel</button>}{transfer.phase === 'Failed' && transfer.retryable && <button type="button" onClick={retryAttachment}>Retry</button>}</div>}
       <div className="composer-feedback">Photos and files up to 8 MiB. You choose when to save a download.</div>
-      {!verified && <div className="composer-feedback">Verify the unchanged contact before sending a file.</div>}
-      {actionMessage && <div className="composer-feedback" role="status">{actionMessage}</div>}
+      {!verified && contactIdentity && <div className="composer-feedback"><strong>Invitation accepted</strong><p>Verify this contact before sharing files.</p><button type="button" className="btn btn--secondary" onClick={onVerifyContact}>Verify this contact</button></div>}
+      {actionMessage && <div className="composer-feedback" role="status">{actionMessage}<SafeDiagnosticDetails code={actionDiagnostic} /></div>}
     </footer>
   );
 };

@@ -17,9 +17,10 @@ import { callStartFailureMessage, terminalCallStatusMessage } from '../../calls/
 interface ChatContainerProps {
   isHidden: boolean;
   onNewConversation: () => void;
+  onVerifyContact: () => void;
 }
 
-export const ChatContainer: React.FC<ChatContainerProps> = ({ isHidden, onNewConversation }) => {
+export const ChatContainer: React.FC<ChatContainerProps> = ({ isHidden, onNewConversation, onVerifyContact }) => {
   const { startCall, startVideoCall, callLifecycleState, callError: remoteCallError, conversations, channelHash, protocolMode } = useChat();
   const [isStartingCall, setIsStartingCall] = useState<boolean>(false);
   const [callError, setCallError] = useState('');
@@ -73,7 +74,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ isHidden, onNewCon
         {(callError || remoteCallError) && <div className="chat-call-error" role="alert">{remoteCallError || callError}</div>}
         {!callError && !remoteCallError && terminalCallMessage && <div className="chat-call-status" role="status">{terminalCallMessage}</div>}
         <MessagesArea />
-        <ChatFooter />
+        <ChatFooter onVerifyContact={onVerifyContact} />
       </div>
     </>
   );

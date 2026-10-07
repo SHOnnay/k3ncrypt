@@ -18,6 +18,8 @@ import { HttpAttachmentGateway } from './media/HttpAttachmentGateway';
 import { getRuntimeConfig } from './config/runtimeConfig';
 import { WorkspaceSection } from './components/AppShell/WorkspaceSection';
 import { CallOverlay } from './components/CallOverlay/CallOverlay';
+import { classifySafeDiagnostic, logSafeFailure, safeFailureCopy, type SafeDiagnosticCode } from './product/safeDiagnostics';
+import { SafeDiagnosticDetails } from './components/common/SafeDiagnosticDetails';
 
 const AppContent: React.FC = () => {
   const { initializeChat, joinChannel, openConversation, attachmentRequestHeaders, privacyPreferences } = useChat();
@@ -26,9 +28,23 @@ const AppContent: React.FC = () => {
   const [initializationError, setInitializationError] = useState<string>('');
   const [isInitializing, setIsInitializing] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
+  const [showVerification, setShowVerification] = useState(false);
+  const [errorDiagnostic, setErrorDiagnostic] = useState<SafeDiagnosticCode>();
   const [activeSection, setActiveSection] = useState<'chats' | 'contacts' | 'calls'>('chats');
   const [backgrounded, setBackgrounded] = useState(false);
   const mediaWorkflow = useMemo(() => new MediaMessageWorkflow(new HttpAttachmentGateway(getRuntimeConfig().baseUrl ?? '', attachmentRequestHeaders)), [attachmentRequestHeaders]);
+  const openVerification = () => { setShowVerification(true); setShowSettings(true); };
+  const reportConversationOpenFailure = (cause: unknown) => {
+    const code = classifySafeDiagnostic('conversation-open', cause);
+    logSafeFailure('conversation_open_failed', code);
+    setErrorDiagnostic(code);
+    setError(safeFailureCopy('conversation-open'));
+  };
+  const beginConversationOpen = (roomId: string) => {
+    setError('');
+    setErrorDiagnostic(undefined);
+    void openConversation(roomId).catch(reportConversationOpenFailure);
+  };
 
   const retryInitialization = useCallback(async () => {
     setIsInitializing(true);
@@ -73,7 +89,7 @@ const AppContent: React.FC = () => {
         onOpenConversation={(roomId) => {
           setActiveSection('chats');
           setShowSetup(false);
-          if (roomId) openConversation(roomId).catch(() => setError('Could not open this saved conversation. Your stored data was not changed.'));
+          if (roomId) beginConversationOpen(roomId);
         }}
         onOpenSettings={() => setShowSettings(true)}
         settingsOpen={showSettings}
@@ -86,17 +102,18 @@ const AppContent: React.FC = () => {
           setShowSetup(false);
         }} isHidden={!showSetup} />
         {activeSection === 'chats' ? <MediaProvider workflow={mediaWorkflow}><FileProvider>
-          <ChatContainer isHidden={showSetup} onNewConversation={() => { setActiveSection('chats'); setShowSetup(true); }} />
+          <ChatContainer isHidden={showSetup} onNewConversation={() => { setActiveSection('chats'); setShowSetup(true); }} onVerifyContact={openVerification} />
         </FileProvider></MediaProvider> : !showSetup && <WorkspaceSection section={activeSection} onNewConversation={() => { setActiveSection('chats'); setShowSetup(true); }} onOpenConversation={(roomId) => {
           setActiveSection('chats');
-          openConversation(roomId).catch(() => setError('Could not open this saved conversation. Your stored data was not changed.'));
+          beginConversationOpen(roomId);
         }} />}
       </section>
-      <SettingsPanel isOpen={showSettings} onClose={() => setShowSettings(false)} />
+      <SettingsPanel isOpen={showSettings} initialView={showVerification ? 'verification' : 'settings'} onClose={() => { setShowSettings(false); setShowVerification(false); }} />
       <CallOverlay />
       {(initializationError || error) && (
         <div className="app-error" role="alert">
           {initializationError || error}
+          {error && <SafeDiagnosticDetails code={errorDiagnostic} />}
           {initializationError && <button className="app-error__retry" type="button" disabled={isInitializing} onClick={() => void retryInitialization()}>{isInitializing ? 'Connecting…' : 'Try again'}</button>}
         </div>
       )}

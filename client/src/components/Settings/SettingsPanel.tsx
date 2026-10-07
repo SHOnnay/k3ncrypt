@@ -19,13 +19,15 @@ import {
   UserIcon,
 } from '../common/icons';
 import { SettingsRow } from './SettingsRow';
-import { copy } from '../../content/copy';
 import './SettingsPanel.css';
+import { classifySafeDiagnostic, logSafeFailure, type SafeDiagnosticCode } from '../../product/safeDiagnostics';
+import { SafeDiagnosticDetails } from '../common/SafeDiagnosticDetails';
 
 type SettingsView = 'settings' | 'profile' | 'devices' | 'privacy' | 'notifications' | 'calls' | 'appearance' | 'network' | 'verification';
 
 interface SettingsPanelProps {
   isOpen: boolean;
+  initialView?: 'settings' | 'verification';
   onClose: () => void;
 }
 
@@ -41,11 +43,19 @@ const viewTitles: Record<SettingsView, string> = {
   verification: 'Security',
 };
 
-export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose }) => {
+export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, initialView = 'settings', onClose }) => {
   const [view, setView] = useState<SettingsView>('settings');
-  const { channelHash, isConnected, protocolMode, userId, ownFingerprint, contactIdentity, verifyContact, unverifyContact, acceptChangedIdentity, prepareVerifiedSessionRenewal, sessionHealth, deleteChannel, deviceLifecycleState, pendingDeviceEnrollment, pendingDeviceApproval, requestDeviceEnrollment, approveDeviceEnrollment, rejectDeviceEnrollment, confirmDeviceEnrollment, revokeDevice, privacyPreferences, updatePrivacyPreferences, permissionStatus, refreshPermissionStatus, syncStatus, profileDisplayName, updateProfileDisplayName, accountState } = useChat();
+  const { channelHash, isConnected, protocolMode, userId, ownFingerprint, contactIdentity, conversations, verifyContact, unverifyContact, acceptChangedIdentity, prepareVerifiedSessionRenewal, sessionHealth, deleteChannel, deviceLifecycleState, pendingDeviceEnrollment, pendingDeviceApproval, requestDeviceEnrollment, approveDeviceEnrollment, rejectDeviceEnrollment, confirmDeviceEnrollment, revokeDevice, privacyPreferences, updatePrivacyPreferences, permissionStatus, refreshPermissionStatus, syncStatus, profileDisplayName, updateProfileDisplayName, accountState } = useChat();
   const [comparisonConfirmed, setComparisonConfirmed] = useState(false);
   const [verificationError, setVerificationError] = useState('');
+  const [verificationDiagnostic, setVerificationDiagnostic] = useState<SafeDiagnosticCode>();
+  useEffect(() => { if (isOpen) setView(initialView); }, [initialView, isOpen]);
+  const reportVerificationFailure = (error: unknown) => {
+    const code = classifySafeDiagnostic('contact-authority', error);
+    logSafeFailure('contact_authority_failed', code);
+    setVerificationDiagnostic(code);
+    setVerificationError('K3NCRYPT can’t confirm this contact right now.');
+  };
   const [qrInput, setQrInput] = useState('');
   const [qrMatch, setQrMatch] = useState(false);
   const [qrError, setQrError] = useState('');
@@ -182,9 +192,10 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
           {view === 'verification' && (
             <section className="settings-detail verification-view">
               <div className="verification-mark"><ShieldIcon size={30} /></div>
-              <h3>Security identity</h3>
-              <p>{copy.verification.description}</p>
+              <h3>{contactIdentity ? `Verify ${conversations.find((item) => item.roomId === channelHash)?.label ?? 'this contact'}` : 'Security identity'}</h3>
+              <p>Make sure you are really talking to this person.</p>
               {protocolMode === 'modern' && ownFingerprint ? <div className="unavailable-card security-details-card">
+                <details><summary>Why do I need this? Security details</summary>
                 <strong>This device identity</strong>
                 <p>This identity belongs to this device. It is separate from your profile name.</p>
                 <strong>Your security code</strong><code className="verification-code">{ownFingerprint}</code>
@@ -193,10 +204,11 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
                 <p>Show this temporary code to your contact so you can compare that you have the right person. It is not saved.</p>
                 <textarea className="verification-qr-payload" aria-label="Your verification QR payload" readOnly value={encodeVerificationQrPayload(ownFingerprint)} />
                 <button className="btn btn--secondary" type="button" onClick={() => navigator.clipboard.writeText(encodeVerificationQrPayload(ownFingerprint))}>Copy verification code</button>
+                </details>
                 {contactIdentity ? <>
                   <strong>Verified contacts</strong>
                   <StatusPill tone={contactIdentity.verification === 'verified' && contactIdentity.changeStatus === 'unchanged' ? 'positive' : 'quiet'}>{contactIdentity.changeStatus === 'changed-pending-review' ? 'Identity changed · review required' : contactIdentity.verification === 'verified' ? 'Verified' : 'Unverified'}</StatusPill>
-                      <button className="btn btn--secondary" type="button" onClick={() => unverifyContact().catch(() => setVerificationError('Could not reset verification.'))}>Mark unverified</button>
+                      <button className="btn btn--secondary" type="button" onClick={() => unverifyContact().then(() => { setVerificationError(''); setVerificationDiagnostic(undefined); }).catch(reportVerificationFailure)}>Mark unverified</button>
                   <strong>Contact security code</strong><code className="verification-code">{contactIdentity.identityId}</code>
                   <button className="btn btn--secondary" type="button" onClick={() => navigator.clipboard.writeText(contactIdentity.identityId)}>Copy contact code</button>
                   {contactIdentity.changeStatus === 'changed-pending-review' ? <>
@@ -209,10 +221,10 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
                       <button className="btn btn--danger" type="button" onClick={() => deleteChannel().catch(() => setVerificationError('Could not block this conversation.'))}>Block conversation</button>
                     </div>
                     <label><input type="checkbox" checked={comparisonConfirmed} onChange={(event) => setComparisonConfirmed(event.target.checked)} /> I compared the new fingerprint with my contact</label>
-                    <button className="btn btn--secondary" type="button" disabled={!comparisonConfirmed} onClick={() => acceptChangedIdentity().catch(() => setVerificationError('Could not accept this identity change.'))}>Accept new identity after review</button>
+                    <button className="btn btn--secondary" type="button" disabled={!comparisonConfirmed} onClick={() => acceptChangedIdentity().then(() => { setVerificationError(''); setVerificationDiagnostic(undefined); }).catch(reportVerificationFailure)}>Accept new identity after review</button>
                   </> : contactIdentity.verification !== 'verified' ? <>
-                    <p>Compare this security code with your contact using another trusted way before marking them verified.</p>
-                    <label htmlFor="verification-qr-input">Paste your contact&apos;s temporary verification code</label>
+                    <p>Compare this security code with them using another trusted way before marking them verified.</p>
+                    <label htmlFor="verification-qr-input">Their shared code (optional)</label>
                     <textarea id="verification-qr-input" className="verification-qr-payload" value={qrInput} onChange={(event) => { setQrInput(event.target.value); setQrError(''); setQrMatch(false); }} />
                     <button className="btn btn--secondary" type="button" onClick={() => {
                       try {
@@ -223,10 +235,11 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
                       } catch { setQrMatch(false); setQrError('That verification code is invalid or does not match this contact.'); }
                     }}>Check verification code</button>
                     {qrError && <p role="alert">{qrError}</p>}
-                    <label><input type="checkbox" checked={comparisonConfirmed} onChange={(event) => setComparisonConfirmed(event.target.checked)} /> I compared the security codes with my contact</label>
+                    <button className="btn btn--secondary" type="button" aria-pressed={comparisonConfirmed} onClick={() => { setComparisonConfirmed(true); setRecoveryNotice('You confirmed the codes match. You still need to choose Mark as verified.'); }}>Codes match</button>
                     <button className="btn btn--primary" type="button" disabled={!comparisonConfirmed} onClick={() => {
-                      verifyContact().then(() => { setComparisonConfirmed(false); setVerificationError(''); }).catch(() => setVerificationError('Could not save verification. Try again.'));
+                      verifyContact().then(() => { setComparisonConfirmed(false); setVerificationError(''); setVerificationDiagnostic(undefined); }).catch(reportVerificationFailure);
                     }}>Mark as verified</button>
+                    <button className="btn btn--secondary" type="button" onClick={() => { setComparisonConfirmed(false); setRecoveryNotice('Do not verify this contact. Compare the codes again using another trusted way.'); }}>They don&apos;t match</button>
                     {qrMatch && <p role="status">The code matches this contact. Continue only after confirming it with them.</p>}
                   </> : <>
                     <p>You marked this contact as verified on this device.</p>
@@ -234,14 +247,14 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
                       <p role="alert">This conversation needs a security reset. Compare this contact’s security code using another trusted way before continuing. Your saved identity, verification and messages stay on this device.</p>
                       <label><input type="checkbox" checked={comparisonConfirmed} onChange={(event) => setComparisonConfirmed(event.target.checked)} /> I compared this security code with my contact again</label>
                       <button className="btn btn--secondary" type="button" disabled={!comparisonConfirmed} onClick={() => {
-                        prepareVerifiedSessionRenewal().then(() => { setComparisonConfirmed(false); setVerificationError(''); }).catch(() => setVerificationError('Session renewal was not prepared. Recheck the contact identity and device trust.'));
+                        prepareVerifiedSessionRenewal().then(() => { setComparisonConfirmed(false); setVerificationError(''); setVerificationDiagnostic(undefined); }).catch(reportVerificationFailure);
                       }}>Prepare verified session renewal</button>
                     </>}
                     {sessionHealth === 'renewal-pending' && <p role="status">Ask your contact to prepare verified session renewal on their device, then send one text message. Calls remain paused until that message is accepted.</p>}
                   </>}
                 </> : <p>{channelHash ? 'Identity details are not available for this conversation yet.' : 'Choose a conversation to review its identity and verification status.'}</p>}
                 {recoveryNotice && <p role="status">{recoveryNotice}</p>}
-                {verificationError && <p role="alert">{verificationError}</p>}
+                {verificationError && <><p role="alert">{verificationError}</p><SafeDiagnosticDetails code={verificationDiagnostic} /></>}
               </div> : <div className="unavailable-card"><StatusPill tone="quiet">Not available in this conversation</StatusPill><p>Security code verification is available for contacts added through a supported invitation.</p></div>}
             </section>
           )}

@@ -600,7 +600,9 @@ export class ModernConversation {
         const bundle = validateVodozemacPublicBundle(await fetchVodozemacBundle(this.roomId, this.capability, this.remoteAddress));
         await this.observe(this.remoteAddress, bundle.identity, this.remoteIdentityCommitment);
         const contact = await this.registry.get(this.remoteAddress);
-        if (!contact || contact.changeStatus !== 'unchanged' || (requireVerified && contact.verification !== 'verified')) throw new Error('Verified unchanged contact required.');
+        if (!contact) throw Object.assign(new Error('Verified unchanged contact required.'), { safeDiagnosticCode: 'RECIPIENT_AUTHORITY_MISSING' });
+        if (contact.changeStatus !== 'unchanged') throw Object.assign(new Error('Verified unchanged contact required.'), { safeDiagnosticCode: 'RECIPIENT_AUTHORITY_CHANGED' });
+        if (requireVerified && contact.verification !== 'verified') throw Object.assign(new Error('Verified unchanged contact required.'), { safeDiagnosticCode: 'VERIFICATION_REQUIRED' });
         return { conversationId: this.roomId, senderParticipantId: this.localAddress, recipientParticipantId: this.remoteAddress, senderIdentityReference: this.localIdentityId, recipientIdentityReference: contact.identityId };
     }
 
