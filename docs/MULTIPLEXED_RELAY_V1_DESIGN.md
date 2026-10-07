@@ -1,6 +1,9 @@
 # Multiplexed Relay v1 Design
 
-Status: Stage 1 proposal; review required before implementation.
+Status: Stage 1 proposal; review required before implementation. The Stage 0
+security gate found that ordinary Olm messages do not have authenticated room
+binding, so mux delivery must remain blocked until the versioned application
+message design below is reviewed and adopted.
 
 ## Stage 0 findings and security boundary
 
@@ -21,26 +24,96 @@ are checked against that same pair. A routing address is not an identity key.
 Modern conversations also persist their local/remote routing addresses,
 session record, outbox, and replay state under the conversation ID.
 
-Room binding is only partial today. The signed join-introduction plaintext
-contains `conversationId`, and call-signal authentication binds the call ID,
-conversation ID, participants, and signal payload. Ordinary Olm message
-ciphertext has no explicit conversation ID in authenticated associated data or
-in a signed per-message outer transcript. The Olm session is created/restored
-from per-conversation storage, which makes accidental cross-room decryption
-fail in the intended client path, but is not an explicit wire-level
-`cryptoBoundRoomId`. Attachment content encryption likewise does not establish
-a general room AAD contract. Stage 1 must not claim the crypto-bound-room check
-until a separate crypto-adjacent protocol change is reviewed. Do not modify
-crypto in Stage 0.
+Room binding is partial and is not a cryptographic property of ordinary Olm
+messages today. `VodozemacRuntime` creates/restores one session record under a
+conversation ID and `ModernConversation` binds each instance to one immutable
+room. This makes established sessions distinct in the intended application
+path. The room ID is not an input to `createOutboundSession` or
+`createInboundSession`, is not included in the Olm session transcript, and does
+not appear in Vodozemac envelope associated data. The authenticated inner
+frame is only `{ innerVersion, channelByte, payload }`; the ciphertext envelope
+is `{ version, strategy, data: { version, olmMessage } }`. Neither carries a
+general room ID.
 
-The smallest future crypto-adjacent change to review is a versioned,
-domain-separated encrypted plaintext wrapper carrying the conversation ID,
-sender and recipient routing IDs, and message/event kind. The receiver checks
-those fields against its immutable room context before applying the plaintext
-or committing state. This would be authenticated by the existing Olm message
-authentication, without assuming unsupported Olm AAD. It needs compatibility,
-first-message/session-establishment, call-control, and attachment-reference
-analysis before adoption; it is not approved by this document.
+The session-establishment APIs authenticate the sender Curve25519 identity,
+the recipient Curve25519 identity, and the recipient one-time key through
+Olm's pre-key exchange. The Olm session ID identifies the resulting session,
+but it is not a room ID. Ed25519 identity pinning and the room-scoped routing
+address are checked by application logic around the handshake, not committed
+to the Olm cryptographic transcript as a room binding.
+
+Consequences for a mux receiver:
+
+- A room-A ciphertext sent through a room-B transport with room-A proof is
+  rejected by the current message/signal relay handlers because the proof's
+  `resource.conversationId` must equal the joined socket room. The initial
+  `chat-join` handler currently verifies device authority but does **not**
+  compare the optional proof resource with `channelID`; Stage 1 must add a
+  dedicated room-subscription proof and enforce that equality.
+- If the outer room, routing IDs, and proof are all independently valid for
+  room B, an established room-B Olm session rejects ciphertext made under
+  distinct room-A session state at Olm authentication/decryption. This is the
+  expected normal case, not a universal invariant.
+- A first Olm pre-key message has no room claim. If room B has no established
+  session and its receiver uses the same peer identity and matching recipient
+  pre-key state, Olm can decrypt that exact ciphertext. `receiveUnlocked`
+  checks that the transport sender address is the expected room-B address and
+  that the sender's pinned identity matches, but ordinary text has no inner
+  room field to compare. `JoinIntroduction` is the exception: its signed
+  plaintext carries `conversationId` and `acceptJoinIntroduction` rejects a
+  room mismatch. Therefore transport proof and address checks alone do not
+  establish cryptographic room ownership for all message payloads.
+- Message replay IDs are room scoped (`envelopeIdForEnvelope(roomId, ...)`)
+  and their durable seen records are keyed by room. The same ciphertext
+  relocated to another room is not deduplicated as the same room event.
+
+The real generated Vodozemac WASM probe (`node
+scripts/probe-olm-room-binding.mjs`) confirms that the same first pre-key
+ciphertext decrypts in two independent copies of the same recipient account
+pre-key state, while an established independent room session rejects the
+other ciphertext. This models a stale/concurrent pre-key snapshot and proves
+the Olm primitive itself has no room binding. Once one inbound handshake is
+committed, that recipient account consumes the one-time key, which helps
+prevent a later sequential replay; it does not bind the ciphertext to a room
+and is not a substitute for an authenticated room field.
+
+### Versioned room-binding proposal for review
+
+Before mux-v1, introduce a new, domain-separated authenticated inner message
+frame version. Keep the Olm primitive unchanged. The proposed wrapper is
+inside the Olm-authenticated plaintext and has strict canonical encoding for:
+
+```text
+domain = "K3NCRYPT/room-message/v1"
+roomId
+senderRoutingId
+recipientRoutingId
+channel (message or signaling)
+payloadKind
+payloadLength
+payload
+```
+
+The sender obtains all context from its immutable room/channel handle. The
+receiver verifies room ID, both routing IDs, and channel against that same
+immutable handle before parsing or committing payload state. Unknown versions,
+unknown critical fields, malformed lengths, and any field disagreement fail
+closed. The proof carrier remains transport authorization, not a substitute
+for the inner authenticated binding. Explicit user verification remains an
+independent trust decision.
+
+Use a new negotiated application protocol/inner-frame version; do not silently
+reinterpret the existing unbound frame. The existing frame remains readable
+and writable only over the legacy one-room transport during migration. A mux
+subscription requires both peers to advertise and select the room-bound
+version; it must fail closed if either side only supports the legacy frame.
+Old messages, session records, histories, and attachments are not rewritten or
+deleted. Their existing per-room sessions continue to operate on the legacy
+one-room path. Migration to mux requires an explicit per-room session upgrade
+or re-establishment and a reviewed rule for old outbox items; no fallback to an
+unbound frame is allowed on a mux channel. Final protocol version names,
+capability negotiation, call/device-control coverage, and rollback rules need
+security review before implementation.
 
 Current UI delivery wording is confirmed by `securityVisibility.ts` and the
 relay flow: `Sending…` is a durable local outbox item awaiting recipient-app
@@ -264,11 +337,18 @@ failure category only.
 - **Android:** implement the same protocol/frame/proof and ACK behavior only
   after Web/SDK protocol review, with shared positive and adversarial fixtures.
 
-Message crypto, attachment crypto, pinned identity, explicit verification, and
-room membership/control authority remain independent and unchanged by transport
-multiplexing. Current file references already carry a conversation and
-recipient-identity binding in the encrypted message reference; transfer
-operations separately bind to conversation, participant, and capability.
+The Olm primitive, attachment AEAD primitive, pinned identity, explicit
+verification authority, and room membership/control authority remain separate
+from transport multiplexing. However, ordinary message encoding needs a
+versioned authenticated room wrapper before mux. Attachment V2 has its own
+stronger object-level binding: its AES-GCM associated data includes conversation
+ID, sender and recipient participant IDs, sender and recipient pinned identity
+references, transfer ID, object type, and chunk parameters. Relocating a V2
+manifest/chunk to another room or changing any bound field fails GCM
+authentication; the attachment AEAD itself needs no additional room field.
+The file-reference message is ordinary Olm message content and shares the
+general room-wrapper gap, but `FileTransferWorkflow` compares its complete
+reference binding to the selected room before retrieving or exposing output.
 Call signals already authenticate conversation, call ID, participant identity,
 event digest, and replay state. Those checks must remain in place.
 
@@ -278,8 +358,8 @@ Reject or safely ignore each case without mutating another room's state:
 
 1. Bob event injected with Carol's outer room ID.
 2. Proof room differs from outer room.
-3. Authenticated crypto-wrapper room differs from outer room (after its
-   separate review).
+3. Authenticated crypto-wrapper room differs from outer room (required before
+   mux can be enabled; exact test fixture is part of the protocol review).
 4. ACK arrives from a different room.
 5. ACK arrives on a stale connection generation.
 6. Subscribe proof is replayed.
@@ -299,3 +379,43 @@ Reject or safely ignore each case without mutating another room's state:
 Stage 0 keeps the current behavior: only the opened room is live and mailbox
 replay happens on opening that room. It does not implement background delivery,
 notifications, unread state, or background calling.
+
+## Stage 0 final gate evidence
+
+The former 20-round test appeared stalled because its candidate-isolation step
+selected Carol while Alice was already viewing Carol, then awaited a pre-key
+request that a same-room selection correctly never issues. The wait had no
+timeout. The test now first makes Bob active, injects a bounded wait on Carol's
+new device-proof request, and verifies that a newer Bob selection remains
+active after the delayed Carol candidate completes.
+
+The corrected Chromium scenario completed 20 Bob/Carol switch rounds, refreshed
+and unlocked Alice, sent after refresh, transferred four 20 KiB JPEGs with
+matching downloaded SHA-256 hashes, and completed three declined-call cleanup
+cycles. Timed switch operations ranged from sub-second to about 9 seconds. Safe
+response counts during the pre-refresh interval included 58 HTTP 429 responses
+on pre-key endpoints and 10 on Alice's device-proof endpoint (Bob and Carol
+also saw 2 and 1 device-proof 429s respectively). A focused call run confirmed
+`Retry-After: 1` on these categories. That identifies the broad API limiter as
+the limiter reached in these runs: capacity 120, refill 2 requests per second
+per client IP. All three browser profiles share one IP bucket. The pre-key and
+room-control routes also have a stricter per-route/IP limiter (capacity 20,
+refill 0.25 requests per second, which returns `Retry-After: 4`) but the
+recorded responses did not identify that stricter limiter as the source. The
+client retried the observed 429s and the scenario completed. Reopening a saved
+room currently fetches the peer bundle and checks the local bundle on every
+connection, so repeated switching consumes pre-key GET quota despite an
+existing persisted Olm session. This is an availability/policy mismatch to
+review separately; do not weaken identity freshness or authorization as a
+test workaround.
+
+Alice opened 41 relay sockets and closed 40 before refresh, leaving one active
+socket as expected. No leaked socket or wrong-room message was observed in the
+20 rounds. This regression covers transport/room-state isolation and declined
+call cleanup. A separate call-after-switch run connected Alice and Bob, ended
+the call remotely, opened Carol, then completed a Carol call and subsequent
+Bob/Carol declines. The full-screen call overlay intercepts navigation, so a
+user cannot change the visible room while the live call overlay is open. The
+existing `CallOverlay` unit test confirms the call contact remains tied to its
+room if selected-room state changes. The room-binding finding above remains a
+blocker for mux-v1 regardless of these Stage 0 results.

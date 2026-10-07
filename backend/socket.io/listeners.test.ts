@@ -74,6 +74,28 @@ it('does not acknowledge a call signal as delivered when the registered recipien
   }
 });
 
+it('rejects an encrypted message when its device proof names a different room than the joined socket', async () => {
+  const roomA = randomUUID(); const roomB = randomUUID(); const sender = randomUUID();
+  const deviceId = randomUUID(); const accountIdentityReference = 'account-test';
+  const handlers = new Map<string, (...args: unknown[]) => void>();
+  const socket = { id: randomUUID(), userID: sender, channelID: roomB, deviceId, accountIdentityReference, deviceTrustEpoch: 1,
+    on: jest.fn((event: string, handler: (...args: unknown[]) => void) => { handlers.set(event, handler); }), emit: jest.fn(), disconnect: jest.fn() } as unknown as CustomSocket;
+  const database = { collection: () => ({ findOne: async () => ({ deviceId, accountIdentityReference, trustEpoch: 1, state: 'active' }) }) };
+  const dbSpy = jest.spyOn(db, 'getDatabase').mockReturnValue(database as never);
+  const authoritySpy = jest.spyOn(durableTrust, 'durableDeviceTrustAuthority').mockReturnValue({ verify: async () => ({ deviceId, accountIdentityReference, trustEpoch: 1, state: 'active' }) } as never);
+  try {
+    connectionListener(socket, { sockets: { sockets: new Map() } });
+    const proof = { version: 1, proofId: randomUUID(), deviceId, accountIdentityReference, deviceIdentityReference: 'identity-test',
+      operation: 'relay:message', trustEpoch: 1, nonce: 'nonce', resource: { conversationId: roomA },
+      issuedAt: Date.now(), expiresAt: Date.now() + 30_000, signature: 'signature' };
+    const ack = jest.fn();
+    await handlers.get('chat-message')?.({ envelope: { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1, olmMessage: 'opaque' } },
+      recipientRoutingId: randomUUID(), deviceAuthorizationProof: proof, proofNonce: 'nonce', proofOperation: 'relay:message' }, ack);
+    expect(ack).toHaveBeenCalledWith({ error: 'Device authorization rejected.' });
+    expect(socket.emit).not.toHaveBeenCalledWith('chat-message', expect.anything(), expect.anything());
+  } finally { dbSpy.mockRestore(); authoritySpy.mockRestore(); }
+});
+
 it('rejects mailbox replay on an existing socket after durable revocation', async () => {
   const handlers = new Map<string, (...args: unknown[]) => void>();
   const socket = { id: randomUUID(), userID: randomUUID(), channelID: randomUUID(), deviceId: randomUUID(), accountIdentityReference: 'account-test', deviceTrustEpoch: 1,

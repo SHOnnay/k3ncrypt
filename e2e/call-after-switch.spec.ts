@@ -1,6 +1,8 @@
 import { test, expect, type Page } from '@playwright/test';
 import { connectedPair, create, invite } from './usabilityHelpers';
 
+test.use({ launchOptions: { args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required'] } });
+
 const verify = async (page: Page) => {
   await page.getByRole('button', { name: 'Open settings' }).click();
   await page.getByRole('button', { name: 'Security' }).click();
@@ -11,9 +13,14 @@ const verify = async (page: Page) => {
 };
 
 const openContact = async (page: Page, name: string) => {
+  await page.evaluate(() => {
+    (globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean }).__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ = true;
+  });
   await page.getByRole('button', { name: 'Chats', exact: true }).click();
   const row = page.locator('.conversation-row').filter({ hasText: name });
   await row.click();
+  await expect.poll(() => page.locator('html').getAttribute('data-k3ncrypt-conversation-open'), { timeout: 30000 }).toMatch(/^(connected|same-room)$/);
+  await expect(row).toHaveClass(/active/);
   try { await expect(page.locator('.chat-header')).toContainText(name, { timeout: 30000 }); }
   catch (error) {
     const active = await page.locator('.conversation-row.active').innerText().catch(() => 'none');
@@ -40,6 +47,12 @@ const enableSafeCallDiagnostics = async (page: Page, output: string[]) => {
   });
   await page.evaluate(() => {
     (globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean }).__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ = true;
+  });
+  page.on('response', response => {
+    if (response.status() < 400) return;
+    const path = new URL(response.url()).pathname;
+    const category = path.includes('/device-trust/proof') ? 'device-proof' : path.includes('/prekeys') ? 'prekey' : path.includes('/chat-link/') ? 'room-control' : 'other-api';
+    console.log('CALL_SAFE_HTTP', `${response.request().method()}:${category}:${response.status()}:retry=${response.headers()['retry-after'] ?? 'none'}`);
   });
 };
 
@@ -69,11 +82,23 @@ test('audio call support follows the selected contact and decline permits a call
   await enableSafeCallDiagnostics(bob, callDiagnostics);
   await enableSafeCallDiagnostics(cara, callDiagnostics);
   await openContact(alice, 'Bob');
+  await alice.getByRole('button', { name: 'Calls', exact: true }).click();
+  await alice.getByRole('button', { name: 'Start audio call', exact: true }).click();
+  await bob.getByRole('button', { name: 'Accept call', exact: true }).click({ timeout: 30000 });
+  await expect(alice.locator('#call-status')).toHaveText('Connected', { timeout: 20000 });
+  await expect(bob.locator('#call-status')).toHaveText('Connected', { timeout: 20000 });
+  await expect(alice.locator('.call-contact-name')).toHaveText('Bob');
+  await expect(alice.locator('#call-status')).toHaveText('Connected');
+  await bob.getByRole('button', { name: 'End call', exact: true }).click();
+  await expect(alice.locator('.call-info')).not.toBeVisible();
+  await expect(bob.locator('.call-info')).not.toBeVisible();
+  await openContact(alice, 'Cara');
+  await startAndDecline(alice, cara);
   const observed = async (receiver: Page) => {
     try { await startAndDecline(alice, receiver); }
     catch (error) { console.log('SAFE_CALL_DIAGNOSTICS', callDiagnostics.sort().join(',')); throw error; }
   };
-  await observed(bob);
+  await openContact(alice, 'Bob'); await observed(bob);
   await openContact(alice, 'Cara'); await observed(cara);
   await openContact(alice, 'Bob'); await observed(bob);
   await a.close(); await b.close(); await c.close();
