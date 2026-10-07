@@ -101,4 +101,17 @@ describe('video call controls and render state', () => {
     expect(markup).toContain('Camera became unavailable');
     expect(markup).not.toContain('network verification');
   });
+
+  it('keeps the call contact tied to its room when the selected room changes', () => {
+    const markup = renderOverlay({
+      channelHash: 'room-2',
+      activeCallRoomId: 'room-1',
+      conversations: [
+        { roomId: 'room-1', label: 'Private contact', remoteDisplayName: 'Bob' },
+        { roomId: 'room-2', label: 'Private contact', remoteDisplayName: 'Cara' },
+      ],
+    });
+    expect(markup).toContain('Bob');
+    expect(markup).not.toContain('Cara');
+  });
 });

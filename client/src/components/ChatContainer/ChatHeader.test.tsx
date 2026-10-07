@@ -67,4 +67,19 @@ describe('ChatHeader call launch controls', () => {
     expect(buttonMarkup(busy, 'Start audio call')).toContain('disabled');
     expect(busy).toContain('A call is already in progress.');
   });
+
+  it('uses the saved contact name in pending and failed room-open status', () => {
+    const pending = renderHeader({
+      conversations: [...verifiedState.conversations, { roomId: 'room-2', label: 'Private contact', remoteDisplayName: 'Bob' }],
+      pendingConversation: { roomId: 'room-2', operationId: 2 },
+    });
+    expect(pending).toContain('Opening Bob…');
+    expect(pending).toContain('The current conversation remains active until it is ready.');
+
+    const failed = renderHeader({
+      conversations: [...verifiedState.conversations, { roomId: 'room-2', label: 'Private contact', remoteDisplayName: 'Bob' }],
+      conversationOpenError: { roomId: 'room-2', operationId: 2, code: 'CONVERSATION_RESTORE_FAILED' },
+    });
+    expect(failed).toContain('Could not open Bob. Your current conversation remains open.');
+  });
 });

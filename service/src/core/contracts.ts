@@ -9,6 +9,8 @@ export interface EncryptedEnvelope {
 export type CryptoChannel = 'message' | 'signaling';
 
 export interface InboundTransportEnvelope {
+    /** Derived from the joined room channel, never accepted from event payload. */
+    readonly conversationId?: string;
     readonly channel: CryptoChannel;
     readonly envelope: EncryptedEnvelope;
     readonly messageId?: string;
@@ -102,6 +104,18 @@ export interface TransportManager {
     join(conversationId: string, peerRoutingId: string, controlCapability: string, routingProof?: string): Promise<void>;
     sendEnvelope(channel: CryptoChannel, envelope: EncryptedEnvelope, recipientRoutingId?: string, proofOperation?: string): Promise<{ id?: string; timestamp?: number }>;
     activeTransport(): Transport | undefined;
+}
+
+/**
+ * A transport-manager view permanently bound to one conversation. The current
+ * implementation still delegates to the existing one-room relay transport;
+ * future multiplexed transports can implement this boundary without allowing
+ * callers to substitute a mutable active-room ID on each operation.
+ */
+export interface RoomTransport extends TransportManager {
+    readonly roomId: string;
+    connect(peerRoutingId: string, controlCapability: string, routingProof?: string): Promise<void>;
+    close(): Promise<void>;
 }
 
 /**

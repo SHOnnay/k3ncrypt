@@ -179,6 +179,15 @@ const verifiedPeerPair = async () => {
     return { alice, bob, aliceStorage, bobStorage, aliceTransport, bobTransport, aliceMessages, bobMessages };
 };
 
+it('keeps a ModernConversation and its transport permanently bound to the first room', async () => {
+    const pair = await verifiedPeerPair();
+    try {
+        await expect(pair.alice.connect('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', key(9))).rejects.toThrow('cannot change its bound room');
+    } finally {
+        await Promise.all([pair.alice.close(false), pair.bob.close(false)]);
+    }
+});
+
 const receiveFirstMessage = (conversation: ModernConversation, envelope: EncryptedEnvelope, senderAddress: string): Promise<boolean> =>
     (conversation as unknown as { receive: (value: EncryptedEnvelope, sender: string) => Promise<boolean> }).receive(envelope, senderAddress);
 

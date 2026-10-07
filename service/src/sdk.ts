@@ -393,6 +393,7 @@ class ChatE2EE implements IChatE2EE {
      */
     private async handleRawChatMessage(msg: InboundTransportEnvelope): Promise<void> {
         this.assertChannelReady();
+        if (msg.conversationId !== this.roomId) throw new Error('Inbound relay event is not bound to this room.');
         const payload = decodePayload<ChatPlaintext>(await this.cryptoSession.decrypt('message', msg.envelope));
         if (!this.chatReplayGuard.accept('chat', payload.seq)) {
             this.chatLogger.log(`Dropping replayed/duplicate chat message, seq=${payload.seq}`);
@@ -415,6 +416,7 @@ class ChatE2EE implements IChatE2EE {
      */
     private async handleRawWebrtcSignal(msg: InboundTransportEnvelope): Promise<void> {
         this.assertChannelReady();
+        if (msg.conversationId !== this.roomId) throw new Error('Inbound relay event is not bound to this room.');
         const payload = decodePayload<WebRtcSignalPayload>(await this.cryptoSession.decrypt('signaling', msg.envelope));
         testOnlyCallSignalStage('signal-received');
         await this.handleCallSignal(payload);

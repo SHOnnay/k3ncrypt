@@ -8,17 +8,28 @@ import { clearFileDisk, createFileOutput, createSealedCache, type SavedFile } fr
 interface FileContextValue { transfer: FileProgress; download?: { reference: string; transfer: FileProgress }; sendFile(file: File): Promise<void>; retry(): Promise<void>; cancel(): void; receive(text: string): Promise<SavedFile | undefined>; }
 const Context = createContext<FileContextValue | undefined>(undefined);
 export const FileProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-    const { fileTransferBinding, attachmentRequestHeaders, sendMessage, channelHash } = useChat();
+    const { fileTransferBindingForRoom, attachmentRequestHeadersForRoom, sendMessageForRoom, channelHash } = useChat();
     const [diskReady, setDiskReady] = useState(false);
     const saved = useRef<SavedFile>();
-    const send = useRef(sendMessage); send.current = sendMessage;
     const [transfer, changed] = useState<FileProgress>({ phase: 'Idle', bytes: 0, total: 0 });
     const activeDownload = useRef<string>();
     const [download, setDownload] = useState<FileContextValue['download']>();
-    const workflow = useMemo(() => new FileTransferWorkflow(new HttpFileGateway(getRuntimeConfig().baseUrl ?? '', attachmentRequestHeaders), fileTransferBinding, createSealedCache, async (reference, binding) => {
-        if (!sameBinding(await fileTransferBinding(true), binding)) throw new Error('File contact identity changed.');
-        await send.current(reference);
-    }, progress => { if (progress.phase === 'Failed') logSafeFailure(activeDownload.current ? 'file_download_failed' : 'file_send_failed', classifySafeDiagnostic('file-send', { safeDiagnosticCode: progress.diagnosticCode })); if (activeDownload.current) setDownload({ reference: activeDownload.current, transfer: progress }); else changed(progress); }), [fileTransferBinding, attachmentRequestHeaders, channelHash]);
+    const workflow = useMemo(() => new FileTransferWorkflow(
+        new HttpFileGateway(getRuntimeConfig().baseUrl ?? '', operation => {
+            if (!channelHash) throw new Error('Protected file transfer requires an open room.');
+            return attachmentRequestHeadersForRoom(channelHash, operation);
+        }),
+        verified => {
+            if (!channelHash) throw new Error('Protected file transfer requires an open room.');
+            return fileTransferBindingForRoom(channelHash, verified);
+        },
+        createSealedCache,
+        async (reference, binding) => {
+            if (!channelHash || !sameBinding(await fileTransferBindingForRoom(channelHash, true), binding)) throw new Error('File contact identity changed.');
+            await sendMessageForRoom(channelHash, reference);
+        },
+        progress => { if (progress.phase === 'Failed') logSafeFailure(activeDownload.current ? 'file_download_failed' : 'file_send_failed', classifySafeDiagnostic('file-send', { safeDiagnosticCode: progress.diagnosticCode })); if (activeDownload.current) setDownload({ reference: activeDownload.current, transfer: progress }); else changed(progress); },
+    ), [attachmentRequestHeadersForRoom, channelHash, fileTransferBindingForRoom, sendMessageForRoom]);
     useEffect(() => {
         const abort = new AbortController(); let release: (() => void) | undefined; let disposed = false;
         if (navigator.locks) void navigator.locks.request('k3ncrypt-file-workspace-v2', { signal: abort.signal }, async lock => {

@@ -8,6 +8,7 @@ import { ContactIdentityRegistry, type StoredContactIdentity } from '../identity
 import { fingerprintVodozemacIdentity, type VodozemacPublicIdentity } from '../identity/vodozemacIdentity';
 import { validateVodozemacPublicBundle } from '../identity/vodozemacBundle';
 import { DefaultTransportManager } from '../transports/transportManager';
+import { RoomTransportChannel } from '../transports/roomTransportChannel';
 import { DeliveryCoordinator } from '../delivery/deliveryCoordinator';
 import { RelayPathAdapter } from '../transports/relayPathAdapter';
 import { JOIN_INTRODUCTION_FEATURE, SocketIoRelayTransport, type SubscriptionType } from '../transports/socketIoRelayTransport';
@@ -251,8 +252,9 @@ export class ModernConversation {
     private readonly registry: ContactIdentityRegistry;
     private readonly modes: ConversationModeStore;
     private readonly subscriptions: SubscriptionType = new Map();
-    private readonly transport: TransportManager;
-    private readonly deliveryCoordinator: DeliveryCoordinator;
+    private readonly transportManager: TransportManager;
+    private roomTransport?: RoomTransportChannel;
+    private deliveryCoordinator?: DeliveryCoordinator;
     private readonly deliveryMutex = new AsyncMutex();
     private readonly receiveMutex = new AsyncMutex();
     private roomId?: string;
@@ -302,6 +304,7 @@ export class ModernConversation {
         this.modes = new ConversationModeStore(storage);
         const relay = transportManager ? undefined : new SocketIoRelayTransport(() => this.subscriptions, new Logger('ModernConversation'),
             async (message) => {
+                if (!this.roomId || message.conversationId !== this.roomId) throw new Error('Inbound relay event is not bound to this room.');
                 if (message.channel === 'signaling') {
                     testOnlyCallSignalStage('signal-received');
                     try {
@@ -335,15 +338,22 @@ export class ModernConversation {
                     ? this.receive(message.envelope, message.senderRoutingId)
                     : this.withTabLock(this.roomId ?? 'unknown', () => this.receive(message.envelope, message.senderRoutingId), false, this.inboundLockAbort.signal);
             });
-        this.transport = transportManager ?? new DefaultTransportManager(relay!);
-        // Message envelopes use the relay-only delivery boundary. Call
-        // signaling and transport lifecycle remain owned by TransportManager.
-        this.deliveryCoordinator = new DeliveryCoordinator(new RelayPathAdapter(this.transport));
+        this.transportManager = transportManager ?? new DefaultTransportManager(relay!);
         this.subscriptions.set('on-alice-join', new Set([() => {
             void this.retryPending();
             void this.retryJoinIntroduction();
         }]));
         this.subscriptions.set('delivered', new Set([(id: string) => { void this.acceptDelivery(id); }]));
+    }
+
+    private get transport(): TransportManager {
+        if (!this.roomTransport) throw new Error('Conversation room transport is not bound.');
+        return this.roomTransport;
+    }
+
+    private get delivery(): DeliveryCoordinator {
+        if (!this.deliveryCoordinator) throw new Error('Conversation room delivery is not bound.');
+        return this.deliveryCoordinator;
     }
 
     public async connect(roomId: string, capability: string, remoteAddress?: string, remoteIdentityCommitment?: string, onMessage?: (text: string, envelopeId: string) => InboundMessageAcceptancePlan | Promise<InboundMessageAcceptancePlan>, onContactChange?: (contact: StoredContactIdentity) => void | Promise<void>, onDeviceControl?: (message: DeviceControlEvent) => void, options?: { sendJoinIntroduction?: boolean }): Promise<ModernConnectionDetails> {
@@ -361,7 +371,10 @@ export class ModernConversation {
 
     private async connectUnlocked(roomId: string, capability: string, remoteAddress?: string, remoteIdentityCommitment?: string, onMessage?: (text: string, envelopeId: string) => InboundMessageAcceptancePlan | Promise<InboundMessageAcceptancePlan>, onContactChange?: (contact: StoredContactIdentity) => void | Promise<void>, onDeviceControl?: (message: DeviceControlEvent) => void, options?: { sendJoinIntroduction?: boolean }): Promise<ModernConnectionDetails> {
         if (!/^[0-9a-f-]{36}$/i.test(roomId) || !capability) throw new Error('Invalid private conversation invitation.');
+        if (this.roomId && this.roomId !== roomId) throw new Error('A ModernConversation cannot change its bound room.');
         this.roomId = roomId;
+        this.roomTransport ??= new RoomTransportChannel(roomId, this.transportManager);
+        this.deliveryCoordinator ??= new DeliveryCoordinator(new RelayPathAdapter(this.roomTransport));
         this.sessionHealth = 'healthy';
         this.lastConnectionFailureCategory = undefined;
         this.capability = capability;
@@ -512,10 +525,9 @@ export class ModernConversation {
             );
             activeTransport.setDeviceProofProvider(this.durableProofs);
         }
-        await this.transport.start();
         if (!routingProof) throw new Error('Modern routing ownership proof is unavailable.');
         this.transport.activeTransport()?.setProtocolFeatures?.([JOIN_INTRODUCTION_FEATURE]);
-        await this.transport.join(roomId, localAddress, capability, routingProof);
+        await this.roomTransport!.connect(localAddress, capability, routingProof);
         if (this.joinIntroductionPending) await this.sendJoinIntroductionUnlocked();
         if (trustSnapshot.list.devices.filter((entry) => entry.state === 'active').length > 1) {
             void this.requestTrustRefresh().catch(() => undefined);
@@ -864,7 +876,7 @@ export class ModernConversation {
         }
         await this.assertCurrentDeviceTrust();
         if (!record.envelope) throw new Error('Saved join introduction ciphertext is unavailable.');
-        await this.deliveryCoordinator.submit(record.envelope, this.remoteAddress);
+        await this.delivery.submit(record.envelope, this.remoteAddress);
     }
 
     public async retryPending(): Promise<void> {
@@ -874,7 +886,7 @@ export class ModernConversation {
             const pending = await this.readPending();
             const renewal = this.sessionHealth === 'renewal-pending'
                 ? parseSessionRenewal(await this.storage.read(SESSION_RENEWAL_RECORD, this.roomId!)) : undefined;
-            await this.deliveryCoordinator.retry({
+            await this.delivery.retry({
                 pending,
                 recipientRoutingId: this.remoteAddress,
                 skip: (item) => this.sessionHealth === 'renewal-pending' && item.clientId !== renewal?.clientId,
@@ -1099,7 +1111,7 @@ export class ModernConversation {
     public async close(lockStorage = true): Promise<void> {
         this.syncRelay?.close();
         if (this.retryTimer) clearInterval(this.retryTimer);
-        await this.transport.stop();
+        await this.roomTransport?.close();
         // A transport may already have delivered more envelopes than the old
         // conversation can drain. Cancel only its queued receive lock requests
         // so a newly selected instance is not starved by a retired listener.

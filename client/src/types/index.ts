@@ -50,6 +50,9 @@ export interface ChatContextType {
   chat: IChatE2EE | null;
   userId: string;
   channelHash: string;
+  pendingConversation?: { roomId: string; operationId: number };
+  conversationOpenError?: { roomId: string; operationId: number; code: import('../product/safeDiagnostics').SafeDiagnosticCode };
+  activeCallRoomId?: string;
   messages: Message[];
   isConnected: boolean;
   callActive: boolean;
@@ -115,6 +118,9 @@ export interface ChatContextType {
   refreshPermissionStatus: () => Promise<void>;
   fileTransferBinding: (verified: boolean) => Promise<import('@chat-e2ee/service').FileBinding>;
   attachmentRequestHeaders: (operation?: 'attachment:create' | 'attachment:read' | 'attachment:write' | 'attachment:delete') => Promise<Record<string, string>>;
+  sendMessageForRoom: (roomId: string, text: string) => Promise<void>;
+  fileTransferBindingForRoom: (roomId: string, verified: boolean) => Promise<import('@chat-e2ee/service').FileBinding>;
+  attachmentRequestHeadersForRoom: (roomId: string, operation?: 'attachment:create' | 'attachment:read' | 'attachment:write' | 'attachment:delete') => Promise<Record<string, string>>;
 }
 
 // Common component props

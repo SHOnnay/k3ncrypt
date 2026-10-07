@@ -86,7 +86,8 @@ export class SocketIoRelayTransport implements Transport {
             void this.acceptChatEnvelope(message, ack);
         });
         this.socket.on(WIRE_EVENTS.WEBRTC_SIGNAL, (message: RawSignalMessage) => {
-            void this.onEnvelope({ channel: 'signaling', envelope: message.envelope }).catch(() => undefined);
+            const conversationId = this.joinedConversationId ?? this.desiredConversation?.conversationId;
+            void this.onEnvelope({ ...(conversationId ? { conversationId } : {}), channel: 'signaling', envelope: message.envelope }).catch(() => undefined);
         });
     }
 
@@ -280,7 +281,10 @@ export class SocketIoRelayTransport implements Transport {
 
     private async acceptChatEnvelope(message: RawChatMessage, ack?: (response: { accepted: boolean }) => void): Promise<void> {
         try {
+            const conversationId = this.joinedConversationId ?? this.desiredConversation?.conversationId;
+            if (!conversationId) throw new Error('No room channel is bound.');
             const accepted = await this.onEnvelope({
+                conversationId,
                 channel: 'message',
                 envelope: message.envelope,
                 messageId: message.id,

@@ -62,7 +62,7 @@ async function verify(page: Page) {
   await page.getByRole('button', { name: 'Back to chat', exact: true }).click();
 }
 
-test('a prepared contact switch commits the selected room after another contact opened', async ({ browser }) => {
+test('a newer active-room selection supersedes a pending conversation candidate', async ({ browser }) => {
   test.setTimeout(180000);
   const { a, b, alice } = await connectedPair(browser);
   const c = await browser.newContext(); const cara = await c.newPage(); await create(cara, 'Cara');
@@ -71,6 +71,7 @@ test('a prepared contact switch commits the selected room after another contact 
   await cara.locator('#channel-hash').fill(invitation); await cara.getByRole('button', { name: 'Continue', exact: true }).click();
   await expect(alice.locator('.chat-header')).toContainText('Cara', { timeout: 30000 });
   await verify(alice); await verify(cara);
+  await openContact(alice, 'Bob');
   await openContact(alice, 'Bob');
   await a.close(); await b.close(); await c.close();
 });
@@ -86,6 +87,29 @@ test('three profiles preserve room ownership through 20 switch rounds, 20 KiB fi
   await expect(alice.locator('.chat-header')).toContainText('Cara', { timeout: 30000 });
   await expect(cara.locator('.chat-header')).toContainText('Alice', { timeout: 30000 });
   await verify(alice); await verify(cara);
+  let releaseCandidate!: () => void;
+  let requestCandidate!: () => void;
+  let blockFirstCandidate = true;
+  const candidateRequested = new Promise<void>(resolve => { requestCandidate = resolve; });
+  await alice.route('**/api/chat-link/*/prekeys/*', async route => {
+    if (blockFirstCandidate) {
+      blockFirstCandidate = false;
+      requestCandidate();
+      await new Promise<void>(resolve => { releaseCandidate = resolve; });
+    }
+    await route.continue();
+  });
+  const openCaraCandidate = alice.locator('.conversation-row').filter({ hasText: 'Cara' }).click();
+  await candidateRequested;
+  await expect(alice.locator('.chat-header')).toContainText('Opening Cara');
+  await alice.locator('.conversation-row').filter({ hasText: 'Bob' }).click();
+  await expect(alice.locator('.chat-header')).toContainText('Bob');
+  await expect(alice.locator('.chat-header')).not.toContainText('Opening Cara');
+  releaseCandidate();
+  await openCaraCandidate;
+  await expect(alice.locator('.chat-header')).toContainText('Bob', { timeout: 30000 });
+  await expect(alice.locator('.chat-header')).not.toContainText('Opening Cara');
+  await alice.unroute('**/api/chat-link/*/prekeys/*');
   await alice.evaluate(() => {
     (globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean }).__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ = true;
   });

@@ -52,6 +52,12 @@ describe('SocketInstance', () => {
     const subscriptionContext = () => subscription;
     let onEnvelope: jest.Mock;
     const createInstance = () => new SocketIoRelayTransport(subscriptionContext, logger, onEnvelope);
+    const joinTestRoom = async (instance: SocketIoRelayTransport): Promise<void> => {
+        mockSocket.emit.mockImplementation((event: string, _payload: unknown, ack?: (result: unknown) => void) => {
+            if (event === 'chat-join') ack?.({ status: 'accepted' });
+        });
+        await instance.join('room-a', 'alice', 'control-capability');
+    };
 
     beforeEach(() => {
         jest.clearAllMocks();
@@ -221,13 +227,15 @@ describe('SocketInstance', () => {
 
     describe('incoming chat-message (still-encrypted, routed to onRawChatMessage)', () => {
         it('hands an opaque transport envelope to the acceptance handler', async () => {
-            createInstance();
+            const instance = createInstance();
+            await joinTestRoom(instance);
             const raw = { id: 'message-1', timestamp: 123, sender: 'alice', envelope: { version: 1, strategy: 'test-strategy', data: { iv: 'i', ct: 'c' } } };
 
             handlerFor('chat-message')(raw);
             await Promise.resolve();
 
             expect(onEnvelope).toHaveBeenCalledWith({
+                conversationId: 'room-a',
                 channel: 'message',
                 envelope: raw.envelope,
                 messageId: raw.id,
@@ -239,7 +247,8 @@ describe('SocketInstance', () => {
         it('acknowledges only after authentication/protocol acceptance resolves true', async () => {
             let accept: (accepted: boolean) => void = () => undefined;
             onEnvelope.mockReturnValue(new Promise<boolean>((resolve) => { accept = resolve; }));
-            createInstance();
+            const instance = createInstance();
+            await joinTestRoom(instance);
 
             handlerFor('chat-message')({ id: 'msg-1', timestamp: 1, sender: 'alice', envelope: {} });
             expect(mockSocket.emit).not.toHaveBeenCalledWith('received', expect.anything());
@@ -253,7 +262,8 @@ describe('SocketInstance', () => {
 
         it('does not acknowledge rejected or malformed ciphertext', async () => {
             onEnvelope.mockResolvedValue(false);
-            createInstance();
+            const instance = createInstance();
+            await joinTestRoom(instance);
 
             handlerFor('chat-message')({ id: 'msg-2', timestamp: 1, sender: 'alice', envelope: {} });
             await Promise.resolve();
@@ -264,13 +274,14 @@ describe('SocketInstance', () => {
     });
 
     describe('incoming webrtc-session-description (still-encrypted, routed to onRawWebrtcSignal)', () => {
-        it('hands the raw envelope to onRawWebrtcSignal', () => {
-            createInstance();
+        it('hands the raw envelope to onRawWebrtcSignal', async () => {
+            const instance = createInstance();
+            await joinTestRoom(instance);
             const raw = { envelope: { version: 1, strategy: 'test-strategy', data: { iv: 'i', ct: 'c' } } };
 
             handlerFor('webrtc-session-description')(raw);
 
-            expect(onEnvelope).toHaveBeenCalledWith({ channel: 'signaling', envelope: raw.envelope });
+            expect(onEnvelope).toHaveBeenCalledWith({ conversationId: 'room-a', channel: 'signaling', envelope: raw.envelope });
         });
     });
 

@@ -22,11 +22,15 @@ interface ChatHeaderProps {
 }
 
 export const ChatHeader: React.FC<ChatHeaderProps> = ({ onStartCall, onStartVideoCall, disableStartCall = false }) => {
-  const { isConnected, channelHash, deleteChannel, protocolMode, sessionHealth, conversations, contactIdentity } = useChat();
+  const { isConnected, channelHash, deleteChannel, protocolMode, sessionHealth, conversations, contactIdentity, pendingConversation, conversationOpenError } = useChat();
   const [hashCopied, setHashCopied] = useState(false);
   const activeConversation = conversations.find((conversation) => conversation.roomId === channelHash)
     ?? (protocolMode === 'legacy' && channelHash ? { roomId: channelHash, label: 'Private conversation', remoteDisplayName: undefined, localNickname: undefined } : undefined);
   const contactLabel = contactDisplayName(activeConversation?.label, activeConversation?.roomId, activeConversation?.remoteDisplayName, activeConversation?.localNickname);
+  const roomLabel = (roomId: string) => {
+    const conversation = conversations.find((item) => item.roomId === roomId);
+    return contactDisplayName(conversation?.label, roomId, conversation?.remoteDisplayName, conversation?.localNickname);
+  };
   const securityVisibility = deriveSecurityVisibility({
     contact: protocolMode === 'modern' ? contactIdentity : undefined,
     sessionHealth: protocolMode === 'modern' ? sessionHealth : undefined,
@@ -101,6 +105,8 @@ const handleDelete = async () => {
         <p id="participant-info" className="participant-info" role={securityVisibility.identityChange === 'changed-pending-review' ? 'alert' : undefined}>
           {securityVisibility.identityChange === 'changed-pending-review' ? 'Identity changed. K3NCRYPT can’t confirm this is the same person or device anymore. Compare the new security code before verifying again.' : activeConversation && (protocolMode === 'modern' && sessionHealth === 'unhealthy' ? 'Review the security update for this conversation before continuing.' : protocolMode === 'modern' && sessionHealth === 'renewal-pending' ? 'Waiting for your contact to review the connection update.' : protocolMode === 'modern' ? 'Messages in this conversation are protected.' : 'This private conversation is open.')}
         </p>
+        {pendingConversation && <p className="participant-info" role="status">Opening {roomLabel(pendingConversation.roomId)}… The current conversation remains active until it is ready.</p>}
+        {conversationOpenError && <p className="participant-info" role="status">Could not open {roomLabel(conversationOpenError.roomId)}. Your current conversation remains open.</p>}
         {callLaunchBlockReason && <p id="call-launch-reason" className="call-launch-reason" role="status">{callLaunchBlockMessage(callLaunchBlockReason)}</p>}
         {activeConversation && <details className="conversation-security-details">
           <summary>Security details</summary>

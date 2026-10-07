@@ -15,7 +15,7 @@ import { hasLiveEnabledVideoTrack, localVideoPlaceholder, remoteVideoPlaceholder
 import './CallOverlay.css';
 
 export const CallOverlay: React.FC = () => {
-  const { callActive, callStatus, isIncomingCall, callLifecycleState, callMediaMode, localCallStream, remoteCallStream, microphoneMuted, cameraEnabled, callError, endCall, acceptCall, rejectCall, cancelCall, setMicrophoneMuted, setCameraEnabled, privacyPreferences, conversations, channelHash } = useChat();
+  const { callActive, callStatus, isIncomingCall, callLifecycleState, callMediaMode, localCallStream, remoteCallStream, microphoneMuted, cameraEnabled, callError, endCall, acceptCall, rejectCall, cancelCall, setMicrophoneMuted, setCameraEnabled, privacyPreferences, conversations, channelHash, activeCallRoomId } = useChat();
   const { duration, formatDuration, startTimer, stopTimer } = useCallTimer();
   const remoteAudio = useRef<HTMLAudioElement>(null);
   const localVideo = useRef<HTMLVideoElement>(null);
@@ -77,7 +77,8 @@ export const CallOverlay: React.FC = () => {
   };
 
   const isVideo = callMediaMode === 'video';
-  const callContact = contactDisplayName(conversations.find((conversation) => conversation.roomId === channelHash)?.label);
+  const callConversation = conversations.find((conversation) => conversation.roomId === (activeCallRoomId ?? channelHash));
+  const callContact = contactDisplayName(callConversation?.label, activeCallRoomId ?? channelHash, callConversation?.remoteDisplayName, callConversation?.localNickname);
   const localVideoState = localVideoPlaceholder(cameraEnabled, localCallStream);
   const remoteVideoState = remoteVideoPlaceholder(remoteCallStream);
   const mediaControlsReady = ['connecting', 'connected'].includes(callLifecycleState);
