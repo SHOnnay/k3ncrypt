@@ -1,3 +1,7 @@
+import { probeConversationRoom } from '../product/conversationRoom';
+import { ConversationSelection } from '../product/conversationSelection';
+import { conversationEligibility, conversationFailure, readConversationIndex } from '../product/conversationEligibility';
+import { classifySafeDiagnostic, type SafeDiagnosticCode } from '../product/safeDiagnostics';
 import { LocalCallHistory } from '../product/callHistory';
 import { parseFileReference } from '@chat-e2ee/service';
 /**
@@ -67,6 +71,9 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [pendingDeviceEnrollment, setPendingDeviceEnrollment] = useState<EnrollmentRequest>();
   const [pendingDeviceApproval, setPendingDeviceApproval] = useState<EnrollmentApprovalPacket>();
   const [vault, setVault] = useState<BrowserSecureStorage>();
+  const selectedConversation = useRef<ModernConversation>();
+  const selections = useRef(new ConversationSelection());
+  const [unavailableConversations, setUnavailableConversations] = useState<SafeDiagnosticCode[]>([]);
   const [conversations, setConversations] = useState<ConversationDescriptor[]>([]);
   const sentProfiles = useRef(new WeakMap<ModernConversation, number>());
   const [profileDisplayName, setProfileDisplayNameState] = useState('You');
@@ -285,16 +292,38 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     catch { sentProfiles.current.delete(conversation); }
   };
 
-  const connectModern = async (secureVault: BrowserSecureStorage, descriptor: ConversationDescriptor, sendJoinIntroduction = false): Promise<{ ownFingerprint: string; ownAddress: string; contact?: StoredContactIdentity }> => {
-    setCallError(undefined);
-    if (modern) await modern.close(false);
-    setSyncStatus('recovering');
-    setMessages(await readMessages(secureVault, descriptor.roomId));
+  const refreshConversations = async (storage: BrowserSecureStorage, checkRoom = false) => {
+    const index = await readConversationIndex(storage, await readConversationDescriptors(storage), checkRoom ? probeConversationRoom : undefined);
+    setConversations(index.conversations); setUnavailableConversations(index.unavailable);
+    return index;
+  };
+
+  const modernProjection = { setCallError, setChannelHash, setContactIdentity, setDeviceLifecycleState, setIsConnected, setMessages, setModern, setModernCallComposition, setModernCallId, setOwnFingerprint, setPendingDeviceApproval, setPendingDeviceEnrollment, setProtocolMode, setSessionError, setSessionHealth, setSyncStatus, setUserId };
+  const resolveModern = async (secureVault: BrowserSecureStorage, descriptor: ConversationDescriptor, sendJoinIntroduction = false): Promise<{ ownFingerprint: string; ownAddress: string; contact?: StoredContactIdentity }> => {
+    await readMessages(secureVault, descriptor.roomId).catch(() => { throw conversationFailure('CONVERSATION_STATE_INCOMPLETE'); });
     const conversation = new ModernConversation(secureVault, loadVodozemacBindings);
+    const setCallError: typeof modernProjection.setCallError = value => { if (selectedConversation.current === conversation) modernProjection.setCallError(value); };
+    const setChannelHash: typeof modernProjection.setChannelHash = value => { if (selectedConversation.current === conversation) modernProjection.setChannelHash(value); };
+    const setContactIdentity: typeof modernProjection.setContactIdentity = value => { if (selectedConversation.current === conversation) modernProjection.setContactIdentity(value); };
+    const setDeviceLifecycleState: typeof modernProjection.setDeviceLifecycleState = value => { if (selectedConversation.current === conversation) modernProjection.setDeviceLifecycleState(value); };
+    const setIsConnected: typeof modernProjection.setIsConnected = value => { if (selectedConversation.current === conversation) modernProjection.setIsConnected(value); };
+    const setMessages: typeof modernProjection.setMessages = value => { if (selectedConversation.current === conversation) modernProjection.setMessages(value); };
+    const setModern: typeof modernProjection.setModern = value => { if (selectedConversation.current === conversation) modernProjection.setModern(value); };
+    const setModernCallComposition: typeof modernProjection.setModernCallComposition = value => { if (selectedConversation.current === conversation) modernProjection.setModernCallComposition(value); };
+    const setModernCallId: typeof modernProjection.setModernCallId = value => { if (selectedConversation.current === conversation) modernProjection.setModernCallId(value); };
+    const setOwnFingerprint: typeof modernProjection.setOwnFingerprint = value => { if (selectedConversation.current === conversation) modernProjection.setOwnFingerprint(value); };
+    const setPendingDeviceApproval: typeof modernProjection.setPendingDeviceApproval = value => { if (selectedConversation.current === conversation) modernProjection.setPendingDeviceApproval(value); };
+    const setPendingDeviceEnrollment: typeof modernProjection.setPendingDeviceEnrollment = value => { if (selectedConversation.current === conversation) modernProjection.setPendingDeviceEnrollment(value); };
+    const setProtocolMode: typeof modernProjection.setProtocolMode = value => { if (selectedConversation.current === conversation) modernProjection.setProtocolMode(value); };
+    const setSessionError: typeof modernProjection.setSessionError = value => { if (selectedConversation.current === conversation) modernProjection.setSessionError(value); };
+    const setSessionHealth: typeof modernProjection.setSessionHealth = value => { if (selectedConversation.current === conversation) modernProjection.setSessionHealth(value); };
+    const setSyncStatus: typeof modernProjection.setSyncStatus = value => { if (selectedConversation.current === conversation) modernProjection.setSyncStatus(value); };
+    const setUserId: typeof modernProjection.setUserId = value => { if (selectedConversation.current === conversation) modernProjection.setUserId(value); };
     let profileFingerprint: string | undefined;
     let receivedPeerProfile = false;
     const scheduleProfile = () => { window.setTimeout(() => { void shareProfile(conversation, secureVault, profileFingerprint).catch(() => undefined); }, 0); };
     conversation.onSessionHealthUpdate((health) => {
+      if (selectedConversation.current !== conversation) return;
       setSessionHealth(health);
       setSessionError(health === 'healthy' ? undefined : health === 'renewal-pending'
         ? 'Verified renewal is waiting for an encrypted message to be accepted by your contact.'
@@ -323,7 +352,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             if (!receivedPeerProfile && profile && bound?.changeStatus === 'unchanged' && profile.identityFingerprint === bound.identityId) {
               receivedPeerProfile = true; sentProfiles.current.delete(conversation);
             }
-            setConversations(await readConversationDescriptors(secureVault)); scheduleProfile();
+            await refreshConversations(secureVault); scheduleProfile();
           } };
         }
         const message = { ...displayMessage('contact', text, 'received'), id: envelopeId };
@@ -333,7 +362,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           afterCommit: async () => {
             setMessages((previous) => previous.some((item) => item.id === envelopeId) ? previous : [...previous, message]);
             deliverNotification({ kind: 'message', conversationId: descriptor.roomId, preview: message.text }, privacyPreferencesRef.current);
-            if (conversation.hasEstablishedSession()) {
+            if (selectedConversation.current === conversation && conversation.hasEstablishedSession()) {
               const contact = await conversation.getContact();
               if (contact?.verification === 'verified' && contact.changeStatus === 'unchanged') {
                 await installModernCallSupport(conversation).catch(() => setCallError('Call signaling is unavailable for this saved contact.'));
@@ -344,7 +373,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }, async (contact) => {
         setContactIdentity(contact);
         scheduleProfile();
-        if (contact.verification !== 'verified' || contact.changeStatus !== 'unchanged') {
+        if (selectedConversation.current === conversation && (contact.verification !== 'verified' || contact.changeStatus !== 'unchanged')) {
           if (callActiveRef.current) {
             await verificationTerminationRef.current();
           } else {
@@ -364,18 +393,31 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         if (contact.contactId && (!descriptor.remoteAddress || descriptor.remoteAddress !== contact.contactId || descriptor.remoteIdentityCommitment !== contact.identityId)) {
           const latestDescriptor = (await readConversationDescriptors(secureVault))
             .find((item) => item.roomId === descriptor.roomId) ?? descriptor;
-          const updated = await saveConversationDescriptor(secureVault, {
+          await saveConversationDescriptor(secureVault, {
             ...latestDescriptor,
+            relationship: conversation.hasEstablishedSession() ? 'accepted' : 'invitation',
             remoteAddress: contact.contactId,
             remoteIdentityCommitment: contact.identityId,
             updatedAt: Date.now(),
           });
-          setConversations(updated);
+          await refreshConversations(secureVault);
+        }
+        if (selectedConversation.current === conversation && !await conversationEligibility(secureVault, (await readConversationDescriptors(secureVault)).find(item => item.roomId === descriptor.roomId))) {
+          setChannelHash(descriptor.roomId); setMessages(await readMessages(secureVault, descriptor.roomId));
         }
       }, (event: DeviceControlEvent) => {
         if (event.type === 'enrollment-request') setPendingDeviceEnrollment(event.payload as EnrollmentRequest);
         if (event.type === 'enrollment-approval') setPendingDeviceApproval(event.payload as EnrollmentApprovalPacket);
       }, { sendJoinIntroduction });
+      const restoredContact = await conversation.getContact();
+      const lifecycle = await conversation.getDeviceLifecycleState();
+      const trust = await conversation.getDeviceTrust();
+      if (descriptor.remoteAddress && (!conversation.hasEstablishedSession() || conversation.getSessionHealth() === 'unhealthy')) throw conversationFailure('CONVERSATION_SESSION_MISSING');
+      const finalHistory = await readMessages(secureVault, descriptor.roomId);
+      const previous = selectedConversation.current;
+      selectedConversation.current = conversation;
+      if (previous && previous !== conversation) await previous.close(false).catch(() => undefined);
+      setCallError(undefined); setMessages(finalHistory);
       profileFingerprint = details.ownFingerprint;
       setModern(conversation);
       scheduleProfile();
@@ -390,33 +432,27 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       // An inbound first message can establish an unverified contact during
       // that replay, so read the final durable contact state rather than
       // overwriting it with connect()'s pre-replay snapshot.
-      const restoredContact = await conversation.getContact();
       setContactIdentity(restoredContact);
       if (restoredContact?.verification === 'verified' && restoredContact.changeStatus === 'unchanged' && conversation.hasEstablishedSession()) {
         await installModernCallSupport(conversation).catch(() => setCallError('Call signaling is unavailable for this saved contact.'));
       }
       setUserId(details.ownAddress);
-      setDeviceLifecycleState(await conversation.getDeviceLifecycleState());
+      setDeviceLifecycleState(lifecycle);
 
       setIsConnected(true);
-      setSyncStatus(restoredSessionHealth !== 'healthy' ? 'blocked' : (await conversation.getDeviceTrust()) === 'trusted' ? 'ready' : 'blocked');
+      setSyncStatus(restoredSessionHealth !== 'healthy' ? 'blocked' : trust === 'trusted' ? 'ready' : 'blocked');
       setSessionError(restoredSessionHealth === 'unhealthy'
         ? 'This conversation’s encrypted session is missing. Your identity, verification, and saved messages remain available; sending and calls are paused until verified renewal.'
         : restoredSessionHealth === 'renewal-pending' ? 'Verified renewal awaits accepted encrypted delivery.' : undefined);
       return details;
     } catch (error) {
-      setSessionHealth('unhealthy');
-
       await conversation.close(false).catch(() => undefined);
-      setSyncStatus('blocked');
-      const safeCategory = error && typeof error === 'object' && 'restoreFailureCategory' in error
-        ? (error as { restoreFailureCategory?: unknown }).restoreFailureCategory : undefined;
-      setSessionError(typeof safeCategory === 'string' && safeCategory === 'session-record-missing'
-        ? 'The vault opened, but a saved encrypted session is missing. Keep this device data intact and contact support.'
-        : 'Could not restore the encrypted account. Check the local passphrase and try again.');
-      throw error;
+      const code = classifySafeDiagnostic('conversation-open', error);
+      throw conversationFailure(code === 'UNKNOWN_SAFE_FAILURE' ? 'CONVERSATION_RESTORE_FAILED' : code);
     }
   };
+  const connectModern = (storage: BrowserSecureStorage, descriptor: ConversationDescriptor, introduce = false) =>
+    selections.current.run(() => resolveModern(storage, descriptor, introduce), async () => undefined);
 
   useEffect(() => {
     if (vault && channelHash && protocolMode === 'modern') void writeMessages(vault, channelHash, messages).catch((error) => debugError('Message history persistence failed', error));
@@ -427,9 +463,9 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const invite = await chat.getLink();
     const secureVault = vault ?? await openModernVault(passphrase);
     if (displayName !== undefined) setProfileDisplayNameState(await writeProfileName(secureVault, displayName));
-    const descriptor: ConversationDescriptor = { version: 1, roomId: invite.hash, controlCapability: invite.controlCapability, label: 'Private contact', updatedAt: Date.now() };
+    const descriptor: ConversationDescriptor = { version: 1, relationship: 'invitation', roomId: invite.hash, controlCapability: invite.controlCapability, label: 'Private contact', updatedAt: Date.now() };
     const details = await connectModern(secureVault, descriptor);
-    setConversations(await saveConversationDescriptor(secureVault, descriptor));
+    await saveConversationDescriptor(secureVault, (await readConversationDescriptors(secureVault)).find(item => item.roomId === descriptor.roomId) ?? descriptor); await refreshConversations(secureVault);
     const fragment = `modern=${encodeURIComponent(invite.hash)}&control=${encodeURIComponent(invite.controlCapability)}&address=${encodeURIComponent(details.ownAddress)}&identity=${encodeURIComponent(details.ownFingerprint)}`;
     return `${window.location.origin}${window.location.pathname}#${fragment}`;
   }, [chat, modern, vault]);
@@ -437,11 +473,11 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const joinModernChannel = useCallback(async (roomId: string, capability: string, address: string, identityCommitment: string, passphrase: string, displayName?: string): Promise<void> => {
     const secureVault = vault ?? await openModernVault(passphrase);
     if (displayName !== undefined) setProfileDisplayNameState(await writeProfileName(secureVault, displayName));
-    const descriptor: ConversationDescriptor = { version: 1, roomId, controlCapability: capability, remoteAddress: address, remoteIdentityCommitment: identityCommitment, label: 'Private contact', updatedAt: Date.now() };
+    const descriptor: ConversationDescriptor = { version: 1, relationship: 'accepted', roomId, controlCapability: capability, remoteAddress: address, remoteIdentityCommitment: identityCommitment, label: 'Private contact', updatedAt: Date.now() };
     const existing = (await readConversationDescriptors(secureVault)).find((item) => item.roomId === roomId);
     if (existing && existing.remoteIdentityCommitment && existing.remoteIdentityCommitment !== identityCommitment) throw new Error('The invitation identity differs from the saved contact.');
     if (!(existing && roomId === channelHash && modern)) await connectModern(secureVault, existing ?? descriptor, !existing);
-    setConversations(await saveConversationDescriptor(secureVault, existing ?? descriptor));
+    await saveConversationDescriptor(secureVault, existing ?? descriptor); await refreshConversations(secureVault);
   }, [modern, vault, channelHash]);
 
   const updateProfileDisplayName = useCallback(async (name: string): Promise<void> => {
@@ -460,7 +496,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           const details = await background.connect(descriptor.roomId, descriptor.controlCapability, descriptor.remoteAddress, descriptor.remoteIdentityCommitment, async (text, id) => {
             if (text.startsWith(PROFILE_PREFIX)) {
               const peer = await background.getContact();
-              return { updates: await prepareProfileAcceptance(vault, descriptor.roomId, text, peer?.changeStatus === 'unchanged' ? peer.identityId : undefined), afterCommit: async () => { setConversations(await readConversationDescriptors(vault)); } };
+              return { updates: await prepareProfileAcceptance(vault, descriptor.roomId, text, peer?.changeStatus === 'unchanged' ? peer.identityId : undefined), afterCommit: async () => { await refreshConversations(vault); } };
             }
             return { updates: [await prepareMessageAcceptance(vault, descriptor.roomId, { ...displayMessage('contact', text, 'received'), id })] };
           });
@@ -478,30 +514,26 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const trimmed = nickname.trim();
     if (trimmed.length > 80 || /[\u0000-\u001f\u007f]/.test(trimmed)) throw new Error('Contact name must be 1–80 characters.');
     const label = trimmed.replace(/\s+/g, ' ') || 'Private contact';
-    setConversations(await saveConversationDescriptor(vault, { ...existing, label, localNickname: trimmed || undefined, updatedAt: Date.now() }));
+    await saveConversationDescriptor(vault, { ...existing, label, localNickname: trimmed || undefined, updatedAt: Date.now() }); await refreshConversations(vault);
   }, [conversations, vault]);
 
   const restoreSession = useCallback(async (passphrase: string): Promise<void> => {
     const secureVault = await openModernVault(passphrase);
-    const saved = await readConversationDescriptors(secureVault);
-    setConversations(saved);
-    if (!saved[0]) { setAccountState('ready'); return; }
-    let missingSessionError: unknown;
-    for (const descriptor of saved) {
-      try {
-        await connectModern(secureVault, descriptor);
-        return;
-      } catch (error) {
-        // A missing record in one saved conversation must not prevent another
-        // intact, independently validated conversation from opening. Preserve
-        // the broken descriptor and all vault records for explicit recovery.
-        const category = error && typeof error === 'object' && 'restoreFailureCategory' in error
-          ? (error as { restoreFailureCategory?: unknown }).restoreFailureCategory : undefined;
-        if (category !== 'session-record-missing') throw error;
-        missingSessionError = error;
+    const index = await refreshConversations(secureVault, true);
+    for (const descriptor of index.conversations) {
+      try { await connectModern(secureVault, descriptor); return; }
+      catch (error) {
+        const code = classifySafeDiagnostic('conversation-open', error);
+        setUnavailableConversations(current => [...current, code]);
+        setConversations(current => current.filter(item => item.roomId !== descriptor.roomId));
       }
     }
-    throw missingSessionError;
+    for (const descriptor of await readConversationDescriptors(secureVault)) {
+      if (await conversationEligibility(secureVault, descriptor, probeConversationRoom) !== 'CONVERSATION_INVITATION_UNACCEPTED') continue;
+      try { await connectModern(secureVault, descriptor); break; } catch { /* Preserve unavailable pending invitation. */ }
+    }
+    setAccountState('ready');
+
   }, [modern]);
 
   const openConversation = useCallback(async (roomId: string): Promise<void> => {
@@ -509,8 +541,18 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (!vault) throw new Error('Unlock this device before opening a conversation.');
     const descriptor = conversations.find((item) => item.roomId === roomId);
     if (!descriptor) throw new Error('Conversation is unavailable.');
-    setMessages([]);
-    await connectModern(vault, descriptor);
+    try {
+      const failure = await conversationEligibility(vault, descriptor, probeConversationRoom);
+      if (failure) throw conversationFailure(failure);
+      await connectModern(vault, descriptor);
+    } catch (error) {
+      const code = classifySafeDiagnostic('conversation-open', error);
+      if (['CONVERSATION_RECORD_INVALID', 'CONVERSATION_INVITATION_UNACCEPTED', 'CONVERSATION_INVITATION_EXPIRED', 'CONVERSATION_SESSION_MISSING', 'CONVERSATION_ROOM_MISSING', 'CONTACT_REGISTRY_MISSING', 'ROOM_MEMBERSHIP_MISMATCH', 'CONVERSATION_STATE_INCOMPLETE', 'CONVERSATION_RESTORE_FAILED'].includes(code)) {
+        setConversations(current => current.filter(item => item.roomId !== roomId));
+        setUnavailableConversations(current => [...current, code]);
+      }
+      throw error;
+    }
   }, [channelHash, conversations, modern, vault]);
 
   const verifyContact = useCallback(async (): Promise<void> => {
@@ -1072,7 +1114,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const deleteChannel = useCallback(async () => {
     if (protocolMode === 'modern') {
       await modern?.delete();
-      if (vault && channelHash) setConversations(await removeConversationDescriptor(vault, channelHash));
+      if (vault && channelHash) { await removeConversationDescriptor(vault, channelHash); await refreshConversations(vault); }
       setModern(null);
       setModernCallComposition(null);
       setModernCallId(undefined);
@@ -1117,6 +1159,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     pendingDeviceEnrollment,
     pendingDeviceApproval,
     conversations,
+    unavailableConversations,
     profileDisplayName,
     accountState,
     sessionError,

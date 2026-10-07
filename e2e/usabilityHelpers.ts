@@ -47,7 +47,7 @@ export async function connectedPair(browser: import('@playwright/test').Browser)
   await expect(alice.locator('.chat-header')).toContainText('Bob', { timeout: 30000 });
   await expect(bob.locator('.chat-header')).toContainText('Alice', { timeout: 30000 });
   for (const page of [alice, bob]) {
-    await security(page); await page.getByRole('button', { name: 'Codes match', exact: true }).click();
+    await security(page); await page.getByRole('button', { name: 'Compare security code', exact: true }).click(); await page.getByRole('button', { name: 'Codes match', exact: true }).click();
     await page.getByRole('button', { name: 'Mark as verified', exact: true }).click();
     await page.getByRole('button', { name: 'Back to chat', exact: true }).click();
   }

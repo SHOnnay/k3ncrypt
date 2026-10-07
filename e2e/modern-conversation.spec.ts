@@ -84,6 +84,7 @@ test('modern private contact works after offline recipient and both browser rest
   await expect(markVerified).toBeDisabled();
   await bobReturned.getByRole('button', { name: 'They don\'t match' }).click();
   await expect(markVerified).toBeDisabled();
+  await bobReturned.getByRole('button', { name: 'Compare security code', exact: true }).click();
   await bobReturned.getByRole('button', { name: 'Codes match' }).click();
   await expect(markVerified).toBeEnabled();
   await bobReturned.getByRole('button', { name: 'Mark as verified' }).click();

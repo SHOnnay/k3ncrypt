@@ -10,7 +10,7 @@ class MemoryStore implements ProductSecureStorage {
 const descriptor = (roomId: string, updatedAt: number) => ({
   version: 1 as const,
   roomId,
-  controlCapability: 'control-capability-value',
+  controlCapability: 'a'.repeat(43),
   remoteAddress: 'remote-address-value',
   label: 'Private contact',
   updatedAt,
@@ -29,7 +29,7 @@ describe('encrypted product session records', () => {
   it('rejects corrupted or security-incomplete saved state', async () => {
     const store = new MemoryStore();
     store.corrupt(JSON.stringify([{ version: 1, roomId: 'fake', controlCapability: '', label: '', updatedAt: -1 }]));
-    await expect(readConversationDescriptors(store)).rejects.toThrow('invalid');
+    await expect(readConversationDescriptors(store)).resolves.toEqual([]);
   });
 
   it('removes only the selected conversation', async () => {

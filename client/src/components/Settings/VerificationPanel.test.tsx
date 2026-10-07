@@ -7,8 +7,11 @@ it('shows a named, explicit verification flow and confines raw codes to security
   const action = async () => undefined;
   const markup = renderToStaticMarkup(createElement(VerificationPanel, { label: 'Onnay', ownFingerprint: 'K3 AAAA CCCC_DDDD', contact: peer, sessionHealth: 'healthy', verify: action, unverify: action, acceptChange: action, renew: action, block: action, onError: () => undefined, onDone: () => undefined }));
   expect(markup).toContain('Verify Onnay');
-  expect(markup).toContain('Scan their verification QR');
-  expect(markup).toContain('Codes match');
+  expect(markup).toContain('Scan their QR');
+  expect(markup).toContain('Show my QR');
+  expect(markup).toContain('Compare security code');
+  expect(markup).not.toContain('Codes match');
+  expect(markup.split('<details')[0]).not.toContain('Comparison security code');
   expect(markup).toMatch(/<button[^>]*disabled=""[^>]*>Mark as verified<\/button>/);
   expect(markup.split('<details')[0]).not.toContain(peer.identityId);
 });

@@ -70,6 +70,7 @@ export interface ChatContextType {
   pendingDeviceEnrollment?: EnrollmentRequest;
   pendingDeviceApproval?: EnrollmentApprovalPacket;
   conversations: ConversationDescriptor[];
+  unavailableConversations: import('../product/safeDiagnostics').SafeDiagnosticCode[];
   profileDisplayName: string;
   accountState: 'checking' | 'new' | 'locked' | 'ready';
   sessionError?: string;

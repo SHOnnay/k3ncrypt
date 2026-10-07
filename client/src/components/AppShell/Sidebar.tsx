@@ -22,7 +22,7 @@ const formatSidebarTime = (date?: Date): string => {
 };
 
 export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection, onNavigate, onNewConversation, onOpenConversation, onOpenSettings, settingsOpen = false }) => {
-  const { channelHash, messages, conversations, syncStatus, sessionHealth, profileDisplayName, protocolMode } = useChat();
+  const { channelHash, messages, conversations, syncStatus, sessionHealth, profileDisplayName, protocolMode, unavailableConversations = [] } = useChat();
   const latest = messages.at(-1);
 
   return (
@@ -63,6 +63,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection
         )}
       </div>
 
+      {unavailableConversations.length > 0 && <details className="conversation-recovery"><summary>Unavailable conversations</summary><p>Some saved entries are not ready to open. Their encrypted data remains on this device.</p><p>Pending invitations appear in Chats only after someone accepts.</p></details>}
       <div className="sidebar-profile">
         <Avatar label={profileDisplayName} size="small" />
         <span><strong>{profileDisplayName}</strong><small>Your profile · this device</small></span>

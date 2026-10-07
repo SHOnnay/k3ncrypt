@@ -76,6 +76,8 @@ test('independent accounts connect, exchange claimed names, explicitly verify, a
   expect(await bob.locator('.conversation-row').count()).toBe(contactsBefore);
   await alice.locator('.chat-footer').getByRole('button', { name: 'Verify Alpha Bob' }).click();
   await bob.locator('.chat-footer').getByRole('button', { name: 'Verify Alpha Alice' }).click();
+  await alice.getByRole('button', { name: 'Compare security code', exact: true }).click();
+  await bob.getByRole('button', { name: 'Compare security code', exact: true }).click();
   const aliceCode = alice.getByLabel('Comparison security code');
   const bobCode = bob.getByLabel('Comparison security code');
   await expect(aliceCode).toHaveText(/\d{5}( · \d{5}){5}/);
@@ -88,7 +90,7 @@ test('independent accounts connect, exchange claimed names, explicitly verify, a
   await bob.getByLabel('Contact verification QR payload', { exact: true }).fill(bobQr);
   await bob.getByRole('button', { name: 'Check shared QR payload' }).click();
   await expect(mark).toBeDisabled();
-  await expect(bob.locator('.verification-view')).toContainText('This QR does not match');
+  await expect(bob.locator('.verification-view')).toContainText('different identity');
   await bob.getByLabel('Contact verification QR payload', { exact: true }).fill(aliceQr);
   await bob.getByRole('button', { name: 'Check shared QR payload' }).click();
   await expect(mark).toBeEnabled();

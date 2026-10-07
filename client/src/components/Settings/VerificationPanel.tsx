@@ -11,6 +11,8 @@ interface Props {
 }
 
 export const VerificationPanel: React.FC<Props> = ({ label, ownFingerprint, contact, sessionHealth, verify, unverify, acceptChange, renew, block, onError, onDone }) => {
+  const [showQr, setShowQr] = useState(false);
+  const [showRemote, setShowRemote] = useState(false);
   const [code, setCode] = useState('');
   const [confirmed, setConfirmed] = useState('');
   const [notice, setNotice] = useState('');
@@ -21,33 +23,40 @@ export const VerificationPanel: React.FC<Props> = ({ label, ownFingerprint, cont
   const binding = JSON.stringify([ownFingerprint, peer]);
   const verified = contact?.verification === 'verified' && !changed;
   useEffect(() => {
-    let active = true; setCode(''); setConfirmed(''); setNotice(''); setRenewalConfirmed(false);
+    let active = true; setCode(''); setConfirmed(''); setShowQr(false); setShowRemote(false); setNotice(''); setRenewalConfirmed(false);
     if (peer) void deriveHumanVerificationCode(ownFingerprint, peer).then((value) => { if (active) setCode(value); }).catch(onError);
     return () => { active = false; };
   }, [ownFingerprint, peer]);
   const scan = (text: string) => {
-    if (!peer || !verificationQrMatches(text, peer)) { setConfirmed(''); setNotice('This QR does not match this contact. Do not verify.'); return; }
-    setConfirmed(binding); setNotice('Identity matches. Choose Mark as verified to confirm.');
+    if (!peer || !verificationQrMatches(text, peer)) { setConfirmed(''); setNotice('That code belongs to a different identity.'); return; }
+    setConfirmed(binding); setNotice('Identity matched. Choose Mark as verified to confirm.');
   };
   return <>
     <h3>{verified ? label : `Verify ${label}`}</h3>
-    <p>Make sure you are really talking to {label}.</p>
+    <p>Confirm you are really connected to {label}.</p>
     <StatusPill tone={verified ? 'positive' : 'quiet'}>{changed ? 'Identity changed · review required' : verified ? 'Verified' : 'Unverified'}</StatusPill>
     {!peer ? <p>This contact’s authenticated identity is not available yet. Keep the conversation open while they connect.</p> : <>
       {changed && <p role="alert">This contact’s identity changed. Compare the new code using another trusted way before accepting it. They will still need explicit verification.</p>}
       {!verified && <>
-        <h4>Together?</h4><p>Show your verification QR, then scan theirs.</p>
-        <LocalQrImage value={encodeVerificationQrPayload(ownFingerprint)} label="Your verification QR" />
+        <h4>Together?</h4>
         <LocalQrScanner onScanned={scan} />
-        <h4>Apart?</h4><p>Compare this security code with them. Both devices must show the same numbers.</p>
-        <code className="human-verification-code" aria-label="Comparison security code">{code || 'Preparing code…'}</code>
-        <div className="verification-actions"><button className="btn btn--secondary" type="button" disabled={!code} onClick={() => { setConfirmed(binding); setNotice('You confirmed the codes match. Choose Mark as verified.'); }}>Codes match</button><button className="btn btn--secondary" type="button" onClick={() => { setConfirmed(''); setNotice('Do not verify. Compare again using another trusted way.'); }}>They don&apos;t match</button></div>
+        <button className="btn btn--secondary" type="button" aria-expanded={showQr} onClick={() => setShowQr(value => !value)}>Show my QR</button>
+        {showQr && <LocalQrImage value={encodeVerificationQrPayload(ownFingerprint)} label="Your verification QR" />}
+        <h4>Not together?</h4>
+        <button className="btn btn--secondary" type="button" aria-expanded={showRemote} onClick={() => setShowRemote(value => !value)}>Compare security code</button>
+        {showRemote && <>
+          <p>Compare this code with {label} using a channel you already trust. Sending it in this unverified chat does not independently confirm identity.</p>
+          <code className="human-verification-code" aria-label="Comparison security code">{code || 'Preparing code…'}</code>
+          <button className="btn btn--secondary" type="button" disabled={!code} onClick={() => void navigator.clipboard.writeText(code).catch(() => setNotice('Could not copy. You can read the grouped code aloud.'))}>Copy security code</button>
+          <div className="verification-actions"><button className="btn btn--secondary" type="button" disabled={!code} onClick={() => { setConfirmed(binding); setNotice('You chose to confirm comparison. Choose Mark as verified to change local trust.'); }}>Codes match</button><button className="btn btn--secondary" type="button" onClick={() => { setConfirmed(''); setNotice('Do not verify. Compare again using another trusted way.'); }}>They don&apos;t match</button></div>
+        </>}
         {changed ? <button className="btn btn--secondary" type="button" disabled={confirmed !== binding} onClick={() => acceptChange().then(() => setConfirmed('')).catch(onError)}>Accept new identity after review</button> : <button className="btn btn--primary" type="button" disabled={confirmed !== binding} onClick={() => verify().then(() => { setConfirmed(''); setNotice('Verified on this device.'); }).catch(onError)}>Mark as verified</button>}
       </>}
       {verified && <><p>You verified this contact on this device.</p><button type="button" className="btn btn--primary" onClick={onDone}>Back to chat</button></>}
     </>}
+    <details><summary>Why verify?</summary><p>Names do not prove identity. Compare in person or through a channel you already trust. A scan or comparison enables your explicit confirmation; it does not silently change trust.</p></details>
     {notice && <p role="status">{notice}</p>}
-    <details className="verification-security-details"><summary>Security details</summary>
+    <details className="verification-security-details"><summary>Advanced security details</summary>
       <p>Names are claims, not identity proof. QR compares the complete pinned fingerprint. The grouped code is derived from both complete identities. Compare using a trusted channel; only your explicit action changes verification.</p>
       <strong>Your security code</strong><code className="verification-code">{ownFingerprint}</code>
       <strong>Contact security code</strong><code className="verification-code">{peer ?? 'Unavailable'}</code>

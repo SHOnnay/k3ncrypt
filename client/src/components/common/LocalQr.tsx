@@ -29,8 +29,8 @@ export const LocalQrScanner: React.FC<{ onScanned: (text: string) => void }> = (
         callback.current(result.getText()); setScanning(false);
       });
       if (cancelled) controls.stop(); else stop = () => controls.stop();
-    }).catch(() => { if (!cancelled) { setError('Camera unavailable. You can compare the security code instead.'); setScanning(false); } });
+    }).catch(() => { if (!cancelled) { setError('Camera unavailable. Choose Compare security code, or use the fallback in Advanced security details.'); setScanning(false); } });
     return () => { cancelled = true; stop?.(); document.removeEventListener('visibilitychange', hidden); };
   }, [scanning]);
-  return <div>{scanning ? <><video ref={video} autoPlay muted playsInline aria-label="Verification QR camera preview" /><button type="button" className="btn btn--secondary" onClick={() => setScanning(false)}>Stop camera</button></> : <button className="btn btn--secondary" type="button" onClick={() => { setError(''); setScanning(true); }}>Scan their verification QR</button>}{error && <p role="alert">{error}</p>}</div>;
+  return <div>{scanning ? <><video ref={video} autoPlay muted playsInline aria-label="Verification QR camera preview" /><button type="button" className="btn btn--secondary" onClick={() => setScanning(false)}>Stop camera</button></> : <button className="btn btn--primary" type="button" onClick={() => { setError(''); setScanning(true); }}>Scan their QR</button>}{error && <p role="alert">{error}</p>}</div>;
 };
