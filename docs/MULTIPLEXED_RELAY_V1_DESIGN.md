@@ -77,43 +77,112 @@ committed, that recipient account consumes the one-time key, which helps
 prevent a later sequential replay; it does not bind the ciphertext to a room
 and is not a substitute for an authenticated room field.
 
-### Versioned room-binding proposal for review
+### ROOM_MESSAGE_V1 pre-mux security milestone
 
-Before mux-v1, introduce a new, domain-separated authenticated inner message
-frame version. Keep the Olm primitive unchanged. The proposed wrapper is
-inside the Olm-authenticated plaintext and has strict canonical encoding for:
+`ROOM_MESSAGE_V1` is an authenticated application wrapper carried inside the
+existing Olm plaintext. It does not change Olm, attachment encryption, identity
+pinning, or explicit verification. Its canonical byte encoding is:
 
 ```text
-domain = "K3NCRYPT/room-message/v1"
-roomId
-senderRoutingId
-recipientRoutingId
-channel (message or signaling)
-payloadKind
-payloadLength
-payload
+ASCII "K3NCRYPT/ROOM-MESSAGE\0"   fixed domain separator
+u8 version = 1                    fixed
+u8 payloadKind                    1=text, 2=attachment-reference,
+                                  3=join-introduction
+16 bytes room UUID                RFC 4122 textual UUID decoded to bytes
+u16be senderIdentityRefLength
+UTF-8 senderIdentityReference    exact K3 fingerprint text
+u16be recipientIdentityRefLength
+UTF-8 recipientIdentityReference exact K3 fingerprint text
+16 bytes sender event UUID        RFC 4122 textual UUID decoded to bytes
+u32be payloadLength
+payload                           exactly payloadLength bytes
 ```
 
-The sender obtains all context from its immutable room/channel handle. The
-receiver verifies room ID, both routing IDs, and channel against that same
-immutable handle before parsing or committing payload state. Unknown versions,
-unknown critical fields, malformed lengths, and any field disagreement fail
-closed. The proof carrier remains transport authorization, not a substitute
-for the inner authenticated binding. Explicit user verification remains an
-independent trust decision.
+There are no optional fields, maps, whitespace, or alternate UUID spellings.
+UUID inputs use lowercase canonical `8-4-4-4-12` hex and become fixed 16-byte
+fields. Each `K3 ` identity reference is exactly 46 bytes and the codec caps
+references at 128 bytes. Payloads are capped at 61,440 bytes; text must be
+valid UTF-8, and attachment references and introductions must match their
+respective content markers. The parser requires exact lengths, supported
+version/kind, valid identity references, and no trailing bytes. The payload is
+exposed to application parsers only after the immutable room and both stable
+identity references match. Event replay identity is SHA-256 over the separate
+`K3NCRYPT/ROOM-MESSAGE-EVENT-ID\0` domain, room UUID bytes, sender reference
+length and bytes, and event UUID bytes. Durable replay state remains keyed by
+room. A second room-keyed marker stores a commitment to the complete canonical
+wrapper; retransmission of the same event ID and same bytes is suppressed,
+while reuse of an event ID for different content fails closed.
 
-Use a new negotiated application protocol/inner-frame version; do not silently
-reinterpret the existing unbound frame. The existing frame remains readable
-and writable only over the legacy one-room transport during migration. A mux
-subscription requires both peers to advertise and select the room-bound
-version; it must fail closed if either side only supports the legacy frame.
-Old messages, session records, histories, and attachments are not rewritten or
-deleted. Their existing per-room sessions continue to operate on the legacy
-one-room path. Migration to mux requires an explicit per-room session upgrade
-or re-establishment and a reviewed rule for old outbox items; no fallback to an
-unbound frame is allowed on a mux channel. Final protocol version names,
-capability negotiation, call/device-control coverage, and rollback rules need
-security review before implementation.
+Participant references are the sender's local identity fingerprint and the
+recipient's pinned identity fingerprint. They are stable through routing
+address renewal. The routing address is a room-scoped mailbox key and the
+current renewal flow updates the bundle at that same address; it is not a
+cryptographic identity and is deliberately absent from the wrapper. This avoids
+invalidating queued offline content when a routing address is renewed or
+replaced. A genuine identity change continues through the existing reviewed
+identity-change/reset flow.
+
+The exact enforcement chain for future mux traffic is:
+
+```text
+outer mux room
+== authorization/proof resource room
+== immutable RoomTransportChannel room
+== authenticated ROOM_MESSAGE_V1 room
+```
+
+The backend checks the outer frame against the active subscription and the
+fresh room-scoped proof. The room-bound transport dispatches only to the
+immutable room channel. `ModernConversation` checks the decrypted wrapper's
+room and sender/recipient identity references before application parsing or
+acceptance. The current one-room relay has no mux outer frame yet, so its
+joined room is supplied by that immutable channel. A future mux transport MUST
+set `requiresRoomMessageV1`; legacy payloads on that path fail closed. Both
+peers must advertise `room-message-v1` before new sends use the wrapper.
+
+Legacy one-room relationships remain compatible: new sends use the wrapper
+only after peer feature negotiation, and non-strict receives continue to
+accept already-queued legacy frames. No stored ciphertext, history, session, or
+outbox is rewritten. New outbox records mark the wrapper version; on a future
+strict mux transport, legacy entries without that marker are skipped and remain
+queued for the legacy room transport. Strict sends fail if the peer did not
+negotiate V1. A saved legacy join-introduction ciphertext is likewise not
+submitted on a strict transport. Future mux subscriptions require V1 and
+cannot carry legacy outbox payloads; migration/re-establishment and old-outbox
+handling must be reviewed before mux implementation.
+
+The wrapper covers all application payloads sent through the generic
+ModernConversation message channel: text (including encrypted profile
+metadata), attachment references, and signed join introductions. Call
+signaling/device-control events on their separate authenticated signaling
+channel are not rewritten here. Attachment V2 already binds its conversation,
+participants, transfer, and chunk metadata independently; its content crypto
+is unchanged. A moved attachment reference is rejected by the message room
+check before the file-reference consumer or retrieval path.
+
+For first inbound pre-key messages, the current runtime creates a candidate
+in-memory Olm session and candidate mutated account (including one-time-key
+consumption), decrypts, and calls the acceptance builder before serializing or
+persisting either candidate. The wrapper check occurs in that builder. Only a
+successful wrapper/application validation is followed by one CAS that commits
+the account, session, and accepted message/replay records together. On a
+wrong-room or otherwise rejected wrapper, the candidate is discarded and the
+runtime reloads durable identity state; durable OTK state is not consumed, no
+session/message is committed, and no recipient-acceptance ACK is returned.
+Established sessions similarly decrypt and validate before the session
+ratchet and application acceptance updates share their atomic commit.
+
+The relay's storage ACK remains distinct from recipient acceptance. The
+recipient app acceptance signal occurs only after decrypt, wrapper validation,
+application validation, and durable commit; a rejected room binding cannot
+produce the sender-visible accepted state.
+
+Stage 0 observed that ordinary 20-round room switching generated many
+legitimate pre-key and device-proof 429 responses (including 65 pre-key GET,
+one pre-key POST, and repeated device-proof responses across three profiles).
+Do not weaken freshness or authentication to address this. Stage 1 should
+avoid unnecessary pre-key lookup on ordinary UI selection when a valid
+established encrypted session is already present.
 
 Current UI delivery wording is confirmed by `securityVisibility.ts` and the
 relay flow: `Sending…` is a durable local outbox item awaiting recipient-app

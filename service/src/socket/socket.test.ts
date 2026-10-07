@@ -135,19 +135,20 @@ describe('SocketInstance', () => {
             expect(await instance.testOnlyRelayRegistration()).toMatchObject({ connected: true, joinAcknowledged: true });
         });
 
-        it('advertises join-introduction support and uses only the peer features from the join acknowledgement', async () => {
+        it('advertises supported message features and uses only the peer features from the join acknowledgement', async () => {
             const instance = createInstance();
-            instance.setProtocolFeatures(['join-introduction-v1']);
+            instance.setProtocolFeatures(['join-introduction-v1', 'room-message-v1']);
             mockSocket.emit.mockImplementation((event: string, _payload: unknown, ack?: (result: unknown) => void) => {
-                if (event === 'chat-join') ack?.({ status: 'accepted', peerFeatures: ['join-introduction-v1'] });
+                if (event === 'chat-join') ack?.({ status: 'accepted', peerFeatures: ['join-introduction-v1', 'room-message-v1'] });
             });
 
             await instance.join('room', 'route', 'capability');
 
             expect(mockSocket.emit).toHaveBeenCalledWith('chat-join', expect.objectContaining({
-                protocolFeatures: ['join-introduction-v1'],
+                protocolFeatures: ['join-introduction-v1', 'room-message-v1'],
             }), expect.any(Function));
             expect(instance.peerSupportsFeature('join-introduction-v1')).toBe(true);
+            expect(instance.peerSupportsFeature('room-message-v1')).toBe(true);
             expect(instance.peerSupportsFeature('unrecognized-feature')).toBe(false);
         });
 

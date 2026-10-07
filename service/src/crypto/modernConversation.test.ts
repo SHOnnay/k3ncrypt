@@ -7,6 +7,7 @@ import { publishVodozemacBundle, fetchVodozemacBundle, claimVodozemacOneTimeKey,
 import { AuthenticatedCallSignalTransport } from '../calls/authenticatedTransport';
 import { SecureStorageDeviceLifecyclePersistence } from '../devices/runtime';
 import { fingerprintVodozemacIdentity } from '../identity/vodozemacIdentity';
+import { decodeRoomMessage, encodeRoomMessageV1, ROOM_MESSAGE_V1_FEATURE } from './roomMessageV1';
 
 jest.mock('../api/prekeys', () => ({
     publishVodozemacBundle: jest.fn(), fetchVodozemacBundle: jest.fn(), claimVodozemacOneTimeKey: jest.fn(), renewVodozemacBundle: jest.fn(),
@@ -61,9 +62,10 @@ let outboundSessionCreations = 0;
 let inboundSessionCreations = 0;
 let sessionDecryptions = 0;
 let decryptedBytes: Uint8Array | undefined;
+let encryptedPlaintexts: Uint8Array[] = [];
 const session = (): VodozemacSessionHandle => ({
     sessionId: () => 'session-test',
-    encrypt: () => { encryptions++; return JSON.stringify({ version: 1, message_type: 0, ciphertext: `opaque-${encryptions}` }); },
+    encrypt: (plaintext) => { encryptions++; encryptedPlaintexts.push(plaintext.slice()); return JSON.stringify({ version: 1, message_type: 0, ciphertext: `opaque-${encryptions}` }); },
     decrypt: () => { sessionDecryptions++; return decryptedBytes ?? new Uint8Array([1, 1, ...new TextEncoder().encode('restored established message')]); }, saveSession: () => new Uint8Array([1, 2]),
 });
 const account = (): VodozemacAccountHandle => ({
@@ -83,7 +85,7 @@ const loader = async () => ({ protocolVersion: 1 as const,
     accountFactory: { createAccount: account, loadAccount: account },
     sessionFactory: { loadSession: session } });
 
-const fakeTransport = (supportsJoinIntroduction = false, failSends = 0) => {
+const fakeTransport = (supportsJoinIntroduction = false, failSends = 0, supportsRoomMessage = false, requiresRoomMessageV1 = false) => {
     const sent: EncryptedEnvelope[] = [];
     const transport = {
         start: async () => undefined, stop: async () => undefined, join: () => undefined,
@@ -92,7 +94,9 @@ const fakeTransport = (supportsJoinIntroduction = false, failSends = 0) => {
             sent.push(envelope); return { id: `relay-${sent.length}` };
         },
         activeTransport: () => undefined as unknown as import('../core/contracts').Transport,
-        peerSupportsFeature: (feature: string) => feature === 'join-introduction-v1' && supportsJoinIntroduction,
+        requiresRoomMessageV1,
+        peerSupportsFeature: (feature: string) => (feature === 'join-introduction-v1' && supportsJoinIntroduction) ||
+            (feature === ROOM_MESSAGE_V1_FEATURE && supportsRoomMessage),
     } as unknown as TransportManager & { peerSupportsFeature: (feature: string) => boolean };
     transport.activeTransport = () => transport as unknown as import('../core/contracts').Transport;
     return { transport, sent };
@@ -191,7 +195,7 @@ it('keeps a ModernConversation and its transport permanently bound to the first 
 const receiveFirstMessage = (conversation: ModernConversation, envelope: EncryptedEnvelope, senderAddress: string): Promise<boolean> =>
     (conversation as unknown as { receive: (value: EncryptedEnvelope, sender: string) => Promise<boolean> }).receive(envelope, senderAddress);
 
-beforeEach(() => { jest.clearAllMocks(); encryptions = 0; outboundSessionCreations = 0; inboundSessionCreations = 0; sessionDecryptions = 0; decryptedBytes = undefined; });
+beforeEach(() => { jest.clearAllMocks(); encryptions = 0; outboundSessionCreations = 0; inboundSessionCreations = 0; sessionDecryptions = 0; decryptedBytes = undefined; encryptedPlaintexts = []; });
 
 it('registers and removes the existing relay peer-disconnect observer', () => {
     const conversation = new ModernConversation(new Storage(), loader, fakeTransport().transport);
@@ -1173,4 +1177,166 @@ it('V2 reference publication uses protected verification CAS and reset denies re
         await pair.alice.unverifyContact(); const before = pair.aliceTransport.sent.length;
         await expect(pair.alice.sendWithReceipt(reference)).rejects.toThrow('Verified unchanged'); expect(pair.aliceTransport.sent).toHaveLength(before);
     } finally { await pair.alice.close(); await pair.bob.close(); }
+});
+
+it('wraps negotiated outbound text with stable room and identity bindings while preserving the legacy peer path', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
+    const storage = new Storage();
+    const transport = fakeTransport(false, 0, true);
+    const conversation = new ModernConversation(storage, loader, transport.transport);
+    const own = await conversation.connect(room, key(9), remoteAddress, await remoteCommitment());
+    await seedVerifiedContact(storage, remoteAddress);
+    await conversation.verifyContact(true);
+    await conversation.sendWithReceipt('room-bound hello');
+    const frame = encryptedPlaintexts[0];
+    expect(frame.slice(0, 2)).toEqual(new Uint8Array([1, 1]));
+    const decoded = decodeRoomMessage(frame.slice(2), {
+        roomId: room, senderIdentityReference: own.ownFingerprint,
+        recipientIdentityReference: (await conversation.getContact())!.identityId,
+    });
+    expect(decoded.version).toBe('room-message-v1');
+    expect(JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!))[0].roomMessageVersion).toBe(1);
+    if (decoded.version === 'room-message-v1') expect(new TextDecoder().decode(decoded.payload)).toBe('room-bound hello');
+    await conversation.close();
+
+    const legacyStorage = new Storage();
+    const legacyTransport = fakeTransport();
+    const legacy = new ModernConversation(legacyStorage, loader, legacyTransport.transport);
+    await legacy.connect(room, key(9), remoteAddress, await remoteCommitment());
+    await seedVerifiedContact(legacyStorage, remoteAddress);
+    await legacy.verifyContact(true);
+    await legacy.sendWithReceipt('legacy compatible');
+    expect(new TextDecoder().decode(encryptedPlaintexts[1].slice(2))).toBe('legacy compatible');
+    expect(JSON.parse(new TextDecoder().decode((await legacyStorage.read('modern-outbox', room))!))[0]).not.toHaveProperty('roomMessageVersion');
+    await legacy.close();
+});
+
+it('keeps legacy outbox ciphertext off a room-message-v1-required transport', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
+    const storage = new Storage();
+    const legacyTransport = fakeTransport();
+    const legacy = new ModernConversation(storage, loader, legacyTransport.transport);
+    await legacy.connect(room, key(9), remoteAddress, await remoteCommitment());
+    await seedVerifiedContact(storage, remoteAddress);
+    await legacy.verifyContact(true);
+    await legacy.sendWithReceipt('legacy outbox item');
+    await legacy.close(false);
+
+    const strictTransport = fakeTransport(false, 0, false, true);
+    const strict = new ModernConversation(storage, loader, strictTransport.transport);
+    await strict.connect(room, key(9), remoteAddress, await remoteCommitment());
+    expect(strictTransport.transport.activeTransport()?.requiresRoomMessageV1).toBe(true);
+    await strict.retryPending();
+    expect(strictTransport.sent).toHaveLength(0);
+    await expect(strict.sendWithReceipt('must fail without peer room-message-v1 support')).rejects.toThrow('requires peer room-message-v1 support');
+    expect(strictTransport.sent).toHaveLength(0);
+    const outbox = JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!));
+    expect(outbox).toHaveLength(1);
+    await strict.close(false);
+
+    const v1Transport = fakeTransport(false, 0, true, true);
+    const v1 = new ModernConversation(storage, loader, v1Transport.transport);
+    const own = await v1.connect(room, key(9), remoteAddress, await remoteCommitment());
+    await v1.sendWithReceipt('strict room-bound send');
+    expect(v1Transport.sent).toHaveLength(1);
+    const nextOutbox = JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!));
+    expect(nextOutbox).toHaveLength(2);
+    expect(nextOutbox[1].roomMessageVersion).toBe(1);
+    expect(decodeRoomMessage(encryptedPlaintexts[1].slice(2), {
+        roomId: room, senderIdentityReference: own.ownFingerprint,
+        recipientIdentityReference: (await v1.getContact())!.identityId,
+    }).version).toBe('room-message-v1');
+    await v1.close();
+});
+
+it('rejects a wrong-room first-prekey wrapper before durable account, session, message, or ACK acceptance', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    const storage = new Storage();
+    const delivered = jest.fn(messageAcceptance(storage));
+    const conversation = new ModernConversation(storage, loader, fakeTransport().transport);
+    const own = await conversation.connect(room, key(9), remoteAddress, await remoteCommitment(), delivered);
+    const accountBefore = await storage.read('vodozemac-account', 'local');
+    expect(accountBefore).toBeDefined();
+    const wrongRoom = encodeRoomMessageV1({ roomId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        senderIdentityReference: await remoteCommitment(), recipientIdentityReference: own.ownFingerprint,
+        eventId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', kind: 'text', payload: new TextEncoder().encode('must reject') });
+    decryptedBytes = new Uint8Array([1, 1, ...wrongRoom]);
+    const envelope: EncryptedEnvelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1,
+        olmMessage: JSON.stringify({ version: 1, message_type: 1, ciphertext: 'opaque-wrong-room' }) } };
+    await expect(receiveFirstMessage(conversation, envelope, remoteAddress)).rejects.toThrow('binding mismatch');
+    expect(await storage.read('vodozemac-account', 'local')).toEqual(accountBefore);
+    expect(await storage.read('vodozemac-session', room)).toBeUndefined();
+    expect(await storage.read('product-messages', room)).toBeUndefined();
+    expect(await storage.read('modern-seen-m1-v1', room)).toBeUndefined();
+    expect(delivered).not.toHaveBeenCalled();
+    await conversation.close();
+});
+
+it('rejects an established-session cross-room file reference before the application consumer runs', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
+    const storage = new Storage();
+    const delivered = jest.fn(messageAcceptance(storage));
+    const conversation = new ModernConversation(storage, loader, fakeTransport().transport);
+    const own = await conversation.connect(room, key(9), remoteAddress, await remoteCommitment(), delivered);
+    await seedVerifiedContact(storage, remoteAddress);
+    const good = encodeRoomMessageV1({ roomId: room, senderIdentityReference: await remoteCommitment(),
+        recipientIdentityReference: own.ownFingerprint, eventId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', kind: 'text',
+        payload: new TextEncoder().encode('establish') });
+    decryptedBytes = new Uint8Array([1, 1, ...good]);
+    const first: EncryptedEnvelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1,
+        olmMessage: JSON.stringify({ version: 1, message_type: 1, ciphertext: 'opaque-first' }) } };
+    await expect(receiveFirstMessage(conversation, first, remoteAddress)).resolves.toBe(true);
+    const messagesBefore = await storage.read('product-messages', room);
+    const sessionBefore = await storage.read('vodozemac-session', room);
+    const moved = encodeRoomMessageV1({ roomId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        senderIdentityReference: await remoteCommitment(), recipientIdentityReference: own.ownFingerprint,
+        eventId: 'ffffffff-ffff-4fff-8fff-ffffffffffff', kind: 'attachment-reference',
+        payload: new TextEncoder().encode('k3ncrypt-file-cross-room') });
+    decryptedBytes = new Uint8Array([1, 1, ...moved]);
+    const second: EncryptedEnvelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1,
+        olmMessage: JSON.stringify({ version: 1, message_type: 1, ciphertext: 'opaque-second' }) } };
+    await expect(receiveFirstMessage(conversation, second, remoteAddress)).rejects.toThrow('binding mismatch');
+    expect(await storage.read('product-messages', room)).toEqual(messagesBefore);
+    expect(await storage.read('vodozemac-session', room)).toEqual(sessionBefore);
+    expect(delivered).toHaveBeenCalledTimes(1);
+    await conversation.close();
+});
+
+it('deduplicates authenticated event identity within its room and rejects conflicting event-ID reuse', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    const storage = new Storage();
+    const consumer = jest.fn(messageAcceptance(storage));
+    const conversation = new ModernConversation(storage, loader, fakeTransport().transport);
+    const own = await conversation.connect(room, key(9), remoteAddress, await remoteCommitment(), consumer);
+    const eventId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+    const wrapper = encodeRoomMessageV1({ roomId: room, senderIdentityReference: await remoteCommitment(),
+        recipientIdentityReference: own.ownFingerprint, eventId, kind: 'text', payload: new TextEncoder().encode('once') });
+    decryptedBytes = new Uint8Array([1, 1, ...wrapper]);
+    const first: EncryptedEnvelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1,
+        olmMessage: JSON.stringify({ version: 1, message_type: 1, ciphertext: 'opaque-event-first' }) } };
+    await expect(receiveFirstMessage(conversation, first, remoteAddress)).resolves.toBe(true);
+    expect(consumer).toHaveBeenCalledTimes(1);
+
+    decryptedBytes = new Uint8Array([1, 1, ...wrapper]);
+    const duplicate: EncryptedEnvelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1,
+        olmMessage: JSON.stringify({ version: 1, message_type: 0, ciphertext: 'opaque-event-replay' }) } };
+    await expect(receiveFirstMessage(conversation, duplicate, remoteAddress)).resolves.toBe(true);
+    expect(consumer).toHaveBeenCalledTimes(1);
+
+    const conflicting = encodeRoomMessageV1({ roomId: room, senderIdentityReference: await remoteCommitment(),
+        recipientIdentityReference: own.ownFingerprint, eventId, kind: 'text', payload: new TextEncoder().encode('changed') });
+    decryptedBytes = new Uint8Array([1, 1, ...conflicting]);
+    const conflictEnvelope: EncryptedEnvelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1,
+        olmMessage: JSON.stringify({ version: 1, message_type: 0, ciphertext: 'opaque-event-conflict' }) } };
+    await expect(receiveFirstMessage(conversation, conflictEnvelope, remoteAddress)).rejects.toThrow('reused with different content');
+    expect(consumer).toHaveBeenCalledTimes(1);
+    await conversation.close();
 });

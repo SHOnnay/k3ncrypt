@@ -93,6 +93,8 @@ export interface Transport {
     capabilities(): TransportCapabilities;
     /** Optional peer feature negotiation supplied by the relay join acknowledgement. */
     peerSupportsFeature?(feature: string): boolean;
+    /** Future multiplexed transports set this to reject legacy unbound message payloads. */
+    readonly requiresRoomMessageV1?: boolean;
     /** Opts a protocol-aware caller into advertising only explicitly enabled features. */
     setProtocolFeatures?(features: readonly string[]): void;
 }

@@ -43,10 +43,12 @@ import { bootstrapFirstDevice } from '../devices/bootstrap';
 import { signEnrollmentEvent, type EnrollmentEvent } from '../devices/trustProtocol';
 import makeRequest from '../api/client';
 import { fromBase64Url, toBase64Url } from './base64url';
+import { decodeRoomMessage, encodeRoomMessageV1, roomMessageCommitment, roomMessageEventId, ROOM_MESSAGE_V1_FEATURE, type RoomMessageKind } from './roomMessageV1';
 
 const OUTBOX_RECORD = 'modern-outbox';
 const SEEN_RECORD = 'modern-seen';
 const M1_SEEN_RECORD = 'modern-seen-m1-v1';
+const ROOM_MESSAGE_SEEN_RECORD = 'modern-seen-room-message-v1';
 const PUBLICATION_RECORD = 'modern-publication';
 const SESSION_AUDIT_RECORD = 'conversation-session-audit';
 const SESSION_RENEWAL_RECORD = 'conversation-session-renewal';
@@ -79,6 +81,7 @@ type JoinIntroductionRecord = {
     envelope?: EncryptedEnvelope;
     clientId?: string;
     senderOrigin?: SenderOriginMetadata;
+    roomMessageVersion?: 1;
 };
 const parseSessionRenewal = (bytes: ArrayBuffer | undefined): SessionRenewal | undefined => {
     if (!bytes) return undefined;
@@ -105,10 +108,12 @@ const TAB_LEASE_MS = 15_000;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const strictMessageDecoder = new TextDecoder('utf-8', { fatal: true });
+const startsWithBytes = (value: Uint8Array, prefix: Uint8Array): boolean =>
+    value.byteLength >= prefix.byteLength && prefix.every((byte, index) => value[index] === byte);
 
 interface SenderOriginMetadata { version: 1; basis: 'durable-commit'; }
 const SENDER_ORIGIN: SenderOriginMetadata = Object.freeze({ version: 1, basis: 'durable-commit' });
-interface PendingEnvelope { envelope: EncryptedEnvelope; relayId?: string; sentAt?: number; clientId?: string; senderOrigin?: SenderOriginMetadata; }
+interface PendingEnvelope { envelope: EncryptedEnvelope; relayId?: string; sentAt?: number; clientId?: string; senderOrigin?: SenderOriginMetadata; roomMessageVersion?: 1; }
 interface PublicationMarker { version: 1; roomId: string; address?: string; routingProof?: string; }
 export interface ModernConnectionDetails {
     ownFingerprint: string;
@@ -178,6 +183,22 @@ const parseM1Seen = (bytes: ArrayBuffer | undefined): string[] => {
     return (value as { ids: string[] }).ids;
 };
 
+type RoomMessageSeenEvent = { id: string; commitment: string };
+const parseRoomMessageSeen = (bytes: ArrayBuffer | undefined): RoomMessageSeenEvent[] => {
+    if (!bytes) return [];
+    const value: unknown = JSON.parse(decoder.decode(bytes));
+    if (!value || typeof value !== 'object' || Array.isArray(value) ||
+        Object.keys(value).sort().join(',') !== 'events,version' ||
+        (value as { version?: unknown }).version !== 1 || !Array.isArray((value as { events?: unknown }).events) ||
+        (value as { events: unknown[] }).events.some((item) => !item || typeof item !== 'object' || Array.isArray(item) ||
+            Object.keys(item).sort().join(',') !== 'commitment,id' ||
+            typeof (item as RoomMessageSeenEvent).id !== 'string' || !/^v1:[0-9a-f]{64}$/.test((item as RoomMessageSeenEvent).id) ||
+            typeof (item as RoomMessageSeenEvent).commitment !== 'string' || !/^v1:[0-9a-f]{64}$/.test((item as RoomMessageSeenEvent).commitment))) {
+        throw new Error('Modern room-message replay state is invalid.');
+    }
+    return (value as { events: RoomMessageSeenEvent[] }).events;
+};
+
 const firstMessage = (envelope: EncryptedEnvelope): string => {
     if (envelope.version !== VODOZEMAC_ENVELOPE_VERSION || envelope.strategy !== VODOZEMAC_STRATEGY_ID ||
         !envelope.data || typeof envelope.data !== 'object' || Array.isArray(envelope.data)) {
@@ -235,11 +256,12 @@ const parseJoinIntroductionRecord = (bytes: ArrayBuffer | undefined): JoinIntrod
     try { value = JSON.parse(decoder.decode(bytes)); } catch { throw new Error('Saved join introduction is invalid.'); }
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Saved join introduction is invalid.');
     const item = value as Record<string, unknown>;
-    if (Object.keys(item).some((key) => !['version', 'recipientAddress', 'recipientIdentityCommitment', 'envelope', 'clientId', 'senderOrigin'].includes(key)) ||
+    if (Object.keys(item).some((key) => !['version', 'recipientAddress', 'recipientIdentityCommitment', 'envelope', 'clientId', 'senderOrigin', 'roomMessageVersion'].includes(key)) ||
         item.version !== 1 || typeof item.recipientAddress !== 'string' || !/^[0-9a-f-]{36}$/i.test(item.recipientAddress) ||
         typeof item.recipientIdentityCommitment !== 'string' || item.recipientIdentityCommitment.length < 8 || item.recipientIdentityCommitment.length > 128 ||
         (item.envelope !== undefined && firstMessage(item.envelope as EncryptedEnvelope) === undefined) ||
         (item.clientId !== undefined && (typeof item.clientId !== 'string' || !item.clientId)) ||
+        (item.roomMessageVersion !== undefined && item.roomMessageVersion !== 1) ||
         (item.senderOrigin !== undefined && !isSenderOriginMetadata(item.senderOrigin))) {
         throw new Error('Saved join introduction is invalid.');
     }
@@ -526,7 +548,7 @@ export class ModernConversation {
             activeTransport.setDeviceProofProvider(this.durableProofs);
         }
         if (!routingProof) throw new Error('Modern routing ownership proof is unavailable.');
-        this.transport.activeTransport()?.setProtocolFeatures?.([JOIN_INTRODUCTION_FEATURE]);
+        this.transport.activeTransport()?.setProtocolFeatures?.([JOIN_INTRODUCTION_FEATURE, ROOM_MESSAGE_V1_FEATURE]);
         await this.roomTransport!.connect(localAddress, capability, routingProof);
         if (this.joinIntroductionPending) await this.sendJoinIntroductionUnlocked();
         if (trustSnapshot.list.devices.filter((entry) => entry.state === 'active').length > 1) {
@@ -761,7 +783,8 @@ export class ModernConversation {
         const sessionSetup = await this.prepareOutboundSession();
         const clientId = crypto.randomUUID();
         await this.deliveryMutex.runExclusive(async () => {
-            const plaintext = encoder.encode(text);
+            const encoded = await this.encodeOutboundMessage(text, clientId, fileReference ? 'attachment-reference' : 'text');
+            const { plaintext, roomMessageVersion } = encoded;
             try {
                 await this.runtime.encryptAndCommitOutbound('message', plaintext.buffer.slice(plaintext.byteOffset, plaintext.byteOffset + plaintext.byteLength) as ArrayBuffer,
                     async (envelope, sessionId) => {
@@ -770,7 +793,7 @@ export class ModernConversation {
                         const pending = parseList<PendingEnvelope>(outboxBytes);
                         if (pending.length >= MAX_PENDING) throw new Error('Too many messages are waiting to send.');
                         if (pending.some((item) => item.clientId === clientId)) throw new Error('The sender message identifier already exists.');
-                        pending.push({ envelope, clientId, senderOrigin: SENDER_ORIGIN });
+                        pending.push({ envelope, clientId, senderOrigin: SENDER_ORIGIN, ...(roomMessageVersion ? { roomMessageVersion } : {}) });
                         const updates: SecureRecordUpdate[] = [
                             { recordType: OUTBOX_RECORD, recordId: this.roomId!, expected: outboxBytes, next: asBytes(pending) },
                         ];
@@ -795,6 +818,25 @@ export class ModernConversation {
         });
         if (sessionSetup) this.lastConnectionFailureCategory = undefined;
         return clientId;
+    }
+
+    private async encodeOutboundMessage(text: string, eventId: string, kind: RoomMessageKind): Promise<{ plaintext: Uint8Array; roomMessageVersion?: 1 }> {
+        const transport = this.transport.activeTransport();
+        const peerSupportsV1 = Boolean(transport?.peerSupportsFeature?.(ROOM_MESSAGE_V1_FEATURE));
+        if (transport?.requiresRoomMessageV1 && !peerSupportsV1) throw new Error('The multiplexed transport requires peer room-message-v1 support.');
+        if (!peerSupportsV1 && !transport?.requiresRoomMessageV1) return { plaintext: encoder.encode(text) };
+        const contact = await this.getContact();
+        if (!this.roomId || !this.localIdentityId || !contact?.identityId || contact.changeStatus !== 'unchanged') {
+            throw new Error('Stable identities are required for room-bound message delivery.');
+        }
+        return { plaintext: encodeRoomMessageV1({
+            roomId: this.roomId,
+            senderIdentityReference: this.localIdentityId,
+            recipientIdentityReference: contact.identityId,
+            eventId,
+            kind,
+            payload: encoder.encode(text),
+        }), roomMessageVersion: 1 };
     }
 
     /** Fetches and verifies first-send material without advancing or persisting the local account. */
@@ -838,6 +880,12 @@ export class ModernConversation {
 
         let record = parseJoinIntroductionRecord(await this.storage.read(JOIN_INTRODUCTION_RECORD, this.roomId));
         if (!record || record.recipientAddress !== this.remoteAddress || record.recipientIdentityCommitment !== this.remoteIdentityCommitment) return;
+        if (transport.requiresRoomMessageV1 && record.envelope && record.roomMessageVersion !== 1) {
+            throw new Error('A legacy join introduction cannot be sent over a room-message-v1-required transport.');
+        }
+        if (transport.requiresRoomMessageV1 && !transport.peerSupportsFeature?.(ROOM_MESSAGE_V1_FEATURE)) {
+            throw new Error('The multiplexed transport requires peer room-message-v1 support.');
+        }
         if (!record.envelope) {
             await this.assertCurrentDeviceTrust();
             const sessionSetup = await this.prepareOutboundSession();
@@ -854,13 +902,31 @@ export class ModernConversation {
                 ...unsigned,
                 signature: await this.runtime.signControlEvent(canonicalJoinIntroduction(unsigned)),
             };
-            const envelope = await this.runtime.encryptAndCommitOutbound('message', encodeJoinIntroduction(event), async (exactEnvelope, sessionId) => {
+            const introductionPayload = new Uint8Array(encodeJoinIntroduction(event));
+            const contact = await this.getContact();
+            const usesRoomMessageV1 = Boolean(transport.peerSupportsFeature?.(ROOM_MESSAGE_V1_FEATURE) || transport.requiresRoomMessageV1);
+            if (usesRoomMessageV1 && (!this.localIdentityId || !contact?.identityId || contact.changeStatus !== 'unchanged')) {
+                throw new Error('Stable identities are required for room-bound message delivery.');
+            }
+            const plaintext = usesRoomMessageV1
+                ? encodeRoomMessageV1({
+                    roomId: this.roomId,
+                    senderIdentityReference: this.localIdentityId!,
+                    recipientIdentityReference: contact!.identityId,
+                    eventId: event.eventId,
+                    kind: 'join-introduction',
+                    payload: introductionPayload,
+                })
+                : introductionPayload;
+            let envelope: EncryptedEnvelope;
+            try { envelope = await this.runtime.encryptAndCommitOutbound('message', plaintext.buffer.slice(plaintext.byteOffset, plaintext.byteOffset + plaintext.byteLength) as ArrayBuffer, async (exactEnvelope, sessionId) => {
                 const recordBytes = await this.storage.read(JOIN_INTRODUCTION_RECORD, this.roomId!);
                 const current = parseJoinIntroductionRecord(recordBytes);
                 if (!current || current.recipientAddress !== this.remoteAddress || current.recipientIdentityCommitment !== this.remoteIdentityCommitment || current.envelope) {
                     throw new Error('Saved join introduction changed before it could be committed.');
                 }
-                const next: JoinIntroductionRecord = { ...current, clientId: event.eventId, envelope: exactEnvelope, senderOrigin: SENDER_ORIGIN };
+                const next: JoinIntroductionRecord = { ...current, clientId: event.eventId, envelope: exactEnvelope, senderOrigin: SENDER_ORIGIN,
+                    ...(usesRoomMessageV1 ? { roomMessageVersion: 1 as const } : {}) };
                 const updates: SecureRecordUpdate[] = [
                     { recordType: JOIN_INTRODUCTION_RECORD, recordId: this.roomId!, expected: recordBytes, next: asBytes(next) },
                 ];
@@ -871,8 +937,13 @@ export class ModernConversation {
                         next: asBytes({ version: 1, classification: 'active-established', direction: 'outbound', origin: 'join' } satisfies SessionAudit) });
                 }
                 return updates;
-            }, sessionSetup ? { conversationId: this.roomId, ...sessionSetup } : undefined);
-            record = { ...record, clientId: event.eventId, envelope, senderOrigin: SENDER_ORIGIN };
+            }, sessionSetup ? { conversationId: this.roomId, ...sessionSetup } : undefined); }
+            finally {
+                introductionPayload.fill(0);
+                if (plaintext !== introductionPayload) plaintext.fill(0);
+            }
+            record = { ...record, clientId: event.eventId, envelope, senderOrigin: SENDER_ORIGIN,
+                ...(usesRoomMessageV1 ? { roomMessageVersion: 1 as const } : {}) };
         }
         await this.assertCurrentDeviceTrust();
         if (!record.envelope) throw new Error('Saved join introduction ciphertext is unavailable.');
@@ -889,7 +960,8 @@ export class ModernConversation {
             await this.delivery.retry({
                 pending,
                 recipientRoutingId: this.remoteAddress,
-                skip: (item) => this.sessionHealth === 'renewal-pending' && item.clientId !== renewal?.clientId,
+                skip: (item) => (this.sessionHealth === 'renewal-pending' && item.clientId !== renewal?.clientId) ||
+                    (this.transport.activeTransport()?.requiresRoomMessageV1 === true && item.roomMessageVersion !== 1),
                 beforeSubmit: async () => {
                     await this.assertCurrentDeviceTrust();
                     testOnlyDeliveryStage('relay-dispatch');
@@ -1228,8 +1300,10 @@ export class ModernConversation {
             const legacyDigest = await this.digest(envelope);
             const seenBytes = await this.storage.read(SEEN_RECORD, this.roomId);
             const m1SeenBytes = await this.storage.read(M1_SEEN_RECORD, this.roomId);
+            const roomMessageSeenBytes = await this.storage.read(ROOM_MESSAGE_SEEN_RECORD, this.roomId);
             const seen = parseList<string>(seenBytes);
             const m1Seen = parseM1Seen(m1SeenBytes);
+            const roomMessageSeen = parseRoomMessageSeen(roomMessageSeenBytes);
             if (seen.includes(legacyDigest) || m1Seen.includes(m1)) {
                 await this.testOnlyRecordInboundStage('persisted');
                 await this.testOnlyRecordInboundStage('acknowledged');
@@ -1259,14 +1333,41 @@ export class ModernConversation {
             let afterCommitRouteRepair: (() => void | Promise<void>) | undefined;
             const buildAcceptanceUpdates = async (plaintext: ArrayBuffer): Promise<readonly SecureRecordUpdate[]> => {
                 let payload: Uint8Array;
+                let authenticatedEventId: string | undefined;
+                let authenticatedCommitment: string | undefined;
                 try {
-                    payload = firstSession ? unframeFirstMessage(plaintext) : new Uint8Array(plaintext);
+                    const decrypted = firstSession ? unframeFirstMessage(plaintext) : new Uint8Array(plaintext);
+                    const decoded = decodeRoomMessage(decrypted, {
+                        roomId: this.roomId!,
+                        senderIdentityReference: senderFingerprint!,
+                        recipientIdentityReference: this.localIdentityId!,
+                    }, { requireRoomMessageV1: this.transport.activeTransport()?.requiresRoomMessageV1 === true });
+                    payload = decoded.payload;
+                    if (decoded.version === 'room-message-v1') {
+                        const isIntroduction = startsWithBytes(payload, JOIN_INTRODUCTION_MAGIC);
+                        const isAttachmentReference = startsWithBytes(payload, encoder.encode('k3ncrypt-file-'));
+                        if ((decoded.kind === 'join-introduction') !== isIntroduction ||
+                            (decoded.kind === 'attachment-reference') !== isAttachmentReference) {
+                            throw new Error('Room message payload kind does not match its application payload.');
+                        }
+                        authenticatedEventId = await roomMessageEventId(this.roomId!, senderFingerprint!, decoded.eventId);
+                        authenticatedCommitment = await roomMessageCommitment(decrypted);
+                    }
                 } catch (error) { this.lastInboundFailureCategory = 'message-frame-parsing-failure'; throw error; }
+                const priorEvent = authenticatedEventId ? roomMessageSeen.find((item) => item.id === authenticatedEventId) : undefined;
+                if (priorEvent && priorEvent.commitment !== authenticatedCommitment) {
+                    this.lastInboundFailureCategory = 'message-frame-parsing-failure';
+                    throw new Error('Room message event ID was reused with different content.');
+                }
+                const authenticatedReplay = Boolean(priorEvent);
                 let introduction: JoinIntroduction | undefined;
                 try { introduction = parseJoinIntroduction(payload); }
                 catch (error) { this.lastInboundFailureCategory = 'message-frame-parsing-failure'; throw error; }
                 const updates: SecureRecordUpdate[] = [];
-                if (introduction) {
+                if (authenticatedReplay) {
+                    // A new ciphertext may carry an already accepted authenticated event.
+                    // Commit the ratchet and ciphertext marker, but do not repeat app effects.
+                } else if (introduction) {
                     const identity = bundle?.identity ?? validateVodozemacPublicBundle(await fetchVodozemacBundle(this.roomId!, this.capability!, senderAddress)).identity;
                     acceptedPlan = await this.acceptJoinIntroduction(introduction, senderAddress, identity);
                     updates.push(...acceptedPlan.updates);
@@ -1305,7 +1406,7 @@ export class ModernConversation {
                         this.lastInboundFailureCategory = 'persistence-failure';
                         throw new Error('Inbound message consumer is unavailable.');
                     }
-                    acceptedPlan = await this.onMessage(text, m1);
+                    acceptedPlan = await this.onMessage(text, authenticatedEventId ?? m1);
                     if (!acceptedPlan || !Array.isArray(acceptedPlan.updates)) {
                         this.lastInboundFailureCategory = 'persistence-failure';
                         throw new Error('Inbound message consumer did not prepare durable acceptance.');
@@ -1316,11 +1417,15 @@ export class ModernConversation {
                 // Legacy digests retain their existing count-bounded behavior. M1 markers are
                 // deliberately not pruned: retention pending owner-approved horizon.
                 const nextLegacySeen = [...seen.slice(-(MAX_SEEN - 1)), legacyDigest];
-                const nextM1Seen = [...m1Seen, m1];
+                const nextM1Seen = [...m1Seen, m1, ...(authenticatedEventId && !m1Seen.includes(authenticatedEventId) ? [authenticatedEventId] : [])];
                 updates.push(
                     { recordType: SEEN_RECORD, recordId: this.roomId!, expected: seenBytes, next: asBytes(nextLegacySeen) },
                     { recordType: M1_SEEN_RECORD, recordId: this.roomId!, expected: m1SeenBytes, next: asBytes({ version: 1, ids: nextM1Seen }) },
                 );
+                if (authenticatedEventId && authenticatedCommitment && !priorEvent) {
+                    updates.push({ recordType: ROOM_MESSAGE_SEEN_RECORD, recordId: this.roomId!, expected: roomMessageSeenBytes,
+                        next: asBytes({ version: 1, events: [...roomMessageSeen, { id: authenticatedEventId, commitment: authenticatedCommitment }] }) });
+                }
                 return updates;
             };
 

@@ -13,6 +13,7 @@ import type { DeviceProofCarrier, DeviceResourceContext } from '../devices/trust
 import type { DeviceProofOperation } from '../devices/deviceProofClient';
 import { Logger } from '../utils/logger';
 import { testDiagnosticsEnabled } from '../utils/testDiagnostics';
+import { ROOM_MESSAGE_V1_FEATURE } from '../crypto/roomMessageV1';
 
 export type SocketListenerType = 'limit-reached' | 'delivered' | 'on-alice-join' | 'on-alice-disconnect' | 'chat-message';
 export type SubscriptionType = Map<string, Set<Function>>;
@@ -26,7 +27,7 @@ export type RawChatMessage = {
 export type RawSignalMessage = { envelope: EncryptedEnvelope };
 
 export const JOIN_INTRODUCTION_FEATURE = 'join-introduction-v1';
-const SUPPORTED_PROTOCOL_FEATURES = [JOIN_INTRODUCTION_FEATURE] as const;
+const SUPPORTED_PROTOCOL_FEATURES = [JOIN_INTRODUCTION_FEATURE, ROOM_MESSAGE_V1_FEATURE] as const;
 
 const WIRE_EVENTS = {
     LIMIT_REACHED: 'limit-reached',

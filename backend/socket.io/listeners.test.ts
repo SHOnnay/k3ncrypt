@@ -30,6 +30,8 @@ describe('optional join protocol feature negotiation', () => {
   it('accepts old clients that omit feature metadata and only whitelisted new features', () => {
     expect(parseProtocolFeatures(undefined)).toEqual([]);
     expect(parseProtocolFeatures(['join-introduction-v1'])).toEqual(['join-introduction-v1']);
+    expect(parseProtocolFeatures(['room-message-v1'])).toEqual(['room-message-v1']);
+    expect(parseProtocolFeatures(['join-introduction-v1', 'room-message-v1'])).toEqual(['join-introduction-v1', 'room-message-v1']);
   });
 
   it.each([

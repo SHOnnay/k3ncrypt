@@ -20,7 +20,7 @@ const OFFLINE_REPLAY_ACK_MS = 10 * 1000;
 const LIVE_DELIVERY_ACK_MS = 5 * 1000;
 /** Burst of 40 messages, refilling at 10/s — plenty for normal signaling/chat traffic. */
 const rateLimiter = new RateLimiter({ capacity: 40, refillPerSecond: 10 });
-const SUPPORTED_PROTOCOL_FEATURES = new Set(['join-introduction-v1']);
+const SUPPORTED_PROTOCOL_FEATURES = new Set(['join-introduction-v1', 'room-message-v1']);
 
 type Ack = (response: Record<string, unknown>) => void;
 const noop: Ack = () => undefined;
