@@ -26,23 +26,31 @@ const roomMessage = (roomId, senderRef, recipientRef, payload) => {
   event.copy(header, offset); offset += 16; header.writeUInt32BE(payload.length, offset);
   return Uint8Array.from(Buffer.concat([Buffer.from([1, 1]), header, payload]));
 };
-const wrapperRoomMatches = (plaintext, expectedRoomId) => {
+const wrapperBindingsMatch = (plaintext, expectedRoomId, expectedSender, expectedRecipient) => {
   const value = Buffer.from(plaintext);
   let offset = 2 + domain.length + 2;
   const room = value.subarray(offset, offset + 16).toString('hex');
   const expected = expectedRoomId.replaceAll('-', '');
-  return room === expected;
+  offset += 16;
+  const senderLength = value.readUInt16BE(offset); offset += 2;
+  const sender = value.subarray(offset, offset + senderLength).toString('utf8'); offset += senderLength;
+  const recipientLength = value.readUInt16BE(offset); offset += 2;
+  const recipient = value.subarray(offset, offset + recipientLength).toString('utf8');
+  return room === expected && sender === expectedSender && recipient === expectedRecipient;
 };
 const alice = K3ncryptAccount.createAccount();
 const bob = K3ncryptAccount.createAccount();
-const handles = [alice, bob];
+const mallory = K3ncryptAccount.createAccount();
+const handles = [alice, bob, mallory];
 
 try {
   bob.generateOneTimeKeys(2);
   const aliceIdentity = JSON.parse(alice.identityKeys());
   const bobIdentity = JSON.parse(bob.identityKeys());
+  const malloryIdentity = JSON.parse(mallory.identityKeys());
   const aliceRef = identityReference(aliceIdentity);
   const bobRef = identityReference(bobIdentity);
+  const malloryRef = identityReference(malloryIdentity);
   const roomA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
   const roomB = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
   const oneTimeKeys = JSON.parse(bob.oneTimeKeys());
@@ -53,7 +61,9 @@ try {
   const bobRoomA = K3ncryptAccount.loadAccount(initialBobPickle, pickleKey);
   const bobRoomBStale = K3ncryptAccount.loadAccount(initialBobPickle, pickleKey);
   const bobRoomBIndependent = K3ncryptAccount.loadAccount(initialBobPickle, pickleKey);
-  handles.push(bobRoomA, bobRoomBStale, bobRoomBIndependent);
+  const bobRoomAEstablished = K3ncryptAccount.loadAccount(initialBobPickle, pickleKey);
+  const bobCurveSubstitution = K3ncryptAccount.loadAccount(initialBobPickle, pickleKey);
+  handles.push(bobRoomA, bobRoomBStale, bobRoomBIndependent, bobRoomAEstablished, bobCurveSubstitution);
 
   const outboundA = alice.createOutboundSession(bobIdentity.curve25519, oneTimeKeys[0]);
   const outboundB = alice.createOutboundSession(bobIdentity.curve25519, oneTimeKeys[1]);
@@ -65,12 +75,39 @@ try {
   const firstReplayB = bobRoomBStale.createInboundSession(aliceIdentity.curve25519, roomACiphertext);
   const replayPlaintextA = firstReplayA.plaintext();
   const replayPlaintextB = firstReplayB.plaintext();
-  const replayAcceptedBySeparatePrekeySnapshots = wrapperRoomMatches(replayPlaintextA, roomA) && wrapperRoomMatches(replayPlaintextB, roomA);
-  const wrongRoomFirstPrekeyRejected = !wrapperRoomMatches(replayPlaintextB, roomB);
+  const replayAcceptedBySeparatePrekeySnapshots = wrapperBindingsMatch(replayPlaintextA, roomA, aliceRef, bobRef) && wrapperBindingsMatch(replayPlaintextB, roomA, aliceRef, bobRef);
+  const wrongRoomFirstPrekeyRejected = !wrapperBindingsMatch(replayPlaintextB, roomB, aliceRef, bobRef);
   replayPlaintextA.fill(0);
   replayPlaintextB.fill(0);
   firstReplayA.free();
   firstReplayB.free();
+
+  let substitutedBundleCurveRejected = false;
+  try { bobCurveSubstitution.createInboundSession(malloryIdentity.curve25519, roomACiphertext); }
+  catch { substitutedBundleCurveRejected = true; }
+
+  const establishedInbound = bobRoomAEstablished.createInboundSession(aliceIdentity.curve25519, roomACiphertext);
+  const establishedPlaintext = establishedInbound.plaintext();
+  const establishedSession = establishedInbound.takeSession();
+  handles.push(establishedSession);
+  establishedPlaintext.fill(0);
+  establishedInbound.free();
+  const forgedClaimCiphertext = outboundA.encrypt(roomMessage(roomA, malloryRef, bobRef, new TextEncoder().encode('forged K3 sender claim')));
+  const forgedClaimPlaintext = establishedSession.decrypt(forgedClaimCiphertext);
+  const firstPrekeyForgedK3Rejected = !wrapperBindingsMatch(forgedClaimPlaintext, roomA, aliceRef, bobRef);
+  forgedClaimPlaintext.fill(0);
+
+  const forgedEstablishedCiphertext = outboundA.encrypt(roomMessage(roomA, malloryRef, bobRef, new TextEncoder().encode('forged established sender claim')));
+  const forgedEstablishedPlaintext = establishedSession.decrypt(forgedEstablishedCiphertext);
+  const establishedForgedK3Rejected = !wrapperBindingsMatch(forgedEstablishedPlaintext, roomA, aliceRef, bobRef);
+  forgedEstablishedPlaintext.fill(0);
+
+  const maxUserPayload = new Uint8Array(16 * 1024).fill(0x61);
+  const maxUserMessage = outboundA.encrypt(roomMessage(roomA, aliceRef, bobRef, maxUserPayload));
+  const maxRelayFrameBytes = Buffer.byteLength(JSON.stringify({
+    envelope: { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1, olmMessage: maxUserMessage } },
+    recipientRoutingId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+  }));
 
   const roomBInbound = bobRoomBIndependent.createInboundSession(aliceIdentity.curve25519, roomBCiphertext);
   const establishedRoomBSession = roomBInbound.takeSession();
@@ -83,13 +120,19 @@ try {
     establishedSessionRejectedRoomAReplay = true;
   }
 
-  if (!replayAcceptedBySeparatePrekeySnapshots || !wrongRoomFirstPrekeyRejected || !establishedSessionRejectedRoomAReplay) {
+  if (!replayAcceptedBySeparatePrekeySnapshots || !wrongRoomFirstPrekeyRejected || !establishedSessionRejectedRoomAReplay ||
+      !substitutedBundleCurveRejected || !firstPrekeyForgedK3Rejected || !establishedForgedK3Rejected) {
     throw new Error('Unexpected generated Olm room-binding probe result.');
   }
+  if (maxRelayFrameBytes > 32 * 1024) throw new Error('The configured user message maximum exceeds the existing relay envelope cap.');
   console.log(JSON.stringify({
     sameFirstPrekeyCiphertextDecryptsWithSeparateCopiesOfInitialRecipientState: replayAcceptedBySeparatePrekeySnapshots,
     authenticatedRoomWrapperRejectsThatFirstPrekeyOnTheOtherRoom: wrongRoomFirstPrekeyRejected,
     establishedIndependentRoomSessionRejectsTheOtherRoomCiphertext: establishedSessionRejectedRoomAReplay,
+    fetchedBundleCurveSubstitutionCannotOpenTheActualSenderPrekey: substitutedBundleCurveRejected,
+    firstPrekeyK1SessionRejectsWrapperClaimingK2: firstPrekeyForgedK3Rejected,
+    establishedK1SessionRejectsWrapperClaimingK2: establishedForgedK3Rejected,
+    '16KiBUserMessageRelayJsonBytes': maxRelayFrameBytes,
     roomIdentifierProvidedToOlmSessionEstablishment: false,
   }));
 } finally {

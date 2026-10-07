@@ -100,9 +100,13 @@ payload                           exactly payloadLength bytes
 
 There are no optional fields, maps, whitespace, or alternate UUID spellings.
 UUID inputs use lowercase canonical `8-4-4-4-12` hex and become fixed 16-byte
-fields. Each `K3 ` identity reference is exactly 46 bytes and the codec caps
-references at 128 bytes. Payloads are capped at 61,440 bytes; text must be
-valid UTF-8, and attachment references and introductions must match their
+fields. Each `K3 ` identity reference is exactly 56 UTF-8 bytes: `K3 ` plus
+43 uppercase base64url digest characters grouped as ten groups of four and a
+final group of three, separated by ten spaces. V1 rejects every noncanonical
+length or spelling. The wrapper payload maximum is 61,440 bytes. The composer
+and service enforce a smaller 16,384 UTF-8 byte message limit so encrypted
+frames fit the existing 32 KiB relay JSON envelope cap with framing headroom.
+Text must be valid UTF-8, and attachment references and introductions must match their
 respective content markers. The parser requires exact lengths, supported
 version/kind, valid identity references, and no trailing bytes. The payload is
 exposed to application parsers only after the immutable room and both stable
@@ -140,6 +144,32 @@ joined room is supplied by that immutable channel. A future mux transport MUST
 set `requiresRoomMessageV1`; legacy payloads on that path fail closed. Both
 peers must advertise `room-message-v1` before new sends use the wrapper.
 
+### Identity binding and current capability limitation
+
+`fingerprintVodozemacIdentity` hashes the canonical pair of public keys: the
+exact Olm Curve25519 identity key and the account Ed25519 signing key. For
+inbound first-prekey traffic, `ModernConversation` validates the fetched public
+bundle, derives the K3 fingerprint from its identity tuple, and passes that
+same bundle's Curve25519 key to `createInboundSession`. Vodozemac checks the
+pre-key message against that remote key. The V1 wrapper sender reference must
+then equal the fingerprint derived from the same tuple before application
+acceptance. Existing contacts additionally require the presented fingerprint
+to equal the pinned K3 fingerprint. A relay cannot replace the Curve25519 key
+while preserving the wrapper's claimed K3 identity except by a hash collision.
+The relay bundle itself is not a separately signed identity document;
+first-contact authenticity still depends on explicit out-of-band verification
+of the displayed K3 fingerprint.
+
+Relay-advertised `peerProtocolFeatures`, including `room-message-v1`, are an
+unauthenticated optimization hint only. They are not a security capability
+statement and currently provide no downgrade resistance. V1 is therefore not
+a universal hard transport invariant. A future mux implementation must use a
+persisted, authenticated, monotonic minimum-wrapper-version latch. Relay
+metadata may raise an optimization hint but must never lower that security
+floor. Today a peer's features can be absent while it is offline; future
+mailbox-based strict sending must not require a live peer merely to rediscover
+support. That offline capability problem remains unsolved here.
+
 Legacy one-room relationships remain compatible: new sends use the wrapper
 only after peer feature negotiation, and non-strict receives continue to
 accept already-queued legacy frames. No stored ciphertext, history, session, or
@@ -150,6 +180,12 @@ negotiate V1. A saved legacy join-introduction ciphertext is likewise not
 submitted on a strict transport. Future mux subscriptions require V1 and
 cannot carry legacy outbox payloads; migration/re-establishment and old-outbox
 handling must be reviewed before mux implementation.
+
+New queued envelopes also pin the intended recipient K3 identity reference.
+Every retry requires the current contact to remain unchanged at that same
+reference immediately before dispatch. Pre-existing queued entries without a
+recipient reference stay pending because their original identity target cannot
+be established safely.
 
 The wrapper covers all application payloads sent through the generic
 ModernConversation message channel: text (including encrypted profile

@@ -710,3 +710,4 @@ export type {
 } from './core/contracts';
 
 export * from "./files";
+export { MAX_USER_MESSAGE_UTF8_BYTES, ROOM_MESSAGE_V1_MAX_PAYLOAD_BYTES } from './crypto/roomMessageV1';

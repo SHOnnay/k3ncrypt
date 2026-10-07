@@ -1,8 +1,10 @@
 const DOMAIN = new TextEncoder().encode('K3NCRYPT/ROOM-MESSAGE\0');
 const VERSION = 1;
 const HEADER_LENGTH = DOMAIN.length + 1 + 1 + 16 + 2 + 2 + 16 + 4;
-const MAX_IDENTITY_REFERENCE_BYTES = 128;
-const MAX_PAYLOAD_BYTES = 60 * 1024;
+const CANONICAL_IDENTITY_REFERENCE_BYTES = 56;
+export const ROOM_MESSAGE_V1_MAX_PAYLOAD_BYTES = 60 * 1024;
+/** Leaves headroom in the existing 32 KiB relay JSON envelope limit after Olm/base64 framing. */
+export const MAX_USER_MESSAGE_UTF8_BYTES = 16 * 1024;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder('utf-8', { fatal: true });
 
@@ -49,7 +51,8 @@ const roomUuidBytes = (value: string): Uint8Array => {
 };
 
 const identityBytes = (value: string, field: string): Uint8Array => {
-    if (typeof value !== 'string' || !/^K3 (?:[A-Z0-9_-]{4} ){10}[A-Z0-9_-]{3}$/.test(value)) {
+    if (typeof value !== 'string' || new TextEncoder().encode(value).byteLength !== CANONICAL_IDENTITY_REFERENCE_BYTES ||
+        !/^K3 (?:[A-Z0-9_-]{4} ){10}[A-Z0-9_-]{3}$/.test(value)) {
         throw new Error(`Room message ${field} identity reference is invalid.`);
     }
     return encoder.encode(value);
@@ -62,7 +65,7 @@ const kindByte = (kind: RoomMessageKind): number => {
 };
 
 const validateKindPayload = (kind: RoomMessageKind, payload: Uint8Array): void => {
-    if (!(payload instanceof Uint8Array) || payload.byteLength > MAX_PAYLOAD_BYTES) throw new Error('Room message payload is invalid or too large.');
+    if (!(payload instanceof Uint8Array) || payload.byteLength > ROOM_MESSAGE_V1_MAX_PAYLOAD_BYTES) throw new Error('Room message payload is invalid or too large.');
     if (kind === 'text') {
         try { decoder.decode(payload); } catch { throw new Error('Room message text is not valid UTF-8.'); }
         if (startsWith(payload, encoder.encode('k3ncrypt-file-')) ||
@@ -92,7 +95,7 @@ export const encodeRoomMessageV1 = (message: RoomMessageV1): Uint8Array => {
     const event = roomUuidBytes(exactUuid(message.eventId, 'event ID'));
     const kind = kindByte(message.kind);
     validateKindPayload(message.kind, message.payload);
-    if (sender.byteLength > MAX_IDENTITY_REFERENCE_BYTES || recipient.byteLength > MAX_IDENTITY_REFERENCE_BYTES) throw new Error('Room message identity reference is too large.');
+    if (sender.byteLength !== CANONICAL_IDENTITY_REFERENCE_BYTES || recipient.byteLength !== CANONICAL_IDENTITY_REFERENCE_BYTES) throw new Error('Room message identity reference is not canonical.');
     const output = new Uint8Array(HEADER_LENGTH + sender.byteLength + recipient.byteLength + message.payload.byteLength);
     let offset = 0;
     output.set(DOMAIN, offset); offset += DOMAIN.byteLength;
@@ -116,7 +119,7 @@ export const decodeRoomMessage = (
     expected: RoomMessageExpectation,
     options: { requireRoomMessageV1?: boolean } = {},
 ): DecodedRoomMessage => {
-    if (!(value instanceof Uint8Array) || value.byteLength > MAX_PAYLOAD_BYTES + HEADER_LENGTH + 2 * MAX_IDENTITY_REFERENCE_BYTES) throw new Error('Room message is invalid or too large.');
+    if (!(value instanceof Uint8Array) || value.byteLength > ROOM_MESSAGE_V1_MAX_PAYLOAD_BYTES + HEADER_LENGTH + 2 * CANONICAL_IDENTITY_REFERENCE_BYTES) throw new Error('Room message is invalid or too large.');
     if (!startsWith(value, DOMAIN)) {
         if (options.requireRoomMessageV1) throw new Error('A room-bound message is required.');
         return { version: 'legacy', payload: value.slice() };
@@ -129,15 +132,15 @@ export const decodeRoomMessage = (
     const roomId = [...roomBytes].map((byte) => byte.toString(16).padStart(2, '0')).join('').replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, '$1-$2-$3-$4-$5');
     const view = new DataView(value.buffer, value.byteOffset, value.byteLength);
     const senderLength = view.getUint16(offset, false); offset += 2;
-    if (!senderLength || senderLength > MAX_IDENTITY_REFERENCE_BYTES || offset + senderLength + 2 > value.byteLength) throw new Error('Room message sender binding is malformed.');
+    if (senderLength !== CANONICAL_IDENTITY_REFERENCE_BYTES || offset + senderLength + 2 > value.byteLength) throw new Error('Room message sender binding is malformed.');
     const senderIdentityReference = decoder.decode(value.subarray(offset, offset + senderLength)); offset += senderLength;
     const recipientLength = view.getUint16(offset, false); offset += 2;
-    if (!recipientLength || recipientLength > MAX_IDENTITY_REFERENCE_BYTES || offset + recipientLength + 20 > value.byteLength) throw new Error('Room message recipient binding is malformed.');
+    if (recipientLength !== CANONICAL_IDENTITY_REFERENCE_BYTES || offset + recipientLength + 20 > value.byteLength) throw new Error('Room message recipient binding is malformed.');
     const recipientIdentityReference = decoder.decode(value.subarray(offset, offset + recipientLength)); offset += recipientLength;
     const eventBytes = value.slice(offset, offset + 16); offset += 16;
     const eventId = [...eventBytes].map((byte) => byte.toString(16).padStart(2, '0')).join('').replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, '$1-$2-$3-$4-$5');
     const payloadLength = view.getUint32(offset, false); offset += 4;
-    if (payloadLength > MAX_PAYLOAD_BYTES || offset + payloadLength !== value.byteLength) throw new Error('Room message payload length is malformed.');
+    if (payloadLength > ROOM_MESSAGE_V1_MAX_PAYLOAD_BYTES || offset + payloadLength !== value.byteLength) throw new Error('Room message payload length is malformed.');
     // Authenticate the wrapper context before exposing or parsing application bytes.
     identityBytes(expected.senderIdentityReference, 'expected sender');
     identityBytes(expected.recipientIdentityReference, 'expected recipient');

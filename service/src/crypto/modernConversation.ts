@@ -43,7 +43,7 @@ import { bootstrapFirstDevice } from '../devices/bootstrap';
 import { signEnrollmentEvent, type EnrollmentEvent } from '../devices/trustProtocol';
 import makeRequest from '../api/client';
 import { fromBase64Url, toBase64Url } from './base64url';
-import { decodeRoomMessage, encodeRoomMessageV1, roomMessageCommitment, roomMessageEventId, ROOM_MESSAGE_V1_FEATURE, type RoomMessageKind } from './roomMessageV1';
+import { decodeRoomMessage, encodeRoomMessageV1, MAX_USER_MESSAGE_UTF8_BYTES, roomMessageCommitment, roomMessageEventId, ROOM_MESSAGE_V1_DOMAIN, ROOM_MESSAGE_V1_FEATURE, type RoomMessageKind } from './roomMessageV1';
 
 const OUTBOX_RECORD = 'modern-outbox';
 const SEEN_RECORD = 'modern-seen';
@@ -113,7 +113,7 @@ const startsWithBytes = (value: Uint8Array, prefix: Uint8Array): boolean =>
 
 interface SenderOriginMetadata { version: 1; basis: 'durable-commit'; }
 const SENDER_ORIGIN: SenderOriginMetadata = Object.freeze({ version: 1, basis: 'durable-commit' });
-interface PendingEnvelope { envelope: EncryptedEnvelope; relayId?: string; sentAt?: number; clientId?: string; senderOrigin?: SenderOriginMetadata; roomMessageVersion?: 1; }
+interface PendingEnvelope { envelope: EncryptedEnvelope; relayId?: string; sentAt?: number; clientId?: string; senderOrigin?: SenderOriginMetadata; roomMessageVersion?: 1; recipientIdentityReference?: string; }
 interface PublicationMarker { version: 1; roomId: string; address?: string; routingProof?: string; }
 export interface ModernConnectionDetails {
     ownFingerprint: string;
@@ -774,11 +774,19 @@ export class ModernConversation {
     private async sendUnlocked(text: string, prepareHistoryUpdate?: (clientId: string) => Promise<SecureRecordUpdate>): Promise<string> {
         if (this.sessionHealth === 'unhealthy') throw new Error('The encrypted session needs verified renewal before sending.');
         if (!this.roomId || !text.trim()) throw new Error('The private contact is not ready.');
+        if (encoder.encode(text).byteLength > MAX_USER_MESSAGE_UTF8_BYTES) throw new Error(`Messages can be up to ${MAX_USER_MESSAGE_UTF8_BYTES.toLocaleString()} UTF-8 bytes.`);
         testOnlyDeliveryStage('send-start');
         await this.assertCurrentDeviceTrust();
         const contact = await this.getContact();
         if (contact?.changeStatus !== 'unchanged') throw new Error('Review this contact’s changed identity before sending.');
-        const fileReference = text.startsWith('k3ncrypt-file-') ? parseFileReference(text) : undefined;
+        const rawPayload = encoder.encode(text);
+        if (startsWithBytes(rawPayload, JOIN_INTRODUCTION_MAGIC) ||
+            (!this.transport.activeTransport()?.peerSupportsFeature?.(ROOM_MESSAGE_V1_FEATURE) && text.startsWith(`${ROOM_MESSAGE_V1_DOMAIN}\0`))) {
+            throw new Error('This message begins with a reserved protocol marker and cannot be sent as plain text.');
+        }
+        let fileReference;
+        try { fileReference = text.startsWith('k3ncrypt-file-') ? parseFileReference(text) : undefined; }
+        catch { throw new Error('This text uses the reserved protected-file marker but is not a valid file reference.'); }
         if (fileReference && (!sameBinding(await this.fileTransferBinding(true), fileReference.context) || fileReference.expiresAt <= Date.now())) throw new Error('File identity binding rejected.');
         const sessionSetup = await this.prepareOutboundSession();
         const clientId = crypto.randomUUID();
@@ -793,7 +801,7 @@ export class ModernConversation {
                         const pending = parseList<PendingEnvelope>(outboxBytes);
                         if (pending.length >= MAX_PENDING) throw new Error('Too many messages are waiting to send.');
                         if (pending.some((item) => item.clientId === clientId)) throw new Error('The sender message identifier already exists.');
-                        pending.push({ envelope, clientId, senderOrigin: SENDER_ORIGIN, ...(roomMessageVersion ? { roomMessageVersion } : {}) });
+                        pending.push({ envelope, clientId, senderOrigin: SENDER_ORIGIN, ...(roomMessageVersion ? { roomMessageVersion } : {}), recipientIdentityReference: contact.identityId });
                         const updates: SecureRecordUpdate[] = [
                             { recordType: OUTBOX_RECORD, recordId: this.roomId!, expected: outboxBytes, next: asBytes(pending) },
                         ];
@@ -955,15 +963,22 @@ export class ModernConversation {
         if (!this.roomId) return;
         await this.deliveryMutex.runExclusive(async () => {
             const pending = await this.readPending();
+            const contact = await this.getContact();
             const renewal = this.sessionHealth === 'renewal-pending'
                 ? parseSessionRenewal(await this.storage.read(SESSION_RENEWAL_RECORD, this.roomId!)) : undefined;
             await this.delivery.retry({
                 pending,
                 recipientRoutingId: this.remoteAddress,
-                skip: (item) => (this.sessionHealth === 'renewal-pending' && item.clientId !== renewal?.clientId) ||
+                skip: (item) => contact?.changeStatus !== 'unchanged' || !contact.identityId ||
+                    item.recipientIdentityReference !== contact.identityId ||
+                    (this.sessionHealth === 'renewal-pending' && item.clientId !== renewal?.clientId) ||
                     (this.transport.activeTransport()?.requiresRoomMessageV1 === true && item.roomMessageVersion !== 1),
                 beforeSubmit: async () => {
                     await this.assertCurrentDeviceTrust();
+                    const current = await this.getContact();
+                    if (current?.changeStatus !== 'unchanged' || !current.identityId || current.identityId !== contact?.identityId) {
+                        throw new Error('Review this contact’s changed identity before sending queued messages.');
+                    }
                     testOnlyDeliveryStage('relay-dispatch');
                 },
                 persist: async (nextPending) => this.storage.write(OUTBOX_RECORD, this.roomId!, asBytes(nextPending)),
@@ -1319,12 +1334,16 @@ export class ModernConversation {
                 senderFingerprint = await fingerprintVodozemacIdentity(bundle.identity);
                 if (pinned && (pinned.identityId !== senderFingerprint || pinned.changeStatus !== 'unchanged')) {
                     this.lastInboundFailureCategory = 'sender-identity-mismatch';
-                    await this.observe(senderAddress, bundle.identity);
                     await this.testOnlyRecordInboundStage('parsed', senderFingerprint, this.lastInboundFailureCategory);
                     return false;
                 }
             } else {
                 const contact = this.remoteAddress ? await this.registry.get(this.remoteAddress) : undefined;
+                if (contact && contact.changeStatus !== 'unchanged') {
+                    this.lastInboundFailureCategory = 'sender-identity-mismatch';
+                    await this.testOnlyRecordInboundStage('parsed', contact.identityId, this.lastInboundFailureCategory);
+                    return false;
+                }
                 senderFingerprint = contact?.identityId;
             }
             await this.testOnlyRecordInboundStage('session-found', senderFingerprint);

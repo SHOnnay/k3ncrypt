@@ -14,6 +14,7 @@ import { contactDisplayName } from '../../content/copy';
 import { fileTransferCopy } from '../../product/fileTransferCopy';
 import { classifySafeDiagnostic, logSafeFailure, safeFailureCopy, type SafeDiagnosticCode } from '../../product/safeDiagnostics';
 import { SafeDiagnosticDetails } from '../common/SafeDiagnosticDetails';
+import { MAX_USER_MESSAGE_UTF8_BYTES } from '@chat-e2ee/service';
 
 export const ChatFooter: React.FC<{ onVerifyContact: () => void }> = ({ onVerifyContact }) => {
   const { sendMessage, sessionHealth, contactIdentity, conversations, channelHash } = useChat();
@@ -65,6 +66,10 @@ export const ChatFooter: React.FC<{ onVerifyContact: () => void }> = ({ onVerify
 
   const handleSend = async () => {
     if (!message.trim()) return;
+    if (new TextEncoder().encode(message).byteLength > MAX_USER_MESSAGE_UTF8_BYTES) {
+      setActionMessage(`Messages can be up to ${MAX_USER_MESSAGE_UTF8_BYTES.toLocaleString()} UTF-8 bytes.`);
+      return;
+    }
 
     try {
       setActionMessage('');
@@ -74,7 +79,10 @@ export const ChatFooter: React.FC<{ onVerifyContact: () => void }> = ({ onVerify
       inputRef.current?.focus();
     } catch (err) {
       debugError('Message send failed', err);
-      setActionMessage('Could not confirm sending. Check the message status before retrying.');
+      const message = err instanceof Error ? err.message : '';
+      setActionMessage(message.includes('reserved protocol marker') || message.includes('reserved protected-file marker')
+        ? message
+        : 'Could not confirm sending. Check the message status before retrying.');
     } finally {
       setIsSending(false);
     }

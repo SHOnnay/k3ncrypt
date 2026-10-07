@@ -7,6 +7,7 @@ import { publishVodozemacBundle, fetchVodozemacBundle, claimVodozemacOneTimeKey,
 import { AuthenticatedCallSignalTransport } from '../calls/authenticatedTransport';
 import { SecureStorageDeviceLifecyclePersistence } from '../devices/runtime';
 import { fingerprintVodozemacIdentity } from '../identity/vodozemacIdentity';
+import { ContactIdentityRegistry } from '../identity/contactIdentityRegistry';
 import { decodeRoomMessage, encodeRoomMessageV1, ROOM_MESSAGE_V1_FEATURE } from './roomMessageV1';
 
 jest.mock('../api/prekeys', () => ({
@@ -132,6 +133,14 @@ const seedVerifiedContact = async (storage: Storage, contactId: string): Promise
         verification: 'unverified',
         changeStatus: 'unchanged',
     })).buffer as ArrayBuffer);
+};
+
+const setContactChangeStatus = async (storage: Storage, contactId: string, changeStatus: 'unchanged' | 'changed-pending-review'): Promise<void> => {
+    const bytes = await storage.read('contact-identity', contactId);
+    if (!bytes) throw new Error('Test contact is missing.');
+    const contact = JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>;
+    contact.changeStatus = changeStatus;
+    await storage.write('contact-identity', contactId, new TextEncoder().encode(JSON.stringify(contact)).buffer as ArrayBuffer);
 };
 
 const messageAcceptance = (storage: Storage, received?: string[]) => async (text: string, id: string) => {
@@ -1253,6 +1262,25 @@ it('keeps legacy outbox ciphertext off a room-message-v1-required transport', as
     await v1.close();
 });
 
+it('rejects reserved protocol-looking text and oversize UTF-8 before writing an outbox item', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
+    const storage = new Storage();
+    const transport = fakeTransport();
+    const conversation = new ModernConversation(storage, loader, transport.transport);
+    await conversation.connect(room, key(9), remoteAddress, await remoteCommitment());
+    await seedVerifiedContact(storage, remoteAddress);
+    await conversation.verifyContact(true);
+    await expect(conversation.sendWithReceipt('K3NCRYPT/ROOM-MESSAGE\0ordinary text')).rejects.toThrow('reserved protocol marker');
+    await expect(conversation.sendWithReceipt('\0K3NCI\x01ordinary text')).rejects.toThrow('reserved protocol marker');
+    await expect(conversation.sendWithReceipt('k3ncrypt-file-not-a-reference')).rejects.toThrow('reserved protected-file marker');
+    await expect(conversation.sendWithReceipt('😀'.repeat(5_000))).rejects.toThrow('UTF-8 bytes');
+    expect(await storage.read('modern-outbox', room)).toBeUndefined();
+    expect(transport.sent).toHaveLength(0);
+    await conversation.close();
+});
+
 it('rejects a wrong-room first-prekey wrapper before durable account, session, message, or ACK acceptance', async () => {
     jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
     jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
@@ -1274,6 +1302,76 @@ it('rejects a wrong-room first-prekey wrapper before durable account, session, m
     expect(await storage.read('product-messages', room)).toBeUndefined();
     expect(await storage.read('modern-seen-m1-v1', room)).toBeUndefined();
     expect(delivered).not.toHaveBeenCalled();
+    await conversation.close();
+});
+
+it('rolls back every first-prekey acceptance record on transaction abort and accepts the identical retry after recovery', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    const storage = new Storage();
+    const received: string[] = [];
+    const conversation = new ModernConversation(storage, loader, fakeTransport().transport);
+    const own = await conversation.connect(room, key(9), remoteAddress, await remoteCommitment(), messageAcceptance(storage, received));
+    const accountBefore = await storage.read('vodozemac-account', 'local');
+    const compareAndSwap = jest.spyOn(storage, 'compareAndSwapRecords');
+    const contactBefore = await storage.read('contact-identity', remoteAddress);
+    const wrapper = encodeRoomMessageV1({ roomId: room, senderIdentityReference: await remoteCommitment(),
+        recipientIdentityReference: own.ownFingerprint, eventId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', kind: 'text',
+        payload: new TextEncoder().encode('retry after atomic abort') });
+    decryptedBytes = new Uint8Array([1, 1, ...wrapper]);
+    const envelope: EncryptedEnvelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1,
+        olmMessage: JSON.stringify({ version: 1, message_type: 1, ciphertext: 'opaque-transaction-retry' }) } };
+    storage.failNextCas = 'before';
+    await expect(receiveFirstMessage(conversation, envelope, remoteAddress)).rejects.toThrow();
+    expect(await storage.read('vodozemac-account', 'local')).toEqual(accountBefore);
+    expect(await storage.read('vodozemac-session', room)).toBeUndefined();
+    expect(await storage.read('contact-identity', remoteAddress)).toEqual(contactBefore);
+    expect(await storage.read('product-messages', room)).toBeUndefined();
+    expect(await storage.read('modern-seen', room)).toBeUndefined();
+    expect(await storage.read('modern-seen-m1-v1', room)).toBeUndefined();
+    expect(await storage.read('modern-seen-room-message-v1', room)).toBeUndefined();
+    expect(received).toEqual([]);
+
+    decryptedBytes = new Uint8Array([1, 1, ...wrapper]);
+    await expect(receiveFirstMessage(conversation, envelope, remoteAddress)).resolves.toBe(true);
+    expect(received).toEqual(['retry after atomic abort']);
+    expect(await storage.read('vodozemac-account', 'local')).toBeDefined();
+    expect(compareAndSwap.mock.calls.some(([updates]) =>
+        ['vodozemac-account', 'vodozemac-session', 'product-messages', 'modern-seen', 'modern-seen-m1-v1', 'modern-seen-room-message-v1']
+            .every((type) => updates.some((item) => item.recordType === type)))).toBe(true);
+    expect(await storage.read('vodozemac-session', room)).toBeDefined();
+    expect(JSON.parse(new TextDecoder().decode((await storage.read('product-messages', room))!))).toHaveLength(1);
+    expect(JSON.parse(new TextDecoder().decode((await storage.read('modern-seen-m1-v1', room))!)).ids).toHaveLength(2);
+    expect(JSON.parse(new TextDecoder().decode((await storage.read('modern-seen-room-message-v1', room))!)).events).toHaveLength(1);
+    await expect(receiveFirstMessage(conversation, envelope, remoteAddress)).resolves.toBe(true);
+    expect(received).toEqual(['retry after atomic abort']);
+    await conversation.close();
+});
+
+it('resolves uncertain first-prekey transaction completion only after all durable acceptance records are present', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    const storage = new Storage();
+    const received: string[] = [];
+    const conversation = new ModernConversation(storage, loader, fakeTransport().transport);
+    const own = await conversation.connect(room, key(9), remoteAddress, await remoteCommitment(), messageAcceptance(storage, received));
+    const wrapper = encodeRoomMessageV1({ roomId: room, senderIdentityReference: await remoteCommitment(),
+        recipientIdentityReference: own.ownFingerprint, eventId: 'ffffffff-ffff-4fff-8fff-ffffffffffff', kind: 'text',
+        payload: new TextEncoder().encode('durably committed once') });
+    decryptedBytes = new Uint8Array([1, 1, ...wrapper]);
+    const envelope: EncryptedEnvelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1,
+        olmMessage: JSON.stringify({ version: 1, message_type: 1, ciphertext: 'opaque-uncertain-first-prekey' }) } };
+    storage.failNextCas = 'after';
+    await expect(receiveFirstMessage(conversation, envelope, remoteAddress)).resolves.toBe(true);
+    expect(received).toEqual(['durably committed once']);
+    expect(await storage.read('vodozemac-account', 'local')).toBeDefined();
+    expect(await storage.read('vodozemac-session', room)).toBeDefined();
+    expect(await storage.read('product-messages', room)).toBeDefined();
+    expect(await storage.read('modern-seen', room)).toBeDefined();
+    expect(await storage.read('modern-seen-m1-v1', room)).toBeDefined();
+    expect(await storage.read('modern-seen-room-message-v1', room)).toBeDefined();
+    await expect(receiveFirstMessage(conversation, envelope, remoteAddress)).resolves.toBe(true);
+    expect(received).toEqual(['durably committed once']);
     await conversation.close();
 });
 
@@ -1307,6 +1405,171 @@ it('rejects an established-session cross-room file reference before the applicat
     expect(await storage.read('vodozemac-session', room)).toEqual(sessionBefore);
     expect(delivered).toHaveBeenCalledTimes(1);
     await conversation.close();
+});
+
+it('rejects a valid-room first-prekey wrapper whose claimed sender identity is not the identity in the fetched Olm bundle', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    const storage = new Storage();
+    const delivered = jest.fn(messageAcceptance(storage));
+    const conversation = new ModernConversation(storage, loader, fakeTransport().transport);
+    const own = await conversation.connect(room, key(9), remoteAddress, await remoteCommitment(), delivered);
+    const accountBefore = await storage.read('vodozemac-account', 'local');
+    const contactBefore = await storage.read('contact-identity', remoteAddress);
+    const forgedIdentity = await fingerprintVodozemacIdentity({ curve25519: key(8), ed25519: key(9) });
+    const forged = encodeRoomMessageV1({ roomId: room, senderIdentityReference: forgedIdentity,
+        recipientIdentityReference: own.ownFingerprint, eventId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', kind: 'text',
+        payload: new TextEncoder().encode('forged identity') });
+    decryptedBytes = new Uint8Array([1, 1, ...forged]);
+    const envelope: EncryptedEnvelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1,
+        olmMessage: JSON.stringify({ version: 1, message_type: 1, ciphertext: 'opaque-forged-first' }) } };
+    await expect(receiveFirstMessage(conversation, envelope, remoteAddress)).rejects.toThrow('binding mismatch');
+    expect(await storage.read('vodozemac-account', 'local')).toEqual(accountBefore);
+    expect(await storage.read('vodozemac-session', room)).toBeUndefined();
+    expect(await storage.read('contact-identity', remoteAddress)).toEqual(contactBefore);
+    expect(await storage.read('product-messages', room)).toBeUndefined();
+    expect(await storage.read('modern-seen-m1-v1', room)).toBeUndefined();
+    expect(await storage.read('modern-seen-room-message-v1', room)).toBeUndefined();
+    expect(delivered).not.toHaveBeenCalled();
+    await conversation.close();
+});
+
+it('rejects an established-session wrapper claiming another K3 identity before acceptance', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    const storage = new Storage();
+    const delivered = jest.fn(messageAcceptance(storage));
+    const conversation = new ModernConversation(storage, loader, fakeTransport().transport);
+    const own = await conversation.connect(room, key(9), remoteAddress, await remoteCommitment(), delivered);
+    await seedVerifiedContact(storage, remoteAddress);
+    const establish = encodeRoomMessageV1({ roomId: room, senderIdentityReference: await remoteCommitment(),
+        recipientIdentityReference: own.ownFingerprint, eventId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', kind: 'text',
+        payload: new TextEncoder().encode('establish') });
+    decryptedBytes = new Uint8Array([1, 1, ...establish]);
+    const first: EncryptedEnvelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1,
+        olmMessage: JSON.stringify({ version: 1, message_type: 1, ciphertext: 'opaque-establish' }) } };
+    await expect(receiveFirstMessage(conversation, first, remoteAddress)).resolves.toBe(true);
+    const messagesBefore = await storage.read('product-messages', room);
+    const sessionBefore = await storage.read('vodozemac-session', room);
+    const replayBefore = await storage.read('modern-seen-room-message-v1', room);
+    const decryptionsBefore = sessionDecryptions;
+    const forgedIdentity = await fingerprintVodozemacIdentity({ curve25519: key(8), ed25519: key(9) });
+    const forged = encodeRoomMessageV1({ roomId: room, senderIdentityReference: forgedIdentity,
+        recipientIdentityReference: own.ownFingerprint, eventId: 'ffffffff-ffff-4fff-8fff-ffffffffffff', kind: 'text',
+        payload: new TextEncoder().encode('forged established identity') });
+    decryptedBytes = new Uint8Array([1, 1, ...forged]);
+    const next: EncryptedEnvelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1,
+        olmMessage: JSON.stringify({ version: 1, message_type: 1, ciphertext: 'opaque-forged-established' }) } };
+    await expect(receiveFirstMessage(conversation, next, remoteAddress)).rejects.toThrow('binding mismatch');
+    expect(sessionDecryptions).toBe(decryptionsBefore + 1);
+    expect(await storage.read('product-messages', room)).toEqual(messagesBefore);
+    expect(await storage.read('vodozemac-session', room)).toEqual(sessionBefore);
+    expect(await storage.read('modern-seen-room-message-v1', room)).toEqual(replayBefore);
+    expect(delivered).toHaveBeenCalledTimes(1);
+    await conversation.close();
+});
+
+it('rejects first-session and established-session delivery while contact identity review is pending', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    const firstStorage = new Storage();
+    const firstDelivered = jest.fn(messageAcceptance(firstStorage));
+    const first = new ModernConversation(firstStorage, loader, fakeTransport().transport);
+    await first.connect(room, key(9), remoteAddress, await remoteCommitment(), firstDelivered);
+    await setContactChangeStatus(firstStorage, remoteAddress, 'changed-pending-review');
+    const pinnedBefore = await firstStorage.read('contact-identity', remoteAddress);
+    const firstEnvelope: EncryptedEnvelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1,
+        olmMessage: JSON.stringify({ version: 1, message_type: 1, ciphertext: 'opaque-changed-first' }) } };
+    await expect(receiveFirstMessage(first, firstEnvelope, remoteAddress)).resolves.toBe(false);
+    expect(await firstStorage.read('contact-identity', remoteAddress)).toEqual(pinnedBefore);
+    expect(await firstStorage.read('vodozemac-session', room)).toBeUndefined();
+    expect(firstDelivered).not.toHaveBeenCalled();
+    await first.close();
+
+    const establishedStorage = new Storage();
+    const establishedDelivered = jest.fn(messageAcceptance(establishedStorage));
+    const established = new ModernConversation(establishedStorage, loader, fakeTransport().transport);
+    const own = await established.connect(room, key(9), remoteAddress, await remoteCommitment(), establishedDelivered);
+    await seedVerifiedContact(establishedStorage, remoteAddress);
+    const initial = encodeRoomMessageV1({ roomId: room, senderIdentityReference: await remoteCommitment(),
+        recipientIdentityReference: own.ownFingerprint, eventId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', kind: 'text', payload: new TextEncoder().encode('initial') });
+    decryptedBytes = new Uint8Array([1, 1, ...initial]);
+    await expect(receiveFirstMessage(established, firstEnvelope, remoteAddress)).resolves.toBe(true);
+    await setContactChangeStatus(establishedStorage, remoteAddress, 'changed-pending-review');
+    const beforeCount = sessionDecryptions;
+    const staleEnvelope: EncryptedEnvelope = { ...firstEnvelope, data: { version: 1, olmMessage: JSON.stringify({ version: 1, message_type: 1, ciphertext: 'opaque-changed-established' }) } };
+    await expect(receiveFirstMessage(established, staleEnvelope, remoteAddress)).resolves.toBe(false);
+    expect(sessionDecryptions).toBe(beforeCount);
+    expect(establishedDelivered).toHaveBeenCalledTimes(1);
+    await established.close();
+});
+
+it('keeps queued outbound ciphertext blocked after identity change and resumes only for the same current identity', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
+    const storage = new Storage();
+    const relay = fakeTransport(false, 1);
+    const conversation = new ModernConversation(storage, loader, relay.transport);
+    await conversation.connect(room, key(9), remoteAddress, await remoteCommitment());
+    await seedVerifiedContact(storage, remoteAddress);
+    const clientId = await conversation.sendWithReceipt('queued before identity change');
+    expect(relay.sent).toHaveLength(0);
+    const before = JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!)) as Array<Record<string, unknown>>;
+    expect(before).toHaveLength(1);
+    expect(before[0].recipientIdentityReference).toBe(await remoteCommitment());
+    await setContactChangeStatus(storage, remoteAddress, 'changed-pending-review');
+    await conversation.retryPending();
+    expect(relay.sent).toHaveLength(0);
+    expect(JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!))).toHaveLength(1);
+    await setContactChangeStatus(storage, remoteAddress, 'unchanged');
+    await conversation.retryPending();
+    expect(relay.sent).toHaveLength(1);
+    expect(relay.sent[0]).toEqual(before[0].envelope);
+    expect(JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!))[0].clientId).toBe(clientId);
+    await conversation.close();
+});
+
+it('accepts a changed identity only through review, keeps old queued ciphertext blocked, and sends future V1 traffic to the new pin', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
+    const storage = new Storage();
+    const oldTransport = fakeTransport(false, 1, true);
+    const oldConversation = new ModernConversation(storage, loader, oldTransport.transport);
+    await oldConversation.connect(room, key(9), remoteAddress, await remoteCommitment());
+    await seedVerifiedContact(storage, remoteAddress);
+    await oldConversation.sendWithReceipt('old recipient ciphertext');
+    const oldPending = JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!)) as Array<Record<string, unknown>>;
+    expect(oldPending).toHaveLength(1);
+
+    const newIdentity = { curve25519: key(8), ed25519: key(9) };
+    const newFingerprint = await fingerprintVodozemacIdentity(newIdentity);
+    await new ContactIdentityRegistry(storage).observe(remoteAddress, {
+        identityId: newFingerprint, publicKey: new TextEncoder().encode(JSON.stringify(newIdentity)), algorithm: 'Olm-Curve25519+Ed25519', verification: 'unverified',
+    });
+    await oldConversation.acceptChangedIdentity();
+    expect(await oldConversation.getContact()).toMatchObject({ identityId: newFingerprint, changeStatus: 'unchanged', verification: 'unverified' });
+    await oldConversation.close(false);
+
+    const newBundle = { ...bundle, identity: newIdentity, oneTimeKeys: [{ id: 'otk-remote-new', key: key(10) }] };
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(newBundle);
+    jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(newBundle.oneTimeKeys[0]);
+    const newTransport = fakeTransport(false, 0, true);
+    const newConversation = new ModernConversation(storage, loader, newTransport.transport);
+    const own = await newConversation.connect(room, key(9), remoteAddress, newFingerprint);
+    await newConversation.verifyContact(true, newFingerprint);
+    await newConversation.retryPending();
+    expect(newTransport.sent).toHaveLength(0);
+    await newConversation.sendWithReceipt('new identity session');
+    expect(newTransport.sent).toHaveLength(1);
+    const outbox = JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!)) as Array<Record<string, unknown>>;
+    expect(outbox).toHaveLength(2);
+    expect(outbox[0]).toEqual(oldPending[0]);
+    const encoded = encryptedPlaintexts.at(-1)!;
+    expect(decodeRoomMessage(encoded.slice(2), { roomId: room, senderIdentityReference: own.ownFingerprint,
+        recipientIdentityReference: newFingerprint })).toMatchObject({ version: 'room-message-v1' });
+    await newConversation.close();
 });
 
 it('deduplicates authenticated event identity within its room and rejects conflicting event-ID reuse', async () => {
