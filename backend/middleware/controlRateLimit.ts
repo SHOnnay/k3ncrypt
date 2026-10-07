@@ -7,6 +7,7 @@ export const createControlRateLimit = (capacity = 20, refillPerSecond = 0.25) =>
   return (req: Request, res: Response, next: NextFunction): void => {
     const key = `${req.ip}:control:${req.route?.path ?? "unmatched"}`;
     if (!limiter.consume(key)) {
+      if (refillPerSecond > 0) res.set('Retry-After', String(Math.ceil(1 / refillPerSecond)));
       res.status(429).send({ error: 'Rate limit exceeded' });
       return;
     }

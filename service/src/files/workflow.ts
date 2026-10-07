@@ -26,10 +26,12 @@ export class FileTransferWorkflow {
     private pending?: Pending;
     private controller?: AbortController;
     private running = false;
+    private failureStage = 'FILE_PREFLIGHT_FAILED';
     constructor(private readonly gateway: FileGateway, private readonly authority: (verified: boolean) => Promise<FileBinding>, private readonly cacheFactory: () => Promise<SealedFileCache>, private readonly publish: (reference: string, binding: FileBinding) => Promise<void>, changed: (progress: FileProgress) => void = () => {}) { this.state = new FileTransferState(changed); }
     private fence(g: number): void { if (!this.state.live(g) || this.controller?.signal.aborted) throw new Error('File canceled.'); }
     async send(source: FileSource): Promise<void> {
         if (this.running) throw new Error('Another file operation is active.');
+        this.failureStage = 'FILE_PREFLIGHT_FAILED';
         await this.forget();
         this.controller = new AbortController(); const g = this.state.begin(source.size, source.name); this.running = true;
         let allocatedCache: SealedFileCache | undefined; let createdId: string | undefined;
@@ -37,6 +39,7 @@ export class FileTransferWorkflow {
             if (!Number.isSafeInteger(source.size) || source.size < 1 || source.size > L.MAX_FILE_SIZE) throw new Error('File must be between 1 byte and 8 MiB.');
             const binding = await this.authority(true); this.fence(g);
             const cache = await this.cacheFactory(); allocatedCache = cache; this.fence(g);
+            this.failureStage = 'FILE_CREATE_FAILED';
             const created = await this.gateway.create(binding, source.size, this.controller.signal); createdId = created.context?.transferId; this.fence(g);
             const key = crypto.getRandomValues(new Uint8Array(32));
             const reference: FileReference = { version: 2, context: created.context, key: b64(key), createdAt: created.createdAt, expiresAt: created.expiresAt };
@@ -45,6 +48,7 @@ export class FileTransferWorkflow {
             this.pending = { source, reference, key, cache, produced: new Set() };
             const manifest = decodeAttachmentManifest(encodeAttachmentManifest({ filename: source.name, mimeType: source.type, fileSize: source.size, chunkSize: created.context.chunkSize, chunkCount: created.context.chunkCount, createdAt: created.createdAt, expiresAt: created.expiresAt }));
             this.state.details(g, source.size, manifest.filename);
+            this.failureStage = 'FILE_PREFLIGHT_FAILED';
             this.pending.produced.add('manifest');
             await cache.put('manifest', wire(await sealAttachmentManifest(key, created.context, manifest))); this.fence(g);
             await this.upload(g);
@@ -65,11 +69,13 @@ export class FileTransferWorkflow {
         this.state.move(g, 'Encrypting');
         const manifest = await p.cache.get('manifest'); if (!manifest) throw new Error('File cache unavailable; restart required.');
         this.state.move(g, 'Uploading');
+        this.failureStage = 'FILE_MANIFEST_UPLOAD_FAILED';
         if (!status.manifest) { status = await this.gateway.put(r.context.transferId, 'manifest', manifest, signal); this.fence(g); checkStatus(r, status); }
         else if ((status.manifest.nonce !== manifest.nonce || status.manifest.ciphertext !== manifest.ciphertext)) throw new Error('File object conflict.');
         let accepted = status.indices.reduce((sum, i) => sum + Math.min(r.context.chunkSize, r.context.fileSize - i * r.context.chunkSize), 0);
         this.state.move(g, 'Uploading', accepted);
         for (let i = 0; i < r.context.chunkCount; i++) {
+            this.failureStage = 'FILE_CHUNK_UPLOAD_FAILED';
             await authorize(); if (status.indices.includes(i)) continue;
             let value = await p.cache.get(String(i)); this.fence(g);
             if (!value) {
@@ -85,8 +91,10 @@ export class FileTransferWorkflow {
             accepted = status.indices.reduce((sum, j) => sum + Math.min(r.context.chunkSize, r.context.fileSize - j * r.context.chunkSize), 0);
             this.state.move(g, 'Uploading', accepted);
         }
+        this.failureStage = 'FILE_FINALIZE_FAILED';
         await authorize(); const completed = await this.gateway.complete(r.context.transferId, signal); this.fence(g); checkStatus(r, completed);
         if (completed.state !== 'available' || completed.indices.length !== r.context.chunkCount) throw new Error('File incomplete.');
+        this.failureStage = 'FILE_REFERENCE_SEND_FAILED';
         await authorize(); await this.publish(serializeFileReference(r), r.context); this.fence(g);
         this.state.move(g, 'WaitingForRecipient', r.context.fileSize); await this.release(false);
     }
@@ -94,28 +102,35 @@ export class FileTransferWorkflow {
         if (this.running) throw new Error('Another file operation is active.');
         await this.forget(); this.controller = new AbortController(); const g = this.state.begin(0); this.running = true; let output: FileOutput<T> | undefined;
         try {
+            this.failureStage = 'FILE_PREFLIGHT_FAILED';
             const r = parseFileReference(text); const own = await this.authority(false); this.fence(g);
             const expected: FileBinding = { conversationId: own.conversationId, senderParticipantId: own.recipientParticipantId, recipientParticipantId: own.senderParticipantId, senderIdentityReference: own.recipientIdentityReference, recipientIdentityReference: own.senderIdentityReference };
             if (!sameBinding(expected, r.context)) throw new Error('File identity binding rejected.');
             const key = unb64(r.key, 32);
             try {
+                this.failureStage = 'FILE_RECIPIENT_FETCH_FAILED';
                 const status = await this.gateway.status(r.context.transferId, this.controller.signal); this.fence(g); checkStatus(r, status);
                 if (status.state !== 'available' || status.indices.length !== r.context.chunkCount || !status.manifest) throw new Error('File incomplete.');
                 this.state.move(g, 'Downloading');
+                this.failureStage = 'FILE_AUTHENTICATION_FAILED';
                 const manifest = await openAttachmentManifest(key, r.context, sealed(status.manifest, L.MAX_METADATA_SIZE)); this.fence(g);
                 if (manifest.createdAt !== r.createdAt || manifest.expiresAt !== r.expiresAt) throw new Error('File manifest binding rejected.');
                 this.state.details(g, manifest.fileSize, manifest.filename);
+                this.failureStage = 'FILE_SAVE_FAILED';
                 output = await outputFactory(manifest.fileSize); this.fence(g);
                 let total = 0;
                 for (let i = 0; i < r.context.chunkCount; i++) {
                     if (!sameBinding(await this.authority(false), own)) throw new Error('File contact changed.'); this.fence(g);
+                    this.failureStage = 'FILE_DOWNLOAD_FAILED';
                     const value = await this.gateway.chunk(r.context.transferId, i, this.controller.signal); this.fence(g);
                     this.state.move(g, 'Verifying', total);
+                    this.failureStage = 'FILE_AUTHENTICATION_FAILED';
                     const plaintext = await openAttachmentChunk(key, { ...r.context, chunkIndex: i }, sealed(value, L.MAX_CHUNK_SIZE + 16));
-                    try { this.fence(g); await output.write(plaintext); total += plaintext.length; } finally { plaintext.fill(0); }
+                    try { this.fence(g); this.failureStage = 'FILE_SAVE_FAILED'; await output.write(plaintext); total += plaintext.length; } finally { plaintext.fill(0); }
                     this.fence(g); if (i + 1 < r.context.chunkCount) this.state.move(g, 'Downloading', total);
                 }
                 if (total !== manifest.fileSize) throw new Error('File size mismatch.');
+                this.failureStage = 'FILE_SAVE_FAILED';
                 this.fence(g); const result = await output.finish(manifest); this.fence(g); this.state.move(g, 'Complete', total); return result;
             } finally { key.fill(0); }
         } catch (e) { await output?.discard(); this.failed(g, e); return undefined; } finally { this.running = false; }
@@ -127,9 +142,11 @@ export class FileTransferWorkflow {
         const expired = reason.toLowerCase().includes('expired');
         const restart = reason.toLowerCase().includes('cache unavailable');
         const unsupported = reason === 'Secure file storage unavailable.';
-        const retryable = !!this.pending && !expired && !unsupported && !restart && /network|fetch|temporarily|storage unavailable/i.test(reason);
+        const retryable = !!this.pending && !expired && !unsupported && !restart && /network|fetch|temporarily|storage unavailable|rate limit/i.test(reason);
         const failure = restart ? 'Sealed file cache was lost. Select the original file again to start a new transfer.' : unsupported ? 'This browser cannot safely stream attachments.' : /8 MiB/.test(reason) ? 'File must be between 1 byte and 8 MiB.' : expired ? 'File expired.' : /quota/i.test(reason) ? 'File storage quota reached.' : /space|full|quotaexceeded/i.test(reason) ? 'Not enough local storage.' : /verification|identity|contact|binding/i.test(reason) ? 'Verified unchanged contact required.' : retryable ? 'Network unavailable. Retry this transfer in this session.' : 'File transfer failed. Select the file again to restart.';
-        this.state.move(g, restart ? 'RestartRequired' : expired ? 'Expired' : 'Failed', undefined, failure, retryable);
+        const tagged = e && typeof e === 'object' && 'safeDiagnosticCode' in e && typeof e.safeDiagnosticCode === 'string' ? e.safeDiagnosticCode : undefined;
+        const diagnosticCode = tagged ?? (expired ? 'FILE_TRANSFER_EXPIRED' : /canceled/i.test(reason) ? 'FILE_TRANSFER_CANCELED' : /identity|contact|binding|verification/i.test(reason) ? 'VERIFICATION_REQUIRED' : /rate limit/i.test(reason) ? 'FILE_RATE_LIMITED' : this.failureStage);
+        this.state.move(g, restart ? 'RestartRequired' : expired ? 'Expired' : 'Failed', undefined, failure, retryable, diagnosticCode);
         if (restart) void this.release(true).catch(() => undefined);
     }
     cancel(): void { this.state.cancel(); this.controller?.abort(); void this.release(true).catch(() => undefined); }

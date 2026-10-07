@@ -40,7 +40,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
     setIsOpening(true);
     setMediaError(false);
     try {
-      if (isFile) { const result = await files.receive(media.reference); if (result) { setSaved(result); setMediaUrl(URL.createObjectURL(new Blob([result.file], { type: 'application/octet-stream' }))); } else setMediaError(true); return; }
+      if (isFile) { const result = await files.receive(media.reference); if (result) { setSaved(result); setMediaUrl(URL.createObjectURL(new Blob([result.file], { type: /^(image\/(png|jpeg|webp|gif))$/.test(result.mimeType ?? '') ? result.mimeType : 'application/octet-stream' }))); } else setMediaError(true); return; }
       const result = await receive(media.reference);
       if (result) setMediaUrl((previous) => { if (previous) URL.revokeObjectURL(previous); return URL.createObjectURL(new Blob([result.bytes], { type: result.mimeType })); });
       else setMediaError(true);
@@ -50,6 +50,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
       setIsOpening(false);
     }
   };
+  if (message.callEvent) return <div className="message call-history-event" aria-label="Local call history"><strong>{message.text}</strong><div className="message-meta">{message.callEvent.durationSeconds !== undefined && <span>{Math.floor(message.callEvent.durationSeconds / 60)} min {message.callEvent.durationSeconds % 60} sec · </span>}{formatMessageTime(message.timestamp)} · On this device</div></div>;
   return (
     <div className={`message ${message.type}`}>
       <div className="message-text">{message.text}</div>
@@ -57,6 +58,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
       {media?.reference && !mediaUrl && <button className="message-media-action" type="button" onClick={openMedia} disabled={isOpening}>{isOpening ? 'Downloading and verifying…' : isFile ? 'Download protected file' : `Open protected ${media.kind}`}</button>}
       {isFile && isOpening && fileProgress?.active && <div role="status" aria-live="polite">{fileProgress.label}{fileProgress.progress !== undefined && <progress max={100} value={fileProgress.progress} aria-label="File download progress" />} <button type="button" onClick={files.cancel}>Cancel</button></div>}
       {mediaError && <div className="message-media-error" role="status">Couldn’t open this file. Check your connection or ask your contact to send it again.</div>}
+      {saved && mediaUrl && /^(image\/(png|jpeg|webp|gif))$/.test(saved.mimeType ?? '') && <img className="message-media-preview" src={mediaUrl} alt="Downloaded photo" />}
       {mediaUrl && media?.kind === 'image' && <img className="message-media-preview" src={mediaUrl} alt="Protected image" />}
       {mediaUrl && media?.kind === 'voice' && <audio className="message-media-audio" controls src={mediaUrl} />}
       {mediaUrl && media?.kind === 'video' && <video className="message-media-preview" controls src={mediaUrl} />}

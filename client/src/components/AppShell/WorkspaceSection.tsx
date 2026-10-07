@@ -17,7 +17,7 @@ export const WorkspaceSection: React.FC<WorkspaceSectionProps> = ({ section, onO
   const [callMessage, setCallMessage] = useState('');
   const [startingCall, setStartingCall] = useState<'audio' | 'video'>();
   const [contactQuery, setContactQuery] = useState('');
-  const { conversations, channelHash, isConnected, sessionHealth, protocolMode, contactIdentity, startCall, startVideoCall, callLifecycleState, setContactNickname } = useChat();
+  const { conversations, channelHash, isConnected, sessionHealth, protocolMode, contactIdentity, startCall, startVideoCall, callActive, setContactNickname } = useChat();
   const filteredConversations = useMemo(() => {
     const query = contactQuery.trim().toLocaleLowerCase();
     return conversations.filter((item) => !query || contactDisplayName(item.label, item.roomId, item.remoteDisplayName, item.localNickname).toLocaleLowerCase().includes(query));
@@ -32,7 +32,7 @@ export const WorkspaceSection: React.FC<WorkspaceSectionProps> = ({ section, onO
     sessionHealth,
     verification: contactIdentity?.verification,
     changeStatus: contactIdentity?.changeStatus,
-    callInProgress: callLifecycleState !== 'idle' || startingCall !== undefined,
+    callInProgress: callActive || startingCall !== undefined,
   });
   const launchCall = async (media: 'audio' | 'video'): Promise<void> => {
     setCallMessage('');
@@ -73,6 +73,6 @@ export const WorkspaceSection: React.FC<WorkspaceSectionProps> = ({ section, onO
       {callLaunchBlockReason && <p className="workspace-call-readiness" role="status">{callLaunchBlockMessage(callLaunchBlockReason)}</p>}
       {callMessage && <p className="workspace-feedback" role="status">{callMessage}</p>}
     </section> : <div className="workspace-empty"><span className="workspace-empty__mark"><img src="/branding/k3ncrypt-cluster-white.svg" alt="" /></span><h2>No active conversation</h2><p>Open a verified conversation to start a call.</p></div>}
-    <section className="calls-note"><span className="calls-note__dot" /><p>Call history is not saved on this device yet. Microphone or camera access is requested only when you start or accept a call.</p></section>
+    <section className="calls-note"><span className="calls-note__dot" /><p>Call history is saved locally in this device’s encrypted conversation history. Microphone or camera access is requested only when you start or accept a call.</p></section>
   </main>;
 };

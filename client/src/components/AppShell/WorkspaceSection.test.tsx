@@ -19,7 +19,7 @@ const verifiedState = {
   contactIdentity: { verification: 'verified', changeStatus: 'unchanged' },
   startCall: jest.fn().mockResolvedValue(undefined),
   startVideoCall: jest.fn().mockResolvedValue(undefined),
-  callLifecycleState: 'idle',
+  callLifecycleState: 'idle', callActive: false,
   setContactNickname: jest.fn(),
 };
 
@@ -43,6 +43,12 @@ describe('Calls workspace launch controls', () => {
     expect(buttonMarkup(markup, 'Start video call')).not.toContain('disabled');
   });
 
+  it('does not let terminal status copy block another call', () => {
+    for (const state of ['ended', 'rejected', 'cancelled', 'timeout', 'ice-failed', 'media-denied', 'signaling-failed']) {
+      expect(buttonMarkup(renderCalls({ callLifecycleState: state, callActive: false }), 'Start audio call')).not.toContain('disabled');
+    }
+  });
+
   it('blocks unverified, changed, unhealthy, disconnected, and incompatible contacts', () => {
     const states: Array<[Record<string, unknown>, string]> = [
       [{ contactIdentity: { verification: 'unverified', changeStatus: 'unchanged' } }, 'Verify this contact before calling.'],
@@ -51,7 +57,7 @@ describe('Calls workspace launch controls', () => {
       [{ isConnected: false }, 'Reconnect to this verified contact'],
       [{ sessionHealth: 'renewal-pending' }, 'Reconnect to this verified contact'],
       [{ protocolMode: 'legacy' }, 'newer K3NCRYPT version'],
-      [{ callLifecycleState: 'connected' }, 'already in progress'],
+      [{ callLifecycleState: 'connected', callActive: true }, 'already in progress'],
     ];
     for (const [overrides, message] of states) {
       const markup = renderCalls(overrides);

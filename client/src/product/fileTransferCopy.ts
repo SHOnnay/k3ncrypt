@@ -19,10 +19,11 @@ const safeFailureCopy = (failure: string): string => {
   if (/8 mib|file size/.test(reason)) return 'Files must be 8 MiB or smaller.';
   if (/expired/.test(reason)) return 'This file has expired. Ask your contact to send it again.';
   if (/verification|identity|contact/.test(reason)) return 'Verify this contact again before sending files.';
-  if (/quota|storage|full/.test(reason)) return 'There is not enough storage. Free some space, then try again.';
-  if (/cache|restart|process/.test(reason)) return 'This transfer was interrupted when the app closed. Select the original file to start again.';
+  if (/quota/.test(reason)) return 'File storage quota reached. Try again after older files expire.';
+  if (/storage|full/.test(reason)) return 'There is not enough storage. Free some space, then try again.';
+  if (/cache|process/.test(reason)) return 'Select the original file again to restart this transfer.';
   if (/network|unavailable|timeout|connect|request-failed/.test(reason)) return 'Could not connect. Check your connection and retry in this session.';
-  return 'The transfer could not finish. Retry in this session or select the file again.';
+  return 'Couldn’t send this file. Retry in this session or select the file again.';
 };
 
 export const fileTransferCopy = (transfer: FileProgress): FileTransferCopy => {
@@ -30,16 +31,17 @@ export const fileTransferCopy = (transfer: FileProgress): FileTransferCopy => {
   const progress = ['Uploading', 'Downloading', 'Verifying'].includes(transfer.phase) ? percent : undefined;
   const name = transfer.filename ? `${transfer.filename} · ` : '';
   switch (transfer.phase) {
+    case 'Idle': return { label: '', active: false };
     case 'Preparing': return { label: `${name}Preparing…`, active: true };
     case 'Encrypting': return { label: `${name}Protecting file…`, active: true };
     case 'Uploading': return { label: `${name}Sending…${progress === undefined ? '' : ` ${progress}%`}`, progress, active: true };
-    case 'WaitingForRecipient': return { label: `${name}Sent securely · waiting for your contact`, active: false };
+    case 'WaitingForRecipient': return { label: `${name}Sent`, active: false };
     case 'Downloading': return { label: `${name}Downloading…${progress === undefined ? '' : ` ${progress}%`}`, progress, active: true };
     case 'Verifying': return { label: `${name}Checking received file…${progress === undefined ? '' : ` ${progress}%`}`, progress, active: true };
     case 'Complete': return { label: `${name}Ready to save`, active: false };
     case 'Canceled': return { label: `${name}Transfer canceled`, active: false };
     case 'Expired': return { label: safeFailureCopy('expired'), active: false };
-    case 'RestartRequired': return { label: safeFailureCopy('restart'), active: false };
+    case 'RestartRequired': return { label: 'Select the original file again to restart this transfer.', active: false };
     case 'Failed': return { label: safeFailureCopy(transfer.failure ?? ''), active: false };
   }
 };

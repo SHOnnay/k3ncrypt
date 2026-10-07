@@ -1,3 +1,4 @@
+import { validLocalCallEvent } from './callHistory';
 import type { Message } from '../types';
 import type { ProductSecureStorage } from './sessionStore';
 
@@ -19,6 +20,7 @@ const valid = (value: unknown): value is StoredMessage => {
     && typeof item.text === 'string' && item.text.length <= 192 * 1024
     && (item.type === 'sent' || item.type === 'received') && typeof item.timestamp === 'string'
     && Number.isFinite(Date.parse(item.timestamp))
+    && (item.callEvent === undefined || item.id.startsWith('local-call:') && validLocalCallEvent(item.callEvent))
     && (item.delivery === undefined || ['pending', 'accepted', 'failed'].includes(String(item.delivery)));
 };
 

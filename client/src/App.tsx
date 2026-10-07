@@ -22,7 +22,7 @@ import { classifySafeDiagnostic, logSafeFailure, safeFailureCopy, type SafeDiagn
 import { SafeDiagnosticDetails } from './components/common/SafeDiagnosticDetails';
 
 const AppContent: React.FC = () => {
-  const { initializeChat, joinChannel, openConversation, attachmentRequestHeaders, privacyPreferences } = useChat();
+  const { initializeChat, joinChannel, openConversation, attachmentRequestHeaders, privacyPreferences, channelHash } = useChat();
   const [showSetup, setShowSetup] = useState(true);
   const [error, setError] = useState<string>('');
   const [initializationError, setInitializationError] = useState<string>('');
@@ -101,7 +101,7 @@ const AppContent: React.FC = () => {
           window.history.replaceState(null, '', window.location.pathname);
           setShowSetup(false);
         }} isHidden={!showSetup} />
-        {activeSection === 'chats' ? <MediaProvider workflow={mediaWorkflow}><FileProvider>
+        {activeSection === 'chats' ? <MediaProvider workflow={mediaWorkflow}><FileProvider key={channelHash}>
           <ChatContainer isHidden={showSetup} onNewConversation={() => { setActiveSection('chats'); setShowSetup(true); }} onVerifyContact={openVerification} />
         </FileProvider></MediaProvider> : !showSetup && <WorkspaceSection section={activeSection} onNewConversation={() => { setActiveSection('chats'); setShowSetup(true); }} onOpenConversation={(roomId) => {
           setActiveSection('chats');

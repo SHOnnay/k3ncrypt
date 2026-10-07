@@ -9,7 +9,14 @@ describe('file transfer wording', () => {
 
   it('uses bounded, actionable failure language without exposing internal errors', () => {
     expect(fileTransferCopy({ phase: 'Failed', bytes: 0, total: 100, failure: 'attachment:create request-failed' }).label).toBe('Could not connect. Check your connection and retry in this session.');
-    expect(fileTransferCopy({ phase: 'Failed', bytes: 0, total: 100, failure: 'Sealed file cache was lost.' }).label).toContain('app closed');
+    expect(fileTransferCopy({ phase: 'Failed', bytes: 0, total: 100, failure: 'Sealed file cache was lost.' }).label).toContain('original file');
+  });
+
+  it('distinguishes server quota, generic failure, restart and idle', () => {
+    expect(fileTransferCopy({ phase: 'Idle', bytes: 0, total: 0 }).label).toBe('');
+    expect(fileTransferCopy({ phase: 'Failed', bytes: 0, total: 0, failure: 'File storage quota reached.' }).label).toContain('older files expire');
+    expect(fileTransferCopy({ phase: 'Failed', bytes: 0, total: 0, failure: 'File transfer failed. Select the file again to restart.' }).label).toContain('Couldn’t send');
+    expect(fileTransferCopy({ phase: 'RestartRequired', bytes: 0, total: 0 }).label).toContain('original file');
   });
 
   it('does not display bytes, transfer phases, or transfer identifiers', () => {

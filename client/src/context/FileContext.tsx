@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { FileTransferWorkflow, sameBinding, type FileProgress } from '@chat-e2ee/service';
+import { classifySafeDiagnostic, logSafeFailure } from '../product/safeDiagnostics';
 import { useChat } from './ChatContext';
 import { getRuntimeConfig } from '../config/runtimeConfig';
 import { HttpFileGateway } from '../media/HttpFileGateway';
@@ -11,13 +12,13 @@ export const FileProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const [diskReady, setDiskReady] = useState(false);
     const saved = useRef<SavedFile>();
     const send = useRef(sendMessage); send.current = sendMessage;
-    const [transfer, changed] = useState<FileProgress>({ phase: 'RestartRequired', bytes: 0, total: 0 });
+    const [transfer, changed] = useState<FileProgress>({ phase: 'Idle', bytes: 0, total: 0 });
     const activeDownload = useRef<string>();
     const [download, setDownload] = useState<FileContextValue['download']>();
     const workflow = useMemo(() => new FileTransferWorkflow(new HttpFileGateway(getRuntimeConfig().baseUrl ?? '', attachmentRequestHeaders), fileTransferBinding, createSealedCache, async (reference, binding) => {
         if (!sameBinding(await fileTransferBinding(true), binding)) throw new Error('File contact identity changed.');
         await send.current(reference);
-    }, progress => { changed(progress); if (activeDownload.current) setDownload({ reference: activeDownload.current, transfer: progress }); }), [fileTransferBinding, attachmentRequestHeaders, channelHash]);
+    }, progress => { if (progress.phase === 'Failed') logSafeFailure(activeDownload.current ? 'file_download_failed' : 'file_send_failed', classifySafeDiagnostic('file-send', { safeDiagnosticCode: progress.diagnosticCode })); if (activeDownload.current) setDownload({ reference: activeDownload.current, transfer: progress }); else changed(progress); }), [fileTransferBinding, attachmentRequestHeaders, channelHash]);
     useEffect(() => {
         const abort = new AbortController(); let release: (() => void) | undefined; let disposed = false;
         if (navigator.locks) void navigator.locks.request('k3ncrypt-file-workspace-v2', { signal: abort.signal }, async lock => {
@@ -28,8 +29,8 @@ export const FileProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         return () => { disposed = true; setDiskReady(false); abort.abort(); release?.(); };
     }, []);
     useEffect(() => () => workflow.dispose(), [workflow]);
-    return <Context.Provider value={{ transfer, download, sendFile: file => { if (!diskReady) { changed({ phase: 'Failed', bytes: 0, total: 0, failure: 'Secure disk workspace unavailable or in use by another tab.' }); return Promise.resolve(); } return workflow.send({ size: file.size, name: file.name, type: file.type, read: async (at, count) => new Uint8Array(await file.slice(at, at + count).arrayBuffer()) }); }, retry: () => workflow.retry(), cancel: () => workflow.cancel(), receive: async text => {
-        if (!diskReady || saved.current) { changed({ phase: 'Failed', bytes: 0, total: 0, failure: 'Save or discard the previous verified output before another download.' }); return undefined; }
+    return <Context.Provider value={{ transfer, download, sendFile: file => { if (!diskReady) { changed({ phase: 'Failed', bytes: 0, total: 0, failure: 'Secure disk workspace unavailable or in use by another tab.', diagnosticCode: 'FILE_PREFLIGHT_FAILED' }); return Promise.resolve(); } return workflow.send({ size: file.size, name: file.name, type: file.type, read: async (at, count) => new Uint8Array(await file.slice(at, at + count).arrayBuffer()) }); }, retry: () => workflow.retry(), cancel: () => workflow.cancel(), receive: async text => {
+        if (!diskReady || saved.current) { setDownload({ reference: text, transfer: { phase: 'Failed', bytes: 0, total: 0, failure: 'Save or discard the previous verified output before another download.', diagnosticCode: 'FILE_PREFLIGHT_FAILED' } }); return undefined; }
         activeDownload.current = text;
         setDownload(undefined);
         let result: SavedFile | undefined;

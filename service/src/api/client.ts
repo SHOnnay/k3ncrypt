@@ -1,3 +1,4 @@
+import { rateLimitedRequest } from './rateLimitedRequest';
 import { configContext } from '../configContext';
 
 export type ApiError = Error & {
@@ -17,14 +18,14 @@ const makeRequest = async <TResponse, TBody = unknown>(
   { method = 'GET', body, headers = {} }: { method: string, body?: TBody, headers?: Record<string, string> }
 ): Promise<TResponse> => {
   const baseUri = configContext().baseUrl;
-  const res = await window.fetch(`${baseUri}/api/${url}`, {
+  const res = await rateLimitedRequest(() => window.fetch(`${baseUri}/api/${url}`, {
     method,
     headers: {
       'Content-Type': 'application/json',
       ...headers,
     },
     ...(body && { body: JSON.stringify(body) })
-  });
+  }));
 
   if (!res.ok) {
     const json = res.headers.get('Content-Type')?.includes('application/json')

@@ -1,4 +1,5 @@
 export const SAFE_DIAGNOSTIC_CODES = [
+  'FILE_RATE_LIMITED', 'FILE_PREFLIGHT_FAILED', 'FILE_CREATE_FAILED', 'FILE_MANIFEST_UPLOAD_FAILED', 'FILE_CHUNK_UPLOAD_FAILED', 'FILE_FINALIZE_FAILED', 'FILE_REFERENCE_SEND_FAILED', 'FILE_RECIPIENT_FETCH_FAILED', 'FILE_DOWNLOAD_FAILED', 'FILE_AUTHENTICATION_FAILED', 'FILE_SAVE_FAILED', 'FILE_SERVER_STATE_CONFLICT', 'FILE_TRANSFER_EXPIRED', 'FILE_TRANSFER_CANCELED', 'FILE_AUTHORIZATION_FAILED', 'FILE_QUOTA_EXCEEDED',
   'CONVERSATION_SESSION_MISSING', 'CONVERSATION_ROOM_MISSING', 'CONTACT_REGISTRY_MISSING',
   'PINNED_IDENTITY_MISSING', 'PINNED_IDENTITY_CHANGED', 'VERIFICATION_RECORD_MISSING',
   'VERIFICATION_RESET_LOCAL', 'CURRENT_IDENTITY_UNAVAILABLE', 'ROOM_MEMBERSHIP_MISMATCH',
@@ -46,6 +47,6 @@ export const classifySafeDiagnostic = (context: DiagnosticContext, error: unknow
   return 'UNKNOWN_SAFE_FAILURE';
 };
 
-export const logSafeFailure = (event: 'conversation_open_failed' | 'contact_authority_failed' | 'file_send_failed', reason: SafeDiagnosticCode): void => {
+export const logSafeFailure = (event: 'conversation_open_failed' | 'contact_authority_failed' | 'file_send_failed' | 'file_download_failed', reason: SafeDiagnosticCode): void => {
   console.warn('[K3NCRYPT]', { event, reason });
 };

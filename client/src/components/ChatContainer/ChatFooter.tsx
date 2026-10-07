@@ -49,13 +49,13 @@ export const ChatFooter: React.FC<{ onVerifyContact: () => void }> = ({ onVerify
 
   useEffect(() => {
     if (transfer.phase !== 'Failed') { loggedFileFailure.current = undefined; return; }
-    const code = classifySafeDiagnostic('file-send', transfer.failure ?? '');
+    const code = classifySafeDiagnostic('file-send', transfer.diagnosticCode ? { safeDiagnosticCode: transfer.diagnosticCode } : transfer.failure ?? '');
     if (loggedFileFailure.current === code) return;
     loggedFileFailure.current = code;
     logSafeFailure('file_send_failed', code);
     setActionDiagnostic(code);
     setActionMessage(safeFailureCopy('file-send'));
-  }, [transfer.failure, transfer.phase]);
+  }, [transfer.failure, transfer.phase, transfer.diagnosticCode]);
 
   useEffect(() => {
     if (!isRecording) { setRecordingSeconds(0); return; }
@@ -84,6 +84,8 @@ export const ChatFooter: React.FC<{ onVerifyContact: () => void }> = ({ onVerify
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
+    setActionDiagnostic(undefined);
+    if (file.size > 8 * 1024 * 1024) { setActionMessage(file.type.startsWith('image/') ? 'This photo is larger than the current 8 MiB limit.' : 'This file is larger than the current 8 MiB limit.'); return; }
     setActionMessage('');
     try { await sendFile(file); }
     catch (error) {
@@ -186,7 +188,7 @@ export const ChatFooter: React.FC<{ onVerifyContact: () => void }> = ({ onVerify
           <SendIcon size={20} />
         </Button>
       </div>
-      {transfer.phase !== 'RestartRequired' && <div className="media-transfer-status" role="status" aria-live="polite"><span>{transferStatus.label}</span>{transferStatus.progress !== undefined && <progress max={100} value={transferStatus.progress} aria-label="File transfer progress" />}{busy && <button type="button" onClick={cancelTransfer}>Cancel</button>}{transfer.phase === 'Failed' && transfer.retryable && <button type="button" onClick={retryAttachment}>Retry</button>}</div>}
+      {transfer.phase !== 'Idle' && <div className="media-transfer-status" role="status" aria-live="polite"><span>{transferStatus.label}</span>{transferStatus.progress !== undefined && <progress max={100} value={transferStatus.progress} aria-label="File transfer progress" />}{busy && <button type="button" onClick={cancelTransfer}>Cancel</button>}{transfer.phase === 'Failed' && transfer.retryable && <button type="button" onClick={retryAttachment}>Retry</button>}</div>}
       <div className="composer-feedback">Photos and files up to 8 MiB. You choose when to save a download.</div>
       {!verified && contactIdentity && <div className="composer-feedback"><strong>Invitation accepted</strong><p>Verify this contact before sharing files.</p><button type="button" className="btn btn--secondary" onClick={onVerifyContact}>Verify {contactLabel}</button></div>}
       {actionMessage && <div className="composer-feedback" role="status">{actionMessage}<SafeDiagnosticDetails code={actionDiagnostic} /></div>}

@@ -14,7 +14,7 @@ const app = express();
 app.disable("x-powered-by");
 app.use(productionWebHeaders);
 if (process.env.K3NCRYPT_TRUST_PROXY === 'true') app.set('trust proxy', 1);
-app.use(cors({ origin: corsOrigin, credentials: false }));
+app.use(cors({ origin: corsOrigin, credentials: false, exposedHeaders: ['Retry-After'] }));
 app.use(bodyParser.json({ limit: '64kb' }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '64kb' }));
 

@@ -1,5 +1,5 @@
 import type { FileOutput, SealedFileCache, WireObject } from '@chat-e2ee/service';
-export interface SavedFile { file: File; filename: string; dispose: () => Promise<void>; }
+export interface SavedFile { file: File; filename: string; mimeType?: string; dispose: () => Promise<void>; }
 const directory = async (): Promise<FileSystemDirectoryHandle> => {
     if (!navigator.storage?.getDirectory) throw new Error('Secure file storage unavailable.');
     const root = await navigator.storage.getDirectory(); return root.getDirectoryHandle('k3ncrypt-files-v2', { create: true });
@@ -19,7 +19,7 @@ export const createFileOutput = async (size: number): Promise<FileOutput<SavedFi
     const discard = async (): Promise<void> => { if (!closed) { closed = true; await stream.abort().catch(() => undefined); } await root.removeEntry(id, { recursive: true }).catch(() => undefined); };
     return {
         async write(bytes) { if (closed || written + bytes.length > size) throw new Error('File output invalid.'); await stream.write(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer); written += bytes.length; },
-        async finish(manifest) { if (written !== size) throw new Error('File incomplete.'); await stream.close(); closed = true; return { file: await handle.getFile(), filename: manifest.filename, dispose: discard }; },
+        async finish(manifest) { if (written !== size) throw new Error('File incomplete.'); await stream.close(); closed = true; return { file: await handle.getFile(), filename: manifest.filename, mimeType: manifest.mimeType, dispose: discard }; },
         discard,
     };
 };

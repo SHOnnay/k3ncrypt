@@ -1,3 +1,4 @@
+import { LocalCallHistory } from '../product/callHistory';
 import { parseFileReference } from '@chat-e2ee/service';
 /**
  * Chat context provider for explicit legacy and modern service paths.
@@ -93,6 +94,9 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [channelHash, setChannelHash] = useState<string>('');
   const [messages, setMessages] = useState<Message[]>([]);
   const [isConnected, setIsConnected] = useState<boolean>(false);
+  const localCallHistory = useRef(new LocalCallHistory());
+  const historyVault = useRef(vault); historyVault.current = vault;
+  const historyRoom = useRef(channelHash); historyRoom.current = channelHash;
   const [callActive, setCallActive] = useState<boolean>(false);
   const [callStatus, setCallStatus] = useState<string>('');
   const [callDuration, setCallDuration] = useState<number>(0);
@@ -211,12 +215,20 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         callMediaFailureRef.current = update.mediaFailure;
         setCallError('Microphone became unavailable. The call ended to stop media safely.');
       }
-      if (update.state === 'connected') { setCallLifecycleState('connected'); setCallStatus('Connected'); }
+      if (update.state === 'connected') { localCallHistory.current.connected(update.callId); setCallLifecycleState('connected'); setCallStatus('Connected'); }
       if (update.state === 'reconnecting') { setCallLifecycleState('connecting'); setCallStatus('Reconnecting...'); }
       if (update.state === 'failed') { setCallLifecycleState('ice-failed'); setCallStatus('Connection Failed'); }
       });
       callStateUnsubscribe.current = composition.onCallUpdate((session) => {
+      const event = localCallHistory.current.observe(session);
+      if (event && historyVault.current) {
+        void writeMessages(historyVault.current, session.conversationId, [event]).then(() => {
+          if (historyRoom.current === session.conversationId) setMessages(current => current.some(item => item.id === event.id) ? current : [...current, event]);
+        }).catch(() => undefined);
+      }
       const terminal = ['rejected', 'cancelled', 'ended', 'expired', 'failed'].includes(session.state);
+      if (terminal && modernCallIdRef.current && modernCallIdRef.current !== session.callId) return;
+      callActiveRef.current = !terminal;
       modernCallIdRef.current = terminal ? undefined : session.callId;
       setModernCallId(terminal ? undefined : session.callId);
       setCallMediaMode(session.mediaMode);
@@ -235,12 +247,14 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         if (negotiator) void negotiator.prepareOutgoing(session).then(() => negotiator.beginOffer(session.callId).catch(async (error: unknown) => {
           const failure = callSetupFailure(error);
           setCallError(failure.message);
+          localCallHistory.current.failed(session.callId);
           await negotiator.end(session.callId).catch(() => undefined);
           setCallLifecycleState(failure.kind);
           setCallStatus(failure.kind === 'verification-required' ? 'Verification required' : failure.kind === 'signaling-failed' ? 'Call negotiation failed' : 'Call media could not start');
         })).catch(async (error: unknown) => {
           const failure = callSetupFailure(error);
           setCallError(failure.message);
+          localCallHistory.current.failed(session.callId);
           await negotiator.end(session.callId).catch(() => undefined);
           setCallLifecycleState(failure.kind);
           setCallStatus(failure.kind === 'verification-required' ? 'Verification required' : failure.kind === 'signaling-failed' ? 'Call negotiation failed' : 'Call media could not start');
@@ -759,6 +773,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         locallyAcceptedCalls.current.delete(modernCallId);
         const failure = callSetupFailure(error);
         setCallError(failure.message);
+        localCallHistory.current.failed(modernCallId);
         await callNegotiator.current?.end(modernCallId).catch(() => undefined);
         setCallLifecycleState(failure.kind);
         setCallStatus(failure.kind === 'verification-required' ? 'Verification required' : failure.kind === 'signaling-failed' ? 'Call negotiation failed' : 'Call media could not start');

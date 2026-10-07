@@ -15,7 +15,7 @@ const toBinaryString = (bytes: Uint8Array): string => {
 
 export const toBase64Url = (bytes: Uint8Array): string => {
     const binary = toBinaryString(bytes);
-    return window.btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    return globalThis.btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 };
 
 export const fromBase64Url = (value: string): Uint8Array => {
@@ -24,7 +24,7 @@ export const fromBase64Url = (value: string): Uint8Array => {
     }
     const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
     const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), '=');
-    const binary = window.atob(padded);
+    const binary = globalThis.atob(padded);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) {
         bytes[i] = binary.charCodeAt(i);

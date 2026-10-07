@@ -69,7 +69,7 @@ test('cancel mid download discards output and stale chunk completion cannot clai
 test('full output storage fails once and does not retry forever; new process does not pretend sender can resume', async () => {
     const gateway = new Gateway(); let reference = ''; const s = new FileTransferWorkflow(gateway, async () => binding, async () => cache(), async r => { reference = r; }); await s.send(source(1));
     const recv = new FileTransferWorkflow(gateway, async () => recipient, async () => cache(), async () => {}); const factory = jest.fn(async () => { throw new Error('Not enough local storage space.'); }); await recv.receive(reference, factory); expect(factory).toHaveBeenCalledTimes(1); expect(recv.state.value.failure).toBe('Not enough local storage.');
-    const restarted = new FileTransferWorkflow(gateway, async () => binding, async () => cache(), async () => {}); await restarted.retry(); expect(restarted.state.value.phase).toBe('RestartRequired');
+    const restarted = new FileTransferWorkflow(gateway, async () => binding, async () => cache(), async () => {}); await restarted.retry(); expect(restarted.state.value.phase).toBe('Idle');
 });
 test('typed state transitions reject terminal resurrection and obsolete generations', () => {
     const s = new FileTransferState(); const g = s.begin(1); expect(s.move(g, 'Complete')).toBe(false); s.cancel(); expect(s.move(g, 'Uploading')).toBe(false); const next = s.begin(1); expect(s.move(g, 'Encrypting')).toBe(false); s.move(next, 'Failed'); expect(s.move(next, 'Encrypting')).toBe(false);
