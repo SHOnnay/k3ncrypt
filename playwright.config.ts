@@ -12,6 +12,7 @@ if (!['127.0.0.1', 'localhost', '::1'].includes(mongoHost)) {
   throw new Error('Playwright MongoDB must use a loopback host; production and remote MongoDB are not supported.');
 }
 const mongoDbName = process.env.PLAYWRIGHT_MONGO_DB_NAME ?? `k3ncrypt_playwright_${process.pid}`;
+const muxStage1 = process.env.PLAYWRIGHT_MUX_STAGE1 === 'true';
 if (!/^k3ncrypt_playwright_[a-zA-Z0-9_-]+$/.test(mongoDbName)) {
   throw new Error('PLAYWRIGHT_MONGO_DB_NAME must use the isolated k3ncrypt_playwright_ prefix.');
 }
@@ -41,6 +42,7 @@ export default defineConfig({
         MONGO_URI: mongoUri,
         MONGO_DB_NAME: mongoDbName,
         K3NCRYPT_DEVICE_TRUST_PROOF_SECRET: deviceTrustTestSecret,
+        ...(muxStage1 ? { K3NCRYPT_MUX_MESSAGE_DELIVERY: 'true' } : {}),
       },
       reuseExistingServer: false,
       timeout: 60_000,
@@ -48,6 +50,7 @@ export default defineConfig({
     {
       command: `cross-env CHATE2EE_API_URL=${backendUrl} npm run dev --workspace=client -- --host ${host} --port ${clientPort}`,
       url: clientUrl,
+      env: muxStage1 ? { VITE_K3NCRYPT_MUX_STAGE1: 'true' } : {},
       reuseExistingServer: false,
       timeout: 60_000,
     },

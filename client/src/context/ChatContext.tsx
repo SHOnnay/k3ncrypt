@@ -9,8 +9,8 @@ import { parseFileReference } from '@chat-e2ee/service';
  */
 
 import React, { createContext, useContext, ReactNode, useState, useCallback, useEffect, useRef } from 'react';
-import { createChatInstance, utils, BrowserSecureStorage, IndexedDbVaultPersistence, ModernConversation, parseEncryptedMediaMessage, BrowserCallTransport, ProductionCallNegotiator } from '@chat-e2ee/service';
-import type { IChatE2EE, IE2ECall, CallLifecycleState, CallLifecycleUpdate, StoredContactIdentity, AuthenticatedCallComposition, EnrollmentRequest, EnrollmentApprovalPacket, DeviceControlEvent, LifecycleStateSnapshot } from '@chat-e2ee/service';
+import { createChatInstance, utils, BrowserSecureStorage, IndexedDbVaultPersistence, ModernConversation, parseEncryptedMediaMessage, BrowserCallTransport, ProductionCallNegotiator, MultiplexedRelayConnection, ContactIdentityRegistry, ConversationModeStore } from '@chat-e2ee/service';
+import type { IChatE2EE, IE2ECall, CallLifecycleState, CallLifecycleUpdate, StoredContactIdentity, AuthenticatedCallComposition, EnrollmentRequest, EnrollmentApprovalPacket, DeviceControlEvent, LifecycleStateSnapshot, ModernConnectionDetails } from '@chat-e2ee/service';
 import { ChatContextType, InviteInfo, Message } from '../types/index';
 import { createMessage } from '../utils/messageHandling';
 import { playBeep } from '../utils/audioNotification';
@@ -28,6 +28,10 @@ import { createRoomState, updateRoomState, type RoomState } from '../product/roo
 import { PROFILE_PREFIX, decodeProfileMessage, encodeProfileMessage, prepareProfileAcceptance } from '../product/profileMetadata';
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
+const MUX_STAGE1_ENABLED = (() => {
+  const env = (import.meta as ImportMeta & { env?: { DEV?: boolean; VITE_K3NCRYPT_MUX_STAGE1?: string } }).env;
+  return env?.DEV === true && env.VITE_K3NCRYPT_MUX_STAGE1 === 'true';
+})();
 
 const callSetupFailure = (error: unknown): { kind: 'verification-required' | 'media-denied' | 'media-failed' | 'signaling-failed'; message: string } => {
   const source = error instanceof Error ? error.message.toLowerCase() : '';
@@ -95,6 +99,10 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [pendingDeviceApproval, setPendingDeviceApproval] = useState<EnrollmentApprovalPacket>();
   const [vault, setVault] = useState<BrowserSecureStorage>();
   const selectedConversation = useRef<ModernConversation>();
+  const muxConnection = useRef<MultiplexedRelayConnection>();
+  const muxRoomIds = useRef(new Set<string>());
+  const muxDetails = useRef(new Map<string, ModernConnectionDetails>());
+  const muxConversations = useRef(new WeakSet<ModernConversation>());
   const selections = useRef(new ConversationSelection());
   const [unavailableConversations, setUnavailableConversations] = useState<SafeDiagnosticCode[]>([]);
   const [conversations, setConversations] = useState<ConversationDescriptor[]>([]);
@@ -353,11 +361,44 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const modernProjection = { setCallError, setChannelHash, setContactIdentity, setDeviceLifecycleState, setIsConnected, setModern, setModernCallComposition, setModernCallId, setOwnFingerprint, setPendingDeviceApproval, setPendingDeviceEnrollment, setProtocolMode, setSessionError, setSessionHealth, setSyncStatus, setUserId };
-  const resolveModern = async (secureVault: BrowserSecureStorage, descriptor: ConversationDescriptor, sendJoinIntroduction = false, operationId?: number): Promise<{ ownFingerprint: string; ownAddress: string; contact?: StoredContactIdentity }> => {
+  const muxEligible = async (secureVault: BrowserSecureStorage, descriptor: ConversationDescriptor, sendJoinIntroduction = false): Promise<boolean> => {
+    if (!MUX_STAGE1_ENABLED || sendJoinIntroduction || descriptor.relationship !== 'accepted' || !descriptor.remoteAddress || !descriptor.remoteIdentityCommitment) return false;
+    const [contact, mode] = await Promise.all([
+      new ContactIdentityRegistry(secureVault).get(descriptor.remoteAddress),
+      new ConversationModeStore(secureVault).read(descriptor.roomId),
+    ]);
+    return Boolean(contact && contact.contactId === descriptor.remoteAddress && contact.identityId === descriptor.remoteIdentityCommitment &&
+      contact.verification === 'verified' && contact.changeStatus === 'unchanged' && mode?.sessionId &&
+      (!mode.remoteAddress || mode.remoteAddress === descriptor.remoteAddress));
+  };
+
+  const resolveModern = async (secureVault: BrowserSecureStorage, descriptor: ConversationDescriptor, sendJoinIntroduction = false, operationId?: number, background = false): Promise<ModernConnectionDetails> => {
+    if (!background && muxRoomIds.current.has(descriptor.roomId)) {
+      const existing = roomStatesRef.current[descriptor.roomId]?.conversation;
+      const details = muxDetails.current.get(descriptor.roomId);
+      if (existing && details && await muxEligible(secureVault, descriptor, sendJoinIntroduction)) {
+        selectedConversation.current = existing;
+        setRoomState(descriptor.roomId, { conversation: existing, connection: 'connected', contactIdentity: await existing.getContact() });
+        setRoomMessages(descriptor.roomId, await readMessages(secureVault, descriptor.roomId));
+        modernProjection.setModern(existing); modernProjection.setChannelHash(descriptor.roomId); modernProjection.setProtocolMode('modern'); modernProjection.setOwnFingerprint(details.ownFingerprint); modernProjection.setUserId(details.ownAddress);
+        modernProjection.setContactIdentity(await existing.getContact()); modernProjection.setDeviceLifecycleState(await existing.getDeviceLifecycleState());
+        const health = existing.getSessionHealth(); const trust = await existing.getDeviceTrust();
+        modernProjection.setSessionHealth(health); modernProjection.setSyncStatus(health !== 'healthy' ? 'blocked' : trust === 'trusted' ? 'ready' : 'blocked'); modernProjection.setIsConnected(true);
+        modernProjection.setModernCallComposition(null); modernProjection.setModernCallId(undefined);
+        return details;
+      }
+      if (existing) await existing.close(false).catch(() => undefined);
+      muxRoomIds.current.delete(descriptor.roomId); muxDetails.current.delete(descriptor.roomId);
+      if (existing) muxConversations.current.delete(existing);
+      setRoomState(descriptor.roomId, { conversation: undefined, connection: 'saved' });
+    }
     conversationOpenStage('candidate-started');
     await readMessages(secureVault, descriptor.roomId).catch(() => { throw conversationFailure('CONVERSATION_STATE_INCOMPLETE'); });
     conversationOpenStage('history-loaded');
-    const conversation = new ModernConversation(secureVault, loadVodozemacBindings);
+    const useMux = await muxEligible(secureVault, descriptor, sendJoinIntroduction);
+    const manager = useMux ? (muxConnection.current ??= new MultiplexedRelayConnection()).forRoom(descriptor.roomId, descriptor.remoteAddress!) : undefined;
+    const conversation = new ModernConversation(secureVault, loadVodozemacBindings, manager);
+    if (useMux) { muxRoomIds.current.add(descriptor.roomId); muxConversations.current.add(conversation); }
     setRoomState(descriptor.roomId, { conversation, connection: 'connecting' });
     const setCallError: typeof modernProjection.setCallError = value => { if (selectedConversation.current === conversation) modernProjection.setCallError(value); };
     const setChannelHash: typeof modernProjection.setChannelHash = value => { if (selectedConversation.current === conversation) modernProjection.setChannelHash(value); };
@@ -481,7 +522,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (heldClientIds.size > 0) await writeMessages(secureVault, descriptor.roomId, finalHistory);
       if (operationId !== undefined && conversationOpenGeneration.current !== operationId) throw new Error('Conversation open was superseded.');
       const previous = selectedConversation.current;
-      selectedConversation.current = conversation;
+      if (!background) selectedConversation.current = conversation;
       setRoomState(descriptor.roomId, { conversation, connection: 'connected', contactIdentity: restoredContact });
       setRoomMessages(descriptor.roomId, current => {
         const merged = new Map(finalHistory.map(message => [message.id, message]));
@@ -491,48 +532,78 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         });
         return [...merged.values()].sort((left, right) => left.timestamp.getTime() - right.timestamp.getTime());
       });
-      setCallError(undefined);
       profileFingerprint = details.ownFingerprint;
-      setModern(conversation);
       const restoredSessionHealth = conversation.getSessionHealth();
-      setSessionHealth(restoredSessionHealth);
-      setModernCallComposition(null);
-      setModernCallId(undefined);
-      setProtocolMode('modern');
-      setChannelHash(descriptor.roomId);
-      // Mailbox replay is deliberately requested after authenticated join.
-      // An inbound first message can establish an unverified contact during
-      // that replay, so read the final durable contact state rather than
-      // overwriting it with connect()'s pre-replay snapshot.
-      setContactIdentity(restoredContact);
-      setChannelHash(descriptor.roomId);
-      setOwnFingerprint(details.ownFingerprint);
-      setUserId(details.ownAddress);
-      setDeviceLifecycleState(lifecycle);
-      setIsConnected(true);
-      setSyncStatus(restoredSessionHealth !== 'healthy' ? 'blocked' : trust === 'trusted' ? 'ready' : 'blocked');
-      setSessionError(restoredSessionHealth === 'unhealthy'
-        ? 'This conversation’s encrypted session is missing. Your identity, verification, and saved messages remain available; sending and calls are paused until verified renewal.'
-        : restoredSessionHealth === 'renewal-pending' ? 'Verified renewal awaits accepted encrypted delivery.' : undefined);
-      if (previous && previous !== conversation) {
+      if (useMux) muxDetails.current.set(descriptor.roomId, details);
+      if (!background) {
+        setCallError(undefined);
+        setModern(conversation);
+        setSessionHealth(restoredSessionHealth);
+        setModernCallComposition(null);
+        setModernCallId(undefined);
+        setProtocolMode('modern');
+        setChannelHash(descriptor.roomId);
+        // Read the final durable contact after mailbox replay so this projection
+        // cannot overwrite a first-message identity update with an earlier snapshot.
+        setContactIdentity(restoredContact);
+        setOwnFingerprint(details.ownFingerprint);
+        setUserId(details.ownAddress);
+        setDeviceLifecycleState(lifecycle);
+        setIsConnected(true);
+        setSyncStatus(restoredSessionHealth !== 'healthy' ? 'blocked' : trust === 'trusted' ? 'ready' : 'blocked');
+        setSessionError(restoredSessionHealth === 'unhealthy'
+          ? 'This conversation’s encrypted session is missing. Your identity, verification, and saved messages remain available; sending and calls are paused until verified renewal.'
+          : restoredSessionHealth === 'renewal-pending' ? 'Verified renewal awaits accepted encrypted delivery.' : undefined);
+      }
+      if (!background && previous && previous !== conversation) {
         const previousRoomId = [...Object.values(roomStates)].find(item => item.conversation === previous)?.roomId;
-        if (previousRoomId) setRoomState(previousRoomId, { conversation: undefined, connection: 'saved' });
-        void previous.close(false).catch(() => undefined);
+        if (previousRoomId && !muxConversations.current.has(previous)) {
+          setRoomState(previousRoomId, { conversation: undefined, connection: 'saved' });
+          void previous.close(false).catch(() => undefined);
+        }
       }
       scheduleProfile();
-      if (restoredContact?.verification === 'verified' && restoredContact.changeStatus === 'unchanged' && conversation.hasEstablishedSession()) {
+      if (!background && !useMux && restoredContact?.verification === 'verified' && restoredContact.changeStatus === 'unchanged' && conversation.hasEstablishedSession()) {
         await installModernCallSupport(conversation).catch(() => setCallError('Call signaling is unavailable for this saved contact.'));
       }
       return details;
     } catch (error) {
+      if (useMux) { muxRoomIds.current.delete(descriptor.roomId); muxDetails.current.delete(descriptor.roomId); muxConversations.current.delete(conversation); }
       setRoomState(descriptor.roomId, { conversation: undefined, connection: 'failed' });
       await conversation.close(false).catch(() => undefined);
       const code = classifySafeDiagnostic('conversation-open', error);
       throw conversationFailure(code === 'UNKNOWN_SAFE_FAILURE' ? 'CONVERSATION_RESTORE_FAILED' : code);
     }
   };
-  const connectModern = (storage: BrowserSecureStorage, descriptor: ConversationDescriptor, introduce = false, operationId?: number) =>
-    selections.current.run(() => resolveModern(storage, descriptor, introduce, operationId), async () => undefined);
+  const connectModern = (storage: BrowserSecureStorage, descriptor: ConversationDescriptor, introduce = false, operationId?: number, background = false) =>
+    selections.current.run(async () => {
+      const details = await resolveModern(storage, descriptor, introduce, operationId, background);
+      if (!background && muxRoomIds.current.has(descriptor.roomId)) {
+        const saved = await readConversationDescriptors(storage);
+        for (const candidate of saved) {
+          if (candidate.roomId === descriptor.roomId || muxRoomIds.current.has(candidate.roomId) || !await muxEligible(storage, candidate)) continue;
+          try { await resolveModern(storage, candidate, false, undefined, true); }
+          catch { /* One revoked or unavailable room cannot stop other room subscriptions. */ }
+        }
+      }
+      return details;
+    }, async () => undefined);
+
+  useEffect(() => {
+    if (!MUX_STAGE1_ENABLED) return;
+    const diagnostics = globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean };
+    const target = window as Window & {
+      __K3NCRYPT_MUX_SNAPSHOT__?: () => ReturnType<MultiplexedRelayConnection['testOnlySnapshot']> | undefined;
+      __K3NCRYPT_ACTIVE_ROOM_TRANSPORT__?: () => ReturnType<ModernConversation['testOnlyTransportKind']> | undefined;
+      __K3NCRYPT_ACTIVE_ROOM_V1_PEER__?: () => boolean | undefined;
+    };
+    if (diagnostics.__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ === true) {
+      target.__K3NCRYPT_MUX_SNAPSHOT__ = () => muxConnection.current?.testOnlySnapshot();
+      target.__K3NCRYPT_ACTIVE_ROOM_TRANSPORT__ = () => selectedConversation.current?.testOnlyTransportKind();
+      target.__K3NCRYPT_ACTIVE_ROOM_V1_PEER__ = () => selectedConversation.current?.testOnlyPeerSupportsRoomMessageV1();
+    }
+    return () => { delete target.__K3NCRYPT_MUX_SNAPSHOT__; delete target.__K3NCRYPT_ACTIVE_ROOM_TRANSPORT__; delete target.__K3NCRYPT_ACTIVE_ROOM_V1_PEER__; };
+  }, []);
 
   useEffect(() => {
     const history = activeRoom?.messages;

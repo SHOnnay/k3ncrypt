@@ -41,9 +41,13 @@ export async function invite(page: Page): Promise<string> {
 }
 
 
-export async function connectedPair(browser: import('@playwright/test').Browser) {
+export async function connectedPair(browser: import('@playwright/test').Browser, diagnostics = false) {
   const a = await browser.newContext({ permissions: ['microphone', 'camera'] });
   const b = await browser.newContext({ permissions: ['microphone', 'camera'] });
+  if (diagnostics) {
+    await a.addInitScript(() => { (globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean }).__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ = true; });
+    await b.addInitScript(() => { (globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean }).__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ = true; });
+  }
   const alice = await a.newPage(); const bob = await b.newPage();
   await create(alice, 'Alice'); await create(bob, 'Bob');
   const link = await invite(alice);
