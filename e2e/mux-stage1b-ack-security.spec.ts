@@ -190,12 +190,19 @@ test('real Socket.IO/Mongo Mux ACK and claim attacks cannot mutate unrelated del
     await expect.poll(async () => (await heldClaims(alice)).includes(generationClaim!.claimId!), { timeout: 30_000 }).toBe(true);
     await alice.evaluate(async () => await (globalThis as typeof globalThis & { __K3NCRYPT_MUX_RECONNECT__?: () => Promise<void> }).__K3NCRYPT_MUX_RECONNECT__?.());
     await expect.poll(() => alice.evaluate(() => (globalThis as typeof globalThis & { __K3NCRYPT_MUX_SNAPSHOT__?: () => { authenticated: boolean; roomSubscriptionCount: number } }).__K3NCRYPT_MUX_SNAPSHOT__?.()), { timeout: 30_000 }).toMatchObject({ authenticated: true, roomSubscriptionCount: 2 });
-    await installAckPolicy(alice, 'pass');
+    await installAckPolicy(alice, 'hold');
     const expiredGenerationClaim = await offline.findOne({ id: generationClaim!.id });
     await expireClaim(generationClaim!.id, expiredGenerationClaim!.claimId!);
     await replay(alice, aliceRoom.roomId);
-    await expect(delivery(bob, generationText)).toHaveText('Sent', { timeout: 30_000 });
+    await expect.poll(async () => (await offline.findOne({ id: generationClaim!.id }))?.claimId, { timeout: 15_000 }).not.toBe(generationClaim?.claimId);
+    const newGenerationClaim = await offline.findOne({ id: generationClaim!.id });
+    expect(newGenerationClaim?.claimId).toBeTruthy();
+    await expect.poll(async () => (await heldClaims(alice)).includes(newGenerationClaim!.claimId!), { timeout: 15_000 }).toBe(true);
     await releaseHeldClaim(alice, generationClaim!.claimId!);
+    await expect.poll(async () => (await offline.findOne({ id: generationClaim!.id }))?.claimId, { timeout: 5_000 }).toBe(newGenerationClaim?.claimId);
+    await expect(delivery(bob, generationText)).toHaveText('Sending…');
+    await releaseHeldClaim(alice, newGenerationClaim!.claimId!);
+    await expect(delivery(bob, generationText)).toHaveText('Sent', { timeout: 30_000 });
     await expect.poll(() => offline.findOne({ id: generationClaim!.id }), { timeout: 10_000 }).toBeNull();
 
     // A7: unsubscribe invalidates the room authority before the held callback.
