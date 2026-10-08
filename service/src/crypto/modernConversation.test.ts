@@ -60,6 +60,16 @@ class Storage implements SecureStorage {
     async withVodozemacPickleKey<T>(fn: (key: Uint8Array) => Promise<T>) { return fn(new Uint8Array(32)); }
 }
 
+const readReplayEntries = async <T>(storage: SecureStorage, recordType: string, recordId: string): Promise<T[]> => {
+    const bytes = await storage.read(recordType, recordId);
+    if (!bytes) return [];
+    const value = JSON.parse(new TextDecoder().decode(bytes)) as { version?: number; ids?: T[]; events?: T[]; segmentCount?: number };
+    if (value.version === 1) return (value.ids ?? value.events ?? []) as T[];
+    const segments = await Promise.all(Array.from({ length: value.segmentCount ?? 0 }, (_, index) =>
+        storage.read(recordType, `${recordId}:replay:${index}`)));
+    return segments.flatMap((segment) => segment ? (JSON.parse(new TextDecoder().decode(segment)) as { entries: T[] }).entries : []);
+};
+
 let encryptions = 0;
 let outboundSessionCreations = 0;
 let inboundSessionCreations = 0;
@@ -264,7 +274,7 @@ it('does not mark a message seen until durable consumer acceptance succeeds', as
     await expect(receive(envelope, remoteAddress)).resolves.toBe(true);
     expect(delivered).toHaveBeenCalledTimes(2);
     expect(JSON.parse(new TextDecoder().decode((await storage.read('modern-seen', room))!))).toHaveLength(1);
-    expect(JSON.parse(new TextDecoder().decode((await storage.read('modern-seen-m1-v1', room))!)).ids).toHaveLength(1);
+    expect(await readReplayEntries(storage, 'modern-seen-m1-v1', room)).toHaveLength(1);
     expect(JSON.parse(new TextDecoder().decode((await storage.read('product-messages', room))!))).toHaveLength(1);
     await expect(receive(envelope, remoteAddress)).resolves.toBe(true);
     expect(delivered).toHaveBeenCalledTimes(2);
@@ -302,7 +312,7 @@ it('recovers an aborted established-session acceptance after restart and redeliv
     const afterAcceptance = sessionDecryptions;
     await expect(receiveFirstMessage(restarted, envelope, localAddress)).resolves.toBe(true);
     expect(sessionDecryptions).toBe(afterAcceptance);
-    expect(JSON.parse(new TextDecoder().decode((await pair.bobStorage.read('modern-seen-m1-v1', room))!)).ids).toHaveLength(2);
+    expect(await readReplayEntries(pair.bobStorage, 'modern-seen-m1-v1', room)).toHaveLength(2);
     expect(JSON.parse(new TextDecoder().decode((await pair.bobStorage.read('product-messages', room))!))).toHaveLength(2);
 
     await restarted.close();
@@ -319,7 +329,7 @@ it('resolves an uncertain completed transaction from durable state without accep
     pair.bobStorage.failNextCas = 'after';
 
     await expect(receiveFirstMessage(pair.bob, envelope, localAddress)).resolves.toBe(true);
-    expect(JSON.parse(new TextDecoder().decode((await pair.bobStorage.read('modern-seen-m1-v1', room))!)).ids).toHaveLength(2);
+    expect(await readReplayEntries(pair.bobStorage, 'modern-seen-m1-v1', room)).toHaveLength(2);
     expect(JSON.parse(new TextDecoder().decode((await pair.bobStorage.read('product-messages', room))!))).toHaveLength(2);
     const afterCommit = sessionDecryptions;
     await expect(receiveFirstMessage(pair.bob, envelope, localAddress)).resolves.toBe(true);
@@ -336,7 +346,7 @@ it('recognizes a previously accepted exact envelope before a second decrypt', as
 
     await expect(receiveFirstMessage(pair.bob, envelope, localAddress)).resolves.toBe(true);
     expect(pair.bobMessages).toEqual(['android first message']);
-    const m1 = JSON.parse(new TextDecoder().decode((await pair.bobStorage.read('modern-seen-m1-v1', room))!)).ids[0];
+    const m1 = (await readReplayEntries<string>(pair.bobStorage, 'modern-seen-m1-v1', room))[0];
     expect(m1).toMatch(/^v1:[0-9a-f]{64}$/);
     expect(JSON.parse(new TextDecoder().decode((await pair.bobStorage.read('modern-seen', room))!))).toHaveLength(1);
     expect(JSON.parse(new TextDecoder().decode((await pair.bobStorage.read('product-messages', room))!))[0].id).toBe(m1);
@@ -1531,8 +1541,8 @@ it('rolls back every first-prekey acceptance record on transaction abort and acc
             .every((type) => updates.some((item) => item.recordType === type)))).toBe(true);
     expect(await storage.read('vodozemac-session', room)).toBeDefined();
     expect(JSON.parse(new TextDecoder().decode((await storage.read('product-messages', room))!))).toHaveLength(1);
-    expect(JSON.parse(new TextDecoder().decode((await storage.read('modern-seen-m1-v1', room))!)).ids).toHaveLength(2);
-    expect(JSON.parse(new TextDecoder().decode((await storage.read('modern-seen-room-message-v1', room))!)).events).toHaveLength(1);
+    expect(await readReplayEntries(storage, 'modern-seen-m1-v1', room)).toHaveLength(1);
+    expect(await readReplayEntries(storage, 'modern-seen-room-message-v1', room)).toHaveLength(1);
     await expect(receiveFirstMessage(conversation, envelope, remoteAddress)).resolves.toBe(true);
     expect(received).toEqual(['retry after atomic abort']);
     await conversation.close();
@@ -1794,7 +1804,7 @@ it('deduplicates authenticated event identity within its room and rejects confli
     await conversation.close();
 });
 
-it('fails closed at the replay evidence cap while preserving exact duplicates across restart', async () => {
+it('migrates a 20000-marker vault without eviction and durably accepts new messages across restart', async () => {
     jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
     jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
     const storage = new Storage();
@@ -1814,8 +1824,13 @@ it('fails closed at the replay evidence cap while preserving exact duplicates ac
     const markers = Array.from({ length: 19_999 }, (_, index) => `v1:${(index + 1).toString(16).padStart(64, '0')}`);
     markers.push(acceptedM1);
     await storage.write('modern-seen-m1-v1', room, new TextEncoder().encode(JSON.stringify({ version: 1, ids: markers })).buffer as ArrayBuffer);
-    const events = markers.map((id) => ({ id, commitment: `v1:${'a'.repeat(64)}` }));
+    // Legacy V1 acceptance wrote a ciphertext id and authenticated event id per
+    // message. Model 10,000 V1 messages reaching the old 20,000-marker cliff.
+    const events = Array.from({ length: 10_000 }, (_, index) => ({ id: markers[index * 2], commitment: `v1:${'a'.repeat(64)}` }));
     await storage.write('modern-seen-room-message-v1', room, new TextEncoder().encode(JSON.stringify({ version: 1, events })).buffer as ArrayBuffer);
+    // Replace the just-created v2 fixture with the legacy single-record form.
+    await storage.delete('modern-seen-m1-v1', `${room}:replay:0`);
+    await storage.delete('modern-seen-room-message-v1', `${room}:replay:0`);
 
     const restarted = new ModernConversation(storage, loader, fakeTransport().transport);
     await restarted.connect(room, key(9), remoteAddress, await remoteCommitment(), consumer);
@@ -1826,11 +1841,59 @@ it('fails closed at the replay evidence cap while preserving exact duplicates ac
 
     const unknownAtCap: EncryptedEnvelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1,
         olmMessage: JSON.stringify({ version: 1, message_type: 0, ciphertext: 'opaque-replay-cap-new' }) } };
+    const freshWrapper = encodeRoomMessageV1({ roomId: room, senderIdentityReference: await remoteCommitment(),
+        recipientIdentityReference: own.ownFingerprint, eventId: '34343434-3434-4434-8434-343434343434', kind: 'text',
+        payload: new TextEncoder().encode('after replay cap') });
+    decryptedBytes = new Uint8Array([1, 1, ...freshWrapper]);
+    storage.failNextCas = 'before';
     await expect(receiveDecision(restarted, unknownAtCap, remoteAddress)).resolves.toEqual({ outcome: 'retryable' });
-    expect(sessionDecryptions).toBe(decryptionsBeforeReplay);
-    expect(consumer).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(new TextDecoder().decode((await storage.read('modern-seen-m1-v1', room))!)).ids).toHaveLength(20_000);
+    expect(consumer).toHaveBeenCalledTimes(2);
+    const rootAfterAbort = JSON.parse(new TextDecoder().decode((await storage.read('modern-seen-m1-v1', room))!));
+    expect(rootAfterAbort.version).toBe(1);
+    expect(await storage.read('modern-seen-m1-v1', `${room}:replay:0`)).toBeUndefined();
     await restarted.close();
+
+    const afterAbortedMigrationRestart = new ModernConversation(storage, loader, fakeTransport().transport);
+    await afterAbortedMigrationRestart.connect(room, key(9), remoteAddress, await remoteCommitment(), consumer);
+    decryptedBytes = new Uint8Array([1, 1, ...freshWrapper]);
+    const migrationStartedAt = Date.now();
+    await expect(receiveDecision(afterAbortedMigrationRestart, unknownAtCap, remoteAddress)).resolves.toEqual({ outcome: 'accepted' });
+    expect(Date.now() - migrationStartedAt).toBeLessThan(10_000);
+    expect(consumer).toHaveBeenCalledTimes(3);
+    expect(JSON.parse(new TextDecoder().decode((await storage.read('product-messages', room))!))).toHaveLength(2);
+    expect(await readReplayEntries(storage, 'modern-seen-m1-v1', room)).toHaveLength(20_001);
+    expect(await readReplayEntries(storage, 'modern-seen-room-message-v1', room)).toHaveLength(10_001);
+    const segmentedBytes = async (recordType: string): Promise<number> => {
+        const rootBytes = (await storage.read(recordType, room))!;
+        const root = JSON.parse(new TextDecoder().decode(rootBytes)) as { segmentCount: number; entryCount: number; version: number };
+        expect(root.version).toBe(2);
+        const pages = await Promise.all(Array.from({ length: root.segmentCount }, (_, index) => storage.read(recordType, `${room}:replay:${index}`)));
+        const decodedPages = pages.map((page) => JSON.parse(new TextDecoder().decode(page!)) as { entries: unknown[] });
+        expect(decodedPages.every((page) => page.entries.length <= 256)).toBe(true);
+        expect(decodedPages.reduce((sum, page) => sum + page.entries.length, 0)).toBe(root.entryCount);
+        return rootBytes.byteLength + pages.reduce((sum, page) => sum + (page?.byteLength ?? 0), 0);
+    };
+    expect(await segmentedBytes('modern-seen-m1-v1') + await segmentedBytes('modern-seen-room-message-v1')).toBeLessThan(4 * 1024 * 1024);
+    const decryptionsAfterAcceptance = sessionDecryptions;
+    await expect(receiveDecision(afterAbortedMigrationRestart, unknownAtCap, remoteAddress)).resolves.toEqual({ outcome: 'accepted' });
+    expect(sessionDecryptions).toBe(decryptionsAfterAcceptance);
+    const conflictingWrapper = encodeRoomMessageV1({ roomId: room, senderIdentityReference: await remoteCommitment(),
+        recipientIdentityReference: own.ownFingerprint, eventId: '34343434-3434-4434-8434-343434343434', kind: 'text',
+        payload: new TextEncoder().encode('conflicting replay content') });
+    decryptedBytes = new Uint8Array([1, 1, ...conflictingWrapper]);
+    const conflictingEnvelope: EncryptedEnvelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1,
+        olmMessage: JSON.stringify({ version: 1, message_type: 0, ciphertext: 'opaque-replay-cap-conflict' }) } };
+    await expect(receiveDecision(afterAbortedMigrationRestart, conflictingEnvelope, remoteAddress)).resolves.toEqual({ outcome: 'permanent-rejection', reasonClass: 'authenticated-invalid' });
+    expect(JSON.parse(new TextDecoder().decode((await storage.read('product-messages', room))!))).toHaveLength(2);
+    expect(consumer).toHaveBeenCalledTimes(3);
+    await afterAbortedMigrationRestart.close();
+
+    const afterMigrationRestart = new ModernConversation(storage, loader, fakeTransport().transport);
+    await afterMigrationRestart.connect(room, key(9), remoteAddress, await remoteCommitment(), consumer);
+    await expect(receiveDecision(afterMigrationRestart, unknownAtCap, remoteAddress)).resolves.toEqual({ outcome: 'accepted' });
+    expect(consumer).toHaveBeenCalledTimes(3);
+    expect(await readReplayEntries(storage, 'modern-seen-m1-v1', room)).toHaveLength(20_001);
+    await afterMigrationRestart.close();
 });
 
 it('maps a strict authenticated legacy frame to terminal unsupported-message without acceptance', async () => {

@@ -59,9 +59,8 @@ const JOIN_INTRODUCTION_SEEN_RECORD = 'conversation-join-introduction-seen';
 const JOIN_INTRODUCTION_MAGIC = new Uint8Array([0x00, 0x4b, 0x33, 0x4e, 0x43, 0x49, 0x01]);
 const MAX_PENDING = 32;
 const MAX_SEEN = 1024;
-/** V1 replay evidence is retained exactly; delivery fails closed at this ceiling. */
-const MAX_M1_REPLAY_MARKERS_PER_ROOM = 20_000;
-const MAX_ROOM_EVENT_REPLAY_MARKERS_PER_ROOM = 20_000;
+/** Each replay page is bounded; exact evidence is segmented without eviction. */
+const REPLAY_SEGMENT_CAPACITY = 256;
 type SessionAudit = {
     version: 1;
     classification: 'unused-outbound' | 'retired-unused-outbound' | 'session-with-message-history' | 'active-established' | 'legacy-unclassified';
@@ -190,6 +189,83 @@ const parseM1Seen = (bytes: ArrayBuffer | undefined): string[] => {
         throw new Error('Modern M1 replay state is invalid.');
     }
     return (value as { ids: string[] }).ids;
+};
+
+type ReplayRoot = { version: 2; segmentCount: number; entryCount: number };
+type ReplayState<T> = { items: T[]; rootBytes?: ArrayBuffer; segmentCount: number; lastSegmentBytes?: ArrayBuffer; legacy: boolean };
+const parseReplayRoot = (bytes: ArrayBuffer | undefined): ReplayRoot | undefined => {
+    if (!bytes) return undefined;
+    const value: unknown = JSON.parse(decoder.decode(bytes));
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Modern replay index is invalid.');
+    const item = value as Record<string, unknown>;
+    if (Object.keys(item).sort().join(',') !== 'entryCount,segmentCount,version' || item.version !== 2 ||
+        !Number.isSafeInteger(item.segmentCount) || (item.segmentCount as number) < 0 ||
+        !Number.isSafeInteger(item.entryCount) || (item.entryCount as number) < 0 ||
+        ((item.segmentCount as number) === 0) !== ((item.entryCount as number) === 0)) throw new Error('Modern replay index is invalid.');
+    return item as ReplayRoot;
+};
+const replaySegmentId = (roomId: string, index: number): string => `${roomId}:replay:${index}`;
+const parseReplaySegment = <T>(bytes: ArrayBuffer | undefined, parseEntry: (value: unknown) => value is T): T[] => {
+    if (!bytes) throw new Error('Modern replay segment is missing.');
+    const value: unknown = JSON.parse(decoder.decode(bytes));
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Modern replay segment is invalid.');
+    const item = value as Record<string, unknown>;
+    if (Object.keys(item).sort().join(',') !== 'entries,version' || item.version !== 1 || !Array.isArray(item.entries) ||
+        item.entries.length < 1 || item.entries.length > REPLAY_SEGMENT_CAPACITY || item.entries.some((entry) => !parseEntry(entry))) throw new Error('Modern replay segment is invalid.');
+    return item.entries as T[];
+};
+const isM1ReplayEntry = (value: unknown): value is string => typeof value === 'string' && /^v1:[0-9a-f]{64}$/.test(value);
+const isRoomMessageReplayEntry = (value: unknown): value is RoomMessageSeenEvent => !!value && typeof value === 'object' && !Array.isArray(value) &&
+    Object.keys(value).sort().join(',') === 'commitment,id' && typeof (value as RoomMessageSeenEvent).id === 'string' &&
+    /^v1:[0-9a-f]{64}$/.test((value as RoomMessageSeenEvent).id) && typeof (value as RoomMessageSeenEvent).commitment === 'string' &&
+    /^v1:[0-9a-f]{64}$/.test((value as RoomMessageSeenEvent).commitment);
+const loadReplayState = async <T>(storage: SecureStorage, recordType: string, roomId: string, parseLegacy: (bytes: ArrayBuffer | undefined) => T[], parseEntry: (value: unknown) => value is T): Promise<ReplayState<T>> => {
+    const rootBytes = await storage.read(recordType, roomId);
+    if (!rootBytes) return { items: [], rootBytes, segmentCount: 0, legacy: false };
+    let root: ReplayRoot | undefined;
+    try { root = parseReplayRoot(rootBytes); } catch { /* A v1 list uses the same record address. */ }
+    if (!root) return { items: parseLegacy(rootBytes), rootBytes, segmentCount: 0, legacy: true };
+    const pages = await Promise.all(Array.from({ length: root.segmentCount }, (_, index) => storage.read(recordType, replaySegmentId(roomId, index))));
+    const items = pages.flatMap((page) => parseReplaySegment(page, parseEntry));
+    if (items.length !== root.entryCount) throw new Error('Modern replay index count does not match its segments.');
+    return { items, rootBytes, segmentCount: root.segmentCount, lastSegmentBytes: pages.at(-1), legacy: false };
+};
+const prepareReplayAppend = <T>(recordType: string, roomId: string, state: ReplayState<T>, additions: readonly T[]): SecureRecordUpdate[] => {
+    const all = [...state.items, ...additions];
+    const updates: SecureRecordUpdate[] = [];
+    if (state.legacy) {
+        for (let offset = 0, index = 0; offset < all.length; offset += REPLAY_SEGMENT_CAPACITY, index += 1) {
+            updates.push({ recordType, recordId: replaySegmentId(roomId, index), expected: undefined,
+                next: asBytes({ version: 1, entries: all.slice(offset, offset + REPLAY_SEGMENT_CAPACITY) }) });
+        }
+        updates.push({ recordType, recordId: roomId, expected: state.rootBytes,
+            next: asBytes({ version: 2, segmentCount: Math.ceil(all.length / REPLAY_SEGMENT_CAPACITY), entryCount: all.length } satisfies ReplayRoot) });
+        return updates;
+    }
+    let root = parseReplayRoot(state.rootBytes);
+    const lastPage = state.lastSegmentBytes ? parseReplaySegment(state.lastSegmentBytes, (_value): _value is T => true) : [];
+    const lastRoom = state.segmentCount - 1;
+    if (lastPage.length > 0 && lastPage.length + additions.length <= REPLAY_SEGMENT_CAPACITY) {
+        updates.push({ recordType, recordId: replaySegmentId(roomId, lastRoom), expected: state.lastSegmentBytes,
+            next: asBytes({ version: 1, entries: [...lastPage, ...additions] }) });
+    } else {
+        let remaining = [...additions];
+        let segmentCount = state.segmentCount;
+        if (lastPage.length > 0 && lastPage.length < REPLAY_SEGMENT_CAPACITY && remaining.length > 0) {
+            const fill = remaining.splice(0, REPLAY_SEGMENT_CAPACITY - lastPage.length);
+            updates.push({ recordType, recordId: replaySegmentId(roomId, lastRoom), expected: state.lastSegmentBytes,
+                next: asBytes({ version: 1, entries: [...lastPage, ...fill] }) });
+        }
+        while (remaining.length) {
+            const page = remaining.splice(0, REPLAY_SEGMENT_CAPACITY);
+            updates.push({ recordType, recordId: replaySegmentId(roomId, segmentCount++), expected: undefined,
+                next: asBytes({ version: 1, entries: page }) });
+        }
+        root = { version: 2, segmentCount, entryCount: all.length };
+    }
+    updates.push({ recordType, recordId: roomId, expected: state.rootBytes,
+        next: asBytes({ version: 2, segmentCount: root!.segmentCount, entryCount: all.length } satisfies ReplayRoot) });
+    return updates;
 };
 
 type RoomMessageSeenEvent = { id: string; commitment: string };
@@ -1431,21 +1507,18 @@ export class ModernConversation {
             const m1 = await envelopeIdForEnvelope(this.roomId, envelope);
             const legacyDigest = await this.digest(envelope);
             const seenBytes = await this.storage.read(SEEN_RECORD, this.roomId);
-            const m1SeenBytes = await this.storage.read(M1_SEEN_RECORD, this.roomId);
-            const roomMessageSeenBytes = await this.storage.read(ROOM_MESSAGE_SEEN_RECORD, this.roomId);
+            const [m1ReplayState, roomMessageReplayState] = await Promise.all([
+                loadReplayState(this.storage, M1_SEEN_RECORD, this.roomId, parseM1Seen, isM1ReplayEntry),
+                loadReplayState(this.storage, ROOM_MESSAGE_SEEN_RECORD, this.roomId, parseRoomMessageSeen, isRoomMessageReplayEntry),
+            ]);
             const seen = parseList<string>(seenBytes);
-            const m1Seen = parseM1Seen(m1SeenBytes);
-            const roomMessageSeen = parseRoomMessageSeen(roomMessageSeenBytes);
+            const m1Seen = m1ReplayState.items;
+            const roomMessageSeen = roomMessageReplayState.items;
             if (seen.includes(legacyDigest) || m1Seen.includes(m1)) {
                 await this.testOnlyRecordInboundStage('persisted');
                 await this.testOnlyRecordInboundStage('acknowledged');
                 return true;
             }
-            if (m1Seen.length >= MAX_M1_REPLAY_MARKERS_PER_ROOM || roomMessageSeen.length >= MAX_ROOM_EVENT_REPLAY_MARKERS_PER_ROOM) {
-                this.lastInboundFailureCategory = 'replay-store-capacity';
-                return false;
-            }
-
             const firstSession = !this.runtime.activeSessionId;
             let bundle: ReturnType<typeof validateVodozemacPublicBundle> | undefined;
             if (firstSession) {
@@ -1602,17 +1675,16 @@ export class ModernConversation {
                     }
                 }
 
-                // Legacy digests retain their existing count-bounded behavior. M1 markers are
-                // deliberately not pruned: retention pending owner-approved horizon.
+                // Legacy digests retain their existing count-bounded behavior. Authenticated
+                // replay evidence is exact and segmented; old markers are never evicted.
                 const nextLegacySeen = [...seen.slice(-(MAX_SEEN - 1)), legacyDigest];
-                const nextM1Seen = [...m1Seen, m1, ...(authenticatedEventId && !m1Seen.includes(authenticatedEventId) ? [authenticatedEventId] : [])];
                 updates.push(
                     { recordType: SEEN_RECORD, recordId: this.roomId!, expected: seenBytes, next: asBytes(nextLegacySeen) },
-                    { recordType: M1_SEEN_RECORD, recordId: this.roomId!, expected: m1SeenBytes, next: asBytes({ version: 1, ids: nextM1Seen }) },
+                    ...prepareReplayAppend(M1_SEEN_RECORD, this.roomId!, m1ReplayState, [m1]),
                 );
                 if (authenticatedEventId && authenticatedCommitment && !priorEvent) {
-                    updates.push({ recordType: ROOM_MESSAGE_SEEN_RECORD, recordId: this.roomId!, expected: roomMessageSeenBytes,
-                        next: asBytes({ version: 1, events: [...roomMessageSeen, { id: authenticatedEventId, commitment: authenticatedCommitment }] }) });
+                    updates.push(...prepareReplayAppend(ROOM_MESSAGE_SEEN_RECORD, this.roomId!, roomMessageReplayState,
+                        [{ id: authenticatedEventId, commitment: authenticatedCommitment }]));
                 }
                 return updates;
             };
