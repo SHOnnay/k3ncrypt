@@ -8,12 +8,14 @@ class FakeSocket {
   id = 'socket-generation-a';
   private readonly listeners = new Map<string, Set<(...args: any[]) => void>>();
   readonly events: Array<{ event: string; payload: any }> = [];
+  dropNextSubscriptionAck = false;
   readonly disconnect = jest.fn(() => { this.connected = false; });
   on(event: string, listener: (...args: any[]) => void): this { const items = this.listeners.get(event) ?? new Set(); items.add(listener); this.listeners.set(event, items); return this; }
   off(event: string, listener: (...args: any[]) => void): this { this.listeners.get(event)?.delete(listener); return this; }
   emit(event: string, payload: any, ack?: (response: any) => void): this {
     this.events.push({ event, payload });
     if (event === 'mux-authenticate') ack?.({ version: 1, status: 'authenticated', connectionGeneration: payload.connectionGeneration });
+    if (event === 'mux-subscribe' && this.dropNextSubscriptionAck) { this.dropNextSubscriptionAck = false; return this; }
     if (event === 'mux-subscribe') ack?.({ version: 1, status: 'subscribed', roomId: payload.roomId, connectionGeneration: payload.connectionGeneration, subscriptionNonce: payload.proofNonce, expiresAt: Date.now() + 300_000, peerFeatures: ['room-message-v1', 'room-call-signal-v2'] });
     if (event === 'mux-mailbox-replay') ack?.({ version: 1, status: 'accepted', roomId: payload.roomId });
     if (event === 'mux-send-message') ack?.({ version: 1, status: 'stored', id: 'message-id', timestamp: 123 });
@@ -168,5 +170,136 @@ describe('multiplexed relay connection Stage 1A', () => {
     expect(goodAck).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'accepted', roomId, id: frame.id, claimId: frame.claimId,
       connectionGeneration: socket.id, subscriptionNonce: sub.proofNonce }));
     await connection.close();
+  });
+
+  it('retries a transient per-room renewal failure with backoff and resumes the lease', async () => {
+    jest.useFakeTimers();
+    try {
+      const socket = new FakeSocket();
+      const connection = new MultiplexedRelayConnection(socket as unknown as Socket);
+      const proofs = proofProvider();
+      const roomId = room('8');
+      const manager = connection.forRoom(roomId, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+      manager.setDeviceProofProvider(proofs);
+      await manager.join(roomId, 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'control', 'route-proof');
+      proofs.acquire.mockRejectedValueOnce(new Error('temporary proof endpoint failure'))
+        .mockRejectedValueOnce(new Error('second temporary proof endpoint failure'));
+
+      await jest.advanceTimersByTimeAsync(240_000);
+      expect(socket.events.filter(({ event }) => event === 'mux-subscribe')).toHaveLength(1);
+      await jest.advanceTimersByTimeAsync(3_000);
+      expect(socket.events.filter(({ event }) => event === 'mux-subscribe')).toHaveLength(1);
+      await jest.advanceTimersByTimeAsync(6_000);
+      expect(socket.events.filter(({ event }) => event === 'mux-subscribe')).toHaveLength(2);
+      expect(socket.events.filter(({ event }) => event === 'mux-mailbox-replay')).toHaveLength(2);
+      await connection.close();
+    } finally { jest.useRealTimers(); }
+  });
+
+  it('honors Retry-After after a rate-limited subscription proof request', async () => {
+    jest.useFakeTimers();
+    try {
+      const socket = new FakeSocket();
+      const connection = new MultiplexedRelayConnection(socket as unknown as Socket);
+      const proofs = proofProvider();
+      const roomId = room('9');
+      const manager = connection.forRoom(roomId, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+      manager.setDeviceProofProvider(proofs);
+      await manager.join(roomId, 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'control', 'route-proof');
+      const rateLimited = Object.assign(new Error('rate limited'), { status: 429, retryAfterMs: 8_000 });
+      proofs.acquire.mockRejectedValueOnce(rateLimited);
+
+      await jest.advanceTimersByTimeAsync(240_000);
+      expect(socket.events.filter(({ event }) => event === 'mux-subscribe')).toHaveLength(1);
+      await jest.advanceTimersByTimeAsync(7_999);
+      expect(socket.events.filter(({ event }) => event === 'mux-subscribe')).toHaveLength(1);
+      await jest.advanceTimersByTimeAsync(1);
+      expect(socket.events.filter(({ event }) => event === 'mux-subscribe')).toHaveLength(2);
+      await connection.close();
+    } finally { jest.useRealTimers(); }
+  });
+
+  it('recovers when a renewal ACK is lost while the socket stays connected', async () => {
+    jest.useFakeTimers();
+    try {
+      const socket = new FakeSocket();
+      const connection = new MultiplexedRelayConnection(socket as unknown as Socket);
+      const manager = connection.forRoom(room('d'), 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+      manager.setDeviceProofProvider(proofProvider());
+      await manager.join(room('d'), 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'control', 'route-proof');
+      socket.dropNextSubscriptionAck = true;
+
+      await jest.advanceTimersByTimeAsync(240_000);
+      await jest.advanceTimersByTimeAsync(15_000);
+      expect(socket.events.filter(({ event }) => event === 'mux-subscribe')).toHaveLength(2);
+      await jest.advanceTimersByTimeAsync(3_000);
+      expect(socket.events.filter(({ event }) => event === 'mux-subscribe')).toHaveLength(3);
+      expect(socket.events.filter(({ event }) => event === 'mux-mailbox-replay')).toHaveLength(2);
+      await connection.close();
+    } finally { jest.useRealTimers(); }
+  });
+
+  it('stops renewal and clears the active lease after device authority is revoked', async () => {
+    jest.useFakeTimers();
+    try {
+      const socket = new FakeSocket();
+      const connection = new MultiplexedRelayConnection(socket as unknown as Socket);
+      const proofs = proofProvider();
+      const roomId = room('a');
+      const manager = connection.forRoom(roomId, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+      manager.setDeviceProofProvider(proofs);
+      await manager.join(roomId, 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'control', 'route-proof');
+      proofs.acquire.mockRejectedValueOnce(Object.assign(new Error('revoked'), { status: 403 }));
+
+      await jest.advanceTimersByTimeAsync(240_000);
+      await jest.advanceTimersByTimeAsync(600_000);
+      expect(socket.events.filter(({ event }) => event === 'mux-subscribe')).toHaveLength(1);
+      await connection.close();
+    } finally { jest.useRealTimers(); }
+  });
+
+  it('clears a room renewal timer when that room is explicitly unsubscribed', async () => {
+    jest.useFakeTimers();
+    try {
+      const socket = new FakeSocket();
+      const connection = new MultiplexedRelayConnection(socket as unknown as Socket);
+      const proofs = proofProvider();
+      const roomId = room('b');
+      const manager = connection.forRoom(roomId, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+      manager.setDeviceProofProvider(proofs);
+      await manager.join(roomId, 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'control', 'route-proof');
+      await manager.close();
+      await jest.advanceTimersByTimeAsync(600_000);
+      expect(socket.events.filter(({ event }) => event === 'mux-subscribe')).toHaveLength(1);
+      await connection.close();
+    } finally { jest.useRealTimers(); }
+  });
+
+  it('resubscribes an expired room when a hidden tab becomes visible', async () => {
+    const priorDocument = globalThis.document;
+    const listeners = new Map<string, Set<() => void>>();
+    const documentStub = {
+      visibilityState: 'visible',
+      addEventListener: (event: string, listener: () => void) => { const set = listeners.get(event) ?? new Set(); set.add(listener); listeners.set(event, set); },
+      removeEventListener: (event: string, listener: () => void) => { listeners.get(event)?.delete(listener); },
+    };
+    Object.defineProperty(globalThis, 'document', { configurable: true, value: documentStub });
+    try {
+      const socket = new FakeSocket();
+      const connection = new MultiplexedRelayConnection(socket as unknown as Socket);
+      const manager = connection.forRoom(room('c'), 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+      manager.setDeviceProofProvider(proofProvider());
+      await manager.join(room('c'), 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'control', 'route-proof');
+      const state = (connection as unknown as { rooms: Map<string, { expiresAt?: number }> }).rooms.get(room('c'))!;
+      state.expiresAt = Date.now() - 1;
+      listeners.get('visibilitychange')?.forEach((listener) => listener());
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(socket.events.filter(({ event }) => event === 'mux-subscribe')).toHaveLength(2);
+      expect(socket.events.filter(({ event }) => event === 'mux-mailbox-replay')).toHaveLength(2);
+      await connection.close();
+    } finally {
+      Object.defineProperty(globalThis, 'document', { configurable: true, value: priorDocument });
+    }
   });
 });

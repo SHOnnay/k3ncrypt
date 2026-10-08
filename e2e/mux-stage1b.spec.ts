@@ -77,7 +77,7 @@ const downloadMuxFile = async (recipient: Page, name: string, bytes: Buffer, out
 };
 
 test('three verified profiles deliver to Alice background rooms over one real mux socket', async ({ browser }, testInfo) => {
-  test.setTimeout(300_000);
+  test.setTimeout(420_000);
   const { a, b, alice, bob } = await connectedPair(browser, true);
   for (const page of [alice, bob]) {
     page.on('response', (response) => {
@@ -120,11 +120,33 @@ test('three verified profiles deliver to Alice background rooms over one real mu
   await expect.poll(() => muxSnapshot(alice), { timeout: 30_000 }).toMatchObject({
     connected: true, authenticated: true, socketCount: 1, roomSubscriptionCount: 2,
   });
+  let renewalProofFailedOnce = false;
+  await alice.route('**/api/device-trust/proof', async (route) => {
+    const body = route.request().postDataJSON() as { operation?: string };
+    if (!renewalProofFailedOnce && body.operation === 'relay:subscribe') {
+      renewalProofFailedOnce = true;
+      await route.abort('failed');
+      return;
+    }
+    await route.continue();
+  });
   const initialLeaseStartedAt = Date.now();
   await expect.poll(async () => (await muxSnapshot(alice) as { subscriptionRenewals?: number } | undefined)?.subscriptionRenewals ?? 0,
     { timeout: 45_000 }).toBeGreaterThanOrEqual(2);
+  expect(renewalProofFailedOnce).toBe(true);
   await expect.poll(async () => (await muxSnapshot(alice) as { subscriptionProofAcquisitions?: number } | undefined)?.subscriptionProofAcquisitions ?? 0,
     { timeout: 45_000 }).toBeGreaterThanOrEqual(4);
+  await expect.poll(async () => (await muxSnapshot(alice) as { subscriptionProofAcquisitions?: number } | undefined)?.subscriptionProofAcquisitions ?? 0,
+    { timeout: 15_000 }).toBeGreaterThanOrEqual(5);
+  await alice.unroute('**/api/device-trust/proof');
+  const proofsBeforeVisibility = (await muxSnapshot(alice) as { subscriptionProofAcquisitions?: number } | undefined)?.subscriptionProofAcquisitions ?? 0;
+  await alice.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  await expect.poll(() => muxSnapshot(alice), { timeout: 15_000 }).toMatchObject({ authenticated: true, socketCount: 1, roomSubscriptionCount: 2 });
+  expect((await muxSnapshot(alice) as { subscriptionProofAcquisitions?: number } | undefined)?.subscriptionProofAcquisitions).toBe(proofsBeforeVisibility);
+  await alice.context().setOffline(true);
+  await expect.poll(() => muxSnapshot(alice), { timeout: 10_000 }).toMatchObject({ connected: false, roomSubscriptionCount: 0 });
+  await alice.context().setOffline(false);
+  await expect.poll(() => muxSnapshot(alice), { timeout: 30_000 }).toMatchObject({ authenticated: true, socketCount: 1, roomSubscriptionCount: 2 });
   await expect.poll(() => Date.now() - initialLeaseStartedAt, { timeout: 110_000, intervals: [500, 1_000, 2_000] }).toBeGreaterThanOrEqual(95_000);
 
   const initialBobMessages = await alice.locator('.message-text').count();

@@ -3,6 +3,7 @@ import { configContext } from '../configContext';
 
 export type ApiError = Error & {
   status: number
+  retryAfterMs?: number
 }
 
 /**
@@ -34,6 +35,12 @@ const makeRequest = async <TResponse, TBody = unknown>(
 
     const err = new Error(json.message || json.error || JSON.stringify(json)) as ApiError;
     err.status = res.status;
+    const retryAfter = res.headers.get('Retry-After');
+    if (retryAfter) {
+      const seconds = Number(retryAfter);
+      const dateDelay = Number.isFinite(seconds) ? seconds * 1_000 : Date.parse(retryAfter) - Date.now();
+      if (Number.isFinite(dateDelay) && dateDelay > 0) err.retryAfterMs = dateDelay;
+    }
 
     throw err;
   }

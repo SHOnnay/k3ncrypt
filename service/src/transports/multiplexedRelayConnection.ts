@@ -5,12 +5,14 @@ import type { DeviceProofCarrier, DeviceResourceContext } from '../devices/trust
 import type { DeviceProofOperation } from '../devices/deviceProofClient';
 import { testDiagnosticsEnabled } from '../utils/testDiagnostics';
 import { ROOM_CALL_SIGNAL_V2_FEATURE } from '../calls/callSecurityPolicy';
+import type { ApiError } from '../api/client';
 
 export const MUX_RELAY_PROTOCOL_VERSION = 1;
 export const MUX_RELAY_MAX_ROOMS = 128;
+const RENEWAL_EARLY_REFRESH_MS = 60_000;
 export type MuxDeviceProofProvider = { acquire(operation: DeviceProofOperation, resource?: DeviceResourceContext): Promise<DeviceProofCarrier> };
 type RoomConfig = { roomId: string; localRoutingAddress: string; peerRoutingAddress: string; controlCapability: string; routingProof: string; protocolFeatures: string[] };
-type RoomState = RoomConfig & { manager: MultiplexedRoomTransportManager; handler?: TransportEnvelopeHandler; nonce?: string; expiresAt?: number; peerFeatures: Set<string>; renewalTimer?: ReturnType<typeof setTimeout>; joining?: Promise<void> };
+type RoomState = RoomConfig & { manager: MultiplexedRoomTransportManager; handler?: TransportEnvelopeHandler; nonce?: string; expiresAt?: number; peerFeatures: Set<string>; renewalTimer?: ReturnType<typeof setTimeout>; joining?: Promise<void>; renewalFailures: number; renewalBlocked: boolean; nextRenewalAt?: number; waitingForNetwork: boolean; closed: boolean };
 type Ack = Record<string, unknown> & { error?: string };
 type TestAckInterceptor = (response: Record<string, unknown>, acknowledge?: (response: Record<string, unknown>) => void) => boolean;
 
@@ -25,6 +27,8 @@ export class MultiplexedRelayConnection {
   private readonly socket: Socket;
   private proofProvider?: MuxDeviceProofProvider;
   private readonly rooms = new Map<string, RoomState>();
+  private readonly onVisibilityChange = (): void => { if (document.visibilityState === 'visible') void this.refreshRooms(); };
+  private readonly onOnline = (): void => { void this.refreshRooms(true); };
   private authenticatedGeneration?: string;
   private authenticating?: Promise<void>;
   private disposed = false;
@@ -49,6 +53,8 @@ export class MultiplexedRelayConnection {
     this.socket.on('mux-peer-subscription', (payload: unknown) => this.acceptPeerSubscription(payload));
     this.socket.on('mux-delivery-status', (payload: unknown) => this.acceptDeliveryStatus(payload));
     this.socket.on('mux-room-suspended', (payload: unknown) => { void this.acceptRoomSuspended(payload); });
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', this.onVisibilityChange);
+    if (typeof window !== 'undefined') window.addEventListener('online', this.onOnline);
   }
 
   public setDeviceProofProvider(provider: MuxDeviceProofProvider | undefined): void { this.proofProvider = provider; }
@@ -63,6 +69,8 @@ export class MultiplexedRelayConnection {
   public async close(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
+    if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', this.onVisibilityChange);
+    if (typeof window !== 'undefined') window.removeEventListener('online', this.onOnline);
     for (const roomId of [...this.rooms.keys()]) await this.unsubscribe(roomId).catch(() => undefined);
     this.socket.disconnect();
   }
@@ -110,6 +118,8 @@ export class MultiplexedRelayConnection {
     await this.emitAck('mux-unsubscribe', { roomId, connectionGeneration: generation, subscriptionNonce: room.nonce });
     if (room.renewalTimer) clearTimeout(room.renewalTimer);
     room.renewalTimer = undefined; room.nonce = undefined; room.expiresAt = undefined; room.peerFeatures.clear();
+    room.nextRenewalAt = undefined;
+    room.waitingForNetwork = false;
   }
 
   public async testOnlyResubscribeRoom(roomId: string): Promise<void> {
@@ -133,7 +143,7 @@ export class MultiplexedRelayConnection {
   public createRoom(roomId: string, peerRoutingAddress: string, manager: MultiplexedRoomTransportManager): void {
     if (this.rooms.has(roomId)) throw new Error('A mux room handle already exists for this room.');
     if (this.rooms.size >= MUX_RELAY_MAX_ROOMS) throw new Error('Mux room subscription limit reached.');
-    this.rooms.set(roomId, { roomId, peerRoutingAddress, manager, localRoutingAddress: '', controlCapability: '', routingProof: '', protocolFeatures: [], peerFeatures: new Set() });
+    this.rooms.set(roomId, { roomId, peerRoutingAddress, manager, localRoutingAddress: '', controlCapability: '', routingProof: '', protocolFeatures: [], peerFeatures: new Set(), renewalFailures: 0, renewalBlocked: false, waitingForNetwork: false, closed: false });
   }
 
   public setHandler(roomId: string, handler: TransportEnvelopeHandler | undefined): void {
@@ -153,10 +163,15 @@ export class MultiplexedRelayConnection {
 
   public async subscribe(roomId: string, localRoutingAddress: string, controlCapability: string, routingProof?: string): Promise<void> {
     const room = this.requireRoom(roomId);
+    if (room.closed) throw new Error('Mux room handle is closed.');
     if (!localRoutingAddress || !controlCapability || !routingProof) throw new Error('Mux room authorization is incomplete.');
     room.localRoutingAddress = localRoutingAddress;
     room.controlCapability = controlCapability;
     room.routingProof = routingProof;
+    room.renewalBlocked = false;
+    room.renewalFailures = 0;
+    room.nextRenewalAt = undefined;
+    room.waitingForNetwork = false;
     if (room.joining) return room.joining;
     room.joining = this.subscribeState(room);
     try { await room.joining; } finally { room.joining = undefined; }
@@ -165,8 +180,11 @@ export class MultiplexedRelayConnection {
   public async unsubscribe(roomId: string): Promise<void> {
     const room = this.rooms.get(roomId);
     if (!room) return;
+    room.closed = true;
     if (room.renewalTimer) clearTimeout(room.renewalTimer);
     room.renewalTimer = undefined;
+    room.nextRenewalAt = undefined;
+    room.waitingForNetwork = false;
     const generation = this.socket.id;
     if (this.socket.connected && generation && this.authenticatedGeneration === generation && room.nonce) {
       await this.emitAck('mux-unsubscribe', { roomId, connectionGeneration: generation, subscriptionNonce: room.nonce });
@@ -194,12 +212,14 @@ export class MultiplexedRelayConnection {
   }
 
   private async subscribeState(room: RoomState): Promise<void> {
+    if (this.disposed || room.closed || this.rooms.get(room.roomId) !== room) throw new Error('Mux room handle is closed.');
     await this.ensureAuthenticated();
     const generation = this.socket.id;
     if (!generation || this.authenticatedGeneration !== generation) throw new Error('Mux connection generation changed.');
     const resource = { conversationId: room.roomId, routingAddress: room.localRoutingAddress, peerRoutingAddress: room.peerRoutingAddress, connectionGeneration: generation };
     this.diagnostics.subscriptionProofAcquisitions += 1;
     const proof = await this.proofProvider!.acquire('relay:subscribe', resource);
+    if (this.disposed || room.closed || this.rooms.get(room.roomId) !== room || this.socket.id !== generation) throw new Error('Mux room authorization changed during renewal.');
     const response = await this.emitAck('mux-subscribe', {
       version: MUX_RELAY_PROTOCOL_VERSION,
       roomId: room.roomId,
@@ -212,12 +232,21 @@ export class MultiplexedRelayConnection {
       ...proof,
       proofOperation: 'relay:subscribe',
     });
+    if (this.disposed || room.closed || this.rooms.get(room.roomId) !== room || this.socket.id !== generation) {
+      if (typeof response.subscriptionNonce === 'string') {
+        await this.emitAck('mux-unsubscribe', { roomId: room.roomId, connectionGeneration: generation, subscriptionNonce: response.subscriptionNonce }).catch(() => undefined);
+      }
+      throw new Error('Mux room authorization changed during renewal.');
+    }
     if (response.status !== 'subscribed' || response.roomId !== room.roomId || response.connectionGeneration !== generation || typeof response.subscriptionNonce !== 'string' || !Number.isSafeInteger(response.expiresAt) || this.socket.id !== generation) {
       throw new Error('Mux room subscription rejected.');
     }
     room.nonce = response.subscriptionNonce;
     room.expiresAt = response.expiresAt as number;
     room.peerFeatures = new Set(Array.isArray(response.peerFeatures) ? response.peerFeatures.filter((item): item is string => typeof item === 'string' && ALLOWED_FEATURES.has(item)) : []);
+    room.renewalFailures = 0;
+    room.nextRenewalAt = undefined;
+    room.waitingForNetwork = false;
     this.scheduleRenewal(room);
     await this.emitAck('mux-mailbox-replay', { version: MUX_RELAY_PROTOCOL_VERSION, roomId: room.roomId, connectionGeneration: generation, subscriptionNonce: room.nonce });
   }
@@ -373,8 +402,66 @@ export class MultiplexedRelayConnection {
     const delay = Math.max(1_000, (room.expiresAt ?? Date.now()) - Date.now() - 60_000);
     room.renewalTimer = setTimeout(() => {
       if (room.expiresAt && room.expiresAt > Date.now()) this.diagnostics.subscriptionRenewals += 1;
-      void this.subscribe(room.roomId, room.localRoutingAddress, room.controlCapability, room.routingProof).catch(() => undefined);
+      void this.renewRoom(room, true);
     }, delay);
+  }
+
+  private async refreshRooms(networkRestored = false): Promise<void> {
+    if (this.disposed || (typeof navigator !== 'undefined' && navigator.onLine === false)) return;
+    // Keep proof acquisition serialized across rooms to avoid a burst against the
+    // shared device-trust endpoint when a sleeping tab wakes.
+    for (const room of this.rooms.values()) {
+      const networkRetry = networkRestored && room.waitingForNetwork;
+      if (networkRetry) {
+        if (room.renewalTimer) clearTimeout(room.renewalTimer);
+        room.renewalTimer = undefined;
+        room.nextRenewalAt = undefined;
+        room.waitingForNetwork = false;
+      }
+      if (networkRetry || !room.expiresAt || room.expiresAt <= Date.now() + RENEWAL_EARLY_REFRESH_MS) await this.renewRoom(room, true);
+    }
+  }
+
+  private async renewRoom(room: RoomState, force = false): Promise<void> {
+    if (this.disposed || room.closed || this.rooms.get(room.roomId) !== room || room.renewalBlocked || !room.localRoutingAddress || !room.controlCapability || !room.routingProof) return;
+    if (room.nextRenewalAt && room.nextRenewalAt > Date.now()) {
+      if (!room.renewalTimer) this.scheduleRetry(room, room.nextRenewalAt - Date.now());
+      return;
+    }
+    if (!force && room.expiresAt && room.expiresAt > Date.now()) return;
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      this.scheduleRetry(room, 30_000);
+      room.waitingForNetwork = true;
+      return;
+    }
+    if (room.joining) return room.joining;
+    const operation = this.subscribeState(room).catch((error: unknown) => {
+      if (isTerminalRenewalFailure(error)) {
+        room.renewalBlocked = true;
+        room.nextRenewalAt = undefined;
+        room.waitingForNetwork = false;
+        if (room.renewalTimer) clearTimeout(room.renewalTimer);
+        room.renewalTimer = undefined;
+        room.nonce = undefined;
+        room.expiresAt = undefined;
+        room.peerFeatures.clear();
+        return;
+      }
+      room.renewalFailures += 1;
+      this.scheduleRetry(room, retryDelay(room.renewalFailures, error));
+    }).finally(() => { if (room.joining === operation) room.joining = undefined; });
+    room.joining = operation;
+    return operation;
+  }
+
+  private scheduleRetry(room: RoomState, delay: number): void {
+    if (room.renewalTimer) clearTimeout(room.renewalTimer);
+    // Exponential backoff is capped at five minutes, with bounded jitter. A
+    // server Retry-After is a lower bound and is never shortened.
+    const retryDelayMs = Math.max(1_000, delay);
+    room.nextRenewalAt = Date.now() + retryDelayMs;
+    room.waitingForNetwork = false;
+    room.renewalTimer = setTimeout(() => { void this.renewRoom(room, true); }, retryDelayMs);
   }
 
   private async restoreRooms(): Promise<void> {
@@ -386,7 +473,7 @@ export class MultiplexedRelayConnection {
       // keeps each room's membership/control checks independent.
       for (const room of this.rooms.values()) {
         if (!room.localRoutingAddress || !room.controlCapability || !room.routingProof) continue;
-        await this.subscribeState(room).catch(() => undefined);
+        await this.renewRoom(room, true);
       }
     } catch { /* A later socket reconnect or explicit room connect retries. */ }
   }
@@ -417,13 +504,33 @@ export class MultiplexedRelayConnection {
 
   private emitAck(event: string, payload: unknown): Promise<Ack> {
     return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Mux relay acknowledgement timed out.')), 15_000);
       this.socket.emit(event, payload, (response: Ack) => {
-        if (!response || typeof response !== 'object' || response.error) reject(new Error('Mux relay operation rejected.'));
+        clearTimeout(timeout);
+        if (!response || typeof response !== 'object') reject(new Error('Mux relay operation rejected.'));
+        else if (response.error) reject(new MuxRelayOperationError(typeof response.error === 'string' ? response.error : 'Mux relay operation rejected.'));
         else resolve(response);
       });
     });
   }
 }
+
+class MuxRelayOperationError extends Error {}
+
+const isTerminalRenewalFailure = (error: unknown): boolean => {
+  if (error instanceof MuxRelayOperationError && error.message === 'Room subscription rejected.') return true;
+  const status = (error as ApiError | undefined)?.status;
+  // Authentication, authority, or conflict responses indicate stale/revoked
+  // device identity. Keep the room fail-closed until explicit fresh authority.
+  return status === 401 || status === 403 || status === 409;
+};
+
+const retryDelay = (failures: number, error: unknown): number => {
+  const retryAfter = (error as (ApiError & { retryAfterMs?: number }) | undefined)?.retryAfterMs;
+  const base = Math.min(5 * 60_000, 2_000 * (2 ** Math.min(Math.max(0, failures - 1), 7)));
+  const jittered = Math.round(base * (0.8 + Math.random() * 0.4));
+  return Math.max(jittered, Number.isFinite(retryAfter) ? retryAfter! : 0);
+};
 
 /** Immutable adapter expected by ModernConversation for one room only. */
 export class MultiplexedRoomTransportManager implements TransportManager, Transport {
