@@ -1,4 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
+import { createHash } from 'crypto';
+import { readFile } from 'fs/promises';
 import { connectedPair, create, invite } from './usabilityHelpers';
 
 const verify = async (page: Page): Promise<void> => {
@@ -49,9 +51,44 @@ const activeTransport = (page: Page) => page.evaluate(() => {
   return hook?.();
 });
 
-test('three verified profiles deliver to Alice background rooms over one real mux socket', async ({ browser }) => {
-  test.setTimeout(120_000);
+const sendMuxFile = async (sender: Page, name: string, bytes: Buffer): Promise<void> => {
+  await sender.locator('input[type=file]').setInputFiles({ name, mimeType: 'application/octet-stream', buffer: bytes });
+  await expect(sender.locator('.media-transfer-status')).toContainText(name, { timeout: 30_000 });
+  const status = sender.locator('.media-transfer-status');
+  try { await expect(status).toContainText('Sent', { timeout: 30_000 }); }
+  catch (error) {
+    const retry = sender.getByRole('button', { name: 'Retry', exact: true });
+    if (!await retry.isVisible().catch(() => false)) throw error;
+    await new Promise((resolve) => setTimeout(resolve, 5_000));
+    await retry.click();
+    await expect(status).toContainText('Sent', { timeout: 30_000 });
+  }
+};
+
+const downloadMuxFile = async (recipient: Page, name: string, bytes: Buffer, output: string): Promise<void> => {
+  const buttons = recipient.getByRole('button', { name: 'Download protected file', exact: true });
+  await expect(buttons).not.toHaveCount(0, { timeout: 30_000 });
+  await buttons.last().click();
+  const save = recipient.getByRole('link', { name: `Save ${name}`, exact: true });
+  await expect(save).toBeVisible({ timeout: 30_000 });
+  const download = recipient.waitForEvent('download'); await save.click(); const artifact = await download; await artifact.saveAs(output);
+  expect(createHash('sha256').update(await readFile(output)).digest('hex')).toBe(createHash('sha256').update(bytes).digest('hex'));
+  await recipient.getByRole('button', { name: 'Discard verified output', exact: true }).click();
+};
+
+test('three verified profiles deliver to Alice background rooms over one real mux socket', async ({ browser }, testInfo) => {
+  test.setTimeout(300_000);
   const { a, b, alice, bob } = await connectedPair(browser, true);
+  for (const page of [alice, bob]) {
+    page.on('response', (response) => {
+      const url = new URL(response.url());
+      if (url.pathname.startsWith('/api/attachments/v2')) console.log('MUX_FILE_HTTP', response.request().method(), response.status(), url.pathname);
+    });
+    page.on('requestfailed', (request) => {
+      const url = new URL(request.url());
+      if (url.pathname.startsWith('/api/attachments/v2')) console.log('MUX_FILE_REQUEST_FAILED', request.method(), url.pathname, request.failure()?.errorText ?? 'unknown');
+    });
+  }
   await send(bob, 'Warm up Bob and Alice');
   await expect(alice.locator('.message-text').filter({ hasText: 'Warm up Bob and Alice' })).toBeVisible();
   const c = await browser.newContext({ permissions: ['microphone', 'camera'] });
@@ -83,10 +120,17 @@ test('three verified profiles deliver to Alice background rooms over one real mu
   await expect.poll(() => muxSnapshot(alice), { timeout: 30_000 }).toMatchObject({
     connected: true, authenticated: true, socketCount: 1, roomSubscriptionCount: 2,
   });
+  const initialLeaseStartedAt = Date.now();
+  await expect.poll(async () => (await muxSnapshot(alice) as { subscriptionRenewals?: number } | undefined)?.subscriptionRenewals ?? 0,
+    { timeout: 45_000 }).toBeGreaterThanOrEqual(2);
+  await expect.poll(async () => (await muxSnapshot(alice) as { subscriptionProofAcquisitions?: number } | undefined)?.subscriptionProofAcquisitions ?? 0,
+    { timeout: 45_000 }).toBeGreaterThanOrEqual(4);
+  await expect.poll(() => Date.now() - initialLeaseStartedAt, { timeout: 110_000, intervals: [500, 1_000, 2_000] }).toBeGreaterThanOrEqual(95_000);
 
   const initialBobMessages = await alice.locator('.message-text').count();
   await expect.poll(() => muxSnapshot(bob), { timeout: 30_000 }).toMatchObject({ authenticated: true, socketCount: 1, roomSubscriptionCount: 1 });
   await expect.poll(() => activeTransport(bob), { timeout: 30_000 }).toBe('multiplexed');
+  await expect.poll(() => activeTransport(carol), { timeout: 30_000 }).toBe('multiplexed');
   await expect.poll(() => activeTransport(alice), { timeout: 30_000 }).toBe('multiplexed');
   try { await send(bob, 'Bob is still the visible room'); }
   catch (error) {
@@ -97,10 +141,35 @@ test('three verified profiles deliver to Alice background rooms over one real mu
   const afterBobMessages = await alice.locator('.message-text').count();
   expect(afterBobMessages).toBeGreaterThan(initialBobMessages);
 
+  await send(carol, 'Carol delivered after renewed leases');
+  await expect(alice.locator('.chat-header')).toContainText('Bob');
+  await openContact(alice, 'Carol');
+  await expect(alice.locator('.message-text').filter({ hasText: 'Carol delivered after renewed leases' })).toHaveCount(1);
+  await openContact(alice, 'Bob');
+
+  const bobFile = Buffer.alloc(20 * 1024, 0x42);
+  const bobFileCount = await alice.getByRole('button', { name: 'Download protected file', exact: true }).count();
+  await sendMuxFile(bob, 'bob-room-20k.bin', bobFile);
+  await expect(alice.getByRole('button', { name: 'Download protected file', exact: true })).toHaveCount(bobFileCount + 1);
+  await downloadMuxFile(alice, 'bob-room-20k.bin', bobFile, testInfo.outputPath('bob-room-20k.bin'));
+  const carolButtonsBefore = await alice.getByRole('button', { name: 'Download protected file', exact: true }).count();
+  const carolFile = Buffer.alloc(20 * 1024, 0x43);
+  await sendMuxFile(carol, 'carol-room-20k.bin', carolFile);
+  expect(await alice.getByRole('button', { name: 'Download protected file', exact: true }).count()).toBe(carolButtonsBefore);
+  const carolFileSafeBefore = await muxSnapshot(alice) as { receivedFrames?: number; acceptedFrames?: number; retryableFrames?: number } | undefined;
+  await openContact(alice, 'Carol');
+  const carolFileSafeAfter = await muxSnapshot(alice) as { receivedFrames?: number; acceptedFrames?: number; retryableFrames?: number } | undefined;
+  console.log('MUX_CAROL_FILE_SAFE', JSON.stringify({ senderTransport: await activeTransport(carol), before: carolFileSafeBefore, after: carolFileSafeAfter }));
+  // Message/media projection is room-scoped, so Carol's room renders its own
+  // protected-file button count after switching away from Bob.
+  await expect(alice.getByRole('button', { name: 'Download protected file', exact: true })).toHaveCount(1);
+  await downloadMuxFile(alice, 'carol-room-20k.bin', carolFile, testInfo.outputPath('carol-room-20k.bin'));
+  await openContact(alice, 'Bob');
+
   await send(carol, 'Hello from Carol');
   await expect(alice.locator('.chat-header')).toContainText('Bob');
   await expect(alice.locator('.message-text').filter({ hasText: 'Hello from Carol' })).toHaveCount(0);
-  await expect(alice.locator('.message-text')).toHaveCount(afterBobMessages);
+  await expect(alice.getByRole('button', { name: 'Download protected file', exact: true })).toHaveCount(carolButtonsBefore);
   await openContact(alice, 'Carol');
   await expect(alice.locator('.message-text').filter({ hasText: 'Hello from Carol' })).toHaveCount(1, { timeout: 30_000 });
 

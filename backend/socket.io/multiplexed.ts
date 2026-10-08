@@ -10,7 +10,12 @@ import type { CustomSocket, WireEnvelope } from './index';
 
 export const MUX_PROTOCOL_VERSION = 1;
 export const MUX_MAX_ROOM_SUBSCRIPTIONS = 128;
-export const MUX_SUBSCRIPTION_LEASE_MS = 5 * 60_000;
+const PRODUCTION_MUX_SUBSCRIPTION_LEASE_MS = 5 * 60_000;
+const testMuxLeaseEnabled = process.env.NODE_ENV === 'test' ||
+  (process.env.NODE_ENV === 'development' && process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY === 'true');
+const testMuxLeaseMs = testMuxLeaseEnabled ? Number(process.env.K3NCRYPT_TEST_MUX_SUBSCRIPTION_LEASE_MS) : NaN;
+export const MUX_SUBSCRIPTION_LEASE_MS = Number.isSafeInteger(testMuxLeaseMs) && testMuxLeaseMs >= 2_000 && testMuxLeaseMs <= PRODUCTION_MUX_SUBSCRIPTION_LEASE_MS
+  ? testMuxLeaseMs : PRODUCTION_MUX_SUBSCRIPTION_LEASE_MS;
 const MUX_MAILBOX_LEASE_MS = 30_000;
 const MUX_DELIVERY_ACK_MS = 10_000;
 const MUX_OFFLINE_TTL_MS = 7 * 24 * 60 * 60 * 1000;

@@ -10,6 +10,7 @@ import { fingerprintVodozemacIdentity } from '../identity/vodozemacIdentity';
 import { ContactIdentityRegistry } from '../identity/contactIdentityRegistry';
 import { decodeRoomMessage, encodeRoomMessageV1, ROOM_MESSAGE_V1_FEATURE } from './roomMessageV1';
 import { readRoomMessageVersionFloor, roomMessageVersionFloorRecordId, ROOM_MESSAGE_VERSION_FLOOR_RECORD } from './roomMessageVersionFloor';
+import { envelopeIdForEnvelope } from '../delivery/envelopeIdentity';
 
 jest.mock('../api/prekeys', () => ({
     publishVodozemacBundle: jest.fn(), fetchVodozemacBundle: jest.fn(), claimVodozemacOneTimeKey: jest.fn(), renewVodozemacBundle: jest.fn(),
@@ -1791,6 +1792,45 @@ it('deduplicates authenticated event identity within its room and rejects confli
     await expect(receiveDecision(conversation, conflictEnvelope, remoteAddress)).resolves.toEqual({ outcome: 'permanent-rejection', reasonClass: 'authenticated-invalid' });
     expect(consumer).toHaveBeenCalledTimes(1);
     await conversation.close();
+});
+
+it('fails closed at the replay evidence cap while preserving exact duplicates across restart', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    const storage = new Storage();
+    const consumer = jest.fn(messageAcceptance(storage));
+    const conversation = new ModernConversation(storage, loader, fakeTransport().transport);
+    const own = await conversation.connect(room, key(9), remoteAddress, await remoteCommitment(), consumer);
+    const wrapper = encodeRoomMessageV1({ roomId: room, senderIdentityReference: await remoteCommitment(),
+        recipientIdentityReference: own.ownFingerprint, eventId: '12121212-1212-4212-8212-121212121212', kind: 'text',
+        payload: new TextEncoder().encode('cap evidence message') });
+    const acceptedEnvelope: EncryptedEnvelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1,
+        olmMessage: JSON.stringify({ version: 1, message_type: 1, ciphertext: 'opaque-replay-cap-accepted' }) } };
+    decryptedBytes = new Uint8Array([1, 1, ...wrapper]);
+    await expect(receiveFirstMessage(conversation, acceptedEnvelope, remoteAddress)).resolves.toBe(true);
+    const acceptedM1 = await envelopeIdForEnvelope(room, acceptedEnvelope);
+    await conversation.close();
+
+    const markers = Array.from({ length: 19_999 }, (_, index) => `v1:${(index + 1).toString(16).padStart(64, '0')}`);
+    markers.push(acceptedM1);
+    await storage.write('modern-seen-m1-v1', room, new TextEncoder().encode(JSON.stringify({ version: 1, ids: markers })).buffer as ArrayBuffer);
+    const events = markers.map((id) => ({ id, commitment: `v1:${'a'.repeat(64)}` }));
+    await storage.write('modern-seen-room-message-v1', room, new TextEncoder().encode(JSON.stringify({ version: 1, events })).buffer as ArrayBuffer);
+
+    const restarted = new ModernConversation(storage, loader, fakeTransport().transport);
+    await restarted.connect(room, key(9), remoteAddress, await remoteCommitment(), consumer);
+    const decryptionsBeforeReplay = sessionDecryptions;
+    await expect(receiveDecision(restarted, acceptedEnvelope, remoteAddress)).resolves.toEqual({ outcome: 'accepted' });
+    expect(sessionDecryptions).toBe(decryptionsBeforeReplay);
+    expect(consumer).toHaveBeenCalledTimes(1);
+
+    const unknownAtCap: EncryptedEnvelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1,
+        olmMessage: JSON.stringify({ version: 1, message_type: 0, ciphertext: 'opaque-replay-cap-new' }) } };
+    await expect(receiveDecision(restarted, unknownAtCap, remoteAddress)).resolves.toEqual({ outcome: 'retryable' });
+    expect(sessionDecryptions).toBe(decryptionsBeforeReplay);
+    expect(consumer).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(new TextDecoder().decode((await storage.read('modern-seen-m1-v1', room))!)).ids).toHaveLength(20_000);
+    await restarted.close();
 });
 
 it('maps a strict authenticated legacy frame to terminal unsupported-message without acceptance', async () => {

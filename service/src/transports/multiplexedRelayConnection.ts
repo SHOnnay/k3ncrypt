@@ -26,7 +26,7 @@ export class MultiplexedRelayConnection {
   private authenticatedGeneration?: string;
   private authenticating?: Promise<void>;
   private disposed = false;
-  private readonly diagnostics = { sendAttempts: 0, storedMessages: 0, receivedFrames: 0, acceptedFrames: 0, retryableFrames: 0, acceptedStatuses: 0, rejectedStatuses: 0 };
+  private readonly diagnostics = { sendAttempts: 0, storedMessages: 0, receivedFrames: 0, acceptedFrames: 0, retryableFrames: 0, acceptedStatuses: 0, rejectedStatuses: 0, subscriptionProofAcquisitions: 0, subscriptionRenewals: 0 };
 
   constructor(socket?: Socket) {
     this.socket = socket ?? socketIOClient(`${configContext().baseUrl}/`);
@@ -72,7 +72,7 @@ export class MultiplexedRelayConnection {
     return this.socket.connected && this.authenticatedGeneration === this.socket.id ? this.socket.id : undefined;
   }
 
-  public testOnlySnapshot(): { connected: boolean; authenticated: boolean; socketCount: number; roomSubscriptionCount: number; sendAttempts: number; storedMessages: number; receivedFrames: number; acceptedFrames: number; retryableFrames: number; acceptedStatuses: number; rejectedStatuses: number } {
+  public testOnlySnapshot(): { connected: boolean; authenticated: boolean; socketCount: number; roomSubscriptionCount: number; sendAttempts: number; storedMessages: number; receivedFrames: number; acceptedFrames: number; retryableFrames: number; acceptedStatuses: number; rejectedStatuses: number; subscriptionProofAcquisitions: number; subscriptionRenewals: number } {
     if (!testDiagnosticsEnabled()) throw new Error('Test-only diagnostics are disabled.');
     return { connected: this.socket.connected, authenticated: this.currentGeneration() !== undefined, socketCount: 1,
       roomSubscriptionCount: [...this.rooms.values()].filter((room) => !!room.nonce && (room.expiresAt ?? 0) > Date.now()).length, ...this.diagnostics };
@@ -146,6 +146,7 @@ export class MultiplexedRelayConnection {
     const generation = this.socket.id;
     if (!generation || this.authenticatedGeneration !== generation) throw new Error('Mux connection generation changed.');
     const resource = { conversationId: room.roomId, routingAddress: room.localRoutingAddress, peerRoutingAddress: room.peerRoutingAddress, connectionGeneration: generation };
+    this.diagnostics.subscriptionProofAcquisitions += 1;
     const proof = await this.proofProvider!.acquire('relay:subscribe', resource);
     const response = await this.emitAck('mux-subscribe', {
       version: MUX_RELAY_PROTOCOL_VERSION,
@@ -277,6 +278,7 @@ export class MultiplexedRelayConnection {
     if (room.renewalTimer) clearTimeout(room.renewalTimer);
     const delay = Math.max(1_000, (room.expiresAt ?? Date.now()) - Date.now() - 60_000);
     room.renewalTimer = setTimeout(() => {
+      if (room.expiresAt && room.expiresAt > Date.now()) this.diagnostics.subscriptionRenewals += 1;
       void this.subscribe(room.roomId, room.localRoutingAddress, room.controlCapability, room.routingProof).catch(() => undefined);
     }, delay);
   }

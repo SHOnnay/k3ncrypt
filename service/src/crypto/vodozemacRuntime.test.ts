@@ -79,6 +79,24 @@ class ContendedAccountStorage extends MemoryStorage {
     }
 }
 
+class ExhaustedAccountCasStorage extends MemoryStorage {
+    public accountConflictsRemaining = 0;
+    public override async read(type: string, id: string): Promise<ArrayBuffer | undefined> {
+        return (await super.read(type, id))?.slice(0);
+    }
+    public override async compareAndSwapRecords(updates: readonly SecureRecordUpdate[]): Promise<boolean> {
+        if (updates[0]?.recordType === 'vodozemac-account' && this.accountConflictsRemaining > 0) {
+            this.accountConflictsRemaining -= 1;
+            const current = await this.read('vodozemac-account', 'local');
+            if (!current) return false;
+            const state = JSON.parse(new TextDecoder().decode(current)) as { oneTimeKeys: string[]; conflictVersion?: number };
+            this.seed('vodozemac-account', 'local', { ...state, conflictVersion: (state.conflictVersion ?? 0) + 1 });
+            return false;
+        }
+        return super.compareAndSwapRecords(updates);
+    }
+}
+
 const concurrentFirstPrekeyBindings = (attempts: Map<string, number>) => {
     const makeAccount = (initial: { oneTimeKeys: string[] }): VodozemacAccountHandle => {
         const state = { oneTimeKeys: [...initial.oneTimeKeys] };
@@ -250,5 +268,35 @@ describe('VodozemacRuntime', () => {
         const durableAccount = await storage.read('vodozemac-account', 'local');
         expect(JSON.parse(new TextDecoder().decode(durableAccount!)).oneTimeKeys).toEqual([]);
         new Uint8Array(durableAccount!).fill(0);
+    });
+
+    it('keeps exhausted first-prekey CAS contention retryable and accepts after mailbox redelivery', async () => {
+        const storage = new ExhaustedAccountCasStorage();
+        storage.seed('vodozemac-account', 'local', { oneTimeKeys: ['otk-bob'] });
+        const attempts = new Map<string, number>();
+        const factory = concurrentFirstPrekeyBindings(attempts);
+        const runtime = new VodozemacRuntime(storage, async () => factory);
+        await runtime.initialize();
+        await runtime.restoreOrCreateIdentity();
+        storage.accountConflictsRemaining = 4;
+
+        const buildUpdates = async (plaintext: ArrayBuffer): Promise<readonly SecureRecordUpdate[]> => {
+            expect(new TextDecoder().decode(plaintext)).toBe('first-prekey:bob');
+            return [{ recordType: 'accepted-first-prekey', recordId: 'room-bob',
+                expected: await storage.read('accepted-first-prekey', 'room-bob'),
+                next: new TextEncoder().encode(JSON.stringify({ room: 'room-bob', sender: 'sender-bob' })).buffer as ArrayBuffer }];
+        };
+        await expect(runtime.establishInboundSessionAndCommit('room-bob', 'sender-bob', 'bob', buildUpdates)).rejects.toThrow();
+        expect(storage.has('accepted-first-prekey', 'room-bob')).toBe(false);
+        expect(storage.has('vodozemac-session', 'room-bob')).toBe(false);
+        expect(attempts.get('bob')).toBe(4);
+        const afterExhaustion = await storage.read('vodozemac-account', 'local');
+        expect(JSON.parse(new TextDecoder().decode(afterExhaustion!)).oneTimeKeys).toEqual(['otk-bob']);
+        new Uint8Array(afterExhaustion!).fill(0);
+
+        await runtime.establishInboundSessionAndCommit('room-bob', 'sender-bob', 'bob', buildUpdates);
+        expect(storage.has('accepted-first-prekey', 'room-bob')).toBe(true);
+        expect(storage.has('vodozemac-session', 'room-bob')).toBe(true);
+        expect(attempts.get('bob')).toBe(5);
     });
 });

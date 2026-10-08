@@ -39,10 +39,11 @@ export default defineConfig({
       command: `cross-env NODE_ENV=test PORT=${backendPort} K3NCRYPT_ALLOWED_ORIGINS=${clientUrl} npm run serve:dev`,
       url: `${backendUrl}/api/ready`,
       env: {
+        K3NCRYPT_BIND_HOST: host,
         MONGO_URI: mongoUri,
         MONGO_DB_NAME: mongoDbName,
         K3NCRYPT_DEVICE_TRUST_PROOF_SECRET: deviceTrustTestSecret,
-        ...(muxStage1 ? { K3NCRYPT_MUX_MESSAGE_DELIVERY: 'true' } : {}),
+        ...(muxStage1 ? { K3NCRYPT_MUX_MESSAGE_DELIVERY: 'true', K3NCRYPT_TEST_MUX_SUBSCRIPTION_LEASE_MS: '90000' } : {}),
       },
       reuseExistingServer: false,
       timeout: 60_000,

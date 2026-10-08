@@ -8,11 +8,13 @@ import { validateProductionConfig } from './backend/security/productionConfig';
 import { operationalLog } from './backend/operations/logger';
 
 const PORT = process.env.PORT || 3001;
+const BIND_HOST = process.env.K3NCRYPT_BIND_HOST;
 
 validateProductionConfig();
 void (async () => {
   await db.connectDb();
-  const server = app.listen(PORT, () => operationalLog('info', 'server_listening', { port: Number(PORT) }));
+  const onListening = () => operationalLog('info', 'server_listening', { port: Number(PORT) });
+  const server = BIND_HOST ? app.listen(Number(PORT), BIND_HOST, onListening) : app.listen(PORT, onListening);
   initSocket(server);
   initSyncRelay(server);
   initPrivateNetworkRelay(server);
