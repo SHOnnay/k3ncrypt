@@ -24,8 +24,10 @@ export interface DeviceControlRoomBinding {
     readonly conversationId: string;
     readonly localIdentityReference: string;
     readonly remoteIdentityReference: string;
-    /** A transport policy bit, never populated from relay peer-feature metadata. */
-    readonly requiresRoomBinding: () => boolean;
+    /** A local persisted policy; must not be derived from relay feature metadata alone. */
+    readonly requiresRoomBoundControlV2: () => boolean | Promise<boolean>;
+    /** Rejects a stale room/session binding after a pin or identity changes. */
+    readonly assertCurrentIdentity: () => Promise<void>;
 }
 
 type RoomBoundDeviceControl = {
@@ -247,24 +249,39 @@ export class AuthenticatedDeviceControlChannel {
     ) {}
     public async send(message: DeviceControlMessage): Promise<void> {
         if (!this.session.encrypted || !this.session.ready) throw new Error('Authenticated device control is unavailable.');
+        const roomBinding = this.roomBinding;
+        if (roomBinding) await roomBinding.assertCurrentIdentity();
         const legacy = encoder.encode(`${CONTROL_PREFIX}${JSON.stringify(message)}`).buffer as ArrayBuffer;
         if (!decodeDeviceControl(legacy)) throw new Error('Invalid device control message.');
-        const encoded = this.roomBinding?.requiresRoomBinding()
-            ? encodeRoomBoundDeviceControl(message, this.roomBinding)
+        const requiresRoomBoundControlV2 = roomBinding ? await roomBinding.requiresRoomBoundControlV2() : false;
+        if (roomBinding) await roomBinding.assertCurrentIdentity();
+        const encoded = requiresRoomBoundControlV2
+            ? encodeRoomBoundDeviceControl(message, roomBinding!)
             : legacy;
+        if (roomBinding) await roomBinding.assertCurrentIdentity();
         await this.transport.sendEnvelope('signaling', await this.session.encrypt('signaling', encoded), undefined, 'device-control');
     }
     public async receive(envelope: EncryptedEnvelope): Promise<DeviceControlMessage | undefined> {
         if (!this.session.encrypted || !this.session.ready) throw new Error('Authenticated device control is unavailable.');
         return this.decode(await this.session.decrypt('signaling', envelope));
     }
-    public decode(plaintext: ArrayBuffer): DeviceControlMessage | undefined {
+    public async decode(plaintext: ArrayBuffer): Promise<DeviceControlMessage | undefined> {
         const text = decoder.decode(plaintext);
         if (text.startsWith(ROOM_CONTROL_PREFIX)) {
             if (!this.roomBinding) throw new Error('Room-bound device control context unavailable.');
-            return decodeRoomBoundDeviceControl(plaintext, this.roomBinding);
+            await this.roomBinding.assertCurrentIdentity();
+            const message = decodeRoomBoundDeviceControl(plaintext, this.roomBinding);
+            await this.roomBinding.assertCurrentIdentity();
+            return message;
         }
-        if (this.roomBinding?.requiresRoomBinding() && text.startsWith(CONTROL_PREFIX)) throw new Error('Legacy device control is not permitted on a room-bound transport.');
+        if (text.startsWith(CONTROL_PREFIX)) {
+            if (this.roomBinding) {
+                await this.roomBinding.assertCurrentIdentity();
+                if (await this.roomBinding.requiresRoomBoundControlV2()) throw new Error('Legacy device control is not permitted on a room-bound transport.');
+                await this.roomBinding.assertCurrentIdentity();
+            }
+            return decodeDeviceControl(plaintext);
+        }
         return decodeDeviceControl(plaintext);
     }
 }

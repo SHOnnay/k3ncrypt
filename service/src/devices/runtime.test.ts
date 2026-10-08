@@ -34,7 +34,7 @@ describe('authenticated device control channel', () => {
     await expect(channel.receive(envelope)).resolves.toBeUndefined();
   });
 
-  it('binds mux-required device control to room and pinned participants while retaining one-room compatibility', async () => {
+  it('enforces the current room control floor on send and receive and preserves unlatched compatibility', async () => {
     const ID_A = 'K3 AAAA BBBB CCCC DDDD EEEE FFFF GGGG HHHH IIII JJJJ KKK';
     const ID_B = 'K3 BBBB CCCC DDDD EEEE FFFF GGGG HHHH IIII JJJJ KKKK LLL';
     const roomA = '11111111-1111-4111-8111-111111111111';
@@ -47,19 +47,82 @@ describe('authenticated device control channel', () => {
       destroy: () => undefined,
     };
     const transport = { sendEnvelope: async (_channel: 'message' | 'signaling', value: EncryptedEnvelope) => { sent.push(value); return {}; } } as unknown as TransportManager;
-    const a = new AuthenticatedDeviceControlChannel(session, transport, { conversationId: roomA, localIdentityReference: ID_A, remoteIdentityReference: ID_B, requiresRoomBinding: () => true });
-    const b = new AuthenticatedDeviceControlChannel(session, transport, { conversationId: roomA, localIdentityReference: ID_B, remoteIdentityReference: ID_A, requiresRoomBinding: () => true });
-    const wrongRoom = new AuthenticatedDeviceControlChannel(session, transport, { conversationId: roomB, localIdentityReference: ID_B, remoteIdentityReference: ID_A, requiresRoomBinding: () => true });
+    let roomFloor = 0;
+    let identityCurrent = true;
+    const policy = (conversationId: string, localIdentityReference: string, remoteIdentityReference: string) => ({
+      conversationId, localIdentityReference, remoteIdentityReference,
+      requiresRoomBoundControlV2: async () => roomFloor >= 1,
+      assertCurrentIdentity: async () => { if (!identityCurrent) throw new Error('Device control identity requires review.'); },
+    });
+    const a = new AuthenticatedDeviceControlChannel(session, transport, policy(roomA, ID_A, ID_B));
+    const b = new AuthenticatedDeviceControlChannel(session, transport, policy(roomA, ID_B, ID_A));
+    const wrongRoom = new AuthenticatedDeviceControlChannel(session, transport, policy(roomB, ID_B, ID_A));
     const message = { type: 'trust-state-request' as const, payload: { request: 'freshness' } };
+
+    // A legacy, unlatched room remains interoperable.
     await a.send(message);
     await expect(b.receive(sent[0])).resolves.toEqual(message);
-    await expect(wrongRoom.receive(sent[0])).rejects.toThrow('Room-bound device control rejected');
-    await expect(a.send({ type: 'trust-state-request', payload: 'x'.repeat(65_300) })).rejects.toThrow('Invalid device control message');
 
+    // Latching the room policy forces v2 even though this test transport has no feature advertisement.
+    roomFloor = 1;
+    await expect(b.receive(sent[0])).rejects.toThrow('Legacy device control');
+    await a.send(message);
+    expect(String(sent[1].data)).toContain('k3ncrypt-device-control-room-v2:');
+    await expect(b.receive(sent[1])).resolves.toEqual(message);
+    await expect(wrongRoom.receive(sent[1])).rejects.toThrow('Room-bound device control rejected');
+
+    // A stale pin invalidates the already-created channel for both directions.
+    identityCurrent = false;
+    await expect(a.send(message)).rejects.toThrow('identity requires review');
+    await expect(b.receive(sent[1])).rejects.toThrow('identity requires review');
+
+    const changingIdentity = new AuthenticatedDeviceControlChannel(session, transport, {
+      conversationId: roomA, localIdentityReference: ID_A, remoteIdentityReference: ID_B,
+      requiresRoomBoundControlV2: async () => { identityCurrent = false; return true; },
+      assertCurrentIdentity: async () => { if (!identityCurrent) throw new Error('Device control identity requires review.'); },
+    });
+    identityCurrent = true;
+    await expect(changingIdentity.send(message)).rejects.toThrow('identity requires review');
+  });
+
+  it('rejects v2 without the matching room context and keeps truly unlatched v1 compatibility', async () => {
+    const roomA = '11111111-1111-4111-8111-111111111111';
+    const ID_A = 'K3 AAAA BBBB CCCC DDDD EEEE FFFF GGGG HHHH IIII JJJJ KKK';
+    const ID_B = 'K3 BBBB CCCC DDDD EEEE FFFF GGGG HHHH IIII JJJJ KKKK LLL';
+    const sent: EncryptedEnvelope[] = [];
+    const session: CryptoSession = {
+      encrypted: true, ready: true, initialize: async () => undefined,
+      encrypt: async (_channel, plaintext) => ({ version: 1, strategy: 'test', data: new TextDecoder().decode(plaintext) }),
+      decrypt: async (_channel, value) => new TextEncoder().encode(value.data as string).buffer as ArrayBuffer,
+      destroy: () => undefined,
+    };
+    const transport = { sendEnvelope: async (_channel: 'message' | 'signaling', value: EncryptedEnvelope) => { sent.push(value); return {}; } } as unknown as TransportManager;
     const legacySender = new AuthenticatedDeviceControlChannel(session, transport);
-    const roomRequiredReceiver = new AuthenticatedDeviceControlChannel(session, transport, { conversationId: roomA, localIdentityReference: ID_B, remoteIdentityReference: ID_A, requiresRoomBinding: () => true });
+    const legacyReceiver = new AuthenticatedDeviceControlChannel(session, transport, {
+      conversationId: roomA, localIdentityReference: ID_B, remoteIdentityReference: ID_A,
+      requiresRoomBoundControlV2: async () => false, assertCurrentIdentity: async () => undefined,
+    });
+    const message = { type: 'trust-state-request' as const, payload: {} };
     await legacySender.send(message);
-    await expect(roomRequiredReceiver.receive(sent[1])).rejects.toThrow('Legacy device control');
+    await expect(legacyReceiver.receive(sent[0])).resolves.toEqual(message);
+  });
+
+  it('keeps device-control packets within the established size limit', async () => {
+    const session: CryptoSession = {
+      encrypted: true, ready: true, initialize: async () => undefined,
+      encrypt: async (_channel, plaintext) => ({ version: 1, strategy: 'test', data: new TextDecoder().decode(plaintext) }),
+      decrypt: async (_channel, value) => new TextEncoder().encode(value.data as string).buffer as ArrayBuffer,
+      destroy: () => undefined,
+    };
+    const transport = { sendEnvelope: async () => ({}) } as unknown as TransportManager;
+    const channel = new AuthenticatedDeviceControlChannel(session, transport, {
+      conversationId: '11111111-1111-4111-8111-111111111111',
+      localIdentityReference: 'K3 AAAA BBBB CCCC DDDD EEEE FFFF GGGG HHHH IIII JJJJ KKK',
+      remoteIdentityReference: 'K3 BBBB CCCC DDDD EEEE FFFF GGGG HHHH IIII JJJJ KKKK LLL',
+      requiresRoomBoundControlV2: async () => true,
+      assertCurrentIdentity: async () => undefined,
+    });
+    await expect(channel.send({ type: 'trust-state-request', payload: 'x'.repeat(65_300) })).rejects.toThrow('Invalid device control message');
   });
 
   it('fails closed when the session is not authenticated', async () => {

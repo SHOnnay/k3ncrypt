@@ -1,6 +1,6 @@
 # Pre-Mux Gate 3: Encrypted Event Binding
 
-Status: implementation and validation in progress on `security/mux-encrypted-event-binding`.
+Status: Gate 3 correction implementation and validation in progress on `security/mux-encrypted-event-binding`.
 
 This gate hardens event ownership before any shared device connection exists. A future transport must enforce:
 
@@ -22,7 +22,7 @@ Any mismatch must fail closed before durable application acceptance. Socket stat
 | WebRTC call signaling | Version 2 call signal digest is domain-separated and authenticates conversation ID, call ID, sender participant/identity, receiver identity, event/kind/payload, media mode, nonce, sequence, timestamp, expiry, and identity binding. It is then carried through an authenticated signaling crypto channel. Admission checks room membership, local explicit verification, pinned identity, and signal semantics. | Authenticated room and participant context make the signal itself mux-safe when the mux room is checked against the immutable call channel. UI room changes do not choose the active call context. | Keep call wire binding. Replay key now includes conversation ID to prevent cross-room namespace collision. |
 | Call control | Invite/accept/reject/cancel/end/expire/fail use the same v2 call envelope and control-kind semantics as signaling. | Same as call signaling. Calls still have no durable invitation mailbox/replay path; this is a separate future-delivery requirement. | No signaling redesign or durable-call feature in this gate. |
 | Receipts / ACK | No encrypted peer receipt class exists. Backend relay ACKs and mailbox operations are transport outcomes over opaque envelopes, routed by authenticated channel/device proof and relay mailbox identity; they are not encrypted peer events. | Relay ACKs are not room content or app-delivery receipts. A future peer Delivered/Read/typing/call invitation must include authenticated room and event/call identity and be accepted only on the matching immutable channel. | No new receipts, read state, typing, notifications, or call mailbox. |
-| Device-control / system | Device lifecycle messages were encrypted in the signaling channel but their v1 packet carried only type/payload and depended on ambient room/session state. New v2 packet adds conversation UUID, sender/recipient pinned identity references, unique event UUID, version, and message. Parser checks exact keys and inverse local/remote context. | V1 remains compatible only while room binding is not required. When the local transport policy requires room binding, sender emits v2 and receiver rejects v1. Wrong room or identity rejects v2. The requirement is local policy, never relay-advertised feature metadata. | Add room-bound v2 device-control packet; no device lifecycle/verification authority changes. |
+| Device-control / system | Device lifecycle messages were encrypted in the signaling channel but their v1 packet carried only type/payload and depended on ambient room/session state. New v2 packet adds conversation UUID, sender/recipient pinned identity references, unique event UUID, version, and message. Parser checks exact keys and inverse local/remote context. | V1 is allowed only while the exact room+remote-pin message floor is 0 and local transport policy does not require binding. A persisted message floor ≥1 or strict local transport policy requires v2 on send and receive. Floor is reread per operation, so relay feature stripping, peer offline, reconnect, and refresh cannot lower it. Changed/missing contact pins reject old channels. | Require room-bound v2 using the captured room and pinned remote identity; do not change verification authority. |
 | Account/device sync | Authenticated sync binds package scope, account/device ID, pinned identities, checkpoint/stream, and message ID. It is account-scoped rather than conversation-scoped. | It must remain on a distinct account-scoped lane and must not be remapped to a room event by a future mux. | No change. |
 | Private-network packet | Separate authenticated packet binds network ID, session ID, sender/receiver device IDs and identities, message ID, and expiry. | Separate private-network lane; not a room message. | No change. |
 | Future reserved events | No other encrypted peer event class was found. | Future room-scoped event kinds must have authenticated room, participant/context, event/call identity, and domain/type before mux delivery. | Add a reviewed event kind/version and downgrade rule before use. |
@@ -37,10 +37,35 @@ Only the application `message` path can initiate an inbound Olm session: text, p
 
 - Legacy one-room messages and device-control v1 continue only on transports whose local policy does not require room binding.
 - A persisted V1 message floor cannot be lowered by relay feature claims or selected-room changes.
+- For a relationship with `minimumWrapperVersion >= 1`, local policy also requires room-bound device-control v2. This is deliberately one-way: V1 floor implies a stricter control requirement, but accepting/sending device-control v2 does not raise or establish the application-message floor. The two versions describe different wire classes. Older peers that only understand control v1 may lose control functionality on a V1-latched room; the client fails closed instead of downgrading.
+- If Stage 1 later needs independent control-version negotiation/latching, introduce a separately versioned `minimumControlVersion` keyed by room and exact pinned remote identity, and raise it only from authenticated control-version evidence. Do not encode control support by changing `minimumWrapperVersion`.
 - Room-bound device-control v2 is required when the local transport policy requires room binding; v1 is rejected in that mode.
 - Call v2 is independently room authenticated; it is not redundantly wrapped in `ROOM_MESSAGE_V1`.
 - Any event that lacks authenticated room ownership stays off a future shared connection.
 - This gate adds no mux socket, subscriptions, background unread, notifications, presence, typing, Android mux, or durable call invitations.
+
+## Stage 1 entry requirements
+
+Stage 1 mux work must not begin until its design and tests address each item below. These are prerequisites, not implemented by Gate 3:
+
+1. Authenticate the current pinned contact identity at control and call send/receive. A changed or unresolved pin must fence an existing channel; no automatic repinning.
+2. Define and enforce a signed introduction freshness/admission window, including clock-skew policy and replay behavior.
+3. Add device-level first-prekey scheduling with bounded contention/liveness, while retaining fresh-account revalidation and transactional room acceptance.
+4. Remove ambient `joinedConversationId` / `desiredConversation` attribution from mux paths; handlers must use immutable authorized room contexts.
+5. Review permanent versus retryable rejection classification. Undecryptable ciphertext and apparent old duplicates remain retryable absent authenticated durable acceptance/irreversible-invalid evidence; unsupported wrapper versions fail closed without tombstoning potentially recoverable legitimate messages absent an explicit upgrade policy.
+6. Define a versioned replay-store schema and crash-safe migration/rollback strategy before compaction or retention changes.
+7. Specify room-scoped authenticated subscription proofs, replay protection, renewal, and revocation, including stale proof fencing.
+8. Check outer mux room, subscription-proof room, immutable channel room, then decrypt and check authenticated inner room. Inner content cannot be authenticated before decryption; outer/proof/channel checks must happen first.
+
+Stage 2 remains separate: durable call invitations, persistent call replay, typing, presence, and notifications are out of scope.
+
+## Inbound rejection classification
+
+- An exact ciphertext digest or authenticated V1 event ID/commitment already persisted by the atomic acceptance transaction is durable evidence of prior acceptance; that exact replay is idempotently accepted. A decrypt failure or a merely apparent duplicate without such a matching record stays retryable.
+- Malformed/unauthenticated Olm ciphertext stays retryable because sender authenticity and message validity have not been established.
+- An authenticated future wrapper version or unsupported future kind stays retryable and creates no durable acceptance/tombstone, allowing a later software upgrade to process it.
+- A legacy frame rejected by an already persisted V1 floor is terminally classified as `unsupported-message` under the existing explicit downgrade policy. It is not treated as an unknown future wrapper; the floor itself is authenticated durable policy evidence.
+- Authenticated event-ID reuse with a different content commitment and authenticated structural/content violations are terminal invalid events. This gate does not redesign mailbox retention or retry lifetime.
 
 ## Replay storage observations
 
@@ -51,5 +76,6 @@ The relay offline mailbox TTL is seven days, but sender outbox retry lifetime ha
 ## Security regression coverage added in this gate
 
 - Call replay keys include conversation ID, call ID, sender participant, and sequence; identical call IDs/sequences in different rooms occupy independent replay slots.
-- Device-control v2 carries and validates room plus sender/recipient pinned identities; a wrong-room packet and legacy packet on a room-binding-required receiver reject.
+- Device-control v2 carries and validates room plus sender/recipient pinned identities; persisted message floor and strict local transport policy require v2 on send/receive; reconnect, missing relay features, changed pins, and cross-room delivery do not downgrade or authorize a stale channel. Old v1 lifecycle, revocation, and trust packets reject before application dispatch on a latched room.
+- Future authenticated message-wrapper versions remain retryable without durable acceptance; undecryptable ciphertext remains retryable, while an exact previously accepted envelope is idempotent only with its persisted acceptance marker.
 - Concurrent first-prekey regression races Bob→Alice and Carol→Alice against one device account CAS; the loser reloads the durable account, repeats decryption/validation, and both room-specific acceptance transactions complete before their callers observe success.
