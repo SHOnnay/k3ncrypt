@@ -14,9 +14,10 @@ class FakeSocket {
   emit(event: string, payload: any, ack?: (response: any) => void): this {
     this.events.push({ event, payload });
     if (event === 'mux-authenticate') ack?.({ version: 1, status: 'authenticated', connectionGeneration: payload.connectionGeneration });
-    if (event === 'mux-subscribe') ack?.({ version: 1, status: 'subscribed', roomId: payload.roomId, connectionGeneration: payload.connectionGeneration, subscriptionNonce: payload.proofNonce, expiresAt: Date.now() + 300_000, peerFeatures: ['room-message-v1'] });
+    if (event === 'mux-subscribe') ack?.({ version: 1, status: 'subscribed', roomId: payload.roomId, connectionGeneration: payload.connectionGeneration, subscriptionNonce: payload.proofNonce, expiresAt: Date.now() + 300_000, peerFeatures: ['room-message-v1', 'room-call-signal-v2'] });
     if (event === 'mux-mailbox-replay') ack?.({ version: 1, status: 'accepted', roomId: payload.roomId });
     if (event === 'mux-send-message') ack?.({ version: 1, status: 'stored', id: 'message-id', timestamp: 123 });
+    if (event === 'mux-send-signal') ack?.({ version: 1, status: 'routed', roomId: payload.roomId });
     if (event === 'mux-unsubscribe') ack?.({ status: 'unsubscribed', roomId: payload.roomId, connectionGeneration: payload.connectionGeneration });
     return this;
   }
@@ -133,11 +134,19 @@ describe('multiplexed relay connection Stage 1A', () => {
     expect(send.payload).toMatchObject({ version: 1, roomId, envelope, proofOperation: 'relay:message' });
     expect(proofs.requests[proofs.requests.length - 1]).toEqual({ operation: 'relay:message', resource: { conversationId: roomId, routingAddress: local, peerRoutingAddress: peer, connectionGeneration: socket.id } });
     await expect(manager.sendEnvelope('message', envelope, 'cccccccc-cccc-4ccc-8ccc-cccccccccccc')).rejects.toThrow('immutable peer route');
-    await expect(manager.sendEnvelope('signaling', envelope)).rejects.toThrow('separate legacy relay path');
+    await expect(manager.sendEnvelope('signaling', envelope, peer)).resolves.toEqual({});
+    const signal = socket.events.find(({ event }) => event === 'mux-send-signal')!;
+    expect(signal.payload).toMatchObject({ version: 1, roomId, envelope, proofOperation: 'relay:signal' });
+    expect(proofs.requests[proofs.requests.length - 1]).toEqual({ operation: 'relay:signal', resource: { conversationId: roomId, routingAddress: local, peerRoutingAddress: peer, connectionGeneration: socket.id } });
 
     const receive = jest.fn(async () => ({ outcome: 'accepted' as const }));
     manager.setEnvelopeHandler(receive);
     const sub = socket.events.find(({ event }) => event === 'mux-subscribe')!.payload;
+    socket.trigger('mux-call-signal', { version: 1, roomId, senderRoutingAddress: peer, recipientRoutingAddress: local,
+      connectionGeneration: socket.id, subscriptionNonce: sub.proofNonce, envelope });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(receive).toHaveBeenCalledWith({ conversationId: roomId, channel: 'signaling', envelope, senderRoutingId: peer });
+    receive.mockClear();
     const frame = { version: 1, roomId, id: 'incoming-id', timestamp: 456, senderRoutingAddress: peer, recipientRoutingAddress: local,
       envelope, claimId: 'claim-id', connectionGeneration: socket.id, subscriptionNonce: sub.proofNonce };
     const acceptedAck = jest.fn();

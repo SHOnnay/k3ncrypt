@@ -31,6 +31,17 @@ const openContact = async (page: Page, name: string) => {
   }
 };
 
+const activeTransport = async (page: Page) => page.evaluate(() =>
+  (globalThis as typeof globalThis & { __K3NCRYPT_ACTIVE_ROOM_TRANSPORT__?: () => string | undefined }).__K3NCRYPT_ACTIVE_ROOM_TRANSPORT__?.());
+
+const reloadUnlocked = async (page: Page) => {
+  await page.reload();
+  await page.getByRole('button', { name: 'Unlock this device', exact: true }).click();
+  await page.locator('input[type=password]').fill('alpha-family-existing-account-2026');
+  await page.getByRole('button', { name: 'Unlock account', exact: true }).click();
+  await expect(page.locator('.chat-header')).toBeVisible({ timeout: 30_000 });
+};
+
 const startAndDecline = async (caller: Page, receiver: Page) => {
   await caller.getByRole('button', { name: 'Calls', exact: true }).click();
   const start = caller.getByRole('button', { name: 'Start audio call', exact: true });
@@ -58,8 +69,10 @@ const enableSafeCallDiagnostics = async (page: Page, output: string[]) => {
 
 test('audio call support follows the selected contact and decline permits a call to the next contact', async ({ browser }) => {
   test.setTimeout(240000);
-  const { a, b, alice, bob } = await connectedPair(browser);
+  const muxEnabled = process.env.PLAYWRIGHT_MUX_STAGE1 === 'true';
+  const { a, b, alice, bob } = await connectedPair(browser, muxEnabled);
   const c = await browser.newContext({ permissions: ['microphone', 'camera'] });
+  if (muxEnabled) await c.addInitScript(() => { (globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean }).__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ = true; });
   const cara = await c.newPage(); await create(cara, 'Cara');
   const invitation = await invite(alice);
   await cara.locator('.new-conversation').click(); await cara.getByRole('button', { name: 'I have an invitation' }).click();
@@ -77,6 +90,12 @@ test('audio call support follows the selected contact and decline permits a call
   await cara.getByRole('button', { name: 'Send message', exact: true }).click();
   await alice.getByRole('textbox', { name: 'Write a message', exact: true }).fill('hello Cara');
   await alice.getByRole('button', { name: 'Send message', exact: true }).click();
+  if (muxEnabled) {
+    await reloadUnlocked(alice); await reloadUnlocked(bob); await reloadUnlocked(cara);
+    await openContact(alice, 'Bob');
+    await expect.poll(() => activeTransport(alice), { timeout: 30_000 }).toBe('multiplexed');
+    await expect.poll(() => activeTransport(bob), { timeout: 30_000 }).toBe('multiplexed');
+  }
   const callDiagnostics: string[] = [];
   await enableSafeCallDiagnostics(alice, callDiagnostics);
   await enableSafeCallDiagnostics(bob, callDiagnostics);
@@ -95,6 +114,7 @@ test('audio call support follows the selected contact and decline permits a call
   await expect(alice.locator('.call-info')).not.toBeVisible();
   await expect(bob.locator('.call-info')).not.toBeVisible();
   await openContact(alice, 'Cara');
+  if (muxEnabled) await expect.poll(() => activeTransport(alice), { timeout: 30_000 }).toBe('multiplexed');
   await startAndDecline(alice, cara);
   await alice.getByRole('button', { name: 'Calls', exact: true }).click();
   await alice.getByRole('button', { name: 'Start audio call', exact: true }).click();

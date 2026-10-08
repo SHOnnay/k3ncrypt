@@ -21,7 +21,7 @@ const MUX_DELIVERY_ACK_MS = 10_000;
 const MUX_OFFLINE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MUX_MAX_OFFLINE_PER_MAILBOX = 64;
 const MUX_MAX_ENVELOPE_BYTES = 32 * 1024;
-const FEATURES = new Set(['join-introduction-v1', 'room-message-v1']);
+const FEATURES = new Set(['join-introduction-v1', 'room-message-v1', 'room-call-signal-v2']);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export type MuxRoomSubscription = {
@@ -382,6 +382,52 @@ export const registerMultiplexedRelay = (socket: CustomSocket, io: MuxServer): v
       reject();
     }
   }, ack, 'Multiplexed message rejected.'));
+
+  socket.on('mux-send-signal', (payload: unknown, ack: (response: Record<string, unknown>) => void = () => undefined) => enqueue(socket, async () => {
+    const body = payload as Record<string, unknown> | null;
+    const roomId = body?.roomId;
+    const subscription = typeof roomId === 'string' ? await currentSubscription(socket, roomId) : undefined;
+    const reject = (): void => ack({ error: 'Multiplexed call signal rejected.' });
+    const envelope = body?.envelope as WireEnvelope | undefined;
+    if (process.env.NODE_ENV === 'production' || process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY !== 'true' || !body || typeof body !== 'object' || Array.isArray(body) ||
+        !exactKeys(body, ['deviceAuthorizationProof', 'envelope', 'proofNonce', 'proofOperation', 'roomId', 'version']) || body.version !== MUX_PROTOCOL_VERSION ||
+        body.proofOperation !== 'relay:signal' || !subscription || !subscription.protocolFeatures.includes('room-call-signal-v2') ||
+        !envelope || typeof envelope !== 'object' || Array.isArray(envelope) || !Number.isSafeInteger(envelope.version) || envelope.version < 1 || envelope.version > 16 ||
+        typeof envelope.strategy !== 'string' || !/^[A-Za-z0-9._-]{1,64}$/.test(envelope.strategy) || envelope.data === undefined || envelope.data === null ||
+        Buffer.byteLength(JSON.stringify(envelope)) > MUX_MAX_ENVELOPE_BYTES || !socket.muxConnectionGeneration) {
+      reject();
+      return;
+    }
+    const resource: DeviceResourceContext = {
+      conversationId: subscription.roomId,
+      routingAddress: subscription.routingAddress,
+      peerRoutingAddress: subscription.peerRoutingAddress,
+      connectionGeneration: subscription.connectionGeneration,
+    };
+    if (!await verifyMuxCarrier(socket, body as unknown as ProofCarrier, 'relay:signal', resource, false) ||
+        !await currentSubscription(socket, subscription.roomId)) {
+      reject();
+      return;
+    }
+    const recipient = muxRoomSockets.get(subscription.roomId)?.get(subscription.peerRoutingAddress);
+    const peerSubscription = recipient?.muxSubscriptions?.get(subscription.roomId);
+    if (!recipient || !peerSubscription || peerSubscription.peerRoutingAddress !== subscription.routingAddress ||
+        !peerSubscription.protocolFeatures.includes('room-call-signal-v2') ||
+        (await currentSubscription(recipient, subscription.roomId))?.nonce !== peerSubscription.nonce) {
+      reject();
+      return;
+    }
+    recipient.emit('mux-call-signal', {
+      version: MUX_PROTOCOL_VERSION,
+      roomId: subscription.roomId,
+      senderRoutingAddress: subscription.routingAddress,
+      recipientRoutingAddress: peerSubscription.routingAddress,
+      connectionGeneration: peerSubscription.connectionGeneration,
+      subscriptionNonce: peerSubscription.nonce,
+      envelope,
+    });
+    ack({ version: MUX_PROTOCOL_VERSION, status: 'routed', roomId: subscription.roomId });
+  }, ack, 'Multiplexed call signal rejected.'));
 
   socket.on('mux-mailbox-replay', (payload: unknown, ack: (response: Record<string, unknown>) => void = () => undefined) => enqueue(socket, async () => {
     const body = payload as Record<string, unknown> | null;

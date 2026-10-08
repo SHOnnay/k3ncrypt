@@ -4,6 +4,7 @@ import type { CryptoChannel, EncryptedEnvelope, InboundTransportDecision, Transp
 import type { DeviceProofCarrier, DeviceResourceContext } from '../devices/trustProtocol';
 import type { DeviceProofOperation } from '../devices/deviceProofClient';
 import { testDiagnosticsEnabled } from '../utils/testDiagnostics';
+import { ROOM_CALL_SIGNAL_V2_FEATURE } from '../calls/callSecurityPolicy';
 
 export const MUX_RELAY_PROTOCOL_VERSION = 1;
 export const MUX_RELAY_MAX_ROOMS = 128;
@@ -12,7 +13,7 @@ type RoomConfig = { roomId: string; localRoutingAddress: string; peerRoutingAddr
 type RoomState = RoomConfig & { manager: MultiplexedRoomTransportManager; handler?: TransportEnvelopeHandler; nonce?: string; expiresAt?: number; peerFeatures: Set<string>; renewalTimer?: ReturnType<typeof setTimeout>; joining?: Promise<void> };
 type Ack = Record<string, unknown> & { error?: string };
 
-const ALLOWED_FEATURES = new Set(['join-introduction-v1', 'room-message-v1']);
+const ALLOWED_FEATURES = new Set(['join-introduction-v1', 'room-message-v1', ROOM_CALL_SIGNAL_V2_FEATURE]);
 const strictFeatures = (features: readonly string[]): string[] => {
   if (features.some((item) => !ALLOWED_FEATURES.has(item)) || new Set(features).size !== features.length) throw new Error('Unsupported mux protocol feature.');
   return [...features];
@@ -42,6 +43,7 @@ export class MultiplexedRelayConnection {
     });
     this.socket.on('connect', () => { void this.restoreRooms(); });
     this.socket.on('mux-envelope', (frame: unknown, ack?: (response: Record<string, unknown>) => void) => { void this.acceptEnvelope(frame, ack); });
+    this.socket.on('mux-call-signal', (frame: unknown) => { void this.acceptCallSignal(frame); });
     this.socket.on('mux-peer-subscription', (payload: unknown) => this.acceptPeerSubscription(payload));
     this.socket.on('mux-delivery-status', (payload: unknown) => this.acceptDeliveryStatus(payload));
     this.socket.on('mux-room-suspended', (payload: unknown) => { void this.acceptRoomSuspended(payload); });
@@ -172,9 +174,44 @@ export class MultiplexedRelayConnection {
 
   public sendEnvelope(roomId: string, channel: CryptoChannel, envelope: EncryptedEnvelope): Promise<{ id?: string; timestamp?: number; terminalRejection?: true }> {
     const room = this.requireRoom(roomId);
-    if (channel !== 'message') throw new Error('Call signaling remains on its separate legacy relay path.');
+    if (channel === 'signaling') return this.sendCallSignal(room, envelope);
     if (!room.manager.requiresRoomMessageV1 || !room.peerFeatures.has('room-message-v1')) throw new Error('The peer has not negotiated room-message-v1 over the multiplexed relay.');
     return this.sendMuxEnvelope(room, envelope);
+  }
+
+  private async sendCallSignal(room: RoomState, envelope: EncryptedEnvelope): Promise<TransportSendResult> {
+    if (!room.peerFeatures.has(ROOM_CALL_SIGNAL_V2_FEATURE)) throw new Error('The peer has not negotiated authenticated room call signaling over the multiplexed relay.');
+    await this.ensureAuthenticated();
+    const generation = this.socket.id;
+    if (!generation || generation !== this.authenticatedGeneration || !room.nonce || !room.expiresAt || room.expiresAt <= Date.now() || !this.proofProvider) {
+      throw new Error('An active room subscription is required before call signaling.');
+    }
+    const resource = { conversationId: room.roomId, routingAddress: room.localRoutingAddress,
+      peerRoutingAddress: room.peerRoutingAddress, connectionGeneration: generation };
+    const proof = await this.proofProvider.acquire('relay:signal', resource);
+    const response = await this.emitAck('mux-send-signal', {
+      version: MUX_RELAY_PROTOCOL_VERSION, roomId: room.roomId, envelope,
+      ...proof, proofOperation: 'relay:signal',
+    });
+    if (response.status !== 'routed' || response.roomId !== room.roomId) throw new Error('Mux relay did not route the encrypted call signal.');
+    return {};
+  }
+
+  private async acceptCallSignal(frame: unknown): Promise<void> {
+    const body = frame as Record<string, unknown> | null;
+    const room = body && typeof body.roomId === 'string' ? this.rooms.get(body.roomId) : undefined;
+    if (!body || typeof body !== 'object' || Array.isArray(body) || !room || !room.handler ||
+        Object.keys(body).sort().join('\0') !== ['connectionGeneration', 'envelope', 'recipientRoutingAddress', 'roomId', 'senderRoutingAddress', 'subscriptionNonce', 'version'].sort().join('\0') ||
+        body.version !== MUX_RELAY_PROTOCOL_VERSION || body.roomId !== room.roomId ||
+        body.recipientRoutingAddress !== room.localRoutingAddress || body.senderRoutingAddress !== room.peerRoutingAddress ||
+        body.connectionGeneration !== this.socket.id || body.connectionGeneration !== this.authenticatedGeneration ||
+        body.connectionGeneration !== room.manager.currentGeneration() || body.subscriptionNonce !== room.nonce ||
+        !room.expiresAt || room.expiresAt <= Date.now() || !room.peerFeatures.has(ROOM_CALL_SIGNAL_V2_FEATURE) ||
+        !body.envelope || typeof body.envelope !== 'object' || Array.isArray(body.envelope)) return;
+    try {
+      await room.handler({ conversationId: room.roomId, channel: 'signaling', envelope: body.envelope as EncryptedEnvelope,
+        senderRoutingId: room.peerRoutingAddress });
+    } catch { /* AuthenticatedCallSignalTransport owns the safe call failure state. */ }
   }
 
   private async sendMuxEnvelope(room: RoomState, envelope: EncryptedEnvelope): Promise<{ id?: string; timestamp?: number; terminalRejection?: true }> {

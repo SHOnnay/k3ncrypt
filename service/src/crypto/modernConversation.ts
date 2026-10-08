@@ -18,6 +18,7 @@ import { ConversationModeStore } from './conversationMode';
 import { VodozemacRuntime, type OutboundSessionInitialization, type VodozemacBindingsLoader } from './vodozemacRuntime';
 import { createAuthenticatedCallComposition, type AuthenticatedCallComposition } from '../calls/composition';
 import { VerifiedCallIdentityVerifier } from '../calls/signalBinding';
+import { ROOM_CALL_SIGNAL_V2_FEATURE } from '../calls/callSecurityPolicy';
 import type { CallParticipant } from '../calls/contracts';
 import { AuthenticatedDeviceControlChannel, SecureStorageDeviceLifecyclePersistence, type DeviceControlMessage } from '../devices/runtime';
 import { DeviceTrustEnforcer, TrustStateEventCoordinator, type DeviceTrustDecision, type TrustStateEvent } from '../devices/trust';
@@ -560,7 +561,7 @@ export class ModernConversation {
             activeTransport.setDeviceProofProvider(this.durableProofs);
         }
         if (!routingProof) throw new Error('Modern routing ownership proof is unavailable.');
-        this.transport.activeTransport()?.setProtocolFeatures?.([JOIN_INTRODUCTION_FEATURE, ROOM_MESSAGE_V1_FEATURE]);
+        this.transport.activeTransport()?.setProtocolFeatures?.([JOIN_INTRODUCTION_FEATURE, ROOM_MESSAGE_V1_FEATURE, ROOM_CALL_SIGNAL_V2_FEATURE]);
         await this.roomTransport!.connect(localAddress, capability, routingProof);
         if (this.joinIntroductionPending) await this.sendJoinIntroductionUnlocked();
         if (trustSnapshot.list.devices.filter((entry) => entry.state === 'active').length > 1) {
