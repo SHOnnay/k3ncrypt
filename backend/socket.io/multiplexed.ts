@@ -38,6 +38,7 @@ type DeviceSocket = { socketId: string; generation: string };
 const deviceSockets = new Map<string, DeviceSocket>();
 const operationQueues = new WeakMap<CustomSocket, Promise<void>>();
 const subscriptionTimers = new WeakMap<CustomSocket, Map<string, ReturnType<typeof setTimeout>>>();
+const muxRoomSockets = new Map<string, Map<string, CustomSocket>>();
 const clients = getClientInstance();
 
 const exactKeys = (value: Record<string, unknown>, keys: readonly string[]): boolean =>
@@ -105,7 +106,17 @@ const removeSubscription = (socket: CustomSocket, subscription: MuxRoomSubscript
   const timer = timers?.get(subscription.roomId);
   if (timer) clearTimeout(timer);
   timers?.delete(subscription.roomId);
-  clients.deleteClient(subscription.routingAddress, subscription.roomId, socket.id);
+  const roomSockets = muxRoomSockets.get(subscription.roomId);
+  if (roomSockets?.get(subscription.routingAddress) === socket) roomSockets.delete(subscription.routingAddress);
+  if (roomSockets?.size === 0) muxRoomSockets.delete(subscription.roomId);
+};
+
+/** Counts legacy and mux routes together without putting mux sockets in the legacy delivery table. */
+export const muxWouldExceedChannelCapacity = (routingAddress: string, roomId: string, capacity: number): boolean => {
+  if (!routingAddress || !roomId || !Number.isInteger(capacity) || capacity < 1) return true;
+  const routes = new Set(Object.keys(clients.getClientsByChannel(roomId)));
+  for (const address of muxRoomSockets.get(roomId)?.keys() ?? []) routes.add(address);
+  return routes.size >= capacity && !routes.has(routingAddress);
 };
 
 const scheduleSubscriptionExpiry = (socket: CustomSocket, subscription: MuxRoomSubscription): void => {
@@ -178,12 +189,14 @@ export const registerMultiplexedRelay = (socket: CustomSocket, io: MuxServer): v
     if (!valid) { reject(); return; }
     const subscriptions = socket.muxSubscriptions ??= new Map();
     if (!subscriptions.has(roomId) && subscriptions.size >= MUX_MAX_ROOM_SUBSCRIPTIONS) { reject(); return; }
-    if (clients.wouldExceedChannelCapacity(routingAddress, roomId, 2)) { reject(); return; }
     if (!await verifyMuxCarrier(socket, body as unknown as ProofCarrier, 'relay:subscribe', resource, false) || !await activeBoundDevice(socket) ||
         !isCurrentMuxSocket(socket) || socket.connected === false || socket.muxConnectionGeneration !== generation) {
       reject();
       return;
     }
+    if (muxWouldExceedChannelCapacity(routingAddress, roomId, 2)) { reject(); return; }
+    const existingRouteSocket = muxRoomSockets.get(roomId)?.get(routingAddress);
+    if (existingRouteSocket && existingRouteSocket !== socket && existingRouteSocket.connected !== false) { reject(); return; }
     const proof = body.deviceAuthorizationProof as DeviceAuthorizationProof;
     const next: MuxRoomSubscription = Object.freeze({
       version: MUX_PROTOCOL_VERSION,
@@ -200,10 +213,14 @@ export const registerMultiplexedRelay = (socket: CustomSocket, io: MuxServer): v
     const previous = subscriptions.get(roomId);
     if (previous) removeSubscription(socket, previous);
     subscriptions.set(roomId, next);
+    const roomSockets = muxRoomSockets.get(roomId) ?? new Map<string, CustomSocket>();
+    muxRoomSockets.set(roomId, roomSockets);
+    roomSockets.set(routingAddress, socket);
     scheduleSubscriptionExpiry(socket, next);
-    clients.setClientToChannel(routingAddress, roomId, socket.id);
-    const peerSid = clients.getSIDByIDs(peerRoutingAddress, roomId)?.sid;
-    const peer = peerSid ? io.sockets.sockets.get(peerSid) as CustomSocket | undefined : undefined;
+    const peer = roomSockets.get(peerRoutingAddress) ?? (() => {
+      const peerSid = clients.getSIDByIDs(peerRoutingAddress, roomId)?.sid;
+      return peerSid ? io.sockets.sockets.get(peerSid) as CustomSocket | undefined : undefined;
+    })();
     const peerMux = peer?.muxSubscriptions?.get(roomId);
     const peerFeatures = peerMux?.routingAddress === peerRoutingAddress && peerMux.peerRoutingAddress === routingAddress
       ? peerMux.protocolFeatures
@@ -247,5 +264,5 @@ const channelValid = async (roomId: string): Promise<{ valid: boolean }> => {
 };
 
 // Exposed for unit tests; IDs and capabilities are never logged.
-export const testOnlyResetMuxDeviceRegistry = (): void => { deviceSockets.clear(); };
+export const testOnlyResetMuxDeviceRegistry = (): void => { deviceSockets.clear(); muxRoomSockets.clear(); };
 export const testOnlyFreshSubscriptionNonce = (): string => randomUUID();

@@ -8,7 +8,7 @@ import db, { type OfflineRejectionReason } from '../db';
 import { PREKEY_COLLECTION } from '../db/const';
 import { durableDeviceTrustAuthority, MongoDeviceTrustStore } from '../security/durableDeviceTrust';
 import type { DeviceAuthorizationProof, DeviceOperation } from '../security/deviceTrust';
-import { registerMultiplexedRelay } from './multiplexed';
+import { muxWouldExceedChannelCapacity, registerMultiplexedRelay } from './multiplexed';
 
 const clients = getClientInstance();
 
@@ -233,7 +233,7 @@ const connectionListener = (socket: CustomSocket, io) => {
       return;
     }
     const previousConnection = clients.getSIDByIDs(userID, channelID)?.sid;
-    if (clients.wouldExceedChannelCapacity(userID, channelID, 2)) {
+    if (muxWouldExceedChannelCapacity(userID, channelID, 2)) {
       socketEmit<SOCKET_TOPIC.LIMIT_REACHED>(SOCKET_TOPIC.LIMIT_REACHED, socket.id, null);
       rejectJoin('Channel is full.', 'channel-full');
       socket.disconnect();

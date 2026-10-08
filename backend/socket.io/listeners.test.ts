@@ -7,7 +7,7 @@ import type { CustomSocket } from './index';
 import db from '../db';
 import { PREKEY_COLLECTION } from '../db/const';
 import { hashControlCapability } from '../security/controlCapability';
-import { testOnlyResetMuxDeviceRegistry } from './multiplexed';
+import { muxWouldExceedChannelCapacity, testOnlyResetMuxDeviceRegistry } from './multiplexed';
 
 describe('relay wire-envelope schema', () => {
   it('accepts bounded opaque versioned envelopes', () => {
@@ -182,6 +182,8 @@ it('authenticates one device socket and independently authorizes two room subscr
   const capA = randomBytes(32).toString('base64url'); const capB = randomBytes(32).toString('base64url');
   const routeProofs = new Map([[`${roomA}:${routeA}`, randomBytes(32).toString('base64url')], [`${roomA}:${peerA}`, randomBytes(32).toString('base64url')], [`${roomB}:${routeB}`, randomBytes(32).toString('base64url')], [`${roomB}:${peerB}`, randomBytes(32).toString('base64url')]]);
   const roomCaps = new Map([[roomA, capA], [roomB, capB]]);
+  const clients = getClientInstance();
+  const legacyRoute = randomUUID();
   let currentDevice = { state: 'active', trustEpoch: 4 };
   const handlers = new Map<string, (...args: any[]) => unknown>();
   const socket = { id: randomUUID(), deviceId: undefined as string | undefined, accountIdentityReference: undefined as string | undefined,
@@ -223,6 +225,10 @@ it('authenticates one device socket and independently authorizes two room subscr
     await expect(subscribe(roomA, routeA, peerA, capA, routeProofs.get(`${roomA}:${routeA}`)!)).resolves.toMatchObject({ status: 'subscribed', roomId: roomA, connectionGeneration: generation });
     await expect(subscribe(roomB, routeB, peerB, capB, routeProofs.get(`${roomB}:${routeB}`)!)).resolves.toMatchObject({ status: 'subscribed', roomId: roomB, connectionGeneration: generation });
     expect(socket.muxSubscriptions?.size).toBe(2);
+    expect(clients.getSIDByIDs(routeA, roomA)).toBeFalsy();
+    clients.setClientToChannel(legacyRoute, roomA, 'legacy-test-socket');
+    expect(muxWouldExceedChannelCapacity(randomUUID(), roomA, 2)).toBe(true);
+    expect(muxWouldExceedChannelCapacity(routeA, roomA, 2)).toBe(false);
 
     await expect(subscribe(roomA, routeA, routeA, capA, routeProofs.get(`${roomA}:${routeA}`)!)).resolves.toEqual({ error: 'Room subscription rejected.' });
     await expect(subscribe(roomA, routeA, peerA, capA, routeProofs.get(`${roomA}:${routeA}`)!, randomUUID(), roomB)).resolves.toEqual({ error: 'Room subscription rejected.' });
@@ -244,6 +250,7 @@ it('authenticates one device socket and independently authorizes two room subscr
     await expect(invoke('mux-unsubscribe', { roomId: roomB, connectionGeneration: generation, subscriptionNonce: socket.muxSubscriptions?.get(roomB)?.nonce })).resolves.toEqual({ error: 'Room unsubscribe rejected.' });
   } finally {
     handlers.get('disconnect')?.();
+    clients.deleteClient(legacyRoute, roomA, 'legacy-test-socket');
     testOnlyResetMuxDeviceRegistry();
     lookupSpy.mockRestore(); dbSpy.mockRestore(); authoritySpy.mockRestore();
   }

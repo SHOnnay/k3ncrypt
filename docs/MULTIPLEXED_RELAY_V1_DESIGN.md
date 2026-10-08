@@ -647,12 +647,15 @@ The server serializes authenticate/subscribe/unsubscribe operations per socket.
 Subscription and unsubscription must match the current generation and active
 device trust epoch. A newly authenticated socket supersedes the old one; old
 socket disconnect cleanup uses expected socket IDs so it cannot erase a newer
-route. A subscription expires with its proof (at most five minutes), is removed
-from the room's live route map at expiry, and is renewed with a fresh proof one
-minute before expiry. The client and server both cap room subscriptions at
-128. Reconnect uses a new socket ID, fresh connect proof, and serial fresh
-subscribe proofs; failed subscriptions are not treated as active. No raw
-proofs, capabilities, routes, or room contents are logged.
+route. Mux presence lives in a separate in-memory room map and never enters the
+legacy recipient-routing table. Both paths enforce the two-participant limit
+against the union of distinct legacy and mux routing addresses. A subscription
+expires with its proof (at most five minutes), is removed from the mux room map
+at expiry, and is renewed with a fresh proof one minute before expiry. The
+client and server both cap room subscriptions at 128. Reconnect uses a new
+socket ID, fresh connect proof, and serial fresh subscribe proofs; failed
+subscriptions are not treated as active. No raw proofs, capabilities, routes,
+or room contents are logged.
 
 Proof request IDs and nonces, then issued proof IDs, are each consumed once in
 the existing `device_proof_nonces` collection. Its existing unique
