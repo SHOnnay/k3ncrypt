@@ -1,7 +1,7 @@
 import makeRequest from '../api/client';
 import { signDeviceProofRequest, type ControlEventSigner, type DeviceAuthorizationProof, type DeviceProofCarrier, type DeviceProofRequest, type DeviceResourceContext } from './trustProtocol';
 
-export type DeviceProofOperation = 'relay:message' | 'relay:signal' | 'attachment:create' | 'attachment:write' | 'attachment:read' | 'attachment:delete' | 'private-network:relay' | 'bridge:authorize' | 'device-control';
+export type DeviceProofOperation = 'relay:connect' | 'relay:subscribe' | 'relay:message' | 'relay:signal' | 'attachment:create' | 'attachment:write' | 'attachment:read' | 'attachment:delete' | 'private-network:relay' | 'bridge:authorize' | 'device-control';
 export type DeviceProofIdentity = { accountIdentityReference: string; deviceId: string; deviceIdentityReference: string; epoch: number };
 
 const nonce = (): string => crypto.randomUUID().replace(/-/g, '');
@@ -12,10 +12,11 @@ export class DeviceProofClient {
 
     public async acquire(operation: DeviceProofOperation, resource?: DeviceResourceContext): Promise<DeviceProofCarrier> {
         const current = await this.identity(); const createdAt = this.now(); const proofNonce = nonce();
+        const lifetimeMs = operation === 'relay:subscribe' ? 5 * 60_000 : 30_000;
         const request: Omit<DeviceProofRequest, 'signature'> = {
             version: 1, requestId: crypto.randomUUID(), accountIdentityReference: current.accountIdentityReference,
             deviceId: current.deviceId, deviceIdentityReference: current.deviceIdentityReference, operation,
-            nonce: proofNonce, epoch: current.epoch, ...(resource ? { resource } : {}), createdAt, expiresAt: createdAt + 30_000,
+            nonce: proofNonce, epoch: current.epoch, ...(resource ? { resource } : {}), createdAt, expiresAt: createdAt + lifetimeMs,
         };
         const signed = await signDeviceProofRequest(this.signer, request);
         const proof = await makeRequest<DeviceAuthorizationProof, DeviceProofRequest>('device-trust/proof', { method: 'POST', body: signed });

@@ -11,6 +11,8 @@ export interface CustomSocket extends Socket {
   accountIdentityReference?: string
   deviceTrustEpoch?: number
   protocolFeatures?: string[]
+  muxConnectionGeneration?: string
+  muxSubscriptions?: Map<string, import('./multiplexed').MuxRoomSubscription>
 }
 
 /** Opaque, versioned envelope — the server never inspects its contents. */

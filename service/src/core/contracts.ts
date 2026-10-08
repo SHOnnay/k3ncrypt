@@ -113,6 +113,8 @@ export interface TransportManager {
     join(conversationId: string, peerRoutingId: string, controlCapability: string, routingProof?: string): Promise<void>;
     sendEnvelope(channel: CryptoChannel, envelope: EncryptedEnvelope, recipientRoutingId?: string, proofOperation?: string): Promise<{ id?: string; timestamp?: number }>;
     activeTransport(): Transport | undefined;
+    /** Optional room transport hook for registering its immutable inbound handler. */
+    setEnvelopeHandler?(handler: TransportEnvelopeHandler | undefined): void;
 }
 
 /**

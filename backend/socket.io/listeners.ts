@@ -8,6 +8,7 @@ import db, { type OfflineRejectionReason } from '../db';
 import { PREKEY_COLLECTION } from '../db/const';
 import { durableDeviceTrustAuthority, MongoDeviceTrustStore } from '../security/durableDeviceTrust';
 import type { DeviceAuthorizationProof, DeviceOperation } from '../security/deviceTrust';
+import { registerMultiplexedRelay } from './multiplexed';
 
 const clients = getClientInstance();
 
@@ -192,7 +193,9 @@ const findPeerSid = (socket: CustomSocket): string | undefined => {
 };
 
 const connectionListener = (socket: CustomSocket, io) => {
+  registerMultiplexedRelay(socket, io);
   socket.on("chat-join", async (data, ack: Ack = noop) => {
+    if (socket.muxConnectionGeneration) { ack({ error: 'Legacy room join is unavailable on a multiplexed connection.' }); return; }
     const rejectJoin = (error: string, code: string) => ack(process.env.NODE_ENV === 'production' ? { error } : { error, code });
     const { userID, channelID, controlCapability, routingProof, deviceAuthorizationProof, proofNonce, protocolFeatures } = data || {};
     const parsedFeatures = parseProtocolFeatures(protocolFeatures);

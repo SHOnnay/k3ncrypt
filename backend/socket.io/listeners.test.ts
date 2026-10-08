@@ -6,6 +6,8 @@ import * as durableTrust from '../security/durableDeviceTrust';
 import type { CustomSocket } from './index';
 import db from '../db';
 import { PREKEY_COLLECTION } from '../db/const';
+import { hashControlCapability } from '../security/controlCapability';
+import { testOnlyResetMuxDeviceRegistry } from './multiplexed';
 
 describe('relay wire-envelope schema', () => {
   it('accepts bounded opaque versioned envelopes', () => {
@@ -171,4 +173,78 @@ it('requires the joined recipient room and a live claim generation before termin
     expect(socket.emit).not.toHaveBeenCalledWith('not-accepted', expect.anything());
     expect(ack).toHaveBeenLastCalledWith({ error: 'Terminal mailbox result rejected.' });
   } finally { dbSpy.mockRestore(); rejectSpy.mockRestore(); authoritySpy.mockRestore(); }
+});
+
+it('authenticates one device socket and independently authorizes two room subscriptions', async () => {
+  testOnlyResetMuxDeviceRegistry();
+  const roomA = randomUUID(); const roomB = randomUUID(); const deviceId = randomUUID(); const accountIdentityReference = 'mux-stage1-account';
+  const routeA = randomUUID(); const peerA = randomUUID(); const routeB = randomUUID(); const peerB = randomUUID();
+  const capA = randomBytes(32).toString('base64url'); const capB = randomBytes(32).toString('base64url');
+  const routeProofs = new Map([[`${roomA}:${routeA}`, randomBytes(32).toString('base64url')], [`${roomA}:${peerA}`, randomBytes(32).toString('base64url')], [`${roomB}:${routeB}`, randomBytes(32).toString('base64url')], [`${roomB}:${peerB}`, randomBytes(32).toString('base64url')]]);
+  const roomCaps = new Map([[roomA, capA], [roomB, capB]]);
+  let currentDevice = { state: 'active', trustEpoch: 4 };
+  const handlers = new Map<string, (...args: any[]) => unknown>();
+  const socket = { id: randomUUID(), deviceId: undefined as string | undefined, accountIdentityReference: undefined as string | undefined,
+    deviceTrustEpoch: undefined as number | undefined, muxConnectionGeneration: undefined as string | undefined, muxSubscriptions: new Map(),
+    on: jest.fn((event: string, handler: (...args: any[]) => unknown) => { handlers.set(event, handler); }), emit: jest.fn(), disconnect: jest.fn() } as unknown as CustomSocket;
+  const database = { collection: (name: string) => ({ findOne: async () => name === 'device_lifecycle' ? { deviceId, accountIdentityReference, ...currentDevice } : undefined }) };
+  const dbSpy = jest.spyOn(db, 'getDatabase').mockReturnValue(database as never);
+  const lookupSpy = jest.spyOn(db, 'findOneFromDB').mockImplementation(async (query: any, collection: string) => {
+    if (collection === 'links') {
+      const cap = roomCaps.get(query.hash);
+      return cap ? { hash: query.hash, deleted: false, expired: false, controlCapabilityHash: hashControlCapability(cap) } as never : undefined;
+    }
+    if (collection === PREKEY_COLLECTION) {
+      const renewalProof = routeProofs.get(`${query.channel}:${query.address}`);
+      return renewalProof ? { channel: query.channel, address: query.address, renewalProofHash: createHash('sha256').update(`k3ncrypt-prekey-renewal-v1\0${renewalProof}`).digest('hex'), expiresAt: new Date(Date.now() + 60_000) } as never : undefined;
+    }
+    return undefined;
+  });
+  const consumed = new Set<string>();
+  const authoritySpy = jest.spyOn(durableTrust, 'durableDeviceTrustAuthority').mockReturnValue(({ verify: async (proof: any, operation: string, resource: unknown) => {
+    if (consumed.has(proof.proofId) || proof.operation !== operation || JSON.stringify(proof.resource ?? {}) !== JSON.stringify(resource ?? {})) throw new Error('proof rejected');
+    consumed.add(proof.proofId);
+    return { deviceId, accountIdentityReference, deviceIdentityReference: 'mux-identity', trustEpoch: 4, state: 'active', verificationKeyReference: 'test-key', createdAt: new Date(), lastTrustUpdate: new Date() };
+  } } as never));
+  const proof = (operation: string, resource: object, nonce: string) => ({ version: 1, proofId: randomUUID(), accountIdentityReference, deviceId,
+    deviceIdentityReference: 'mux-identity', operation, trustEpoch: 4, nonce, resource, issuedAt: Date.now(), expiresAt: Date.now() + 300_000, signature: 'sig' });
+  const invoke = (event: string, payload: unknown): Promise<any> => new Promise(resolve => { void handlers.get(event)?.(payload, resolve); });
+  try {
+    connectionListener(socket, { sockets: { sockets: new Map() } });
+    const generation = socket.id;
+    const authNonce = randomUUID();
+    await expect(invoke('mux-authenticate', { connectionGeneration: generation, deviceAuthorizationProof: proof('relay:connect', { connectionGeneration: generation }, authNonce), proofNonce: authNonce, proofOperation: 'relay:connect' })).resolves.toMatchObject({ status: 'authenticated', connectionGeneration: generation });
+
+    const subscribe = async (roomId: string, routingAddress: string, peerRoutingAddress: string, controlCapability: string, routingProof: string, nonce = randomUUID(), proofRoom = roomId) => {
+      const resource = { conversationId: proofRoom, routingAddress, peerRoutingAddress, connectionGeneration: generation };
+      return invoke('mux-subscribe', { version: 1, roomId, routingAddress, peerRoutingAddress, controlCapability, routingProof, connectionGeneration: generation,
+        protocolFeatures: ['room-message-v1'], deviceAuthorizationProof: proof('relay:subscribe', resource, nonce), proofNonce: nonce, proofOperation: 'relay:subscribe' });
+    };
+    await expect(subscribe(roomA, routeA, peerA, capA, routeProofs.get(`${roomA}:${routeA}`)!)).resolves.toMatchObject({ status: 'subscribed', roomId: roomA, connectionGeneration: generation });
+    await expect(subscribe(roomB, routeB, peerB, capB, routeProofs.get(`${roomB}:${routeB}`)!)).resolves.toMatchObject({ status: 'subscribed', roomId: roomB, connectionGeneration: generation });
+    expect(socket.muxSubscriptions?.size).toBe(2);
+
+    await expect(subscribe(roomA, routeA, routeA, capA, routeProofs.get(`${roomA}:${routeA}`)!)).resolves.toEqual({ error: 'Room subscription rejected.' });
+    await expect(subscribe(roomA, routeA, peerA, capA, routeProofs.get(`${roomA}:${routeA}`)!, randomUUID(), roomB)).resolves.toEqual({ error: 'Room subscription rejected.' });
+    await expect(subscribe(randomUUID(), randomUUID(), randomUUID(), randomBytes(32).toString('base64url'), randomBytes(32).toString('base64url'))).resolves.toEqual({ error: 'Room subscription rejected.' });
+    const replayNonce = randomUUID(); const replayProof = proof('relay:subscribe', { conversationId: roomA, routingAddress: routeA, peerRoutingAddress: peerA, connectionGeneration: generation }, replayNonce);
+    const replayPayload = { version: 1, roomId: roomA, routingAddress: routeA, peerRoutingAddress: peerA, controlCapability: capA, routingProof: routeProofs.get(`${roomA}:${routeA}`), connectionGeneration: generation, protocolFeatures: [], deviceAuthorizationProof: replayProof, proofNonce: replayNonce, proofOperation: 'relay:subscribe' };
+    await expect(invoke('mux-subscribe', replayPayload)).resolves.toMatchObject({ status: 'subscribed' });
+    await expect(invoke('mux-subscribe', replayPayload)).resolves.toEqual({ error: 'Room subscription rejected.' });
+    await expect(invoke('mux-unsubscribe', { roomId: roomA, connectionGeneration: 'stale-generation', subscriptionNonce: replayNonce })).resolves.toEqual({ error: 'Room unsubscribe rejected.' });
+    const raceNonce = randomUUID();
+    const raceUnsubscribe = invoke('mux-unsubscribe', { roomId: roomA, connectionGeneration: generation, subscriptionNonce: replayNonce });
+    const raceSubscribe = subscribe(roomA, routeA, peerA, capA, routeProofs.get(`${roomA}:${routeA}`)!, raceNonce);
+    await expect(Promise.all([raceUnsubscribe, raceSubscribe])).resolves.toEqual([
+      { status: 'unsubscribed', roomId: roomA, connectionGeneration: generation },
+      expect.objectContaining({ status: 'subscribed', roomId: roomA }),
+    ]);
+    expect(socket.muxSubscriptions?.get(roomA)?.nonce).toBe(raceNonce);
+    currentDevice = { state: 'revoked', trustEpoch: 5 };
+    await expect(invoke('mux-unsubscribe', { roomId: roomB, connectionGeneration: generation, subscriptionNonce: socket.muxSubscriptions?.get(roomB)?.nonce })).resolves.toEqual({ error: 'Room unsubscribe rejected.' });
+  } finally {
+    handlers.get('disconnect')?.();
+    testOnlyResetMuxDeviceRegistry();
+    lookupSpy.mockRestore(); dbSpy.mockRestore(); authoritySpy.mockRestore();
+  }
 });

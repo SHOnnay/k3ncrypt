@@ -329,41 +329,42 @@ export class ModernConversation {
         this.runtime = new VodozemacRuntime(storage, loader);
         this.registry = new ContactIdentityRegistry(storage);
         this.modes = new ConversationModeStore(storage);
-        const relay = transportManager ? undefined : new SocketIoRelayTransport(() => this.subscriptions, new Logger('ModernConversation'),
-            async (message) => {
-                if (!this.roomId || message.conversationId !== this.roomId) throw new Error('Inbound relay event is not bound to this room.');
-                if (message.channel === 'signaling') {
-                    testOnlyCallSignalStage('signal-received');
-                    try {
-                        if (this.sessionHealth === 'unhealthy') throw new Error('signaling_session_unhealthy');
-                        await this.assertCurrentDeviceTrust();
-                        testOnlyCallSignalStage('trust-check-passed');
-                        this.prepareDeviceControl();
-                        if (this.deviceControlChannel) {
-                            testOnlyCallSignalStage('signal-decrypt-started');
-                            const plaintext = await this.runtime.decrypt('signaling', message.envelope);
-                            testOnlyCallSignalStage('signal-decrypted');
-                            const control = await this.deviceControlChannel.decode(plaintext);
-                            if (control) await this.handleDeviceControl(control);
-                            else if (this.callSignalTransport) {
-                                await this.callSignalTransport.receivePlaintext(plaintext);
-                                testOnlyCallSignalStage('call-signal-accepted');
-                            } else testOnlyCallSignalStage('call-listener-unavailable');
-                        } else if (this.callSignalTransport) {
-                            testOnlyCallSignalStage('signal-decrypt-started');
-                            await this.callSignalTransport.receive(message.envelope);
-                            testOnlyCallSignalStage('signal-decrypted');
+        const inboundHandler = async (message: import('../core/contracts').InboundTransportEnvelope): Promise<boolean | import('../core/contracts').InboundTransportDecision> => {
+            if (!this.roomId || message.conversationId !== this.roomId) throw new Error('Inbound relay event is not bound to this room.');
+            if (message.channel === 'signaling') {
+                testOnlyCallSignalStage('signal-received');
+                try {
+                    if (this.sessionHealth === 'unhealthy') throw new Error('signaling_session_unhealthy');
+                    await this.assertCurrentDeviceTrust();
+                    testOnlyCallSignalStage('trust-check-passed');
+                    this.prepareDeviceControl();
+                    if (this.deviceControlChannel) {
+                        testOnlyCallSignalStage('signal-decrypt-started');
+                        const plaintext = await this.runtime.decrypt('signaling', message.envelope);
+                        testOnlyCallSignalStage('signal-decrypted');
+                        const control = await this.deviceControlChannel.decode(plaintext);
+                        if (control) await this.handleDeviceControl(control);
+                        else if (this.callSignalTransport) {
+                            await this.callSignalTransport.receivePlaintext(plaintext);
                             testOnlyCallSignalStage('call-signal-accepted');
                         } else testOnlyCallSignalStage('call-listener-unavailable');
-                    } catch {
-                        testOnlyCallSignalStage('signal-handler-rejected');
-                        throw new Error('Authenticated signaling receive failed.');
-                    }
-                    return false;
+                    } else if (this.callSignalTransport) {
+                        testOnlyCallSignalStage('signal-decrypt-started');
+                        await this.callSignalTransport.receive(message.envelope);
+                        testOnlyCallSignalStage('signal-decrypted');
+                        testOnlyCallSignalStage('call-signal-accepted');
+                    } else testOnlyCallSignalStage('call-listener-unavailable');
+                } catch {
+                    testOnlyCallSignalStage('signal-handler-rejected');
+                    throw new Error('Authenticated signaling receive failed.');
                 }
-                return this.decideInbound(message.envelope, message.senderRoutingId);
-            });
+                return false;
+            }
+            return this.decideInbound(message.envelope, message.senderRoutingId);
+        };
+        const relay = transportManager ? undefined : new SocketIoRelayTransport(() => this.subscriptions, new Logger('ModernConversation'), inboundHandler);
         this.transportManager = transportManager ?? new DefaultTransportManager(relay!);
+        if (transportManager?.setEnvelopeHandler) transportManager.setEnvelopeHandler(inboundHandler);
         this.subscriptions.set('on-alice-join', new Set([() => {
             void this.retryPending();
             void this.retryJoinIntroduction();
@@ -391,7 +392,7 @@ export class ModernConversation {
             finally { this.connecting = false; }
         }, true);
         const activeTransport = this.transport.activeTransport();
-        if (this.sessionHealth !== 'unhealthy' && activeTransport instanceof SocketIoRelayTransport) await activeTransport.requestMailboxReplay();
+        if (this.sessionHealth !== 'unhealthy' && activeTransport && 'requestMailboxReplay' in activeTransport && typeof activeTransport.requestMailboxReplay === 'function') await activeTransport.requestMailboxReplay();
         return details;
     }
 
@@ -541,7 +542,7 @@ export class ModernConversation {
         this.prepareDeviceControl();
 
         const activeTransport = this.transport.activeTransport();
-        if (activeTransport instanceof SocketIoRelayTransport) {
+        if (activeTransport && 'setDeviceProofProvider' in activeTransport && typeof activeTransport.setDeviceProofProvider === 'function') {
             this.durableProofs = new DeviceProofClient(
                 { signControlEvent: (payload) => this.runtime.signControlEvent(payload) },
                 async () => {

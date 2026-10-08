@@ -1,11 +1,14 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
 
-export type DeviceOperation = 'relay:message' | 'relay:signal' | 'attachment:create' | 'attachment:write' | 'attachment:read' | 'attachment:delete' | 'private-network:relay' | 'bridge:authorize' | 'device-control';
-export type DeviceResourceContext = { conversationId?: string; networkId?: string; attachmentId?: string; bridgeRouteId?: string };
+export type DeviceOperation = 'relay:connect' | 'relay:subscribe' | 'relay:message' | 'relay:signal' | 'attachment:create' | 'attachment:write' | 'attachment:read' | 'attachment:delete' | 'private-network:relay' | 'bridge:authorize' | 'device-control';
+export type DeviceResourceContext = {
+  conversationId?: string; networkId?: string; attachmentId?: string; bridgeRouteId?: string;
+  connectionGeneration?: string; routingAddress?: string; peerRoutingAddress?: string;
+};
 export type DeviceLifecycleRecord = { accountIdentityReference: string; deviceId: string; deviceIdentityReference: string; verificationKeyReference: string; state: 'pending' | 'active' | 'revoked'; trustEpoch: number; createdAt: number; revokedAt?: number; lastTrustUpdate: number };
 export type DeviceAuthorizationProof = { version: 1; proofId: string; accountIdentityReference: string; deviceId: string; deviceIdentityReference: string; operation: DeviceOperation; trustEpoch: number; nonce: string; resource?: DeviceResourceContext; issuedAt: number; expiresAt: number; signature: string };
 
-const operation = new Set<DeviceOperation>(['relay:message', 'relay:signal', 'attachment:create', 'attachment:write', 'attachment:read', 'attachment:delete', 'private-network:relay', 'bridge:authorize', 'device-control']);
+const operation = new Set<DeviceOperation>(['relay:connect', 'relay:subscribe', 'relay:message', 'relay:signal', 'attachment:create', 'attachment:write', 'attachment:read', 'attachment:delete', 'private-network:relay', 'bridge:authorize', 'device-control']);
 const canonical = (proof: Omit<DeviceAuthorizationProof, 'signature'>): string => JSON.stringify(proof);
 const fail = (): never => { throw new Error('Device authorization rejected.'); };
 const equal = (left: string, right: string): boolean => { const a = Buffer.from(left); const b = Buffer.from(right); return a.length === b.length && timingSafeEqual(a, b); };

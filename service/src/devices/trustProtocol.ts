@@ -1,6 +1,16 @@
 /** Canonical, signed inputs for the durable device-trust authority. */
 export type EnrollmentEvent = { version: 1; eventId: string; accountIdentityReference: string; issuerDeviceId: string; issuerIdentityReference: string; issuerEpoch: number; targetDeviceId: string; targetIdentityReference: string; targetVerificationKey: string; targetFingerprint: string; nonce: string; createdAt: number; expiresAt: number; signature: string };
-export type DeviceResourceContext = { conversationId?: string; networkId?: string; attachmentId?: string; bridgeRouteId?: string };
+export type DeviceResourceContext = {
+    conversationId?: string;
+    networkId?: string;
+    attachmentId?: string;
+    bridgeRouteId?: string;
+    /** Socket.IO id; changes on every transport generation. */
+    connectionGeneration?: string;
+    /** Room-scoped routing identifiers, never cryptographic identities. */
+    routingAddress?: string;
+    peerRoutingAddress?: string;
+};
 export type NetworkMembershipOperation = 'add-member' | 'remove-member' | 'update-capability';
 export type NetworkMembershipEvent = { version: 1; eventId: string; networkId: string; accountIdentityReference: string; issuerDeviceId: string; issuerIdentityReference: string; targetDeviceId: string; targetIdentityReference: string; operation: NetworkMembershipOperation; previousEpoch: number; nextEpoch: number; capabilities: readonly string[]; createdAt: number; expiresAt: number; nonce: string; signature: string };
 export type DeviceProofRequest = { version: 1; requestId: string; accountIdentityReference: string; deviceId: string; deviceIdentityReference: string; operation: string; nonce: string; epoch: number; resource?: DeviceResourceContext; createdAt: number; expiresAt: number; signature: string };

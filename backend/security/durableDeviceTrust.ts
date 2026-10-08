@@ -5,7 +5,7 @@ import type { BootstrapRequest, EnrollmentEvent, DeviceProofRequest, DeviceResou
 import type { SignedLifecycleEvent } from './lifecycleEvent';
 import { verifyBootstrapSignature, verifyDeviceControlSignature, verifyLifecycleEvent } from './lifecycleEvent';
 
-const deviceOperations = new Set<import('./deviceTrust').DeviceOperation>(['relay:message', 'relay:signal', 'attachment:create', 'attachment:write', 'attachment:read', 'attachment:delete', 'private-network:relay', 'bridge:authorize', 'device-control']);
+const deviceOperations = new Set<import('./deviceTrust').DeviceOperation>(['relay:connect', 'relay:subscribe', 'relay:message', 'relay:signal', 'attachment:create', 'attachment:write', 'attachment:read', 'attachment:delete', 'private-network:relay', 'bridge:authorize', 'device-control']);
 const PROOF_REQUEST_CLOCK_SKEW_MS = 5_000;
 
 export type ConsumedProofRecord = { proofId: string; deviceId: string; expiresAt: Date; consumedAt: Date };
@@ -102,8 +102,17 @@ export class DurableDeviceTrustAuthority {
     // Proof requests use client wall clocks. Permit a small positive skew while
     // still requiring that the request has not expired at server receipt.
     const record = await this.store.read(request.accountIdentityReference, request.deviceId);
-    if (!record || record.state !== 'active' || !deviceOperations.has(request.operation as import('./deviceTrust').DeviceOperation) || record.deviceIdentityReference !== request.deviceIdentityReference || record.trustEpoch !== request.epoch || request.expiresAt <= now || request.createdAt > now + PROOF_REQUEST_CLOCK_SKEW_MS || !verifyDeviceControlSignature(request, record.verificationKeyReference) || !await this.store.consume(request.requestId, request.deviceId, request.expiresAt)) throw new Error('Device proof request rejected.');
-    const unsigned = { version: 1 as const, proofId: randomUUID(), accountIdentityReference: request.accountIdentityReference, deviceId: request.deviceId, deviceIdentityReference: request.deviceIdentityReference, operation: request.operation as import('./deviceTrust').DeviceOperation, trustEpoch: request.epoch, nonce: request.nonce, ...(request.resource ? { resource: request.resource } : {}), issuedAt: now, expiresAt: Math.min(request.expiresAt, now + 30_000) };
+    const maxLifetime = request.operation === 'relay:subscribe' ? 5 * 60_000 : 30_000;
+    const validMuxResource = request.operation === 'relay:connect'
+      ? !!request.resource && Object.keys(request.resource).sort().join(',') === 'connectionGeneration' && /^[A-Za-z0-9_-]{1,128}$/.test(request.resource.connectionGeneration ?? '')
+      : request.operation === 'relay:subscribe'
+        ? !!request.resource && Object.keys(request.resource).sort().join(',') === 'connectionGeneration,conversationId,peerRoutingAddress,routingAddress' &&
+          /^[A-Za-z0-9_-]{1,128}$/.test(request.resource.connectionGeneration ?? '') &&
+          /^[0-9a-f-]{36}$/i.test(request.resource.conversationId ?? '') && /^[0-9a-f-]{36}$/i.test(request.resource.routingAddress ?? '') &&
+          /^[0-9a-f-]{36}$/i.test(request.resource.peerRoutingAddress ?? '')
+        : true;
+    if (!record || record.state !== 'active' || !deviceOperations.has(request.operation as import('./deviceTrust').DeviceOperation) || record.deviceIdentityReference !== request.deviceIdentityReference || record.trustEpoch !== request.epoch || !validMuxResource || request.expiresAt <= now || request.expiresAt - request.createdAt > maxLifetime || request.createdAt > now + PROOF_REQUEST_CLOCK_SKEW_MS || !verifyDeviceControlSignature(request, record.verificationKeyReference) || !await this.store.consume(request.requestId, request.deviceId, request.expiresAt) || !await this.store.consume(request.nonce, request.deviceId, request.expiresAt)) throw new Error('Device proof request rejected.');
+    const unsigned = { version: 1 as const, proofId: randomUUID(), accountIdentityReference: request.accountIdentityReference, deviceId: request.deviceId, deviceIdentityReference: request.deviceIdentityReference, operation: request.operation as import('./deviceTrust').DeviceOperation, trustEpoch: request.epoch, nonce: request.nonce, ...(request.resource ? { resource: request.resource } : {}), issuedAt: now, expiresAt: Math.min(request.expiresAt, now + maxLifetime) };
     return { ...unsigned, signature: this.sign(unsigned) };
   }
   async verify(proof: import('./deviceTrust').DeviceAuthorizationProof, expectedOperation: import('./deviceTrust').DeviceOperation, expectedResource?: DeviceResourceContext): Promise<DeviceLifecycleRecord> {

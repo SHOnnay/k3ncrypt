@@ -615,3 +615,86 @@ saved rooms repeatedly re-fetches pre-keys despite an existing session, and
 every new relay connection obtains a fresh device proof. Do not weaken proof
 freshness or authorization to reduce the counts; review request policy and
 limit budgets before background multiplexing.
+
+## Stage 1A implementation boundary
+
+The implementation branch adds an opt-in, subscription-only protocol. It is
+not enabled by the UI and does not carry messages, signaling, ACKs, or mailbox
+replay. Existing one-room transport remains the only application delivery path.
+This is a reviewable Stage 1A checkpoint, not production readiness.
+
+The socket generation is the server-issued Socket.IO `socket.id`; the client
+cannot select or reuse it across reconnects. `mux-authenticate` accepts only a
+`relay:connect` device proof whose exact resource is
+`{ connectionGeneration }`. The proof binds account, device identity, trust
+epoch, operation, nonce, and generation. A process-local current-socket table
+allows only the newest authenticated socket for an account/device pair; a
+superseded socket cannot subscribe and is disconnected.
+
+Each `mux-subscribe` carries one version-1 room ID, local and peer routing
+addresses, that room's control capability, local pre-key routing-renewal proof,
+the current generation, negotiated known feature names, and one
+`relay:subscribe` device proof. Its exact resource is
+`{ conversationId, routingAddress, peerRoutingAddress, connectionGeneration }`
+where `conversationId` equals the outer `roomId`. The room control capability
+proves access to that room; the routing-renewal proof proves possession of the
+local route; the device proof proves the active device. None of these asserts
+contact verification or substitutes for client-side pinned identity. The
+subscription record is immutable per room and contains the same route context,
+generation, proof nonce, protocol feature set, and server-enforced expiration.
+
+The server serializes authenticate/subscribe/unsubscribe operations per socket.
+Subscription and unsubscription must match the current generation and active
+device trust epoch. A newly authenticated socket supersedes the old one; old
+socket disconnect cleanup uses expected socket IDs so it cannot erase a newer
+route. A subscription expires with its proof (at most five minutes), is removed
+from the room's live route map at expiry, and is renewed with a fresh proof one
+minute before expiry. The client and server both cap room subscriptions at
+128. Reconnect uses a new socket ID, fresh connect proof, and serial fresh
+subscribe proofs; failed subscriptions are not treated as active. No raw
+proofs, capabilities, routes, or room contents are logged.
+
+Proof request IDs and nonces, then issued proof IDs, are each consumed once in
+the existing `device_proof_nonces` collection. Its existing unique
+`proofId_1_deviceId_1` and `expiresAt_1` TTL indexes cover these records. Stage
+1A therefore requires no Mongo collection/index migration. The in-memory
+socket/subscription table is intentionally process-local; it provides no
+multi-node coordination or durable subscription state. A restart drops all
+subscriptions and requires reconnect/resubscribe.
+
+At this checkpoint the relay still has no mux event dispatcher and the client
+room adapter deliberately rejects `sendEnvelope`. Do not advertise mux message
+delivery or use these subscriptions for production traffic. Before Stage 1B,
+the server needs a room-keyed envelope/mailbox dispatch contract with
+generation-scoped ACK correlation; the client needs persistent per-room
+`ModernConversation` ownership, authenticated room-frame validation, durable
+mailbox acceptance, and ACK only after the existing transactional commit.
+Those paths must pass the full adversarial and three-profile acceptance matrix
+before the protocol can carry messages.
+
+The remaining pre-traffic gates are still open and must be closed before that
+dispatcher is enabled:
+
+- Join introductions sign `createdAt` and persist a once-per-room accepted
+  event ID, but acceptance currently has no future-skew or admission-window
+  rule. Define bounded future skew and replay behavior while preserving old
+  legitimate offline invitations; do not add an arbitrary maximum age.
+- First-prekey accept/commit is transactional in one conversation instance,
+  but that mutex is not a device-wide scheduler. Bound concurrent first-prekey
+  work across all live room conversations while retaining fresh-snapshot retry
+  and ACK-after-commit.
+- `modern-seen-room-message-v1` is a version-1 persistent room record and does
+  not prune authenticated event IDs. Keep that retention. Before expanding
+  replay volume, specify a versioned crash-safe migration/rollback and bounded
+  development resource budget; do not introduce a time-based TTL.
+- Message delivery must use the immutable room handler and remove any implicit
+  selected-room/current-room attribution in every mux receive, rejection, and
+  ACK path. Permanent authenticated rejection must remain distinct from
+  transient decrypt/storage/unsupported-version failure.
+- Revalidate current pinned identity and unchanged status at each protected
+  action that can send or accept identity-sensitive control/call content. This
+  Stage 1A branch has not changed call signaling or call admission.
+
+No Stage 1A code writes the replay store, creates Olm state, or routes an
+application envelope, so these blockers remain isolated for the next security
+review instead of being hidden behind subscription success.
