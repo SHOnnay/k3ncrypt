@@ -226,6 +226,28 @@ it('authenticates one device socket and independently authorizes two room subscr
     await expect(subscribe(roomB, routeB, peerB, capB, routeProofs.get(`${roomB}:${routeB}`)!)).resolves.toMatchObject({ status: 'subscribed', roomId: roomB, connectionGeneration: generation });
     expect(socket.muxSubscriptions?.size).toBe(2);
     expect(clients.getSIDByIDs(routeA, roomA)).toBeFalsy();
+
+    const priorMuxGate = process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY;
+    process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY = 'true';
+    const storeOfflineSpy = jest.spyOn(db, 'storeOfflineMessage').mockImplementation(async (message) => message as never);
+    const countOfflineSpy = jest.spyOn(db, 'countOfflineMessages').mockResolvedValue(1);
+    const cleanupOfflineSpy = jest.spyOn(db, 'cleanupExpiredOfflineMessages').mockReturnValue(0);
+    const muxEnvelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { opaque: 'ciphertext' } };
+    const sendNonce = randomUUID();
+    const sendResource = { conversationId: roomA, routingAddress: routeA, peerRoutingAddress: peerA, connectionGeneration: generation };
+    await expect(invoke('mux-send-message', { version: 1, roomId: roomA, envelope: muxEnvelope,
+      deviceAuthorizationProof: proof('relay:message', sendResource, sendNonce), proofNonce: sendNonce, proofOperation: 'relay:message' }))
+      .resolves.toMatchObject({ version: 1, status: 'stored' });
+    expect(storeOfflineSpy).toHaveBeenCalledWith(expect.objectContaining({ channel: roomA, mailbox: peerA, sender: routeA, envelope: muxEnvelope }));
+    const wrongRoomNonce = randomUUID();
+    await expect(invoke('mux-send-message', { version: 1, roomId: roomA, envelope: muxEnvelope,
+      deviceAuthorizationProof: proof('relay:message', { conversationId: roomB, routingAddress: routeB, peerRoutingAddress: peerB, connectionGeneration: generation }, wrongRoomNonce),
+      proofNonce: wrongRoomNonce, proofOperation: 'relay:message' })).resolves.toEqual({ error: 'Multiplexed message rejected.' });
+    expect(storeOfflineSpy).toHaveBeenCalledTimes(1);
+    storeOfflineSpy.mockRestore(); countOfflineSpy.mockRestore(); cleanupOfflineSpy.mockRestore();
+    if (priorMuxGate === undefined) delete process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY;
+    else process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY = priorMuxGate;
+
     clients.setClientToChannel(legacyRoute, roomA, 'legacy-test-socket');
     expect(muxWouldExceedChannelCapacity(randomUUID(), roomA, 2)).toBe(true);
     expect(muxWouldExceedChannelCapacity(routeA, roomA, 2)).toBe(false);

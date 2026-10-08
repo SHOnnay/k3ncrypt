@@ -8,6 +8,7 @@ import type {
     TransportConnectionState,
     InboundTransportDecision,
     TransportEnvelopeHandler,
+    TransportSendResult,
 } from '../core/contracts';
 import type { chatJoinPayloadType } from '../public/types';
 import type { DeviceProofCarrier, DeviceResourceContext } from '../devices/trustProtocol';
@@ -146,7 +147,7 @@ export class SocketIoRelayTransport implements Transport {
         envelope: EncryptedEnvelope,
         recipientRoutingId?: string,
         proofOperation?: DeviceProofOperation,
-    ): Promise<{ id?: string; timestamp?: number }> {
+    ): Promise<TransportSendResult> {
         const desired = this.desiredConversation;
         if (!desired) throw new Error('Join a conversation before sending relay operations.');
         await this.ensureChannelPresence(desired);

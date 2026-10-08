@@ -1275,6 +1275,8 @@ it('latches authenticated V1 per room and pinned identity, then sends V1 offline
     const transport = fakeTransport();
     const first = new ModernConversation(storage, loader, transport.transport);
     const own = await first.connect(room, key(9), remoteAddress, await remoteCommitment(), messageAcceptance(storage));
+    await seedVerifiedContact(storage, remoteAddress);
+    await first.verifyContact(true);
     const v1 = encodeRoomMessageV1({ roomId: room, senderIdentityReference: await remoteCommitment(),
         recipientIdentityReference: own.ownFingerprint, eventId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', kind: 'text',
         payload: new TextEncoder().encode('authenticated V1') });
@@ -1288,6 +1290,7 @@ it('latches authenticated V1 per room and pinned identity, then sends V1 offline
     const noFeatures = fakeTransport(false, 0, false, true);
     const restarted = new ModernConversation(storage, loader, noFeatures.transport);
     const restored = await restarted.connect(room, key(9), remoteAddress, await remoteCommitment());
+    await restarted.verifyContact(true);
     await expect(readRoomMessageVersionFloor(storage, room, await remoteCommitment())).resolves.toBe(1);
     await restarted.sendWithReceipt('offline peer still gets V1');
     expect(noFeatures.sent).toHaveLength(1);
@@ -1352,6 +1355,8 @@ it('does not raise the message V1 floor when strict transport policy independent
     const transport = fakeTransport(false, 0, true, true);
     const conversation = new ModernConversation(storage, loader, transport.transport);
     await conversation.connect(room, key(9), remoteAddress, await remoteCommitment());
+    await seedVerifiedContact(storage, remoteAddress);
+    await conversation.verifyContact(true);
     await conversation.sendWithReceipt('peer advertises message V1; do not infer from control V2');
     await expect(readRoomMessageVersionFloor(storage, room, await remoteCommitment())).resolves.toBe(0);
     await conversation.requestTrustRefresh();
@@ -1795,6 +1800,8 @@ it('maps a strict authenticated legacy frame to terminal unsupported-message wit
     const delivered = jest.fn(messageAcceptance(storage));
     const conversation = new ModernConversation(storage, loader, fakeTransport(false, 0, false, true).transport);
     await conversation.connect(room, key(9), remoteAddress, await remoteCommitment(), delivered);
+    await seedVerifiedContact(storage, remoteAddress);
+    await conversation.verifyContact(true);
     decryptedBytes = new Uint8Array([1, 1, ...new TextEncoder().encode('legacy but authenticated')]);
     const envelope: EncryptedEnvelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1,
         olmMessage: JSON.stringify({ version: 1, message_type: 1, ciphertext: 'opaque-strict-legacy' }) } };

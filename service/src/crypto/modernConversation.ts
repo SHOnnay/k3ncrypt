@@ -58,6 +58,9 @@ const JOIN_INTRODUCTION_SEEN_RECORD = 'conversation-join-introduction-seen';
 const JOIN_INTRODUCTION_MAGIC = new Uint8Array([0x00, 0x4b, 0x33, 0x4e, 0x43, 0x49, 0x01]);
 const MAX_PENDING = 32;
 const MAX_SEEN = 1024;
+/** V1 replay evidence is retained exactly; delivery fails closed at this ceiling. */
+const MAX_M1_REPLAY_MARKERS_PER_ROOM = 20_000;
+const MAX_ROOM_EVENT_REPLAY_MARKERS_PER_ROOM = 20_000;
 type SessionAudit = {
     version: 1;
     classification: 'unused-outbound' | 'retired-unused-outbound' | 'session-with-message-history' | 'active-established' | 'legacy-unclassified';
@@ -371,6 +374,10 @@ export class ModernConversation {
         }]));
         this.subscriptions.set('delivered', new Set([(id: string) => { void this.acceptDelivery(id); }]));
         this.subscriptions.set('not-accepted', new Set([(id: string) => { void this.rejectDelivery(id); }]));
+        transportManager?.setDeliveryStatusHandler?.((eventId, status) => {
+            const listeners = this.subscriptions.get(status === 'accepted' ? 'delivered' : 'not-accepted');
+            listeners?.forEach((listener) => { try { listener(eventId); } catch { /* Delivery state is persisted by its owner. */ } });
+        });
     }
 
     private get transport(): TransportManager {
@@ -594,6 +601,16 @@ export class ModernConversation {
         return await transport.testOnlyRelayRegistration();
     }
 
+    public testOnlyTransportKind(): 'multiplexed' | 'legacy' {
+        if (!testDiagnosticsEnabled()) throw new Error('Test-only diagnostics are disabled.');
+        return this.transport.activeTransport()?.requiresRoomMessageV1 ? 'multiplexed' : 'legacy';
+    }
+
+    public testOnlyPeerSupportsRoomMessageV1(): boolean {
+        if (!testDiagnosticsEnabled()) throw new Error('Test-only diagnostics are disabled.');
+        return this.transport.activeTransport()?.peerSupportsFeature?.('room-message-v1') === true;
+    }
+
     private async testOnlyRecordInboundStage(stage: InboundDiagnosticStage, senderFingerprint?: string, failureCategory?: string): Promise<void> {
         if (!testDiagnosticsEnabled() || !this.roomId) return;
         try {
@@ -786,6 +803,9 @@ export class ModernConversation {
         await this.assertCurrentDeviceTrust();
         const contact = await this.getContact();
         if (contact?.changeStatus !== 'unchanged') throw new Error('Review this contact’s changed identity before sending.');
+        if (this.transport.activeTransport()?.requiresRoomMessageV1 && (!contact || contact.verification !== 'verified' || !contact.identityId)) {
+            throw new Error('Verify this contact again before using multiplexed delivery.');
+        }
         const rawPayload = encoder.encode(text);
         if (startsWithBytes(rawPayload, JOIN_INTRODUCTION_MAGIC) ||
             (!this.transport.activeTransport()?.peerSupportsFeature?.(ROOM_MESSAGE_V1_FEATURE) && text.startsWith(`${ROOM_MESSAGE_V1_DOMAIN}\0`))) {
@@ -1395,6 +1415,13 @@ export class ModernConversation {
                 await this.testOnlyRecordInboundStage('received', undefined, this.lastInboundFailureCategory);
                 return false;
             }
+            if (this.transport.activeTransport()?.requiresRoomMessageV1) {
+                const contact = await this.getContact();
+                if (!contact || contact.verification !== 'verified' || contact.changeStatus !== 'unchanged' || contact.contactId !== senderAddress) {
+                    this.lastInboundFailureCategory = 'identity-changed';
+                    throw new PermanentInboundRejection('identity-changed');
+                }
+            }
             let wireText: string;
             try { wireText = firstMessage(envelope); }
             catch (error) { this.lastInboundFailureCategory = 'malformed-envelope'; throw error; }
@@ -1412,6 +1439,10 @@ export class ModernConversation {
                 await this.testOnlyRecordInboundStage('persisted');
                 await this.testOnlyRecordInboundStage('acknowledged');
                 return true;
+            }
+            if (m1Seen.length >= MAX_M1_REPLAY_MARKERS_PER_ROOM || roomMessageSeen.length >= MAX_ROOM_EVENT_REPLAY_MARKERS_PER_ROOM) {
+                this.lastInboundFailureCategory = 'replay-store-capacity';
+                return false;
             }
 
             const firstSession = !this.runtime.activeSessionId;
@@ -1467,6 +1498,9 @@ export class ModernConversation {
                     }, { requireRoomMessageV1: this.transport.activeTransport()?.requiresRoomMessageV1 === true || floorGuard.floor >= 1 });
                     payload = decoded.payload;
                     if (decoded.version === 'room-message-v1') {
+                        if (this.transport.activeTransport()?.requiresRoomMessageV1 && decoded.kind === 'join-introduction') {
+                            throw new PermanentInboundRejection('unsupported-message', 'Mux Stage 1B does not admit introductions.');
+                        }
                         authenticatedWrapperVersion = 1;
                         const isIntroduction = startsWithBytes(payload, JOIN_INTRODUCTION_MAGIC);
                         const isAttachmentReference = startsWithBytes(payload, encoder.encode('k3ncrypt-file-'));

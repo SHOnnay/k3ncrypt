@@ -27,6 +27,7 @@ export type { VodozemacSessionFactory } from './identity/vodozemacSessionStore';
 export { VodozemacSessionRepository } from './identity/vodozemacSessionRepository';
 export { VodozemacRuntime } from './crypto/vodozemacRuntime';
 export { ModernConversation } from './crypto/modernConversation';
+export { MultiplexedRelayConnection, MultiplexedRoomTransportManager } from './transports/multiplexedRelayConnection';
 export type { ModernConnectionDetails, DeviceControlEvent } from './crypto/modernConversation';
 export type { EnrollmentRequest, LifecycleStateSnapshot } from './devices/lifecycle';
 export { ConversationModeStore } from './crypto/conversationMode';

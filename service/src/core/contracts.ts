@@ -26,6 +26,7 @@ export type InboundTransportDecision =
     | { readonly outcome: 'retryable' }
     | { readonly outcome: 'permanent-rejection'; readonly reasonClass: PermanentInboundRejectionReason };
 export type TransportEnvelopeHandler = (message: InboundTransportEnvelope) => Promise<boolean | InboundTransportDecision>;
+export type TransportDeliveryStatusHandler = (eventId: string, status: 'accepted' | 'rejected') => void;
 
 /**
  * Owns one conversation's cryptographic state and lifecycle.
@@ -82,6 +83,7 @@ export interface IdentityManager<TIdentity = MessagingIdentity> {
 }
 
 export type TransportConnectionState = 'stopped' | 'connecting' | 'connected' | 'degraded';
+export interface TransportSendResult { readonly id?: string; readonly timestamp?: number; readonly terminalRejection?: true; }
 
 export interface TransportCapabilities {
     readonly envelopes: boolean;
@@ -94,7 +96,7 @@ export interface Transport {
     start(): Promise<void>;
     stop(): Promise<void>;
     join(conversationId: string, peerRoutingId: string, controlCapability: string, routingProof?: string): Promise<void>;
-    sendEnvelope(channel: CryptoChannel, envelope: EncryptedEnvelope, recipientRoutingId?: string, proofOperation?: string): Promise<{ id?: string; timestamp?: number }>;
+    sendEnvelope(channel: CryptoChannel, envelope: EncryptedEnvelope, recipientRoutingId?: string, proofOperation?: string): Promise<TransportSendResult>;
     sendBlob?(ciphertext: ArrayBuffer): Promise<void>;
     connectionState(): TransportConnectionState;
     capabilities(): TransportCapabilities;
@@ -111,10 +113,12 @@ export interface TransportManager {
     start(): Promise<void>;
     stop(): Promise<void>;
     join(conversationId: string, peerRoutingId: string, controlCapability: string, routingProof?: string): Promise<void>;
-    sendEnvelope(channel: CryptoChannel, envelope: EncryptedEnvelope, recipientRoutingId?: string, proofOperation?: string): Promise<{ id?: string; timestamp?: number }>;
+    sendEnvelope(channel: CryptoChannel, envelope: EncryptedEnvelope, recipientRoutingId?: string, proofOperation?: string): Promise<TransportSendResult>;
     activeTransport(): Transport | undefined;
     /** Optional room transport hook for registering its immutable inbound handler. */
     setEnvelopeHandler?(handler: TransportEnvelopeHandler | undefined): void;
+    /** Optional transport status hook; the manager must scope statuses to its immutable room. */
+    setDeliveryStatusHandler?(handler: TransportDeliveryStatusHandler | undefined): void;
 }
 
 /**

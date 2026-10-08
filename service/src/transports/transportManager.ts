@@ -3,6 +3,7 @@ import type {
     EncryptedEnvelope,
     Transport,
     TransportManager,
+    TransportSendResult,
 } from '../core/contracts';
 
 /**
@@ -30,7 +31,7 @@ export class DefaultTransportManager implements TransportManager {
         envelope: EncryptedEnvelope,
         recipientRoutingId?: string,
         proofOperation?: string,
-    ): Promise<{ id?: string; timestamp?: number }> {
+    ): Promise<TransportSendResult> {
         return recipientRoutingId === undefined
             ? this.transport.sendEnvelope(channel, envelope, undefined, proofOperation)
             : this.transport.sendEnvelope(channel, envelope, recipientRoutingId, proofOperation);

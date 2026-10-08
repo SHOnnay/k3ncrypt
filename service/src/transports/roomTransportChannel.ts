@@ -1,4 +1,4 @@
-import type { CryptoChannel, EncryptedEnvelope, RoomTransport, Transport, TransportManager } from '../core/contracts';
+import type { CryptoChannel, EncryptedEnvelope, RoomTransport, Transport, TransportManager, TransportSendResult } from '../core/contracts';
 
 /** Immutable room-scoped facade over the current relay manager. */
 export class RoomTransportChannel implements RoomTransport {
@@ -34,7 +34,7 @@ export class RoomTransportChannel implements RoomTransport {
 
     public close(): Promise<void> { return this.stop(); }
 
-    public sendEnvelope(channel: CryptoChannel, envelope: EncryptedEnvelope, recipientRoutingId?: string, proofOperation?: string): Promise<{ id?: string; timestamp?: number }> {
+    public sendEnvelope(channel: CryptoChannel, envelope: EncryptedEnvelope, recipientRoutingId?: string, proofOperation?: string): Promise<TransportSendResult> {
         if (this.closed) throw new Error('Room transport is closed.');
         return this.manager.sendEnvelope(channel, envelope, recipientRoutingId, proofOperation);
     }

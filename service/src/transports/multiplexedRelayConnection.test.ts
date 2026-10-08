@@ -15,10 +15,12 @@ class FakeSocket {
     this.events.push({ event, payload });
     if (event === 'mux-authenticate') ack?.({ version: 1, status: 'authenticated', connectionGeneration: payload.connectionGeneration });
     if (event === 'mux-subscribe') ack?.({ version: 1, status: 'subscribed', roomId: payload.roomId, connectionGeneration: payload.connectionGeneration, subscriptionNonce: payload.proofNonce, expiresAt: Date.now() + 300_000, peerFeatures: ['room-message-v1'] });
+    if (event === 'mux-mailbox-replay') ack?.({ version: 1, status: 'accepted', roomId: payload.roomId });
+    if (event === 'mux-send-message') ack?.({ version: 1, status: 'stored', id: 'message-id', timestamp: 123 });
     if (event === 'mux-unsubscribe') ack?.({ status: 'unsubscribed', roomId: payload.roomId, connectionGeneration: payload.connectionGeneration });
     return this;
   }
-  trigger(event: string): void { for (const listener of this.listeners.get(event) ?? []) listener(); }
+  trigger(event: string, ...args: unknown[]): void { for (const listener of this.listeners.get(event) ?? []) listener(...args); }
 }
 
 const proofProvider = () => {
@@ -87,6 +89,75 @@ describe('multiplexed relay connection Stage 1A', () => {
     expect(subscribeEvents.slice(2).map(({ payload }) => payload.connectionGeneration)).toEqual(['socket-generation-b', 'socket-generation-b']);
     expect(proofs.requests.filter(({ operation }) => operation === 'relay:connect')).toHaveLength(2);
     expect(managerA.peerSupportsFeature('room-message-v1')).toBe(true);
+    await connection.close();
+  });
+
+  it('updates an existing room when the peer subscribes after initial negotiation', async () => {
+    const socket = new FakeSocket();
+    const connection = new MultiplexedRelayConnection(socket as unknown as Socket);
+    const proofs = proofProvider();
+    const roomId = room('7');
+    const peer = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const manager = connection.forRoom(roomId, peer);
+    manager.setDeviceProofProvider(proofs);
+    manager.setProtocolFeatures(['room-message-v1']);
+    await manager.join(roomId, 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'control', 'route-proof');
+    expect(manager.peerSupportsFeature('room-message-v1')).toBe(true);
+    const subscription = socket.events.find(({ event }) => event === 'mux-subscribe')!.payload;
+    const peerJoined = { version: 1, roomId, connectionGeneration: socket.id, subscriptionNonce: subscription.proofNonce,
+      peerRoutingAddress: peer, peerFeatures: [] };
+    socket.trigger('mux-peer-subscription', { ...peerJoined, subscriptionNonce: 'stale-nonce' });
+    expect(manager.peerSupportsFeature('room-message-v1')).toBe(true);
+    socket.trigger('mux-peer-subscription', peerJoined);
+    expect(manager.peerSupportsFeature('room-message-v1')).toBe(false);
+    socket.trigger('mux-peer-subscription', { ...peerJoined, peerFeatures: ['room-message-v1'] });
+    expect(manager.peerSupportsFeature('room-message-v1')).toBe(true);
+    await connection.close();
+  });
+
+  it('sends only explicit room-bound V1 envelopes and routes acceptance to that room handler', async () => {
+    const socket = new FakeSocket();
+    const connection = new MultiplexedRelayConnection(socket as unknown as Socket);
+    const proofs = proofProvider();
+    const roomId = room('5');
+    const peer = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const local = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const manager = connection.forRoom(roomId, peer);
+    manager.setDeviceProofProvider(proofs);
+    manager.setProtocolFeatures(['join-introduction-v1', 'room-message-v1']);
+    await manager.join(roomId, local, 'control', 'routing-proof');
+
+    const envelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { opaque: true } };
+    await expect(manager.sendEnvelope('message', envelope, peer)).resolves.toEqual({ id: 'message-id', timestamp: 123 });
+    const send = socket.events.find(({ event }) => event === 'mux-send-message')!;
+    expect(send.payload).toMatchObject({ version: 1, roomId, envelope, proofOperation: 'relay:message' });
+    expect(proofs.requests[proofs.requests.length - 1]).toEqual({ operation: 'relay:message', resource: { conversationId: roomId, routingAddress: local, peerRoutingAddress: peer, connectionGeneration: socket.id } });
+    await expect(manager.sendEnvelope('message', envelope, 'cccccccc-cccc-4ccc-8ccc-cccccccccccc')).rejects.toThrow('immutable peer route');
+    await expect(manager.sendEnvelope('signaling', envelope)).rejects.toThrow('separate legacy relay path');
+
+    const receive = jest.fn(async () => ({ outcome: 'accepted' as const }));
+    manager.setEnvelopeHandler(receive);
+    const sub = socket.events.find(({ event }) => event === 'mux-subscribe')!.payload;
+    const frame = { version: 1, roomId, id: 'incoming-id', timestamp: 456, senderRoutingAddress: peer, recipientRoutingAddress: local,
+      envelope, claimId: 'claim-id', connectionGeneration: socket.id, subscriptionNonce: sub.proofNonce };
+    const acceptedAck = jest.fn();
+    socket.trigger('mux-envelope', { ...frame, roomId: room('6') }, acceptedAck);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(receive).not.toHaveBeenCalled();
+    expect(acceptedAck).not.toHaveBeenCalled();
+
+    const wrongRouteAck = jest.fn();
+    socket.trigger('mux-envelope', { ...frame, senderRoutingAddress: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' }, wrongRouteAck);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(receive).not.toHaveBeenCalled();
+    expect(wrongRouteAck).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'retryable', roomId, id: frame.id }));
+
+    const goodAck = jest.fn();
+    socket.trigger('mux-envelope', frame, goodAck);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(receive).toHaveBeenCalledWith(expect.objectContaining({ conversationId: roomId, senderRoutingId: peer, messageId: frame.id }));
+    expect(goodAck).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'accepted', roomId, id: frame.id, claimId: frame.claimId,
+      connectionGeneration: socket.id, subscriptionNonce: sub.proofNonce }));
     await connection.close();
   });
 });

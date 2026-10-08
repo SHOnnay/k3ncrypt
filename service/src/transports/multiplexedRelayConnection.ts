@@ -1,8 +1,9 @@
 import socketIOClient, { type Socket } from 'socket.io-client';
 import { configContext } from '../configContext';
-import type { CryptoChannel, EncryptedEnvelope, Transport, TransportConnectionState, TransportEnvelopeHandler, TransportManager } from '../core/contracts';
+import type { CryptoChannel, EncryptedEnvelope, InboundTransportDecision, Transport, TransportConnectionState, TransportDeliveryStatusHandler, TransportEnvelopeHandler, TransportManager, TransportSendResult } from '../core/contracts';
 import type { DeviceProofCarrier, DeviceResourceContext } from '../devices/trustProtocol';
 import type { DeviceProofOperation } from '../devices/deviceProofClient';
+import { testDiagnosticsEnabled } from '../utils/testDiagnostics';
 
 export const MUX_RELAY_PROTOCOL_VERSION = 1;
 export const MUX_RELAY_MAX_ROOMS = 128;
@@ -25,6 +26,7 @@ export class MultiplexedRelayConnection {
   private authenticatedGeneration?: string;
   private authenticating?: Promise<void>;
   private disposed = false;
+  private readonly diagnostics = { sendAttempts: 0, storedMessages: 0, receivedFrames: 0, acceptedFrames: 0, retryableFrames: 0, acceptedStatuses: 0, rejectedStatuses: 0 };
 
   constructor(socket?: Socket) {
     this.socket = socket ?? socketIOClient(`${configContext().baseUrl}/`);
@@ -39,8 +41,10 @@ export class MultiplexedRelayConnection {
       }
     });
     this.socket.on('connect', () => { void this.restoreRooms(); });
-    // Stage 1B installs per-room dispatch on this same socket. Stage 1A deliberately
-    // keeps subscriptions inert until the room acceptance path is bound.
+    this.socket.on('mux-envelope', (frame: unknown, ack?: (response: Record<string, unknown>) => void) => { void this.acceptEnvelope(frame, ack); });
+    this.socket.on('mux-peer-subscription', (payload: unknown) => this.acceptPeerSubscription(payload));
+    this.socket.on('mux-delivery-status', (payload: unknown) => this.acceptDeliveryStatus(payload));
+    this.socket.on('mux-room-suspended', (payload: unknown) => { void this.acceptRoomSuspended(payload); });
   }
 
   public setDeviceProofProvider(provider: MuxDeviceProofProvider | undefined): void { this.proofProvider = provider; }
@@ -64,6 +68,16 @@ export class MultiplexedRelayConnection {
     return this.socket.connected ? 'connected' : 'connecting';
   }
 
+  public currentGeneration(): string | undefined {
+    return this.socket.connected && this.authenticatedGeneration === this.socket.id ? this.socket.id : undefined;
+  }
+
+  public testOnlySnapshot(): { connected: boolean; authenticated: boolean; socketCount: number; roomSubscriptionCount: number; sendAttempts: number; storedMessages: number; receivedFrames: number; acceptedFrames: number; retryableFrames: number; acceptedStatuses: number; rejectedStatuses: number } {
+    if (!testDiagnosticsEnabled()) throw new Error('Test-only diagnostics are disabled.');
+    return { connected: this.socket.connected, authenticated: this.currentGeneration() !== undefined, socketCount: 1,
+      roomSubscriptionCount: [...this.rooms.values()].filter((room) => !!room.nonce && (room.expiresAt ?? 0) > Date.now()).length, ...this.diagnostics };
+  }
+
   public createRoom(roomId: string, peerRoutingAddress: string, manager: MultiplexedRoomTransportManager): void {
     if (this.rooms.has(roomId)) throw new Error('A mux room handle already exists for this room.');
     if (this.rooms.size >= MUX_RELAY_MAX_ROOMS) throw new Error('Mux room subscription limit reached.');
@@ -75,7 +89,15 @@ export class MultiplexedRelayConnection {
     room.handler = handler;
   }
 
-  public setFeatures(roomId: string, features: readonly string[]): void { this.requireRoom(roomId).protocolFeatures = strictFeatures(features); }
+  public setDeliveryStatusHandler(roomId: string, handler: TransportDeliveryStatusHandler | undefined): void {
+    this.requireRoom(roomId).manager.setDeliveryStatusHandler(handler);
+  }
+
+  public setFeatures(roomId: string, features: readonly string[]): void {
+    // Stage 1B intentionally admits only established ROOM_MESSAGE_V1 rooms.
+    // Signed introductions remain on the legacy invitation path until their freshness window is enforced.
+    this.requireRoom(roomId).protocolFeatures = strictFeatures(features.filter((feature) => feature !== 'join-introduction-v1'));
+  }
 
   public async subscribe(roomId: string, localRoutingAddress: string, controlCapability: string, routingProof?: string): Promise<void> {
     const room = this.requireRoom(roomId);
@@ -144,6 +166,111 @@ export class MultiplexedRelayConnection {
     room.expiresAt = response.expiresAt as number;
     room.peerFeatures = new Set(Array.isArray(response.peerFeatures) ? response.peerFeatures.filter((item): item is string => typeof item === 'string' && ALLOWED_FEATURES.has(item)) : []);
     this.scheduleRenewal(room);
+    await this.emitAck('mux-mailbox-replay', { version: MUX_RELAY_PROTOCOL_VERSION, roomId: room.roomId, connectionGeneration: generation, subscriptionNonce: room.nonce });
+  }
+
+  public sendEnvelope(roomId: string, channel: CryptoChannel, envelope: EncryptedEnvelope): Promise<{ id?: string; timestamp?: number; terminalRejection?: true }> {
+    const room = this.requireRoom(roomId);
+    if (channel !== 'message') throw new Error('Call signaling remains on its separate legacy relay path.');
+    if (!room.manager.requiresRoomMessageV1 || !room.peerFeatures.has('room-message-v1')) throw new Error('The peer has not negotiated room-message-v1 over the multiplexed relay.');
+    return this.sendMuxEnvelope(room, envelope);
+  }
+
+  private async sendMuxEnvelope(room: RoomState, envelope: EncryptedEnvelope): Promise<{ id?: string; timestamp?: number; terminalRejection?: true }> {
+    this.diagnostics.sendAttempts += 1;
+    await this.ensureAuthenticated();
+    const generation = this.socket.id;
+    if (!generation || generation !== this.authenticatedGeneration || !room.nonce || !room.expiresAt || room.expiresAt <= Date.now()) throw new Error('An active room subscription is required before sending.');
+    if (!this.proofProvider) throw new Error('Mux device authorization is unavailable.');
+    const proof = await this.proofProvider.acquire('relay:message', {
+      conversationId: room.roomId,
+      routingAddress: room.localRoutingAddress,
+      peerRoutingAddress: room.peerRoutingAddress,
+      connectionGeneration: generation,
+    });
+    const response = await this.emitAck('mux-send-message', {
+      version: MUX_RELAY_PROTOCOL_VERSION,
+      roomId: room.roomId,
+      envelope,
+      ...proof,
+      proofOperation: 'relay:message',
+    });
+    if (response.terminalRejection === true && typeof response.id === 'string' && Number.isSafeInteger(response.timestamp)) {
+      return { id: response.id, timestamp: response.timestamp as number, terminalRejection: true };
+    }
+    if (response.status !== 'stored' || typeof response.id !== 'string' || !Number.isSafeInteger(response.timestamp)) throw new Error('Mux relay did not durably accept the encrypted envelope.');
+    this.diagnostics.storedMessages += 1;
+    return { id: response.id, timestamp: response.timestamp as number, ...(response.terminalRejection === true ? { terminalRejection: true } : {}) };
+  }
+
+  private async acceptEnvelope(frame: unknown, ack?: (response: Record<string, unknown>) => void): Promise<void> {
+    const body = frame as Record<string, unknown> | null;
+    const room = body && typeof body.roomId === 'string' ? this.rooms.get(body.roomId) : undefined;
+    this.diagnostics.receivedFrames += 1;
+    const failure = (outcome: 'retryable' | 'permanent-rejection', reasonClass?: string): void => {
+      if (!room || !body) return;
+      ack?.({ outcome, ...(reasonClass ? { reasonClass } : {}), roomId: room.roomId, id: body.id,
+        claimId: body.claimId, connectionGeneration: body.connectionGeneration, subscriptionNonce: body.subscriptionNonce });
+    };
+    if (!body || typeof body !== 'object' || Array.isArray(body) || !room || !room.handler ||
+        Object.keys(body).sort().join('\0') !== ['claimId', 'connectionGeneration', 'envelope', 'id', 'recipientRoutingAddress', 'roomId', 'senderRoutingAddress', 'subscriptionNonce', 'timestamp', 'version'].sort().join('\0') ||
+        body.version !== MUX_RELAY_PROTOCOL_VERSION || body.roomId !== room.roomId || body.recipientRoutingAddress !== room.localRoutingAddress ||
+        body.senderRoutingAddress !== room.peerRoutingAddress || body.connectionGeneration !== this.socket.id ||
+        body.connectionGeneration !== this.authenticatedGeneration || body.connectionGeneration !== room.manager.currentGeneration() ||
+        body.subscriptionNonce !== room.nonce || !room.expiresAt || room.expiresAt <= Date.now() ||
+        typeof body.id !== 'string' || typeof body.claimId !== 'string' || !Number.isSafeInteger(body.timestamp) ||
+        !room.peerFeatures.has('room-message-v1') || !body.envelope || typeof body.envelope !== 'object' || Array.isArray(body.envelope)) {
+      this.diagnostics.retryableFrames += 1;
+      failure('retryable');
+      return;
+    }
+    try {
+      const result = await room.handler({ conversationId: room.roomId, channel: 'message', envelope: body.envelope as EncryptedEnvelope,
+        messageId: body.id as string, senderRoutingId: room.peerRoutingAddress, timestamp: body.timestamp as number,
+        mailboxClaimId: body.claimId as string });
+      const decision: InboundTransportDecision = typeof result === 'boolean' ? (result ? { outcome: 'accepted' } : { outcome: 'retryable' }) : result;
+      if (decision.outcome === 'permanent-rejection') failure('permanent-rejection', decision.reasonClass);
+      else if (decision.outcome === 'accepted') {
+        this.diagnostics.acceptedFrames += 1;
+        ack?.({ outcome: 'accepted', roomId: room.roomId, id: body.id, claimId: body.claimId,
+          connectionGeneration: body.connectionGeneration, subscriptionNonce: body.subscriptionNonce });
+      } else { this.diagnostics.retryableFrames += 1; failure('retryable'); }
+    } catch { this.diagnostics.retryableFrames += 1; failure('retryable'); }
+  }
+
+  private acceptDeliveryStatus(payload: unknown): void {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return;
+    const body = payload as Record<string, unknown>;
+    if (Object.keys(body).sort().join('\0') !== ['id', 'roomId', 'status', 'version'].sort().join('\0') || body.version !== MUX_RELAY_PROTOCOL_VERSION ||
+        typeof body.roomId !== 'string' || typeof body.id !== 'string' || (body.status !== 'accepted' && body.status !== 'rejected')) return;
+    const room = this.rooms.get(body.roomId);
+    if (!room) return;
+    if (body.status === 'accepted') this.diagnostics.acceptedStatuses += 1;
+    else this.diagnostics.rejectedStatuses += 1;
+    room.manager.dispatchDeliveryStatus(body.id, body.status);
+  }
+
+  private acceptPeerSubscription(payload: unknown): void {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return;
+    const body = payload as Record<string, unknown>;
+    if (Object.keys(body).sort().join('\0') !== ['connectionGeneration', 'peerFeatures', 'peerRoutingAddress', 'roomId', 'subscriptionNonce', 'version'].sort().join('\0') ||
+        body.version !== MUX_RELAY_PROTOCOL_VERSION || typeof body.roomId !== 'string' || typeof body.connectionGeneration !== 'string' ||
+        typeof body.subscriptionNonce !== 'string' || typeof body.peerRoutingAddress !== 'string' || !Array.isArray(body.peerFeatures) ||
+        body.peerFeatures.some((feature) => typeof feature !== 'string' || !ALLOWED_FEATURES.has(feature)) || new Set(body.peerFeatures).size !== body.peerFeatures.length) return;
+    const room = this.rooms.get(body.roomId);
+    if (!room || body.connectionGeneration !== this.socket.id || body.connectionGeneration !== this.authenticatedGeneration ||
+        body.subscriptionNonce !== room.nonce || body.peerRoutingAddress !== room.peerRoutingAddress || !room.expiresAt || room.expiresAt <= Date.now()) return;
+    room.peerFeatures = new Set(body.peerFeatures as string[]);
+  }
+
+  private async acceptRoomSuspended(payload: unknown): Promise<void> {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return;
+    const body = payload as Record<string, unknown>;
+    if (Object.keys(body).sort().join('\0') !== ['connectionGeneration', 'roomId', 'subscriptionNonce', 'version'].sort().join('\0') ||
+        body.version !== MUX_RELAY_PROTOCOL_VERSION || typeof body.roomId !== 'string' || typeof body.connectionGeneration !== 'string' || typeof body.subscriptionNonce !== 'string') return;
+    const room = this.rooms.get(body.roomId);
+    if (!room || body.connectionGeneration !== this.socket.id || body.connectionGeneration !== this.authenticatedGeneration || body.subscriptionNonce !== room.nonce) return;
+    await this.unsubscribe(room.roomId).catch(() => undefined);
   }
 
   private scheduleRenewal(room: RoomState): void {
@@ -205,6 +332,7 @@ export class MultiplexedRelayConnection {
 /** Immutable adapter expected by ModernConversation for one room only. */
 export class MultiplexedRoomTransportManager implements TransportManager, Transport {
   private closed = false;
+  private deliveryStatusHandler?: TransportDeliveryStatusHandler;
 
   constructor(private readonly connection: MultiplexedRelayConnection, readonly roomId: string, private readonly peerRoutingAddress: string) {
     this.connection.createRoom(roomId, peerRoutingAddress, this);
@@ -219,8 +347,9 @@ export class MultiplexedRoomTransportManager implements TransportManager, Transp
     await this.connection.subscribe(this.roomId, routingAddress, controlCapability, routingProof);
   }
   public connect(routingAddress: string, controlCapability: string, routingProof?: string): Promise<void> { return this.join(this.roomId, routingAddress, controlCapability, routingProof); }
-  public async sendEnvelope(_channel: CryptoChannel, _envelope: EncryptedEnvelope, _recipientRoutingId?: string, _proofOperation?: string): Promise<{ id?: string; timestamp?: number }> {
-    throw new Error('Mux room delivery is not enabled until room-scoped dispatch is installed.');
+  public async sendEnvelope(channel: CryptoChannel, envelope: EncryptedEnvelope, recipientRoutingId?: string, _proofOperation?: string): Promise<TransportSendResult> {
+    if (recipientRoutingId && recipientRoutingId !== this.peerRoutingAddress) throw new Error('Mux room recipient does not match its immutable peer route.');
+    return this.connection.sendEnvelope(this.roomId, channel, envelope);
   }
   public activeTransport(): Transport { return this; }
   public connectionState(): TransportConnectionState { return this.connection.connectionState(); }
@@ -230,4 +359,7 @@ export class MultiplexedRoomTransportManager implements TransportManager, Transp
   public setProtocolFeatures(features: readonly string[]): void { this.connection.setFeatures(this.roomId, features); }
   public setDeviceProofProvider(provider: MuxDeviceProofProvider | undefined): void { this.connection.setDeviceProofProvider(provider); }
   public setEnvelopeHandler(handler: TransportEnvelopeHandler | undefined): void { this.connection.setHandler(this.roomId, handler); }
+  public setDeliveryStatusHandler(handler: TransportDeliveryStatusHandler | undefined): void { this.deliveryStatusHandler = handler; }
+  public dispatchDeliveryStatus(eventId: string, status: 'accepted' | 'rejected'): void { this.deliveryStatusHandler?.(eventId, status); }
+  public currentGeneration(): string | undefined { return this.connection.currentGeneration(); }
 }
