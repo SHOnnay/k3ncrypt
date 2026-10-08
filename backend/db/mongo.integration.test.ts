@@ -23,6 +23,7 @@ suite('MongoDB Phase 3H integration', () => {
     expect(offline.some((index) => index.key?.expiresAt === 1 && index.expireAfterSeconds === 0)).toBe(true);
     expect(offline.some((index) => index.unique && index.key?.dedupeKey === 1)).toBe(true);
     expect(offline.some((index) => index.key?.mailbox === 1 && index.key?.claimedUntil === 1)).toBe(true);
+    expect(offline.find((index) => index.name === 'channel_1_mailbox_1_slot_1')?.partialFilterExpression).toEqual({ state: 'active' });
     await db.connectDb();
   });
 });

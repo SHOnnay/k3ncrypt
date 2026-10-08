@@ -4,7 +4,7 @@ import channelValid from "../api/chatHash/utils/validateChannel";
 import { socketEmit, SOCKET_TOPIC, CustomSocket, WireEnvelope } from "./index";
 import { RateLimiter } from "./rateLimiter";
 import { authorizeRoomControl, isValidControlCapability, isValidRoomId } from '../security/controlCapability';
-import db from '../db';
+import db, { type OfflineRejectionReason } from '../db';
 import { PREKEY_COLLECTION } from '../db/const';
 import { durableDeviceTrustAuthority, MongoDeviceTrustStore } from '../security/durableDeviceTrust';
 import type { DeviceAuthorizationProof, DeviceOperation } from '../security/deviceTrust';
@@ -24,6 +24,10 @@ const SUPPORTED_PROTOCOL_FEATURES = new Set(['join-introduction-v1', 'room-messa
 
 type Ack = (response: Record<string, unknown>) => void;
 const noop: Ack = () => undefined;
+type RecipientOutcome = { accepted?: unknown; outcome?: unknown; reasonClass?: unknown };
+const permanentReason = (value: unknown): value is OfflineRejectionReason =>
+  value === 'authenticated-invalid' || value === 'unsupported-message' || value === 'identity-changed';
+const acceptedOutcome = (value: RecipientOutcome | undefined): boolean => value?.accepted === true || value?.outcome === 'accepted';
 const traceDelivery = (stage: string, reached: boolean): void => {
   if (process.env.NODE_ENV !== 'production' && process.env.K3NCRYPT_TEST_ONLY_DIAGNOSTICS === 'true') console.info(`delivery-stage ${stage}=${reached}`);
 };
@@ -112,7 +116,7 @@ const retainUndeliveredEnvelope = async (
   envelope: WireEnvelope,
   id: string,
   timestamp: number,
-): Promise<{ id: string; timestamp: number }> => {
+): Promise<{ id: string; timestamp: number; terminalRejection?: true }> => {
   if (process.env.NODE_ENV === 'production' && !db.persistentStorageReady()) throw new Error('OFFLINE_DELIVERY_UNAVAILABLE');
   db.cleanupExpiredOfflineMessages();
   const stored = await db.storeOfflineMessage({
@@ -122,9 +126,11 @@ const retainUndeliveredEnvelope = async (
     mailbox,
     sender,
     envelope,
+    state: 'active',
     timestamp,
     expiresAt: new Date(timestamp + OFFLINE_TTL_MS),
   });
+  if (stored.state === 'rejected') return { id: stored.id as string, timestamp: stored.timestamp as number, terminalRejection: true };
   if (await db.countOfflineMessages({ channel, mailbox }) > MAX_OFFLINE_PER_MAILBOX) {
     await db.ackOfflineMessage(stored.id, mailbox, channel);
     throw new Error('MAILBOX_QUOTA');
@@ -137,19 +143,35 @@ const deliverOffline = async (socket: CustomSocket): Promise<void> => {
   db.cleanupExpiredOfflineMessages();
   for (let count = 0; count < MAX_OFFLINE_PER_MAILBOX; count += 1) {
     if (!await activeBoundDevice(socket)) return;
-    const message = await db.claimOfflineMessage<{ id: string; timestamp: number; sender: string; envelope: WireEnvelope; mailbox: string; channel: string }>(
-      socket.userID, socket.channelID, new Date(Date.now() + OFFLINE_LEASE_MS));
+    const claimId = randomUUID();
+    const message = await db.claimOfflineMessage<{ id: string; timestamp: number; sender: string; envelope: WireEnvelope; mailbox: string; channel: string; claimId: string }>(
+      socket.userID, socket.channelID, new Date(Date.now() + OFFLINE_LEASE_MS), claimId);
     if (!message) return;
-    const accepted = await new Promise<boolean>((resolve) => {
-      const timeout = setTimeout(() => resolve(false), OFFLINE_REPLAY_ACK_MS);
-      socket.emit(SOCKET_TOPIC.CHAT_MESSAGE, { id: message.id, timestamp: message.timestamp, sender: message.sender, envelope: message.envelope }, (response?: { accepted?: unknown }) => {
+    const outcome = await new Promise<RecipientOutcome | undefined>((resolve) => {
+      const timeout = setTimeout(() => resolve({ outcome: 'retryable' }), OFFLINE_REPLAY_ACK_MS);
+      socket.emit(SOCKET_TOPIC.CHAT_MESSAGE, { id: message.id, timestamp: message.timestamp, sender: message.sender, envelope: message.envelope, claimId: message.claimId }, (response?: RecipientOutcome) => {
         clearTimeout(timeout);
-        resolve(response?.accepted === true);
+        resolve(response);
       });
     });
+    const accepted = acceptedOutcome(outcome);
     traceDelivery('mailbox-replay-accepted', accepted);
+    if (outcome?.outcome === 'permanent-rejection' && permanentReason(outcome.reasonClass)) {
+      if (!await activeBoundDevice(socket)) return;
+      const terminal = await db.rejectOfflineMessage(message.id, socket.userID, socket.channelID, message.claimId, outcome.reasonClass);
+      if (terminal === 'stale') return;
+      if (terminal === 'rejected') {
+        const senderSid = clients.getSIDByIDs(message.sender, socket.channelID)?.sid;
+        if (senderSid) socketEmit<SOCKET_TOPIC.NOT_ACCEPTED>(SOCKET_TOPIC.NOT_ACCEPTED, senderSid, message.id);
+      }
+      // A valid terminal transition frees this slot so the next row proceeds.
+      continue;
+    }
     if (!accepted || !await activeBoundDevice(socket)) return;
-    await db.ackOfflineMessage(message.id, socket.userID, socket.channelID);
+    const removed = await db.ackOfflineMessage(message.id, socket.userID, socket.channelID, message.claimId);
+    if (!removed) return;
+    const senderSid = clients.getSIDByIDs(message.sender, socket.channelID)?.sid;
+    if (senderSid) socketEmit<SOCKET_TOPIC.DELIVERED>(SOCKET_TOPIC.DELIVERED, senderSid, message.id);
     traceDelivery('mailbox-deleted-after-ack', true);
   }
 };
@@ -272,7 +294,7 @@ const connectionListener = (socket: CustomSocket, io) => {
       try {
         const existing = await retainUndeliveredEnvelope(socket.channelID, mailbox, socket.userID, payload.envelope, id, timestamp);
         traceDelivery('envelope-stored', true);
-        ack({ id: existing.id, timestamp: existing.timestamp, stored: true });
+        ack({ id: existing.id, timestamp: existing.timestamp, stored: !existing.terminalRejection, ...(existing.terminalRejection ? { terminalRejection: true } : {}) });
       } catch (error) { ack({ error: error instanceof Error && error.message === 'MAILBOX_QUOTA' ? "Mailbox quota exceeded." : "Message could not be queued." }); }
       return;
     }
@@ -288,32 +310,47 @@ const connectionListener = (socket: CustomSocket, io) => {
       return;
     }
     if (!await activeBoundDevice(receiverSocket as CustomSocket)) { ack({ error: 'Receiver is unavailable.' }); return; }
-    const delivered = await new Promise<boolean>((resolve) => {
-      const timeout = setTimeout(() => resolve(false), LIVE_DELIVERY_ACK_MS);
+    const receiverId = clients.getReceiverIDBySenderID(socket.userID, socket.channelID);
+    if (!receiverId) { ack({ error: 'Receiver is unavailable.' }); return; }
+    const delivered = await new Promise<RecipientOutcome | undefined>((resolve) => {
+      const timeout = setTimeout(() => resolve({ outcome: 'retryable' }), LIVE_DELIVERY_ACK_MS);
       receiverSocket.emit(SOCKET_TOPIC.CHAT_MESSAGE, {
         id,
         timestamp,
         sender: socket.userID,
         envelope: payload.envelope,
-      }, (response?: { accepted?: unknown }) => {
+      }, (response?: RecipientOutcome) => {
         clearTimeout(timeout);
-        resolve(response?.accepted === true);
+        resolve(response);
       });
     });
-    traceDelivery('socket-dispatch-success', delivered);
-    if (delivered) {
+    const accepted = acceptedOutcome(delivered);
+    traceDelivery('socket-dispatch-success', accepted);
+    if (delivered?.outcome === 'permanent-rejection' && permanentReason(delivered.reasonClass) && await activeBoundDevice(receiverSocket as CustomSocket)) {
+      try {
+        const recorded = await db.recordOfflineRejection({
+          id, dedupeKey: envelopeDedupeKey(socket.channelID, receiverId, socket.userID, payload.envelope),
+          channel: socket.channelID, mailbox: receiverId, sender: socket.userID, timestamp,
+          expiresAt: new Date(timestamp + OFFLINE_TTL_MS), terminalReason: delivered.reasonClass,
+        });
+        if (recorded === 'rejected' || recorded === 'duplicate') {
+          ack({ id, timestamp, terminalRejection: true });
+          return;
+        }
+      } catch { /* Preserve the opaque message as retryable if terminal accounting fails. */ }
+    }
+    if (accepted) {
       ack({ id, timestamp });
       return;
     }
 
     // A live client can decline before peer verification, or its ACK can be
     // lost. Retain the same opaque envelope for authenticated mailbox replay.
-    const receiverId = clients.getReceiverIDBySenderID(socket.userID, socket.channelID);
     if (!receiverId) { ack({ error: 'Receiver is unavailable.' }); return; }
     try {
       const stored = await retainUndeliveredEnvelope(socket.channelID, receiverId, socket.userID, payload.envelope, id, timestamp);
       traceDelivery('envelope-stored', true);
-      ack({ ...stored, stored: true });
+      ack({ ...stored, stored: !stored.terminalRejection, ...(stored.terminalRejection ? { terminalRejection: true } : {}) });
     } catch (error) {
       ack({ error: error instanceof Error && error.message === 'MAILBOX_QUOTA' ? 'Mailbox quota exceeded.' : 'Message could not be queued.' });
     }
@@ -355,14 +392,43 @@ const connectionListener = (socket: CustomSocket, io) => {
     ack({ status: "ok" });
   });
 
-  socket.on("received", async (payload: { id?: unknown }) => {
+  socket.on('recipient-rejected', async (payload: { id?: unknown; roomId?: unknown; claimId?: unknown; reasonClass?: unknown }, ack: Ack = noop) => {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload) ||
-        !exactKeys(payload, ['id']) || !isValidRoomId(payload.id)) {
+        !exactKeys(payload, ['id', 'roomId', 'claimId', 'reasonClass']) ||
+        !isValidRoomId(payload.id) || !isValidRoomId(payload.roomId) || !isValidRoomId(payload.claimId) ||
+        !permanentReason(payload.reasonClass)) {
+      ack({ error: 'Terminal mailbox result rejected.' });
       return;
     }
-    const { id } = payload as { id: string };
+    if (!socket.userID || !socket.channelID || payload.roomId !== socket.channelID || !await activeBoundDevice(socket)) {
+      ack({ error: 'Terminal mailbox result rejected.' });
+      return;
+    }
+    try {
+      const result = await db.rejectOfflineMessage(payload.id, socket.userID, socket.channelID, payload.claimId, payload.reasonClass);
+      if (result === 'stale') {
+        ack({ error: 'Terminal mailbox result rejected.' });
+        return;
+      }
+      const senderSid = findPeerSid(socket);
+      if (senderSid) socketEmit<SOCKET_TOPIC.NOT_ACCEPTED>(SOCKET_TOPIC.NOT_ACCEPTED, senderSid, payload.id);
+      ack({ status: result });
+    } catch {
+      // A failed terminal write is not an acceptance or a permanent decision.
+      ack({ error: 'Terminal mailbox result unavailable.' });
+    }
+  });
+
+  socket.on("received", async (payload: { id?: unknown; claimId?: unknown }) => {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload) ||
+        !Object.keys(payload).every((key) => key === 'id' || key === 'claimId') || !isValidRoomId(payload.id) ||
+        (payload.claimId !== undefined && !isValidRoomId(payload.claimId))) {
+      return;
+    }
+    const { id, claimId } = payload as { id: string; claimId?: string };
     if (!socket.userID || !socket.channelID || !await activeBoundDevice(socket)) return;
-    await db.ackOfflineMessage(id, socket.userID, socket.channelID);
+    const removed = await db.ackOfflineMessage(id, socket.userID, socket.channelID, claimId);
+    if (claimId && !removed) return;
     const receiverSid = findPeerSid(socket);
     if (receiverSid) {
       socketEmit<SOCKET_TOPIC.DELIVERED>(SOCKET_TOPIC.DELIVERED, receiverSid, id);

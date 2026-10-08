@@ -3,7 +3,7 @@ import { randomInt } from 'crypto';
 
 import {
     findOneFromDB as _findOneFromDB, insertInDb as _insertInDb, updateOneFromDb as _updateOneFromDb, claimOneTimeKey as _claimOneTimeKey, deleteExpiredPrekeyBundles as _deleteExpiredPrekeyBundles
-    , insertOfflineMessage as _insertOfflineMessage, claimOfflineMessage as _claimOfflineMessage, ackOfflineMessage as _ackOfflineMessage, deleteExpiredOfflineMessages as _deleteExpiredOfflineMessages, countOfflineMessages as _countOfflineMessages
+    , insertOfflineMessage as _insertOfflineMessage, claimOfflineMessage as _claimOfflineMessage, ackOfflineMessage as _ackOfflineMessage, rejectOfflineMessage as _rejectOfflineMessage, recordOfflineRejection as _recordOfflineRejection, deleteExpiredOfflineMessages as _deleteExpiredOfflineMessages, countOfflineMessages as _countOfflineMessages
 } from './inMemDB';
 import { LINK_COLLECTION, PREKEY_COLLECTION, OFFLINE_MESSAGE_COLLECTION } from './const';
 import { applyMigrations } from './migrations';
@@ -143,17 +143,18 @@ export const cleanupExpiredPrekeyBundles = (now = Date.now()): number =>
   inMem ? _deleteExpiredPrekeyBundles(now, PREKEY_COLLECTION) : 0;
 
 export const storeOfflineMessage = async <T extends Record<string, unknown>>(data: T): Promise<T> => {
+  const activeData = { state: 'active', ...data };
   if (inMem) {
     const duplicate = _findOneFromDB({ dedupeKey: data.dedupeKey }, OFFLINE_MESSAGE_COLLECTION);
     if (duplicate) return duplicate as T;
     if (_countOfflineMessages({ channel: data.channel, mailbox: data.mailbox }, OFFLINE_MESSAGE_COLLECTION) >= 64) throw new Error('MAILBOX_QUOTA');
-    return _insertOfflineMessage(data, OFFLINE_MESSAGE_COLLECTION) as T;
+    return _insertOfflineMessage(activeData, OFFLINE_MESSAGE_COLLECTION) as T;
   }
   const existing = await db.collection(OFFLINE_MESSAGE_COLLECTION).findOne({ dedupeKey: data.dedupeKey });
   if (existing) return existing as unknown as T;
   const start = randomInt(0, 64);
   for (let offset = 0; offset < 64; offset += 1) {
-    const candidate = { ...data, slot: (start + offset) % 64 };
+    const candidate = { ...activeData, slot: (start + offset) % 64 };
     try {
       await db.collection(OFFLINE_MESSAGE_COLLECTION).insertOne(candidate);
       return candidate;
@@ -165,26 +166,61 @@ export const storeOfflineMessage = async <T extends Record<string, unknown>>(dat
   throw new Error('MAILBOX_QUOTA');
 };
 
-export const claimOfflineMessage = async <T>(mailbox: string, channel: string, leaseUntil: Date): Promise<T | undefined> => {
-  if (inMem) return _claimOfflineMessage({ mailbox, channel }, leaseUntil, OFFLINE_MESSAGE_COLLECTION) as T | undefined;
+export const claimOfflineMessage = async <T>(mailbox: string, channel: string, leaseUntil: Date, claimId: string): Promise<T | undefined> => {
+  if (inMem) return _claimOfflineMessage({ mailbox, channel }, leaseUntil, claimId, OFFLINE_MESSAGE_COLLECTION) as T | undefined;
   const result = await db.collection(OFFLINE_MESSAGE_COLLECTION).findOneAndUpdate(
-    { mailbox, channel, expiresAt: { $gt: new Date() }, $or: [{ claimedUntil: { $exists: false } }, { claimedUntil: { $lte: new Date() } }] },
-    { $set: { claimedUntil: leaseUntil } }, { returnDocument: 'after' },
+    { mailbox, channel, state: 'active', expiresAt: { $gt: new Date() }, $or: [{ claimedUntil: { $exists: false } }, { claimedUntil: { $lte: new Date() } }] },
+    { $set: { claimedUntil: leaseUntil, claimId } }, { returnDocument: 'after' },
   );
   return ((result && typeof result === 'object' && 'value' in result) ? (result as { value?: unknown }).value : result) as T | undefined;
 };
 
-export const ackOfflineMessage = async (id: string, mailbox: string, channel: string): Promise<boolean> => {
-  if (inMem) return _ackOfflineMessage({ id, mailbox, channel }, OFFLINE_MESSAGE_COLLECTION);
-  const result = await db.collection(OFFLINE_MESSAGE_COLLECTION).deleteOne({ id, mailbox, channel });
+export const ackOfflineMessage = async (id: string, mailbox: string, channel: string, claimId?: string): Promise<boolean> => {
+  const condition = { id, mailbox, channel, ...(claimId ? { claimId } : {}) };
+  if (inMem) return _ackOfflineMessage(condition, OFFLINE_MESSAGE_COLLECTION);
+  const result = await db.collection(OFFLINE_MESSAGE_COLLECTION).deleteOne(condition);
   return result.deletedCount === 1;
+};
+
+export type OfflineRejectionReason = 'authenticated-invalid' | 'unsupported-message' | 'identity-changed';
+export type OfflineRejectionResult = 'rejected' | 'duplicate' | 'stale';
+export const rejectOfflineMessage = async (id: string, mailbox: string, channel: string, claimId: string, reasonClass: OfflineRejectionReason): Promise<OfflineRejectionResult> => {
+  if (inMem) return _rejectOfflineMessage({ id, mailbox, channel, claimId }, reasonClass, new Date(), OFFLINE_MESSAGE_COLLECTION);
+  const collection = db.collection(OFFLINE_MESSAGE_COLLECTION);
+  const result = await collection.updateOne(
+    { id, mailbox, channel, state: 'active', claimId },
+    { $set: { state: 'rejected', terminalReason: reasonClass, terminalAt: new Date(), terminalClaimId: claimId },
+      $unset: { envelope: '', claimId: '', claimedUntil: '', slot: '' } },
+  );
+  if (result.modifiedCount === 1) return 'rejected';
+  const prior = await collection.findOne({ id, mailbox, channel, state: 'rejected', terminalClaimId: claimId }, { projection: { _id: 1 } });
+  return prior ? 'duplicate' : 'stale';
+};
+
+export const recordOfflineRejection = async (data: { id: string; dedupeKey: string; channel: string; mailbox: string; sender: string; timestamp: number; expiresAt: Date; terminalReason: OfflineRejectionReason }): Promise<'rejected' | 'duplicate'> => {
+  const terminalData = { id: data.id, dedupeKey: data.dedupeKey, channel: data.channel, mailbox: data.mailbox, sender: data.sender,
+    timestamp: data.timestamp, expiresAt: data.expiresAt, terminalReason: data.terminalReason, state: 'rejected', terminalAt: new Date() };
+  if (inMem) return _recordOfflineRejection(terminalData, OFFLINE_MESSAGE_COLLECTION);
+  const collection = db.collection(OFFLINE_MESSAGE_COLLECTION);
+  const existing = await collection.findOne({ dedupeKey: data.dedupeKey });
+  if (existing?.state === 'rejected') return 'duplicate';
+  if (existing) {
+    await collection.updateOne({ _id: existing._id, dedupeKey: data.dedupeKey }, { $set: { state: 'rejected', terminalReason: data.terminalReason, terminalAt: terminalData.terminalAt }, $unset: { envelope: '', claimId: '', claimedUntil: '', slot: '' } });
+    return 'rejected';
+  }
+  try { await collection.insertOne(terminalData); return 'rejected'; }
+  catch {
+    const duplicate = await collection.findOne({ dedupeKey: data.dedupeKey }, { projection: { _id: 1, state: 1 } });
+    if (duplicate?.state === 'rejected') return 'duplicate';
+    throw new Error('Permanent mailbox result could not be recorded.');
+  }
 };
 
 export const cleanupExpiredOfflineMessages = (now = Date.now()): number =>
   inMem ? _deleteExpiredOfflineMessages(now, OFFLINE_MESSAGE_COLLECTION) : 0;
 
 export const countOfflineMessages = async (condition: Record<string, unknown>): Promise<number> =>
-  inMem ? _countOfflineMessages(condition, OFFLINE_MESSAGE_COLLECTION) : db.collection(OFFLINE_MESSAGE_COLLECTION).countDocuments({ ...condition, expiresAt: { $gt: new Date() } });
+  inMem ? _countOfflineMessages(condition, OFFLINE_MESSAGE_COLLECTION) : db.collection(OFFLINE_MESSAGE_COLLECTION).countDocuments({ ...condition, state: 'active', expiresAt: { $gt: new Date() } });
 
 export default {
   db,
@@ -200,6 +236,8 @@ export default {
   storeOfflineMessage,
   claimOfflineMessage,
   ackOfflineMessage,
+  rejectOfflineMessage,
+  recordOfflineRejection,
   cleanupExpiredOfflineMessages,
   countOfflineMessages,
   persistentStorageReady,

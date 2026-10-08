@@ -22,6 +22,7 @@ export enum SOCKET_TOPIC {
   LIMIT_REACHED = 'limit-reached',
   ON_ALICE_JOIN = 'on-alice-join',
   DELIVERED = 'delivered',
+  NOT_ACCEPTED = 'not-accepted',
   ON_ALICE_DISCONNECTED = 'on-alice-disconnect',
   MESSAGE = 'message',
   WEBRTC_SESSION_DESCRIPTION = 'webrtc-session-description'
@@ -31,9 +32,10 @@ type emitDataTypes = {
   // `sender`/`id`/`timestamp` are assigned by the server from the
   // authenticated socket, never taken from client input. `envelope` is
   // opaque — the server relays it verbatim.
-  [SOCKET_TOPIC.CHAT_MESSAGE]: { id: string, timestamp: number, sender: string, envelope: WireEnvelope },
+  [SOCKET_TOPIC.CHAT_MESSAGE]: { id: string, timestamp: number, sender: string, envelope: WireEnvelope, claimId?: string },
   [SOCKET_TOPIC.LIMIT_REACHED]: null,
   [SOCKET_TOPIC.DELIVERED]: string | number,
+  [SOCKET_TOPIC.NOT_ACCEPTED]: string,
   [SOCKET_TOPIC.ON_ALICE_DISCONNECTED]: null,
   // No key material is exchanged any more — this is purely a presence signal.
   [SOCKET_TOPIC.ON_ALICE_JOIN]: { protocolFeatures: string[] },

@@ -16,9 +16,16 @@ export interface InboundTransportEnvelope {
     readonly messageId?: string;
     readonly senderRoutingId?: string;
     readonly timestamp?: number;
+    /** Present only for a relay mailbox delivery and changes on every lease claim. */
+    readonly mailboxClaimId?: string;
 }
 
-export type TransportEnvelopeHandler = (message: InboundTransportEnvelope) => Promise<boolean>;
+export type PermanentInboundRejectionReason = 'authenticated-invalid' | 'unsupported-message' | 'identity-changed';
+export type InboundTransportDecision =
+    | { readonly outcome: 'accepted' }
+    | { readonly outcome: 'retryable' }
+    | { readonly outcome: 'permanent-rejection'; readonly reasonClass: PermanentInboundRejectionReason };
+export type TransportEnvelopeHandler = (message: InboundTransportEnvelope) => Promise<boolean | InboundTransportDecision>;
 
 /**
  * Owns one conversation's cryptographic state and lifecycle.

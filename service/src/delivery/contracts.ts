@@ -20,6 +20,7 @@ export interface DeliveryPathAdapter {
 export interface DeliverySubmissionResult {
     readonly id?: string;
     readonly timestamp?: number;
+    readonly terminalRejection?: true;
 }
 
 export interface PendingDeliveryEnvelope {
@@ -34,4 +35,5 @@ export interface DeliveryRetryWork<T extends PendingDeliveryEnvelope> {
     readonly skip: (item: T) => boolean;
     readonly beforeSubmit: () => Promise<void>;
     readonly persist: (pending: T[]) => Promise<void>;
+    readonly onTerminalRejection?: (item: T) => void;
 }

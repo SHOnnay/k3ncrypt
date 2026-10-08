@@ -32,6 +32,7 @@ export class DeliveryCoordinator {
                 const sent = await this.submit(item.envelope, work.recipientRoutingId);
                 item.relayId = sent.id;
                 item.sentAt = this.now();
+                if (sent.terminalRejection) work.onTerminalRejection?.(item);
                 await work.persist(work.pending);
             } catch {
                 // Keep the current item and later items pending for the next

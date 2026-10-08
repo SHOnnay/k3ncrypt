@@ -86,13 +86,15 @@ const loader = async () => ({ protocolVersion: 1 as const,
     accountFactory: { createAccount: account, loadAccount: account },
     sessionFactory: { loadSession: session } });
 
-const fakeTransport = (supportsJoinIntroduction = false, failSends = 0, supportsRoomMessage = false, requiresRoomMessageV1 = false) => {
+const fakeTransport = (supportsJoinIntroduction = false, failSends = 0, supportsRoomMessage = false, requiresRoomMessageV1 = false, terminalRejects = 0) => {
     const sent: EncryptedEnvelope[] = [];
     const transport = {
         start: async () => undefined, stop: async () => undefined, join: () => undefined,
         sendEnvelope: async (_channel: unknown, envelope: EncryptedEnvelope) => {
             if (failSends > 0) { failSends -= 1; throw new Error('simulated relay interruption'); }
-            sent.push(envelope); return { id: `relay-${sent.length}` };
+            sent.push(envelope);
+            if (terminalRejects > 0) { terminalRejects -= 1; return { id: `relay-${sent.length}`, terminalRejection: true as const }; }
+            return { id: `relay-${sent.length}` };
         },
         activeTransport: () => undefined as unknown as import('../core/contracts').Transport,
         requiresRoomMessageV1,
@@ -203,6 +205,8 @@ it('keeps a ModernConversation and its transport permanently bound to the first 
 
 const receiveFirstMessage = (conversation: ModernConversation, envelope: EncryptedEnvelope, senderAddress: string): Promise<boolean> =>
     (conversation as unknown as { receive: (value: EncryptedEnvelope, sender: string) => Promise<boolean> }).receive(envelope, senderAddress);
+const receiveDecision = (conversation: ModernConversation, envelope: EncryptedEnvelope, senderAddress: string): Promise<import('../core/contracts').InboundTransportDecision> =>
+    (conversation as unknown as { decideInbound: (value: EncryptedEnvelope, sender: string) => Promise<import('../core/contracts').InboundTransportDecision> }).decideInbound(envelope, senderAddress);
 
 beforeEach(() => { jest.clearAllMocks(); encryptions = 0; outboundSessionCreations = 0; inboundSessionCreations = 0; sessionDecryptions = 0; decryptedBytes = undefined; encryptedPlaintexts = []; });
 
@@ -761,7 +765,7 @@ it('rejects a signed introduction for another conversation without learning its 
         data: { version: 1, olmMessage: JSON.stringify({ version: 1, message_type: 0, ciphertext: 'wrong-conversation' }) },
     };
 
-    await expect(receiveFirstMessage(conversation, envelope, remoteAddress)).rejects.toThrow('Join introduction binding is invalid.');
+    await expect(receiveDecision(conversation, envelope, remoteAddress)).resolves.toEqual({ outcome: 'permanent-rejection', reasonClass: 'authenticated-invalid' });
     expect(onMessage).not.toHaveBeenCalled();
     expect(await conversation.getContact()).toBeUndefined();
     expect(JSON.parse(new TextDecoder().decode((await storage.read('conversation-protocol', room))!)).remoteAddress).toBeUndefined();
@@ -1296,7 +1300,7 @@ it('rejects a wrong-room first-prekey wrapper before durable account, session, m
     decryptedBytes = new Uint8Array([1, 1, ...wrongRoom]);
     const envelope: EncryptedEnvelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1,
         olmMessage: JSON.stringify({ version: 1, message_type: 1, ciphertext: 'opaque-wrong-room' }) } };
-    await expect(receiveFirstMessage(conversation, envelope, remoteAddress)).rejects.toThrow('binding mismatch');
+    await expect(receiveDecision(conversation, envelope, remoteAddress)).resolves.toEqual({ outcome: 'permanent-rejection', reasonClass: 'authenticated-invalid' });
     expect(await storage.read('vodozemac-account', 'local')).toEqual(accountBefore);
     expect(await storage.read('vodozemac-session', room)).toBeUndefined();
     expect(await storage.read('product-messages', room)).toBeUndefined();
@@ -1400,7 +1404,7 @@ it('rejects an established-session cross-room file reference before the applicat
     decryptedBytes = new Uint8Array([1, 1, ...moved]);
     const second: EncryptedEnvelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1,
         olmMessage: JSON.stringify({ version: 1, message_type: 1, ciphertext: 'opaque-second' }) } };
-    await expect(receiveFirstMessage(conversation, second, remoteAddress)).rejects.toThrow('binding mismatch');
+    await expect(receiveDecision(conversation, second, remoteAddress)).resolves.toEqual({ outcome: 'permanent-rejection', reasonClass: 'authenticated-invalid' });
     expect(await storage.read('product-messages', room)).toEqual(messagesBefore);
     expect(await storage.read('vodozemac-session', room)).toEqual(sessionBefore);
     expect(delivered).toHaveBeenCalledTimes(1);
@@ -1423,7 +1427,7 @@ it('rejects a valid-room first-prekey wrapper whose claimed sender identity is n
     decryptedBytes = new Uint8Array([1, 1, ...forged]);
     const envelope: EncryptedEnvelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1,
         olmMessage: JSON.stringify({ version: 1, message_type: 1, ciphertext: 'opaque-forged-first' }) } };
-    await expect(receiveFirstMessage(conversation, envelope, remoteAddress)).rejects.toThrow('binding mismatch');
+    await expect(receiveDecision(conversation, envelope, remoteAddress)).resolves.toEqual({ outcome: 'permanent-rejection', reasonClass: 'authenticated-invalid' });
     expect(await storage.read('vodozemac-account', 'local')).toEqual(accountBefore);
     expect(await storage.read('vodozemac-session', room)).toBeUndefined();
     expect(await storage.read('contact-identity', remoteAddress)).toEqual(contactBefore);
@@ -1460,7 +1464,7 @@ it('rejects an established-session wrapper claiming another K3 identity before a
     decryptedBytes = new Uint8Array([1, 1, ...forged]);
     const next: EncryptedEnvelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1,
         olmMessage: JSON.stringify({ version: 1, message_type: 1, ciphertext: 'opaque-forged-established' }) } };
-    await expect(receiveFirstMessage(conversation, next, remoteAddress)).rejects.toThrow('binding mismatch');
+    await expect(receiveDecision(conversation, next, remoteAddress)).resolves.toEqual({ outcome: 'permanent-rejection', reasonClass: 'authenticated-invalid' });
     expect(sessionDecryptions).toBe(decryptionsBefore + 1);
     expect(await storage.read('product-messages', room)).toEqual(messagesBefore);
     expect(await storage.read('vodozemac-session', room)).toEqual(sessionBefore);
@@ -1480,7 +1484,7 @@ it('rejects first-session and established-session delivery while contact identit
     const pinnedBefore = await firstStorage.read('contact-identity', remoteAddress);
     const firstEnvelope: EncryptedEnvelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1,
         olmMessage: JSON.stringify({ version: 1, message_type: 1, ciphertext: 'opaque-changed-first' }) } };
-    await expect(receiveFirstMessage(first, firstEnvelope, remoteAddress)).resolves.toBe(false);
+    await expect(receiveDecision(first, firstEnvelope, remoteAddress)).resolves.toEqual({ outcome: 'permanent-rejection', reasonClass: 'identity-changed' });
     expect(await firstStorage.read('contact-identity', remoteAddress)).toEqual(pinnedBefore);
     expect(await firstStorage.read('vodozemac-session', room)).toBeUndefined();
     expect(firstDelivered).not.toHaveBeenCalled();
@@ -1498,7 +1502,7 @@ it('rejects first-session and established-session delivery while contact identit
     await setContactChangeStatus(establishedStorage, remoteAddress, 'changed-pending-review');
     const beforeCount = sessionDecryptions;
     const staleEnvelope: EncryptedEnvelope = { ...firstEnvelope, data: { version: 1, olmMessage: JSON.stringify({ version: 1, message_type: 1, ciphertext: 'opaque-changed-established' }) } };
-    await expect(receiveFirstMessage(established, staleEnvelope, remoteAddress)).resolves.toBe(false);
+    await expect(receiveDecision(established, staleEnvelope, remoteAddress)).resolves.toEqual({ outcome: 'permanent-rejection', reasonClass: 'identity-changed' });
     expect(sessionDecryptions).toBe(beforeCount);
     expect(establishedDelivered).toHaveBeenCalledTimes(1);
     await established.close();
@@ -1599,7 +1603,85 @@ it('deduplicates authenticated event identity within its room and rejects confli
     decryptedBytes = new Uint8Array([1, 1, ...conflicting]);
     const conflictEnvelope: EncryptedEnvelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1,
         olmMessage: JSON.stringify({ version: 1, message_type: 0, ciphertext: 'opaque-event-conflict' }) } };
-    await expect(receiveFirstMessage(conversation, conflictEnvelope, remoteAddress)).rejects.toThrow('reused with different content');
+    await expect(receiveDecision(conversation, conflictEnvelope, remoteAddress)).resolves.toEqual({ outcome: 'permanent-rejection', reasonClass: 'authenticated-invalid' });
     expect(consumer).toHaveBeenCalledTimes(1);
+    await conversation.close();
+});
+
+it('maps a strict authenticated legacy frame to terminal unsupported-message without acceptance', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    const storage = new Storage();
+    const delivered = jest.fn(messageAcceptance(storage));
+    const conversation = new ModernConversation(storage, loader, fakeTransport(false, 0, false, true).transport);
+    await conversation.connect(room, key(9), remoteAddress, await remoteCommitment(), delivered);
+    decryptedBytes = new Uint8Array([1, 1, ...new TextEncoder().encode('legacy but authenticated')]);
+    const envelope: EncryptedEnvelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1,
+        olmMessage: JSON.stringify({ version: 1, message_type: 1, ciphertext: 'opaque-strict-legacy' }) } };
+
+    await expect(receiveDecision(conversation, envelope, remoteAddress)).resolves.toEqual({ outcome: 'permanent-rejection', reasonClass: 'unsupported-message' });
+    expect(delivered).not.toHaveBeenCalled();
+    expect(await storage.read('modern-seen-m1-v1', room)).toBeUndefined();
+    await conversation.close();
+});
+
+it('keeps unauthenticated malformed Olm ciphertext retryable without exposing a rejection class', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    const conversation = new ModernConversation(new Storage(), loader, fakeTransport().transport);
+    await conversation.connect(room, key(9), remoteAddress, await remoteCommitment());
+    const malformed: EncryptedEnvelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1, olmMessage: 'not-an-olm-message' } };
+
+    await expect(receiveDecision(conversation, malformed, remoteAddress)).resolves.toEqual({ outcome: 'retryable' });
+    await conversation.close();
+});
+
+it('keeps an uncertain durable receive retryable and accepts it after storage recovers', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    const storage = new Storage();
+    const received: string[] = [];
+    const conversation = new ModernConversation(storage, loader, fakeTransport().transport);
+    const own = await conversation.connect(room, key(9), remoteAddress, await remoteCommitment(), messageAcceptance(storage, received));
+    const wrapper = encodeRoomMessageV1({ roomId: room, senderIdentityReference: await remoteCommitment(),
+        recipientIdentityReference: own.ownFingerprint, eventId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', kind: 'text',
+        payload: new TextEncoder().encode('retry the same mailbox event') });
+    const envelope: EncryptedEnvelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1,
+        olmMessage: JSON.stringify({ version: 1, message_type: 1, ciphertext: 'opaque-db-retry' }) } };
+    storage.failNextCas = 'before';
+    decryptedBytes = new Uint8Array([1, 1, ...wrapper]);
+
+    await expect(receiveDecision(conversation, envelope, remoteAddress)).resolves.toEqual({ outcome: 'retryable' });
+    expect(received).toEqual([]);
+    expect(await storage.read('vodozemac-session', room)).toBeUndefined();
+    expect(await storage.read('modern-seen-m1-v1', room)).toBeUndefined();
+    decryptedBytes = new Uint8Array([1, 1, ...wrapper]);
+    await expect(receiveDecision(conversation, envelope, remoteAddress)).resolves.toEqual({ outcome: 'accepted' });
+    expect(received).toEqual(['retry the same mailbox event']);
+    await conversation.close();
+});
+
+it('retains terminally rejected sender intent, suppresses automatic retry, and never upgrades it to accepted', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
+    const storage = new Storage();
+    const relay = fakeTransport(false, 0, true, false, 1);
+    const conversation = new ModernConversation(storage, loader, relay.transport);
+    await conversation.connect(room, key(9), remoteAddress, await remoteCommitment());
+    await seedVerifiedContact(storage, remoteAddress);
+    const updates: string[] = [];
+    conversation.onDeliveryUpdate((clientId, state) => updates.push(`${clientId}:${state}`));
+    const clientId = await conversation.sendWithReceipt('terminally rejected message');
+
+    expect(await conversation.isTerminallyRejected(clientId)).toBe(true);
+    expect(updates).toEqual([`${clientId}:rejected`]);
+    expect(relay.sent).toHaveLength(1);
+    await conversation.retryPending();
+    await conversation.acceptDelivery('relay-1');
+    expect(relay.sent).toHaveLength(1);
+    expect(await conversation.isTerminallyRejected(clientId)).toBe(true);
+    expect(updates).toEqual([`${clientId}:rejected`]);
+    const outbox = JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!)) as Array<Record<string, unknown>>;
+    expect(outbox).toEqual([expect.objectContaining({ clientId, terminallyRejected: true })]);
     await conversation.close();
 });

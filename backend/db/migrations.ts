@@ -8,7 +8,13 @@ export const applyMigrations = async (database: Db): Promise<void> => {
   await database.collection(PREKEY_COLLECTION).createIndex({ channel: 1, address: 1 }, { unique: true });
   await database.collection(OFFLINE_MESSAGE_COLLECTION).createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
   await database.collection(OFFLINE_MESSAGE_COLLECTION).createIndex({ dedupeKey: 1 }, { unique: true });
-  await database.collection(OFFLINE_MESSAGE_COLLECTION).createIndex({ channel: 1, mailbox: 1, slot: 1 }, { unique: true });
+  const offlineMessages = database.collection(OFFLINE_MESSAGE_COLLECTION);
+  await offlineMessages.updateMany({ state: { $exists: false } }, { $set: { state: 'active' } });
+  const slotIndex = (await offlineMessages.listIndexes().toArray()).find((index) => index.name === 'channel_1_mailbox_1_slot_1');
+  if (slotIndex && JSON.stringify(slotIndex.partialFilterExpression) !== JSON.stringify({ state: 'active' })) {
+    await offlineMessages.dropIndex('channel_1_mailbox_1_slot_1');
+  }
+  await offlineMessages.createIndex({ channel: 1, mailbox: 1, slot: 1 }, { unique: true, partialFilterExpression: { state: 'active' } });
   await database.collection(OFFLINE_MESSAGE_COLLECTION).createIndex({ channel: 1, mailbox: 1, claimedUntil: 1, expiresAt: 1 });
   await database.collection('file_ledgers_v2').createIndex({ 'transfers.context.transferId': 1 }, { unique: true, partialFilterExpression: { 'transfers.0': { $exists: true } } });
   await database.collection('attachment_metadata').createIndex({ id: 1 }, { unique: true });

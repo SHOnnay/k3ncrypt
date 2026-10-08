@@ -353,8 +353,10 @@ Do not change Stage 0 UI semantics. Any later `Delivered` label must name its
 precise layer. Never collapse L1 and L3.
 
 ACK correlation is at least
-`(roomId, serverEventId, connectionGeneration, recipientDeviceId)` and is
-validated against the active subscription and mailbox claim. Sender IDs are
+`(roomId, serverEventId, claimId, recipientDeviceId)` for mailbox events and is
+validated against the active subscription and current mailbox claim. Each
+lease claim gets a fresh opaque claim ID; stale acceptance or rejection from a
+previous generation cannot mutate a reclaimed row. Sender IDs are
 namespaced by `(roomId, senderDeviceId, senderEventId)`; server IDs are unique
 within a room and recipient mailbox. Never acknowledge by bare ID.
 
@@ -366,10 +368,45 @@ room where current relay/session behavior requires it; there is no global
 ordering promise across rooms. Mailbox replay is room scoped, bounded, and
 fairly scheduled across subscribed rooms. A mailbox item is removed only after
 the intended recipient device reports L3 for the matching room, event, and
-generation. Reconnect obtains fresh proofs, creates a new generation, restores
-authorized subscriptions, and replays from per-room cursors. Duplicates are
-suppressed by durable per-room acceptance state. Old generations cannot ACK,
-delete, or advance the replay cursor for the replacement connection.
+claim. A separately authenticated recipient terminal-rejection decision can
+also leave the active queue, but it is never L3 and never produces `Delivered`.
+Reconnect obtains fresh proofs, creates a new generation, restores authorized
+subscriptions, and replays from per-room cursors. Duplicates are suppressed by
+durable per-room acceptance state. Old claims cannot ACK, reject, delete, or
+advance the replay cursor for a replacement claim.
+
+### Current mailbox terminal decisions
+
+The current room relay stores opaque mailbox rows with a 7-day TTL and a
+64-active-row per-room recipient quota. A recipient decision has three
+outcomes: accepted (durable local commit), retryable (no acceptance/rejection;
+lease expiry permits retry), and terminal rejection (authenticated content is
+deterministically unusable under the recipient's current policy). Only the
+last outcome sends `recipient-rejected {id, roomId, claimId, reasonClass}`.
+The server derives recipient ownership from the joined socket, checks the
+active device epoch and room, and conditionally updates the exact current
+claim. Reason classes are coarse: `authenticated-invalid`,
+`unsupported-message`, or `identity-changed`.
+
+Accepted terminal rows retain only dedupe/routing/timestamp/expiry and bounded
+reason accounting; the opaque envelope is removed, the claim is released, and
+the mailbox slot is freed. The tombstone shares the original TTL and is not
+replayed or counted against active quota. It prevents retry of the same
+ciphertext from silently recreating a poison row. The sender keeps its durable
+outbox item marked terminal and does not auto-retry it; the existing safe
+failure/retry UI starts a new encrypted event when the user retries.
+
+Authenticated ROOM_MESSAGE_V1 room/participant mismatch, event-content
+conflict, malformed authenticated application payload, and forbidden legacy
+payload are terminal. Unsupported wrapper versions/kinds are also removed
+from active replay as `unsupported-message`, while the sender retains its
+local event for a deliberate new send after compatible software is available.
+No plaintext reason is returned to the sender. Identity-change rejection
+keeps old ciphertext blocked and never repins. Failures before Olm
+authentication, device-trust/database uncertainty, and network interruption
+remain retryable and do not disclose a rejection class; this intentionally
+avoids an unauthenticated crypto-failure oracle. Such undecided entries remain
+subject to the existing 64-row quota and seven-day expiry.
 
 ## 7. Calls (Stage 2)
 

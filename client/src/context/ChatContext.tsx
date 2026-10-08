@@ -108,6 +108,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const privacyPreferencesRef = useRef(privacyPreferences);
   const [permissionStatus, setPermissionStatus] = useState<{ microphone: PermissionState | 'unknown'; camera: PermissionState | 'unknown' }>({ microphone: 'unknown', camera: 'unknown' });
   const acceptedDeliveries = useRef(new Set<string>());
+  const rejectedDeliveries = useRef(new Set<string>());
   const endCallRef = useRef<() => Promise<void>>(async () => undefined);
   const callNegotiator = useRef<ProductionCallNegotiator>();
   const modernCallCompositionRef = useRef<AuthenticatedCallComposition | null>(modernCallComposition);
@@ -391,8 +392,9 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }
     });
     conversation.onDeliveryUpdate((clientId, state) => {
-      acceptedDeliveries.current.add(clientId);
-      setMessages((current) => current.map((message) => message.id === clientId ? { ...message, delivery: state } : message));
+      if (state === 'accepted') acceptedDeliveries.current.add(clientId);
+      else rejectedDeliveries.current.add(clientId);
+      setMessages((current) => current.map((message) => message.id === clientId ? { ...message, delivery: state === 'accepted' ? 'accepted' : 'failed' } : message));
     });
     try {
       conversationOpenStage('candidate-connect-started');
@@ -773,7 +775,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           const clientId = await modern!.sendWithReceipt(text, async (id) =>
             prepareMessageAcceptance(vault!, roomId, { ...outgoing, id }));
           const accepted = acceptedDeliveries.current.delete(clientId);
-          addMessage(roomId, { ...outgoing, id: clientId, delivery: accepted ? 'accepted' : 'pending' });
+          const rejected = rejectedDeliveries.current.delete(clientId);
+          addMessage(roomId, { ...outgoing, id: clientId, delivery: accepted ? 'accepted' : rejected ? 'failed' : 'pending' });
           const contact = await activeConversation.getContact();
           if (!callActiveRef.current && activeConversation.hasEstablishedSession() && contact?.verification === 'verified' && contact.changeStatus === 'unchanged' && selectedConversation.current === activeConversation) {
             await installModernCallSupport(activeConversation, true).catch(() => setCallError('Call signaling is unavailable for this saved contact.'));
@@ -795,6 +798,15 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const failed = messages.find((message) => message.id === messageId && message.type === 'sent');
     if (!failed) throw new Error('Message retry is unavailable.');
     const roomId = channelHash;
+    if (protocolMode === 'modern' && modern && vault && userId && await modern.isTerminallyRejected(messageId)) {
+      const outgoing = { ...displayMessage(userId, failed.text, 'sent'), delivery: 'pending' as const };
+      const clientId = await modern.sendWithReceipt(failed.text, async (id) =>
+        prepareMessageAcceptance(vault, roomId, { ...outgoing, id }));
+      const accepted = acceptedDeliveries.current.delete(clientId);
+      const rejected = rejectedDeliveries.current.delete(clientId);
+      addMessage(roomId, { ...outgoing, id: clientId, delivery: accepted ? 'accepted' : rejected ? 'failed' : 'pending' });
+      return;
+    }
     setRoomMessages(roomId, (current) => current.map((message) => message.id === messageId ? { ...message, delivery: 'pending' } : message));
     try {
       if (protocolMode === 'modern') await modern?.retryPending();
@@ -807,7 +819,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setRoomMessages(roomId, (current) => current.map((message) => message.id === messageId ? { ...message, delivery: 'failed' } : message));
       throw error;
     }
-  }, [channelHash, chat, messages, modern, protocolMode, setRoomMessages]);
+  }, [addMessage, channelHash, chat, messages, modern, protocolMode, setRoomMessages, userId, vault]);
 
   useEffect(() => {
     const retry = () => { if (modern) void modern.retryPending(); };

@@ -114,3 +114,61 @@ it('rejects mailbox replay on an existing socket after durable revocation', asyn
     expect(deleteSpy).not.toHaveBeenCalled();
   } finally { dbSpy.mockRestore(); deleteSpy.mockRestore(); }
 });
+
+it('terminally rejects a claimed poison entry and continues replay to later accepted events', async () => {
+  const channel = randomUUID(); const recipient = randomUUID(); const deviceId = randomUUID();
+  const accountIdentityReference = 'mailbox-test-account';
+  const poison = { id: randomUUID(), claimId: randomUUID(), sender: randomUUID(), timestamp: 1, envelope: { version: 2, strategy: 'opaque', data: { ciphertext: 'e1' } } };
+  const valid = { id: randomUUID(), claimId: randomUUID(), sender: randomUUID(), timestamp: 2, envelope: { version: 2, strategy: 'opaque', data: { ciphertext: 'e2' } } };
+  const rows = [poison, valid]; const delivered: string[] = []; const claimsById = new Map<string, string>(); const handlers = new Map<string, (...args: any[]) => unknown>();
+  const socket = { id: randomUUID(), userID: recipient, channelID: channel, deviceId, accountIdentityReference, deviceTrustEpoch: 1,
+    on: jest.fn((event: string, handler: (...args: any[]) => unknown) => { handlers.set(event, handler); }),
+    emit: jest.fn((event: string, payload: { id: string; claimId: string; roomId?: string }, ack?: (response: unknown) => void) => {
+      if (event !== 'chat-message') return;
+      delivered.push(payload.id);
+      if (payload.id === poison.id) {
+        const rejection = { id: payload.id, roomId: channel, claimId: payload.claimId, reasonClass: 'authenticated-invalid' };
+        void Promise.resolve(handlers.get('recipient-rejected')?.(rejection, () => undefined)).then(() =>
+          ack?.({ accepted: false, outcome: 'permanent-rejection', reasonClass: 'authenticated-invalid' }));
+      } else ack?.({ accepted: true, outcome: 'accepted' });
+    }), disconnect: jest.fn() } as unknown as CustomSocket;
+  const database = { collection: () => ({ findOne: async () => ({ deviceId, accountIdentityReference, trustEpoch: 1, state: 'active' }) }) };
+  const dbSpy = jest.spyOn(db, 'getDatabase').mockReturnValue(database as never);
+  const claimSpy = jest.spyOn(db, 'claimOfflineMessage').mockImplementation(async (_mailbox, _channel, _lease, claimId) => {
+    const next = rows.shift(); if (next) claimsById.set(next.id, claimId); return next ? { ...next, claimId } as never : undefined;
+  });
+  const rejectSpy = jest.spyOn(db, 'rejectOfflineMessage').mockResolvedValueOnce('rejected').mockResolvedValueOnce('duplicate');
+  const ackSpy = jest.spyOn(db, 'ackOfflineMessage').mockResolvedValue(true);
+  const authoritySpy = jest.spyOn(durableTrust, 'durableDeviceTrustAuthority').mockReturnValue({ verify: async () => ({ deviceId, accountIdentityReference, trustEpoch: 1, state: 'active' }) } as never);
+  try {
+    connectionListener(socket, { sockets: { sockets: new Map() } });
+    const replayAck = jest.fn();
+    await handlers.get('mailbox-replay')?.({}, replayAck);
+    expect(replayAck).toHaveBeenCalledWith({ status: 'accepted' });
+    expect(delivered).toEqual([poison.id, valid.id]);
+    expect(rejectSpy).toHaveBeenNthCalledWith(1, poison.id, recipient, channel, expect.any(String), 'authenticated-invalid');
+    expect(ackSpy).toHaveBeenCalledWith(valid.id, recipient, channel, claimsById.get(valid.id));
+    expect(claimSpy).toHaveBeenCalledTimes(3);
+  } finally { dbSpy.mockRestore(); claimSpy.mockRestore(); rejectSpy.mockRestore(); ackSpy.mockRestore(); authoritySpy.mockRestore(); }
+});
+
+it('requires the joined recipient room and a live claim generation before terminal rejection', async () => {
+  const channel = randomUUID(); const otherRoom = randomUUID(); const recipient = randomUUID(); const deviceId = randomUUID();
+  const accountIdentityReference = 'mailbox-test-account'; const handlers = new Map<string, (...args: any[]) => unknown>();
+  const socket = { id: randomUUID(), userID: recipient, channelID: channel, deviceId, accountIdentityReference, deviceTrustEpoch: 1,
+    on: jest.fn((event: string, handler: (...args: any[]) => unknown) => { handlers.set(event, handler); }), emit: jest.fn(), disconnect: jest.fn() } as unknown as CustomSocket;
+  const database = { collection: () => ({ findOne: async () => ({ deviceId, accountIdentityReference, trustEpoch: 1, state: 'active' }) }) };
+  const dbSpy = jest.spyOn(db, 'getDatabase').mockReturnValue(database as never);
+  const rejectSpy = jest.spyOn(db, 'rejectOfflineMessage').mockResolvedValue('stale');
+  const authoritySpy = jest.spyOn(durableTrust, 'durableDeviceTrustAuthority').mockReturnValue({ verify: async () => ({ deviceId, accountIdentityReference, trustEpoch: 1, state: 'active' }) } as never);
+  try {
+    connectionListener(socket, { sockets: { sockets: new Map() } });
+    const ack = jest.fn();
+    await handlers.get('recipient-rejected')?.({ id: randomUUID(), roomId: otherRoom, claimId: randomUUID(), reasonClass: 'authenticated-invalid' }, ack);
+    expect(rejectSpy).not.toHaveBeenCalled();
+    await handlers.get('recipient-rejected')?.({ id: randomUUID(), roomId: channel, claimId: randomUUID(), reasonClass: 'authenticated-invalid' }, ack);
+    expect(rejectSpy).toHaveBeenCalledWith(expect.any(String), recipient, channel, expect.any(String), 'authenticated-invalid');
+    expect(socket.emit).not.toHaveBeenCalledWith('not-accepted', expect.anything());
+    expect(ack).toHaveBeenLastCalledWith({ error: 'Terminal mailbox result rejected.' });
+  } finally { dbSpy.mockRestore(); rejectSpy.mockRestore(); authoritySpy.mockRestore(); }
+});

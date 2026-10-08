@@ -74,7 +74,7 @@ export const deleteExpiredPrekeyBundles = (now: number, collectionName: string):
 
 export const findOfflineMessages = (condition: Record<string, unknown>, collectionName: string, limit: number): any[] => {
   const collection = storage[collectionName] || [];
-  return collection.filter((entry) => Object.keys(condition).every((key) => entry[key] === condition[key]) &&
+  return collection.filter((entry) => entry.state !== 'rejected' && Object.keys(condition).every((key) => entry[key] === condition[key]) &&
     (!entry.expiresAt || entry.expiresAt.getTime() > Date.now()) && (!entry.claimedUntil || entry.claimedUntil.getTime() <= Date.now()))
     .slice(0, limit);
 };
@@ -83,14 +83,16 @@ export const insertOfflineMessage = (data: any, collectionName: string): any => 
   const collection = storage[collectionName] || (storage[collectionName] = []);
   const existing = collection.find((entry) => entry.dedupeKey === data.dedupeKey);
   if (existing) return existing;
-  collection.push({ pk: pk++, ...data });
-  return data;
+  const stored = { state: 'active', ...data };
+  collection.push({ pk: pk++, ...stored });
+  return stored;
 };
 
-export const claimOfflineMessage = (condition: Record<string, unknown>, leaseUntil: Date, collectionName: string): any => {
+export const claimOfflineMessage = (condition: Record<string, unknown>, leaseUntil: Date, claimId: string, collectionName: string): any => {
   const message = findOfflineMessages(condition, collectionName, 1)[0];
   if (!message) return null;
   message.claimedUntil = leaseUntil;
+  message.claimId = claimId;
   return message;
 };
 
@@ -102,6 +104,43 @@ export const ackOfflineMessage = (condition: Record<string, unknown>, collection
   return true;
 };
 
+export const rejectOfflineMessage = (condition: Record<string, unknown>, reasonClass: string, now: Date, collectionName: string): 'rejected' | 'duplicate' | 'stale' => {
+  const collection = storage[collectionName] || [];
+  const active = collection.find((entry) => entry.state !== 'rejected' && Object.keys(condition).every((key) => entry[key] === condition[key]));
+  if (active) {
+    active.state = 'rejected';
+    active.terminalReason = reasonClass;
+    active.terminalAt = now;
+    active.terminalClaimId = condition.claimId;
+    delete active.envelope;
+    delete active.claimId;
+    delete active.claimedUntil;
+    delete active.slot;
+    return 'rejected';
+  }
+  const prior = collection.find((entry) => entry.state === 'rejected' && Object.keys(condition).filter((key) => key !== 'claimId').every((key) => entry[key] === condition[key]) && entry.terminalClaimId === condition.claimId);
+  return prior ? 'duplicate' : 'stale';
+};
+
+export const recordOfflineRejection = (data: Record<string, unknown>, collectionName: string): 'rejected' | 'duplicate' => {
+  const collection = storage[collectionName] || (storage[collectionName] = []);
+  const existing = collection.find((entry) => entry.dedupeKey === data.dedupeKey);
+  if (existing?.state === 'rejected') return 'duplicate';
+  if (existing) {
+    existing.state = 'rejected';
+    existing.terminalReason = data.terminalReason;
+    existing.terminalAt = data.terminalAt;
+    existing.terminalClaimId = undefined;
+    delete existing.envelope;
+    delete existing.claimId;
+    delete existing.claimedUntil;
+    delete existing.slot;
+    return 'rejected';
+  }
+  collection.push({ pk: pk++, ...data, state: 'rejected' });
+  return 'rejected';
+};
+
 export const deleteExpiredOfflineMessages = (now: number, collectionName: string): number => {
   const collection = storage[collectionName] || [];
   const retained = collection.filter((entry) => !(entry.expiresAt instanceof Date) || entry.expiresAt.getTime() > now);
@@ -110,4 +149,4 @@ export const deleteExpiredOfflineMessages = (now: number, collectionName: string
 };
 
 export const countOfflineMessages = (condition: Record<string, unknown>, collectionName: string): number =>
-  (storage[collectionName] || []).filter((entry) => Object.keys(condition).every((key) => entry[key] === condition[key]) && (!entry.expiresAt || entry.expiresAt.getTime() > Date.now())).length;
+  (storage[collectionName] || []).filter((entry) => entry.state !== 'rejected' && Object.keys(condition).every((key) => entry[key] === condition[key]) && (!entry.expiresAt || entry.expiresAt.getTime() > Date.now())).length;

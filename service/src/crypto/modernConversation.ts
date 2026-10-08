@@ -1,6 +1,6 @@
 import { parseFileReference, sameBinding } from '../files/protocol';
 import { testDiagnosticsEnabled } from '../utils/testDiagnostics';
-import type { EncryptedEnvelope, SecureRecordUpdate, SecureStorage, TransportManager } from '../core/contracts';
+import type { EncryptedEnvelope, InboundTransportDecision, PermanentInboundRejectionReason, SecureRecordUpdate, SecureStorage, TransportManager } from '../core/contracts';
 import { VODOZEMAC_ENVELOPE_VERSION, VODOZEMAC_STRATEGY_ID } from '../core/vodozemacCryptoSession';
 import { claimVodozemacOneTimeKey, fetchVodozemacBundle, publishVodozemacBundle, renewVodozemacBundle } from '../api/prekeys';
 import { deleteLink } from '../api/links';
@@ -43,7 +43,7 @@ import { bootstrapFirstDevice } from '../devices/bootstrap';
 import { signEnrollmentEvent, type EnrollmentEvent } from '../devices/trustProtocol';
 import makeRequest from '../api/client';
 import { fromBase64Url, toBase64Url } from './base64url';
-import { decodeRoomMessage, encodeRoomMessageV1, MAX_USER_MESSAGE_UTF8_BYTES, roomMessageCommitment, roomMessageEventId, ROOM_MESSAGE_V1_DOMAIN, ROOM_MESSAGE_V1_FEATURE, type RoomMessageKind } from './roomMessageV1';
+import { decodeRoomMessage, encodeRoomMessageV1, MAX_USER_MESSAGE_UTF8_BYTES, RoomMessageDecodeError, roomMessageCommitment, roomMessageEventId, ROOM_MESSAGE_V1_DOMAIN, ROOM_MESSAGE_V1_FEATURE, type RoomMessageKind } from './roomMessageV1';
 
 const OUTBOX_RECORD = 'modern-outbox';
 const SEEN_RECORD = 'modern-seen';
@@ -113,7 +113,7 @@ const startsWithBytes = (value: Uint8Array, prefix: Uint8Array): boolean =>
 
 interface SenderOriginMetadata { version: 1; basis: 'durable-commit'; }
 const SENDER_ORIGIN: SenderOriginMetadata = Object.freeze({ version: 1, basis: 'durable-commit' });
-interface PendingEnvelope { envelope: EncryptedEnvelope; relayId?: string; sentAt?: number; clientId?: string; senderOrigin?: SenderOriginMetadata; roomMessageVersion?: 1; recipientIdentityReference?: string; }
+interface PendingEnvelope { envelope: EncryptedEnvelope; relayId?: string; sentAt?: number; clientId?: string; senderOrigin?: SenderOriginMetadata; roomMessageVersion?: 1; recipientIdentityReference?: string; terminallyRejected?: true; }
 interface PublicationMarker { version: 1; roomId: string; address?: string; routingProof?: string; }
 export interface ModernConnectionDetails {
     ownFingerprint: string;
@@ -121,6 +121,10 @@ export interface ModernConnectionDetails {
     contact?: StoredContactIdentity;
 }
 export type DeviceControlEvent = DeviceControlMessage;
+
+class PermanentInboundRejection extends Error {
+    constructor(readonly reasonClass: PermanentInboundRejectionReason, detail = 'Inbound message is permanently not accepted.') { super(detail); this.name = 'PermanentInboundRejection'; }
+}
 
 type InboundDiagnosticStage = 'received' | 'parsed' | 'session-found' | 'decrypted' | 'frame-parsed' | 'persisted' | 'acknowledged';
 type InboundDiagnosticEvent = {
@@ -305,7 +309,7 @@ export class ModernConversation {
     private trustEvents?: TrustStateEventCoordinator;
     private trustEpoch?: number;
     private syncController?: RuntimeSyncController;
-    private deliveryObserver?: (clientId: string, state: 'accepted') => void;
+    private deliveryObserver?: (clientId: string, state: 'accepted' | 'rejected') => void;
     private syncRelay?: SocketSyncRelay;
     private groupAdapter?: SecureStorageGroupRuntimeAdapter;
     private groupRuntime?: GroupSecurityRuntime;
@@ -356,9 +360,7 @@ export class ModernConversation {
                     }
                     return false;
                 }
-                return this.connecting
-                    ? this.receive(message.envelope, message.senderRoutingId)
-                    : this.withTabLock(this.roomId ?? 'unknown', () => this.receive(message.envelope, message.senderRoutingId), false, this.inboundLockAbort.signal);
+                return this.decideInbound(message.envelope, message.senderRoutingId);
             });
         this.transportManager = transportManager ?? new DefaultTransportManager(relay!);
         this.subscriptions.set('on-alice-join', new Set([() => {
@@ -366,6 +368,7 @@ export class ModernConversation {
             void this.retryJoinIntroduction();
         }]));
         this.subscriptions.set('delivered', new Set([(id: string) => { void this.acceptDelivery(id); }]));
+        this.subscriptions.set('not-accepted', new Set([(id: string) => { void this.rejectDelivery(id); }]));
     }
 
     private get transport(): TransportManager {
@@ -758,7 +761,7 @@ export class ModernConversation {
         throw new Error('The private contact is not ready.');
     }
 
-    public onDeliveryUpdate(observer: (clientId: string, state: 'accepted') => void): void { this.deliveryObserver = observer; }
+    public onDeliveryUpdate(observer: (clientId: string, state: 'accepted' | 'rejected') => void): void { this.deliveryObserver = observer; }
 
     /** Observe the existing relay presence event to release active media when a peer leaves. */
     public onPeerDisconnect(observer: () => void): () => void {
@@ -969,7 +972,7 @@ export class ModernConversation {
             await this.delivery.retry({
                 pending,
                 recipientRoutingId: this.remoteAddress,
-                skip: (item) => contact?.changeStatus !== 'unchanged' || !contact.identityId ||
+                skip: (item) => Boolean(item.terminallyRejected) || contact?.changeStatus !== 'unchanged' || !contact.identityId ||
                     item.recipientIdentityReference !== contact.identityId ||
                     (this.sessionHealth === 'renewal-pending' && item.clientId !== renewal?.clientId) ||
                     (this.transport.activeTransport()?.requiresRoomMessageV1 === true && item.roomMessageVersion !== 1),
@@ -982,8 +985,16 @@ export class ModernConversation {
                     testOnlyDeliveryStage('relay-dispatch');
                 },
                 persist: async (nextPending) => this.storage.write(OUTBOX_RECORD, this.roomId!, asBytes(nextPending)),
+                onTerminalRejection: (item) => {
+                    item.terminallyRejected = true;
+                    if (item.clientId) this.deliveryObserver?.(item.clientId, 'rejected');
+                },
             });
         });
+    }
+
+    public async isTerminallyRejected(clientId: string): Promise<boolean> {
+        return (await this.readPending()).some((item) => item.clientId === clientId && item.terminallyRejected === true);
     }
 
     public async acceptDelivery(relayId: string): Promise<void> {
@@ -991,6 +1002,7 @@ export class ModernConversation {
         await this.deliveryMutex.runExclusive(async () => {
             const pending = await this.readPending();
             const accepted = pending.find((item) => item.relayId === relayId);
+            if (accepted?.terminallyRejected) return;
             const next = pending.filter((item) => item.relayId !== relayId);
             if (next.length !== pending.length) await this.storage.write(OUTBOX_RECORD, this.roomId!, asBytes(next));
             const renewal = parseSessionRenewal(await this.storage.read(SESSION_RENEWAL_RECORD, this.roomId!));
@@ -1000,6 +1012,18 @@ export class ModernConversation {
                 this.sessionHealthObserver?.('healthy');
             }
             if (accepted?.clientId) this.deliveryObserver?.(accepted.clientId, 'accepted');
+        });
+    }
+
+    public async rejectDelivery(relayId: string): Promise<void> {
+        if (!this.roomId) return;
+        await this.deliveryMutex.runExclusive(async () => {
+            const pending = await this.readPending();
+            const rejected = pending.find((item) => item.relayId === relayId);
+            if (!rejected || rejected.terminallyRejected) return;
+            rejected.terminallyRejected = true;
+            await this.storage.write(OUTBOX_RECORD, this.roomId!, asBytes(pending));
+            if (rejected.clientId) this.deliveryObserver?.(rejected.clientId, 'rejected');
         });
     }
 
@@ -1293,6 +1317,19 @@ export class ModernConversation {
         return this.receiveMutex.runExclusive(() => this.receiveUnlocked(envelope, senderAddress));
     }
 
+    private async decideInbound(envelope: EncryptedEnvelope, senderAddress?: string): Promise<InboundTransportDecision> {
+        try {
+            const accepted = this.connecting
+                ? await this.receive(envelope, senderAddress)
+                : await this.withTabLock(this.roomId ?? 'unknown', () => this.receive(envelope, senderAddress), false, this.inboundLockAbort.signal);
+            return accepted ? { outcome: 'accepted' } : { outcome: 'retryable' };
+        } catch (error) {
+            return error instanceof PermanentInboundRejection
+                ? { outcome: 'permanent-rejection', reasonClass: error.reasonClass }
+                : { outcome: 'retryable' };
+        }
+    }
+
     private async receiveUnlocked(envelope: EncryptedEnvelope, senderAddress?: string): Promise<boolean> {
         if (this.sessionHealth === 'unhealthy') return false;
         this.lastInboundFailureCategory = undefined;
@@ -1335,14 +1372,14 @@ export class ModernConversation {
                 if (pinned && (pinned.identityId !== senderFingerprint || pinned.changeStatus !== 'unchanged')) {
                     this.lastInboundFailureCategory = 'sender-identity-mismatch';
                     await this.testOnlyRecordInboundStage('parsed', senderFingerprint, this.lastInboundFailureCategory);
-                    return false;
+                    throw new PermanentInboundRejection('identity-changed');
                 }
             } else {
                 const contact = this.remoteAddress ? await this.registry.get(this.remoteAddress) : undefined;
                 if (contact && contact.changeStatus !== 'unchanged') {
                     this.lastInboundFailureCategory = 'sender-identity-mismatch';
                     await this.testOnlyRecordInboundStage('parsed', contact.identityId, this.lastInboundFailureCategory);
-                    return false;
+                    throw new PermanentInboundRejection('identity-changed');
                 }
                 senderFingerprint = contact?.identityId;
             }
@@ -1372,16 +1409,24 @@ export class ModernConversation {
                         authenticatedEventId = await roomMessageEventId(this.roomId!, senderFingerprint!, decoded.eventId);
                         authenticatedCommitment = await roomMessageCommitment(decrypted);
                     }
-                } catch (error) { this.lastInboundFailureCategory = 'message-frame-parsing-failure'; throw error; }
+                } catch (error) {
+                    this.lastInboundFailureCategory = 'message-frame-parsing-failure';
+                    if (error instanceof RoomMessageDecodeError) {
+                        const reasonClass = error.failure === 'unsupported-version' || error.failure === 'unsupported-kind' || error.failure === 'legacy-forbidden'
+                            ? 'unsupported-message' : 'authenticated-invalid';
+                        throw new PermanentInboundRejection(reasonClass, error.message);
+                    }
+                    throw new PermanentInboundRejection('authenticated-invalid', error instanceof Error ? error.message : undefined);
+                }
                 const priorEvent = authenticatedEventId ? roomMessageSeen.find((item) => item.id === authenticatedEventId) : undefined;
                 if (priorEvent && priorEvent.commitment !== authenticatedCommitment) {
                     this.lastInboundFailureCategory = 'message-frame-parsing-failure';
-                    throw new Error('Room message event ID was reused with different content.');
+                    throw new PermanentInboundRejection('authenticated-invalid', 'Room message event ID was reused with different content.');
                 }
                 const authenticatedReplay = Boolean(priorEvent);
                 let introduction: JoinIntroduction | undefined;
                 try { introduction = parseJoinIntroduction(payload); }
-                catch (error) { this.lastInboundFailureCategory = 'message-frame-parsing-failure'; throw error; }
+                catch { this.lastInboundFailureCategory = 'message-frame-parsing-failure'; throw new PermanentInboundRejection('authenticated-invalid'); }
                 const updates: SecureRecordUpdate[] = [];
                 if (authenticatedReplay) {
                     // A new ciphertext may carry an already accepted authenticated event.
@@ -1393,12 +1438,12 @@ export class ModernConversation {
                 } else {
                     let text: string;
                     try { text = strictMessageDecoder.decode(payload); }
-                    catch (error) { this.lastInboundFailureCategory = 'message-frame-parsing-failure'; throw error; }
+                    catch { this.lastInboundFailureCategory = 'message-frame-parsing-failure'; throw new PermanentInboundRejection('authenticated-invalid'); }
                     await this.testOnlyRecordInboundStage('frame-parsed', senderFingerprint);
                     if (firstSession) {
                         if (this.remoteIdentityCommitment && this.remoteIdentityCommitment !== senderFingerprint) {
                             this.lastInboundFailureCategory = 'sender-identity-mismatch';
-                            throw new Error('The authenticated sender identity does not match the saved invitation.');
+                            throw new PermanentInboundRejection('identity-changed');
                         }
                         const routePlan = await this.prepareAuthenticatedRouteUpdates(senderAddress, bundle!.identity, senderFingerprint!);
                         updates.push(...routePlan.updates);
@@ -1477,15 +1522,15 @@ export class ModernConversation {
     ): Promise<InboundMessageAcceptancePlan> {
         if (!this.roomId || event.conversationId !== this.roomId || event.senderAddress !== senderAddress ||
             (this.remoteAddress !== undefined && this.remoteAddress !== senderAddress)) {
-            throw new Error('Join introduction binding is invalid.');
+            throw new PermanentInboundRejection('authenticated-invalid');
         }
         const fingerprint = await fingerprintVodozemacIdentity(identity);
         if (event.identityCommitment !== fingerprint ||
             (this.remoteIdentityCommitment !== undefined && this.remoteIdentityCommitment !== fingerprint)) {
-            throw new Error('Join introduction identity association is invalid.');
+            throw new PermanentInboundRejection('identity-changed');
         }
         const signatureValid = await this.verifyJoinIntroductionSignature(event, identity.ed25519);
-        if (!signatureValid) throw new Error('Join introduction authentication failed.');
+        if (!signatureValid) throw new PermanentInboundRejection('authenticated-invalid');
 
         const acceptedBytes = await this.storage.read(JOIN_INTRODUCTION_SEEN_RECORD, this.roomId);
         const updates: SecureRecordUpdate[] = [];
@@ -1498,7 +1543,7 @@ export class ModernConversation {
                 typeof (accepted as { eventId?: unknown }).eventId !== 'string') {
                 throw new Error('Saved join introduction replay state is invalid.');
             }
-            if ((accepted as { eventId: string }).eventId !== event.eventId) throw new Error('Join introduction replay rejected.');
+            if ((accepted as { eventId: string }).eventId !== event.eventId) throw new PermanentInboundRejection('authenticated-invalid');
         } else {
             updates.push({
                 recordType: JOIN_INTRODUCTION_SEEN_RECORD,
@@ -1535,7 +1580,7 @@ export class ModernConversation {
         }
         const known = await this.registry.get(senderAddress);
         if (known && (known.identityId !== fingerprint || known.changeStatus !== 'unchanged')) {
-            throw new Error('The authenticated sender identity changed. Review it before continuing.');
+            throw new PermanentInboundRejection('identity-changed');
         }
         const contactBytes = await this.storage.read('contact-identity', senderAddress);
         const updates: SecureRecordUpdate[] = [];

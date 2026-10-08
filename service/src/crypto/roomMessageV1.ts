@@ -12,6 +12,10 @@ export const ROOM_MESSAGE_V1_FEATURE = 'room-message-v1';
 export const ROOM_MESSAGE_V1_DOMAIN = 'K3NCRYPT/ROOM-MESSAGE';
 
 export type RoomMessageKind = 'text' | 'attachment-reference' | 'join-introduction';
+export type RoomMessageDecodeFailure = 'legacy-forbidden' | 'unsupported-version' | 'unsupported-kind' | 'binding-mismatch' | 'authenticated-invalid';
+export class RoomMessageDecodeError extends Error {
+    constructor(readonly failure: RoomMessageDecodeFailure, message: string) { super(message); this.name = 'RoomMessageDecodeError'; }
+}
 const KIND_TO_BYTE: Record<RoomMessageKind, number> = {
     text: 1,
     'attachment-reference': 2,
@@ -60,7 +64,7 @@ const identityBytes = (value: string, field: string): Uint8Array => {
 
 const kindByte = (kind: RoomMessageKind): number => {
     const value = KIND_TO_BYTE[kind];
-    if (!value) throw new Error('Room message payload kind is unsupported.');
+    if (!value) throw new RoomMessageDecodeError('unsupported-kind', 'Room message payload kind is unsupported.');
     return value;
 };
 
@@ -70,14 +74,14 @@ const validateKindPayload = (kind: RoomMessageKind, payload: Uint8Array): void =
         try { decoder.decode(payload); } catch { throw new Error('Room message text is not valid UTF-8.'); }
         if (startsWith(payload, encoder.encode('k3ncrypt-file-')) ||
             startsWith(payload, new Uint8Array([0x00, 0x4b, 0x33, 0x4e, 0x43, 0x49, 0x01]))) {
-            throw new Error('Room message payload kind does not match its content.');
+            throw new RoomMessageDecodeError('authenticated-invalid', 'Room message payload kind does not match its content.');
         }
     } else if (kind === 'attachment-reference') {
-        if (!startsWith(payload, encoder.encode('k3ncrypt-file-'))) throw new Error('Room message attachment reference kind is invalid.');
+        if (!startsWith(payload, encoder.encode('k3ncrypt-file-'))) throw new RoomMessageDecodeError('authenticated-invalid', 'Room message attachment reference kind is invalid.');
     } else if (kind === 'join-introduction') {
-        if (!startsWith(payload, new Uint8Array([0x00, 0x4b, 0x33, 0x4e, 0x43, 0x49, 0x01]))) throw new Error('Room message introduction kind is invalid.');
+        if (!startsWith(payload, new Uint8Array([0x00, 0x4b, 0x33, 0x4e, 0x43, 0x49, 0x01]))) throw new RoomMessageDecodeError('authenticated-invalid', 'Room message introduction kind is invalid.');
     } else {
-        throw new Error('Room message payload kind is unsupported.');
+        throw new RoomMessageDecodeError('unsupported-kind', 'Room message payload kind is unsupported.');
     }
 };
 
@@ -119,35 +123,36 @@ export const decodeRoomMessage = (
     expected: RoomMessageExpectation,
     options: { requireRoomMessageV1?: boolean } = {},
 ): DecodedRoomMessage => {
-    if (!(value instanceof Uint8Array) || value.byteLength > ROOM_MESSAGE_V1_MAX_PAYLOAD_BYTES + HEADER_LENGTH + 2 * CANONICAL_IDENTITY_REFERENCE_BYTES) throw new Error('Room message is invalid or too large.');
+    if (!(value instanceof Uint8Array) || value.byteLength > ROOM_MESSAGE_V1_MAX_PAYLOAD_BYTES + HEADER_LENGTH + 2 * CANONICAL_IDENTITY_REFERENCE_BYTES) throw new RoomMessageDecodeError('authenticated-invalid', 'Room message is invalid or too large.');
     if (!startsWith(value, DOMAIN)) {
-        if (options.requireRoomMessageV1) throw new Error('A room-bound message is required.');
+        if (options.requireRoomMessageV1) throw new RoomMessageDecodeError('legacy-forbidden', 'A room-bound message is required.');
         return { version: 'legacy', payload: value.slice() };
     }
-    if (value.byteLength < HEADER_LENGTH || value[DOMAIN.byteLength] !== VERSION) throw new Error('Room message version is unsupported or malformed.');
+    if (value.byteLength < HEADER_LENGTH) throw new RoomMessageDecodeError('authenticated-invalid', 'Room message frame is malformed.');
+    if (value[DOMAIN.byteLength] !== VERSION) throw new RoomMessageDecodeError('unsupported-version', 'Room message version is unsupported.');
     let offset = DOMAIN.byteLength + 1;
     const kind = BYTE_TO_KIND.get(value[offset++]);
-    if (!kind) throw new Error('Room message payload kind is unsupported.');
+    if (!kind) throw new RoomMessageDecodeError('unsupported-kind', 'Room message payload kind is unsupported.');
     const roomBytes = value.slice(offset, offset + 16); offset += 16;
     const roomId = [...roomBytes].map((byte) => byte.toString(16).padStart(2, '0')).join('').replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, '$1-$2-$3-$4-$5');
     const view = new DataView(value.buffer, value.byteOffset, value.byteLength);
     const senderLength = view.getUint16(offset, false); offset += 2;
-    if (senderLength !== CANONICAL_IDENTITY_REFERENCE_BYTES || offset + senderLength + 2 > value.byteLength) throw new Error('Room message sender binding is malformed.');
+    if (senderLength !== CANONICAL_IDENTITY_REFERENCE_BYTES || offset + senderLength + 2 > value.byteLength) throw new RoomMessageDecodeError('authenticated-invalid', 'Room message sender binding is malformed.');
     const senderIdentityReference = decoder.decode(value.subarray(offset, offset + senderLength)); offset += senderLength;
     const recipientLength = view.getUint16(offset, false); offset += 2;
-    if (recipientLength !== CANONICAL_IDENTITY_REFERENCE_BYTES || offset + recipientLength + 20 > value.byteLength) throw new Error('Room message recipient binding is malformed.');
+    if (recipientLength !== CANONICAL_IDENTITY_REFERENCE_BYTES || offset + recipientLength + 20 > value.byteLength) throw new RoomMessageDecodeError('authenticated-invalid', 'Room message recipient binding is malformed.');
     const recipientIdentityReference = decoder.decode(value.subarray(offset, offset + recipientLength)); offset += recipientLength;
     const eventBytes = value.slice(offset, offset + 16); offset += 16;
     const eventId = [...eventBytes].map((byte) => byte.toString(16).padStart(2, '0')).join('').replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, '$1-$2-$3-$4-$5');
     const payloadLength = view.getUint32(offset, false); offset += 4;
-    if (payloadLength > ROOM_MESSAGE_V1_MAX_PAYLOAD_BYTES || offset + payloadLength !== value.byteLength) throw new Error('Room message payload length is malformed.');
+    if (payloadLength > ROOM_MESSAGE_V1_MAX_PAYLOAD_BYTES || offset + payloadLength !== value.byteLength) throw new RoomMessageDecodeError('authenticated-invalid', 'Room message payload length is malformed.');
     // Authenticate the wrapper context before exposing or parsing application bytes.
     identityBytes(expected.senderIdentityReference, 'expected sender');
     identityBytes(expected.recipientIdentityReference, 'expected recipient');
     if (roomId !== exactUuid(expected.roomId, 'expected room ID') ||
         senderIdentityReference !== expected.senderIdentityReference ||
         recipientIdentityReference !== expected.recipientIdentityReference) {
-        throw new Error('Room message participant or room binding mismatch.');
+        throw new RoomMessageDecodeError('binding-mismatch', 'Room message participant or room binding mismatch.');
     }
     const payload = value.slice(offset, offset + payloadLength);
     validateKindPayload(kind, payload);

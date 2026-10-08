@@ -6,6 +6,7 @@ import type {
     Transport,
     TransportCapabilities,
     TransportConnectionState,
+    InboundTransportDecision,
     TransportEnvelopeHandler,
 } from '../core/contracts';
 import type { chatJoinPayloadType } from '../public/types';
@@ -15,7 +16,7 @@ import { Logger } from '../utils/logger';
 import { testDiagnosticsEnabled } from '../utils/testDiagnostics';
 import { ROOM_MESSAGE_V1_FEATURE } from '../crypto/roomMessageV1';
 
-export type SocketListenerType = 'limit-reached' | 'delivered' | 'on-alice-join' | 'on-alice-disconnect' | 'chat-message';
+export type SocketListenerType = 'limit-reached' | 'delivered' | 'not-accepted' | 'on-alice-join' | 'on-alice-disconnect' | 'chat-message';
 export type SubscriptionType = Map<string, Set<Function>>;
 
 export type RawChatMessage = {
@@ -23,6 +24,7 @@ export type RawChatMessage = {
     timestamp: number;
     sender: string;
     envelope: EncryptedEnvelope;
+    claimId?: string;
 };
 export type RawSignalMessage = { envelope: EncryptedEnvelope };
 
@@ -32,6 +34,7 @@ const SUPPORTED_PROTOCOL_FEATURES = [JOIN_INTRODUCTION_FEATURE, ROOM_MESSAGE_V1_
 const WIRE_EVENTS = {
     LIMIT_REACHED: 'limit-reached',
     DELIVERED: 'delivered',
+    NOT_ACCEPTED: 'not-accepted',
     ON_ALICE_JOIN: 'on-alice-join',
     ON_ALICE_DISCONNECT: 'on-alice-disconnect',
     CHAT_MESSAGE: 'chat-message',
@@ -76,6 +79,7 @@ export class SocketIoRelayTransport implements Transport {
         });
         this.socket.on(WIRE_EVENTS.LIMIT_REACHED, (...args) => this.handleEvent('limit-reached', args));
         this.socket.on(WIRE_EVENTS.DELIVERED, (...args) => this.handleEvent('delivered', args));
+        this.socket.on(WIRE_EVENTS.NOT_ACCEPTED, (...args) => this.handleEvent('not-accepted', args));
         this.socket.on(WIRE_EVENTS.ON_ALICE_JOIN, (payload: unknown) => {
             const features = payload && typeof payload === 'object' && !Array.isArray(payload)
                 ? (payload as { protocolFeatures?: unknown }).protocolFeatures : payload;
@@ -83,7 +87,7 @@ export class SocketIoRelayTransport implements Transport {
             this.handleEvent('on-alice-join', [payload]);
         });
         this.socket.on(WIRE_EVENTS.ON_ALICE_DISCONNECT, (...args) => this.handleEvent('on-alice-disconnect', args));
-        this.socket.on(WIRE_EVENTS.CHAT_MESSAGE, (message: RawChatMessage, ack?: (response: { accepted: boolean }) => void) => {
+        this.socket.on(WIRE_EVENTS.CHAT_MESSAGE, (message: RawChatMessage, ack?: (response: { accepted: boolean; outcome?: string; reasonClass?: string }) => void) => {
             void this.acceptChatEnvelope(message, ack);
         });
         this.socket.on(WIRE_EVENTS.WEBRTC_SIGNAL, (message: RawSignalMessage) => {
@@ -149,7 +153,8 @@ export class SocketIoRelayTransport implements Transport {
         if (channel === 'message') {
             const operation = proofOperation ?? 'relay:message';
             const carrier = this.proofProvider ? await this.proofProvider.acquire(operation, this.activeConversationId ? { conversationId: this.activeConversationId } : undefined) : undefined;
-            return await this.emitWithAck<{ id: string; timestamp: number }>('chat-message', { envelope, ...(recipientRoutingId ? { recipientRoutingId } : {}), ...(carrier ? { ...carrier, proofOperation: operation } : {}) });
+            const response = await this.emitWithAck<{ id: string; timestamp: number; terminalRejection?: unknown }>('chat-message', { envelope, ...(recipientRoutingId ? { recipientRoutingId } : {}), ...(carrier ? { ...carrier, proofOperation: operation } : {}) });
+            return { id: response.id, timestamp: response.timestamp, ...(response.terminalRejection === true ? { terminalRejection: true as const } : {}) };
         }
         const operation = proofOperation ?? 'relay:signal';
         const carrier = this.proofProvider ? await this.proofProvider.acquire(operation, this.activeConversationId ? { conversationId: this.activeConversationId } : undefined) : undefined;
@@ -285,27 +290,54 @@ export class SocketIoRelayTransport implements Transport {
         return { envelopes: true, blobs: false, localOnly: false };
     }
 
-    private async acceptChatEnvelope(message: RawChatMessage, ack?: (response: { accepted: boolean }) => void): Promise<void> {
+    private async acceptChatEnvelope(message: RawChatMessage, ack?: (response: { accepted: boolean; outcome?: string; reasonClass?: string }) => void): Promise<void> {
         try {
             const conversationId = this.joinedConversationId ?? this.desiredConversation?.conversationId;
             if (!conversationId) throw new Error('No room channel is bound.');
-            const accepted = await this.onEnvelope({
+            const result = await this.onEnvelope({
                 conversationId,
                 channel: 'message',
                 envelope: message.envelope,
                 messageId: message.id,
                 senderRoutingId: message.sender,
                 timestamp: message.timestamp,
+                ...(message.claimId ? { mailboxClaimId: message.claimId } : {}),
             });
-            if (accepted) {
-                this.socket.emit('received', { id: message.id });
+            const decision: InboundTransportDecision = typeof result === 'boolean'
+                ? { outcome: result ? 'accepted' : 'retryable' } : result;
+            if (decision.outcome === 'accepted') {
+                if (!message.claimId) this.socket.emit('received', { id: message.id });
+                ack?.({ accepted: true, outcome: 'accepted' });
+                return;
             }
-            ack?.({ accepted });
+            if (decision.outcome === 'permanent-rejection' && message.claimId && !this.isUuid(message.claimId)) {
+                ack?.({ accepted: false, outcome: 'retryable' });
+                return;
+            }
+            if (decision.outcome === 'permanent-rejection' && message.claimId) {
+                const response = await this.emitWithAck<{ status?: unknown }>('recipient-rejected', {
+                    id: message.id,
+                    roomId: conversationId,
+                    claimId: message.claimId,
+                    reasonClass: decision.reasonClass,
+                });
+                if (response.status === 'rejected' || response.status === 'duplicate') {
+                    ack?.({ accepted: false, outcome: 'permanent-rejection', reasonClass: decision.reasonClass });
+                    return;
+                }
+                ack?.({ accepted: false, outcome: 'retryable' });
+                return;
+            }
+            ack?.(decision.outcome === 'permanent-rejection'
+                ? { accepted: false, outcome: decision.outcome, reasonClass: decision.reasonClass }
+                : { accepted: false, outcome: 'retryable' });
         } catch {
-            // Rejected/invalid envelopes are intentionally not acknowledged.
-            ack?.({ accepted: false });
+            // Transient local/relay failures remain eligible after their claim lease expires.
+            ack?.({ accepted: false, outcome: 'retryable' });
         }
     }
+
+    private isUuid(value: string): boolean { return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value); }
 
     private emitWithAck<T>(event: string, payload: unknown): Promise<T> {
         return new Promise((resolve, reject) => {

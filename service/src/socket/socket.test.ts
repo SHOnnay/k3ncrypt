@@ -80,6 +80,7 @@ describe('SocketInstance', () => {
                 expect.arrayContaining([
                     'limit-reached',
                     'delivered',
+                    'not-accepted',
                     'on-alice-join',
                     'on-alice-disconnect',
                     'chat-message',
@@ -87,7 +88,7 @@ describe('SocketInstance', () => {
                     'connect',
                 ]),
             );
-            expect(mockSocket.on).toHaveBeenCalledTimes(8);
+            expect(mockSocket.on).toHaveBeenCalledTimes(9);
         });
 
         it('rejoins with a fresh proof before requesting mailbox replay after reconnect', async () => {
@@ -271,6 +272,55 @@ describe('SocketInstance', () => {
             await Promise.resolve();
 
             expect(mockSocket.emit).not.toHaveBeenCalledWith('received', expect.anything());
+        });
+
+        it('reports authenticated terminal rejection only after relay confirms the matching mailbox claim', async () => {
+            const instance = createInstance();
+            await joinTestRoom(instance);
+            const ack = jest.fn();
+            mockSocket.emit.mockImplementation((event: string, payload: unknown, relayAck?: (result: unknown) => void) => {
+                if (event === 'recipient-rejected') relayAck?.({ status: 'rejected' });
+            });
+            onEnvelope.mockResolvedValue({ outcome: 'permanent-rejection', reasonClass: 'authenticated-invalid' });
+            const claimId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+
+            handlerFor('chat-message')({ id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', timestamp: 1, sender: 'alice', envelope: {}, claimId }, ack);
+            await new Promise<void>((resolve) => setImmediate(resolve));
+
+            expect(mockSocket.emit).toHaveBeenCalledWith('recipient-rejected', {
+                id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', roomId: 'room-a', claimId, reasonClass: 'authenticated-invalid',
+            }, expect.any(Function));
+            expect(ack).toHaveBeenCalledWith({ accepted: false, outcome: 'permanent-rejection', reasonClass: 'authenticated-invalid' });
+            expect(mockSocket.emit).not.toHaveBeenCalledWith('received', expect.anything());
+        });
+
+        it('keeps a terminal candidate retryable when the relay cannot commit its rejection', async () => {
+            const instance = createInstance();
+            await joinTestRoom(instance);
+            const ack = jest.fn();
+            mockSocket.emit.mockImplementation((event: string, _payload: unknown, relayAck?: (result: unknown) => void) => {
+                if (event === 'recipient-rejected') relayAck?.({ error: 'Terminal mailbox result unavailable.' });
+            });
+            onEnvelope.mockResolvedValue({ outcome: 'permanent-rejection', reasonClass: 'unsupported-message' });
+
+            handlerFor('chat-message')({ id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', timestamp: 1, sender: 'alice', envelope: {}, claimId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }, ack);
+            await new Promise<void>((resolve) => setImmediate(resolve));
+
+            expect(ack).toHaveBeenCalledWith({ accepted: false, outcome: 'retryable' });
+        });
+
+        it('returns a coarse terminal decision for direct live delivery without claiming recipient acceptance', async () => {
+            const instance = createInstance();
+            await joinTestRoom(instance);
+            const ack = jest.fn();
+            onEnvelope.mockResolvedValue({ outcome: 'permanent-rejection', reasonClass: 'unsupported-message' });
+
+            handlerFor('chat-message')({ id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', timestamp: 1, sender: 'alice', envelope: {} }, ack);
+            await new Promise<void>((resolve) => setImmediate(resolve));
+
+            expect(ack).toHaveBeenCalledWith({ accepted: false, outcome: 'permanent-rejection', reasonClass: 'unsupported-message' });
+            expect(mockSocket.emit).not.toHaveBeenCalledWith('received', expect.anything());
+            expect(mockSocket.emit).not.toHaveBeenCalledWith('recipient-rejected', expect.anything(), expect.anything());
         });
     });
 
