@@ -1,4 +1,4 @@
-import { prepareMessageAcceptance, readMessages, writeMessages } from './messageStore';
+import { prepareHeldTextRetry, prepareMessageAcceptance, readMessages, writeMessages } from './messageStore';
 import type { ProductSecureStorage } from './sessionStore';
 
 class MemoryStore implements ProductSecureStorage {
@@ -54,4 +54,20 @@ it('quarantines one invalid history entry atomically and restores the valid room
   expect(quarantine).toMatchObject({ version: 1, entries: [{ index: 1, value: invalid, reason: 'invalid-message-entry' }] });
   expect(warn).toHaveBeenCalledWith('[K3NCRYPT]', { event: 'conversation_open_failed', reason: 'MESSAGE_HISTORY_ENTRY_QUARANTINED' });
   warn.mockRestore();
+});
+
+it('keeps held state through stale history writes and replaces held text only with a new local event id', async () => {
+  const store = new MemoryStore();
+  const held = { id: 'old-event', sender: 'me', text: 'retry this safely', type: 'sent' as const, timestamp: new Date('2026-01-01T00:00:00Z'), delivery: 'held' as const };
+  await writeMessages(store, 'room', [held]);
+  await writeMessages(store, 'room', [{ ...held, delivery: 'pending' }]);
+  await expect(readMessages(store, 'room')).resolves.toEqual([expect.objectContaining({ id: 'old-event', delivery: 'held' })]);
+
+  const replacement = { ...held, id: 'new-event', delivery: 'pending' as const };
+  const update = await prepareHeldTextRetry(store, 'room', held.id, replacement);
+  expect(await store.compareAndSwapRecords!([update])).toBe(true);
+  await expect(readMessages(store, 'room')).resolves.toEqual([expect.objectContaining({ id: 'new-event', text: held.text, delivery: 'pending' })]);
+  await expect(prepareHeldTextRetry(store, 'room', 'new-event', { ...replacement, id: 'newer' })).rejects.toThrow('needs a new secure send action');
+  await writeMessages(store, 'room', [{ ...held, id: 'held-file', text: 'k3ncrypt-file-v2:{"opaque":"reference"}', delivery: 'held' }]);
+  await expect(prepareHeldTextRetry(store, 'room', 'held-file', { ...replacement, id: 'new-file-event' })).rejects.toThrow('needs a new secure send action');
 });

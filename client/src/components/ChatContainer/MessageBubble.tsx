@@ -67,6 +67,8 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
       <div className="message-meta">
         <span>{formatMessageTime(message.timestamp)}</span>
         {message.type === 'sent' && message.delivery === 'failed' && <button type="button" title={deliveryVisibility.explanation} onClick={() => retryMessage(message.id)}>Could not confirm · Retry</button>}
+        {message.type === 'sent' && message.delivery === 'held' && !message.text.startsWith('k3ncrypt-file-') && <button type="button" title={deliveryVisibility.explanation} onClick={() => retryMessage(message.id)}>Not sent · Retry securely</button>}
+        {message.type === 'sent' && message.delivery === 'held' && message.text.startsWith('k3ncrypt-file-') && <span title={deliveryVisibility.explanation}>Not sent · Select the file again</span>}
         {message.type === 'sent' && message.delivery !== 'failed' && message.delivery && (
           <details className="message-delivery-details">
             <summary aria-label={`Message status: ${deliveryVisibility.summaryLabel}`}>{deliveryVisibility.summaryLabel}</summary>

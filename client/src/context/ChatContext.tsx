@@ -22,7 +22,7 @@ import { readConversationDescriptors, removeConversationDescriptor, saveConversa
 import { readProfileName, readLocalProfile, writeProfileName } from '../product/profileStore';
 import { readPrivacyPreferences, writePrivacyPreferences, type PrivacyPreferences } from '../product/preferences';
 import { deliverNotification } from '../product/notifications';
-import { prepareMessageAcceptance, readMessages, writeMessages } from '../product/messageStore';
+import { prepareHeldTextRetry, prepareMessageAcceptance, readMessages, writeMessages } from '../product/messageStore';
 import { createRoomState, updateRoomState, type RoomState } from '../product/roomState';
 
 import { PROFILE_PREFIX, decodeProfileMessage, encodeProfileMessage, prepareProfileAcceptance } from '../product/profileMetadata';
@@ -393,8 +393,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     });
     conversation.onDeliveryUpdate((clientId, state) => {
       if (state === 'accepted') acceptedDeliveries.current.add(clientId);
-      else rejectedDeliveries.current.add(clientId);
-      setMessages((current) => current.map((message) => message.id === clientId ? { ...message, delivery: state === 'accepted' ? 'accepted' : 'failed' } : message));
+      else if (state === 'rejected') rejectedDeliveries.current.add(clientId);
+      setMessages((current) => current.map((message) => message.id === clientId ? { ...message, delivery: state === 'accepted' ? 'accepted' : state === 'held' ? 'held' : 'failed' } : message));
     });
     try {
       conversationOpenStage('candidate-connect-started');
@@ -475,14 +475,20 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const lifecycle = await conversation.getDeviceLifecycleState();
       const trust = await conversation.getDeviceTrust();
       if (descriptor.remoteAddress && (!conversation.hasEstablishedSession() || conversation.getSessionHealth() === 'unhealthy')) throw conversationFailure('CONVERSATION_SESSION_MISSING');
-      const finalHistory = await readMessages(secureVault, descriptor.roomId);
+      const heldClientIds = new Set(await conversation.heldNotSentSecurelyClientIds());
+      const finalHistory = (await readMessages(secureVault, descriptor.roomId)).map(message =>
+        heldClientIds.has(message.id) && message.type === 'sent' ? { ...message, delivery: 'held' as const } : message);
+      if (heldClientIds.size > 0) await writeMessages(secureVault, descriptor.roomId, finalHistory);
       if (operationId !== undefined && conversationOpenGeneration.current !== operationId) throw new Error('Conversation open was superseded.');
       const previous = selectedConversation.current;
       selectedConversation.current = conversation;
       setRoomState(descriptor.roomId, { conversation, connection: 'connected', contactIdentity: restoredContact });
       setRoomMessages(descriptor.roomId, current => {
         const merged = new Map(finalHistory.map(message => [message.id, message]));
-        current.forEach(message => merged.set(message.id, message));
+        current.forEach(message => {
+          const restored = merged.get(message.id);
+          merged.set(message.id, restored?.delivery === 'held' && message.delivery !== 'accepted' ? restored : message);
+        });
         return [...merged.values()].sort((left, right) => left.timestamp.getTime() - right.timestamp.getTime());
       });
       setCallError(undefined);
@@ -795,9 +801,22 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   );
 
   const retryMessage = useCallback(async (messageId: string): Promise<void> => {
-    const failed = messages.find((message) => message.id === messageId && message.type === 'sent');
+    const failed = messages.find((message) => message.id === messageId && message.type === 'sent' && ['failed', 'held'].includes(message.delivery ?? ''));
     if (!failed) throw new Error('Message retry is unavailable.');
     const roomId = channelHash;
+    if (failed.delivery === 'held') {
+      if (failed.text.startsWith('k3ncrypt-file-')) throw new Error('Select the original file and send a new protected transfer.');
+      if (protocolMode !== 'modern' || !modern || !vault || !userId) throw new Error('A secure retry is unavailable.');
+      const outgoing = { ...displayMessage(userId, failed.text, 'sent'), delivery: 'pending' as const };
+      const clientId = await modern.sendWithReceipt(failed.text, async (id) =>
+        prepareHeldTextRetry(vault, roomId, failed.id, { ...outgoing, id }), failed.id);
+      const accepted = acceptedDeliveries.current.delete(clientId);
+      const rejected = rejectedDeliveries.current.delete(clientId);
+      setRoomMessages(roomId, (current) => [...current.filter((message) => message.id !== failed.id), {
+        ...outgoing, id: clientId, delivery: accepted ? 'accepted' : rejected ? 'failed' : 'pending',
+      }]);
+      return;
+    }
     if (protocolMode === 'modern' && modern && vault && userId && await modern.isTerminallyRejected(messageId)) {
       const outgoing = { ...displayMessage(userId, failed.text, 'sent'), delivery: 'pending' as const };
       const clientId = await modern.sendWithReceipt(failed.text, async (id) =>

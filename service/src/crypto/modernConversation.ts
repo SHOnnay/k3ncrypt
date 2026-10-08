@@ -44,6 +44,7 @@ import { signEnrollmentEvent, type EnrollmentEvent } from '../devices/trustProto
 import makeRequest from '../api/client';
 import { fromBase64Url, toBase64Url } from './base64url';
 import { decodeRoomMessage, encodeRoomMessageV1, MAX_USER_MESSAGE_UTF8_BYTES, RoomMessageDecodeError, roomMessageCommitment, roomMessageEventId, ROOM_MESSAGE_V1_DOMAIN, ROOM_MESSAGE_V1_FEATURE, type RoomMessageKind } from './roomMessageV1';
+import { prepareRoomMessageVersionFloorGuard, prepareRoomMessageVersionFloorRaise, readRoomMessageVersionFloor } from './roomMessageVersionFloor';
 
 const OUTBOX_RECORD = 'modern-outbox';
 const SEEN_RECORD = 'modern-seen';
@@ -113,7 +114,7 @@ const startsWithBytes = (value: Uint8Array, prefix: Uint8Array): boolean =>
 
 interface SenderOriginMetadata { version: 1; basis: 'durable-commit'; }
 const SENDER_ORIGIN: SenderOriginMetadata = Object.freeze({ version: 1, basis: 'durable-commit' });
-interface PendingEnvelope { envelope: EncryptedEnvelope; relayId?: string; sentAt?: number; clientId?: string; senderOrigin?: SenderOriginMetadata; roomMessageVersion?: 1; recipientIdentityReference?: string; terminallyRejected?: true; }
+interface PendingEnvelope { envelope: EncryptedEnvelope; relayId?: string; sentAt?: number; clientId?: string; senderOrigin?: SenderOriginMetadata; roomMessageVersion?: 1; recipientIdentityReference?: string; terminallyRejected?: true; heldNotSentSecurely?: true; }
 interface PublicationMarker { version: 1; roomId: string; address?: string; routingProof?: string; }
 export interface ModernConnectionDetails {
     ownFingerprint: string;
@@ -309,7 +310,7 @@ export class ModernConversation {
     private trustEvents?: TrustStateEventCoordinator;
     private trustEpoch?: number;
     private syncController?: RuntimeSyncController;
-    private deliveryObserver?: (clientId: string, state: 'accepted' | 'rejected') => void;
+    private deliveryObserver?: (clientId: string, state: 'accepted' | 'rejected' | 'held') => void;
     private syncRelay?: SocketSyncRelay;
     private groupAdapter?: SecureStorageGroupRuntimeAdapter;
     private groupRuntime?: GroupSecurityRuntime;
@@ -749,9 +750,10 @@ export class ModernConversation {
     public async sendWithReceipt(
         text: string,
         prepareHistoryUpdate?: (clientId: string) => Promise<SecureRecordUpdate>,
+        supersedeHeldClientId?: string,
     ): Promise<string> {
         if (this.roomId) {
-            const clientId = await this.withTabLock(this.roomId, () => this.sendUnlocked(text, prepareHistoryUpdate));
+            const clientId = await this.withTabLock(this.roomId, () => this.sendUnlocked(text, prepareHistoryUpdate, supersedeHeldClientId));
             // Durable encrypted enqueue is the acceptance boundary. Relay I/O
             // must not retain the room lock and block another conversation
             // instance from restoring the same room.
@@ -761,7 +763,7 @@ export class ModernConversation {
         throw new Error('The private contact is not ready.');
     }
 
-    public onDeliveryUpdate(observer: (clientId: string, state: 'accepted' | 'rejected') => void): void { this.deliveryObserver = observer; }
+    public onDeliveryUpdate(observer: (clientId: string, state: 'accepted' | 'rejected' | 'held') => void): void { this.deliveryObserver = observer; }
 
     /** Observe the existing relay presence event to release active media when a peer leaves. */
     public onPeerDisconnect(observer: () => void): () => void {
@@ -774,7 +776,7 @@ export class ModernConversation {
         };
     }
 
-    private async sendUnlocked(text: string, prepareHistoryUpdate?: (clientId: string) => Promise<SecureRecordUpdate>): Promise<string> {
+    private async sendUnlocked(text: string, prepareHistoryUpdate?: (clientId: string) => Promise<SecureRecordUpdate>, supersedeHeldClientId?: string): Promise<string> {
         if (this.sessionHealth === 'unhealthy') throw new Error('The encrypted session needs verified renewal before sending.');
         if (!this.roomId || !text.trim()) throw new Error('The private contact is not ready.');
         if (encoder.encode(text).byteLength > MAX_USER_MESSAGE_UTF8_BYTES) throw new Error(`Messages can be up to ${MAX_USER_MESSAGE_UTF8_BYTES.toLocaleString()} UTF-8 bytes.`);
@@ -802,12 +804,22 @@ export class ModernConversation {
                         testOnlyDeliveryStage('envelope-created');
                         const outboxBytes = await this.storage.read(OUTBOX_RECORD, this.roomId!);
                         const pending = parseList<PendingEnvelope>(outboxBytes);
-                        if (pending.length >= MAX_PENDING) throw new Error('Too many messages are waiting to send.');
                         if (pending.some((item) => item.clientId === clientId)) throw new Error('The sender message identifier already exists.');
-                        pending.push({ envelope, clientId, senderOrigin: SENDER_ORIGIN, ...(roomMessageVersion ? { roomMessageVersion } : {}), recipientIdentityReference: contact.identityId });
+                        if (supersedeHeldClientId) {
+                            const held = pending.find((item) => item.clientId === supersedeHeldClientId && item.heldNotSentSecurely === true);
+                            if (!held || !roomMessageVersion || fileReference) throw new Error('Held message cannot be safely retried in the current room.');
+                        }
+                        const nextPending = pending.filter((item) => item.clientId !== supersedeHeldClientId);
+                        if (nextPending.length >= MAX_PENDING) throw new Error('Too many messages are waiting to send.');
+                        nextPending.push({ envelope, clientId, senderOrigin: SENDER_ORIGIN, ...(roomMessageVersion ? { roomMessageVersion } : {}), recipientIdentityReference: contact.identityId });
                         const updates: SecureRecordUpdate[] = [
-                            { recordType: OUTBOX_RECORD, recordId: this.roomId!, expected: outboxBytes, next: asBytes(pending) },
+                            { recordType: OUTBOX_RECORD, recordId: this.roomId!, expected: outboxBytes, next: asBytes(nextPending) },
                         ];
+                        const floorGuard = await prepareRoomMessageVersionFloorGuard(this.storage, this.roomId!, contact.identityId);
+                        if (floorGuard.floor >= 1 && roomMessageVersion === undefined) {
+                            throw new Error('This contact requires room-message-v1; retry to create a new secure message.');
+                        }
+                        updates.push(floorGuard.update);
                         if (sessionSetup) {
                             updates.push(await this.modes.prepareWrite(this.roomId!, { sessionId, remoteAddress: this.remoteAddress }));
                             const auditBytes = await this.storage.read(SESSION_AUDIT_RECORD, this.roomId!);
@@ -834,9 +846,12 @@ export class ModernConversation {
     private async encodeOutboundMessage(text: string, eventId: string, kind: RoomMessageKind): Promise<{ plaintext: Uint8Array; roomMessageVersion?: 1 }> {
         const transport = this.transport.activeTransport();
         const peerSupportsV1 = Boolean(transport?.peerSupportsFeature?.(ROOM_MESSAGE_V1_FEATURE));
-        if (transport?.requiresRoomMessageV1 && !peerSupportsV1) throw new Error('The multiplexed transport requires peer room-message-v1 support.');
-        if (!peerSupportsV1 && !transport?.requiresRoomMessageV1) return { plaintext: encoder.encode(text) };
         const contact = await this.getContact();
+        const latchedFloor = this.roomId && contact?.identityId
+            ? await readRoomMessageVersionFloor(this.storage, this.roomId, contact.identityId) : 0;
+        if (latchedFloor > 1) throw new Error('This contact requires a newer secure message format.');
+        if (transport?.requiresRoomMessageV1 && !peerSupportsV1 && latchedFloor < 1) throw new Error('The multiplexed transport requires peer room-message-v1 support.');
+        if (!peerSupportsV1 && !transport?.requiresRoomMessageV1 && latchedFloor < 1) return { plaintext: encoder.encode(text) };
         if (!this.roomId || !this.localIdentityId || !contact?.identityId || contact.changeStatus !== 'unchanged') {
             throw new Error('Stable identities are required for room-bound message delivery.');
         }
@@ -891,10 +906,14 @@ export class ModernConversation {
 
         let record = parseJoinIntroductionRecord(await this.storage.read(JOIN_INTRODUCTION_RECORD, this.roomId));
         if (!record || record.recipientAddress !== this.remoteAddress || record.recipientIdentityCommitment !== this.remoteIdentityCommitment) return;
+        const contact = await this.getContact();
+        const floor = this.roomId && contact?.identityId ? await readRoomMessageVersionFloor(this.storage, this.roomId, contact.identityId) : 0;
+        if (floor > 1) throw new Error('This contact requires a newer secure message format.');
+        if (floor >= 1 && record.envelope && record.roomMessageVersion !== 1) return;
         if (transport.requiresRoomMessageV1 && record.envelope && record.roomMessageVersion !== 1) {
             throw new Error('A legacy join introduction cannot be sent over a room-message-v1-required transport.');
         }
-        if (transport.requiresRoomMessageV1 && !transport.peerSupportsFeature?.(ROOM_MESSAGE_V1_FEATURE)) {
+        if (transport.requiresRoomMessageV1 && !transport.peerSupportsFeature?.(ROOM_MESSAGE_V1_FEATURE) && floor < 1) {
             throw new Error('The multiplexed transport requires peer room-message-v1 support.');
         }
         if (!record.envelope) {
@@ -915,7 +934,7 @@ export class ModernConversation {
             };
             const introductionPayload = new Uint8Array(encodeJoinIntroduction(event));
             const contact = await this.getContact();
-            const usesRoomMessageV1 = Boolean(transport.peerSupportsFeature?.(ROOM_MESSAGE_V1_FEATURE) || transport.requiresRoomMessageV1);
+            const usesRoomMessageV1 = Boolean(transport.peerSupportsFeature?.(ROOM_MESSAGE_V1_FEATURE) || transport.requiresRoomMessageV1 || floor >= 1);
             if (usesRoomMessageV1 && (!this.localIdentityId || !contact?.identityId || contact.changeStatus !== 'unchanged')) {
                 throw new Error('Stable identities are required for room-bound message delivery.');
             }
@@ -967,12 +986,14 @@ export class ModernConversation {
         await this.deliveryMutex.runExclusive(async () => {
             const pending = await this.readPending();
             const contact = await this.getContact();
+            const floor = this.roomId && contact?.identityId ? await readRoomMessageVersionFloor(this.storage, this.roomId, contact.identityId) : 0;
+            const safePending = floor >= 1 ? await this.holdLegacyPending(pending) : pending;
             const renewal = this.sessionHealth === 'renewal-pending'
                 ? parseSessionRenewal(await this.storage.read(SESSION_RENEWAL_RECORD, this.roomId!)) : undefined;
             await this.delivery.retry({
-                pending,
+                pending: safePending,
                 recipientRoutingId: this.remoteAddress,
-                skip: (item) => Boolean(item.terminallyRejected) || contact?.changeStatus !== 'unchanged' || !contact.identityId ||
+                skip: (item) => Boolean(item.terminallyRejected || item.heldNotSentSecurely) || contact?.changeStatus !== 'unchanged' || !contact.identityId ||
                     item.recipientIdentityReference !== contact.identityId ||
                     (this.sessionHealth === 'renewal-pending' && item.clientId !== renewal?.clientId) ||
                     (this.transport.activeTransport()?.requiresRoomMessageV1 === true && item.roomMessageVersion !== 1),
@@ -987,10 +1008,39 @@ export class ModernConversation {
                 persist: async (nextPending) => this.storage.write(OUTBOX_RECORD, this.roomId!, asBytes(nextPending)),
                 onTerminalRejection: (item) => {
                     item.terminallyRejected = true;
-                    if (item.clientId) this.deliveryObserver?.(item.clientId, 'rejected');
+                    if (item.clientId) this.deliveryObserver?.(item.clientId, item.heldNotSentSecurely ? 'held' : 'rejected');
                 },
             });
         });
+    }
+
+    /** Legacy ciphertext is durably held before any retry can submit it after the floor is raised. */
+    private async holdLegacyPending(pending: PendingEnvelope[]): Promise<PendingEnvelope[]> {
+        if (!this.roomId) return pending;
+        let current = pending;
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+            const held = current.filter((item) => !item.roomMessageVersion && !item.heldNotSentSecurely && !item.terminallyRejected);
+            if (held.length === 0) return current;
+            const expected = await this.storage.read(OUTBOX_RECORD, this.roomId);
+            current = parseList<PendingEnvelope>(expected);
+            const next = current.map((item) => !item.roomMessageVersion && !item.terminallyRejected ? { ...item, heldNotSentSecurely: true as const } : item);
+            if (!this.storage.compareAndSwapRecords) throw new Error('Atomic secure outbox hold is unavailable.');
+            if (await this.storage.compareAndSwapRecords([{ recordType: OUTBOX_RECORD, recordId: this.roomId, expected, next: asBytes(next) }])) {
+                next.filter((item) => item.heldNotSentSecurely && !current.some((prior) => prior.clientId === item.clientId && prior.heldNotSentSecurely))
+                    .forEach((item) => { if (item.clientId) this.deliveryObserver?.(item.clientId, 'held'); });
+                return next;
+            }
+            current = parseList<PendingEnvelope>(await this.storage.read(OUTBOX_RECORD, this.roomId));
+        }
+        throw new Error('Outbox changed too often to apply the secure hold.');
+    }
+
+    public async isHeldNotSentSecurely(clientId: string): Promise<boolean> {
+        return (await this.readPending()).some((item) => item.clientId === clientId && item.heldNotSentSecurely === true);
+    }
+
+    public async heldNotSentSecurelyClientIds(): Promise<string[]> {
+        return (await this.readPending()).flatMap((item) => item.heldNotSentSecurely && item.clientId ? [item.clientId] : []);
     }
 
     public async isTerminallyRejected(clientId: string): Promise<boolean> {
@@ -1002,7 +1052,7 @@ export class ModernConversation {
         await this.deliveryMutex.runExclusive(async () => {
             const pending = await this.readPending();
             const accepted = pending.find((item) => item.relayId === relayId);
-            if (accepted?.terminallyRejected) return;
+            if (accepted?.terminallyRejected || accepted?.heldNotSentSecurely) return;
             const next = pending.filter((item) => item.relayId !== relayId);
             if (next.length !== pending.length) await this.storage.write(OUTBOX_RECORD, this.roomId!, asBytes(next));
             const renewal = parseSessionRenewal(await this.storage.read(SESSION_RENEWAL_RECORD, this.roomId!));
@@ -1023,7 +1073,7 @@ export class ModernConversation {
             if (!rejected || rejected.terminallyRejected) return;
             rejected.terminallyRejected = true;
             await this.storage.write(OUTBOX_RECORD, this.roomId!, asBytes(pending));
-            if (rejected.clientId) this.deliveryObserver?.(rejected.clientId, 'rejected');
+            if (rejected.clientId) this.deliveryObserver?.(rejected.clientId, rejected.heldNotSentSecurely ? 'held' : 'rejected');
         });
     }
 
@@ -1381,25 +1431,41 @@ export class ModernConversation {
                     await this.testOnlyRecordInboundStage('parsed', contact.identityId, this.lastInboundFailureCategory);
                     throw new PermanentInboundRejection('identity-changed');
                 }
-                senderFingerprint = contact?.identityId;
+                // A saved invitation commitment is the provisional identity
+                // scope when route/contact metadata needs authenticated repair.
+                // The acceptance path verifies it against the fetched identity
+                // before this event can commit.
+                senderFingerprint = contact?.identityId ?? this.remoteIdentityCommitment;
             }
             await this.testOnlyRecordInboundStage('session-found', senderFingerprint);
 
             let acceptedPlan: InboundMessageAcceptancePlan | undefined;
             let afterCommitRouteRepair: (() => void | Promise<void>) | undefined;
+            let heldOutboxClientIds: string[] = [];
             const buildAcceptanceUpdates = async (plaintext: ArrayBuffer): Promise<readonly SecureRecordUpdate[]> => {
                 let payload: Uint8Array;
                 let authenticatedEventId: string | undefined;
                 let authenticatedCommitment: string | undefined;
+                let authenticatedWrapperVersion: number | undefined;
+                if (!senderFingerprint) {
+                    const identity = bundle?.identity ?? validateVodozemacPublicBundle(await fetchVodozemacBundle(this.roomId!, this.capability!, senderAddress)).identity;
+                    senderFingerprint = await fingerprintVodozemacIdentity(identity);
+                    if (this.remoteIdentityCommitment && senderFingerprint !== this.remoteIdentityCommitment) {
+                        throw new Error('The authenticated sender identity does not match the saved invitation.');
+                    }
+                }
+                const floorGuard = await prepareRoomMessageVersionFloorGuard(this.storage, this.roomId!, senderFingerprint!);
+                if (floorGuard.floor > 1) throw new Error('This contact requires a newer secure message format.');
                 try {
                     const decrypted = firstSession ? unframeFirstMessage(plaintext) : new Uint8Array(plaintext);
                     const decoded = decodeRoomMessage(decrypted, {
                         roomId: this.roomId!,
                         senderIdentityReference: senderFingerprint!,
                         recipientIdentityReference: this.localIdentityId!,
-                    }, { requireRoomMessageV1: this.transport.activeTransport()?.requiresRoomMessageV1 === true });
+                    }, { requireRoomMessageV1: this.transport.activeTransport()?.requiresRoomMessageV1 === true || floorGuard.floor >= 1 });
                     payload = decoded.payload;
                     if (decoded.version === 'room-message-v1') {
+                        authenticatedWrapperVersion = 1;
                         const isIntroduction = startsWithBytes(payload, JOIN_INTRODUCTION_MAGIC);
                         const isAttachmentReference = startsWithBytes(payload, encoder.encode('k3ncrypt-file-'));
                         if ((decoded.kind === 'join-introduction') !== isIntroduction ||
@@ -1478,6 +1544,23 @@ export class ModernConversation {
                     updates.push(...acceptedPlan.updates);
                 }
 
+                const floorUpdate = authenticatedWrapperVersion === undefined
+                    ? floorGuard.update
+                    : (await prepareRoomMessageVersionFloorRaise(this.storage, this.roomId!, senderFingerprint!, authenticatedWrapperVersion)).update!;
+                updates.push(floorUpdate);
+                if (authenticatedWrapperVersion !== undefined) {
+                    const outboxBytes = await this.storage.read(OUTBOX_RECORD, this.roomId!);
+                    const outbox = parseList<PendingEnvelope>(outboxBytes);
+                    const nextOutbox = outbox.map((item) => {
+                        if (item.roomMessageVersion || item.terminallyRejected || item.heldNotSentSecurely) return item;
+                        if (item.clientId) heldOutboxClientIds.push(item.clientId);
+                        return { ...item, heldNotSentSecurely: true as const };
+                    });
+                    if (nextOutbox.some((item, index) => item !== outbox[index])) {
+                        updates.push({ recordType: OUTBOX_RECORD, recordId: this.roomId!, expected: outboxBytes, next: asBytes(nextOutbox) });
+                    }
+                }
+
                 // Legacy digests retain their existing count-bounded behavior. M1 markers are
                 // deliberately not pruned: retention pending owner-approved horizon.
                 const nextLegacySeen = [...seen.slice(-(MAX_SEEN - 1)), legacyDigest];
@@ -1505,6 +1588,7 @@ export class ModernConversation {
             }
             try { await afterCommitRouteRepair?.(); } catch { /* Durable message/session acceptance can recover route metadata on reconnect. */ }
             try { await acceptedPlan?.afterCommit?.(); } catch { /* Durable acceptance is already complete; UI projection reloads stored history. */ }
+            heldOutboxClientIds.forEach((clientId) => this.deliveryObserver?.(clientId, 'held'));
             await this.testOnlyRecordInboundStage('persisted', senderFingerprint);
             await this.testOnlyRecordInboundStage('acknowledged', senderFingerprint);
             this.lastInboundFailureCategory = undefined;

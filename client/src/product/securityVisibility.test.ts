@@ -54,4 +54,9 @@ describe('deriveMessageDeliveryVisibility', () => {
     expect(deriveMessageDeliveryVisibility(undefined, 'modern'))
       .toMatchObject({ state: 'unknown', label: 'Status unavailable' });
   });
+
+  it('distinguishes a durable secure hold from failure or relay acceptance', () => {
+    expect(deriveMessageDeliveryVisibility('held', 'modern'))
+      .toMatchObject({ state: 'held-not-sent-securely', label: 'Not sent — retry required', summaryLabel: 'Not sent — retry required' });
+  });
 });

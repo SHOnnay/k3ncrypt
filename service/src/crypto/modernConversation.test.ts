@@ -9,6 +9,7 @@ import { SecureStorageDeviceLifecyclePersistence } from '../devices/runtime';
 import { fingerprintVodozemacIdentity } from '../identity/vodozemacIdentity';
 import { ContactIdentityRegistry } from '../identity/contactIdentityRegistry';
 import { decodeRoomMessage, encodeRoomMessageV1, ROOM_MESSAGE_V1_FEATURE } from './roomMessageV1';
+import { readRoomMessageVersionFloor, roomMessageVersionFloorRecordId, ROOM_MESSAGE_VERSION_FLOOR_RECORD } from './roomMessageVersionFloor';
 
 jest.mock('../api/prekeys', () => ({
     publishVodozemacBundle: jest.fn(), fetchVodozemacBundle: jest.fn(), claimVodozemacOneTimeKey: jest.fn(), renewVodozemacBundle: jest.fn(),
@@ -1210,6 +1211,7 @@ it('wraps negotiated outbound text with stable room and identity bindings while 
         recipientIdentityReference: (await conversation.getContact())!.identityId,
     });
     expect(decoded.version).toBe('room-message-v1');
+    await expect(readRoomMessageVersionFloor(storage, room, (await conversation.getContact())!.identityId)).resolves.toBe(0);
     expect(JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!))[0].roomMessageVersion).toBe(1);
     if (decoded.version === 'room-message-v1') expect(new TextDecoder().decode(decoded.payload)).toBe('room-bound hello');
     await conversation.close();
@@ -1264,6 +1266,121 @@ it('keeps legacy outbox ciphertext off a room-message-v1-required transport', as
         recipientIdentityReference: (await v1.getContact())!.identityId,
     }).version).toBe('room-message-v1');
     await v1.close();
+});
+
+it('latches authenticated V1 per room and pinned identity, then sends V1 offline after reload despite stripped feature metadata', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    const storage = new Storage();
+    const transport = fakeTransport();
+    const first = new ModernConversation(storage, loader, transport.transport);
+    const own = await first.connect(room, key(9), remoteAddress, await remoteCommitment(), messageAcceptance(storage));
+    const v1 = encodeRoomMessageV1({ roomId: room, senderIdentityReference: await remoteCommitment(),
+        recipientIdentityReference: own.ownFingerprint, eventId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', kind: 'text',
+        payload: new TextEncoder().encode('authenticated V1') });
+    const envelope: EncryptedEnvelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1,
+        olmMessage: JSON.stringify({ version: 1, message_type: 1, ciphertext: 'opaque-latch-first' }) } };
+    decryptedBytes = new Uint8Array([1, 1, ...v1]);
+    await expect(receiveFirstMessage(first, envelope, remoteAddress)).resolves.toBe(true);
+    await expect(readRoomMessageVersionFloor(storage, room, await remoteCommitment())).resolves.toBe(1);
+    await first.close(false);
+
+    const noFeatures = fakeTransport(false, 0, false, true);
+    const restarted = new ModernConversation(storage, loader, noFeatures.transport);
+    const restored = await restarted.connect(room, key(9), remoteAddress, await remoteCommitment());
+    await expect(readRoomMessageVersionFloor(storage, room, await remoteCommitment())).resolves.toBe(1);
+    await restarted.sendWithReceipt('offline peer still gets V1');
+    expect(noFeatures.sent).toHaveLength(1);
+    expect(decodeRoomMessage(encryptedPlaintexts[0].slice(2), {
+        roomId: room, senderIdentityReference: restored.ownFingerprint, recipientIdentityReference: await remoteCommitment(),
+    }).version).toBe('room-message-v1');
+    await restarted.close(false);
+});
+
+it('atomically holds legacy outbox ciphertext on authenticated V1 transition and supports only a fresh V1 text retry', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
+    const storage = new Storage();
+    const legacyTransport = fakeTransport(false, 0, false);
+    const conversation = new ModernConversation(storage, loader, legacyTransport.transport);
+    const heldUpdates: string[] = [];
+    const deliveryStates: Array<{ id: string; state: string }> = [];
+    conversation.onDeliveryUpdate((id, state) => { deliveryStates.push({ id, state }); if (state === 'held') heldUpdates.push(id); });
+    const own = await conversation.connect(room, key(9), remoteAddress, await remoteCommitment(), messageAcceptance(storage));
+    const oldClientId = await conversation.sendWithReceipt('keep this user text for explicit retry');
+    const before = JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!)) as Array<Record<string, unknown>>;
+    expect(before).toEqual([expect.objectContaining({ clientId: oldClientId })]);
+    expect(before[0]).not.toHaveProperty('roomMessageVersion');
+
+    const v1 = encodeRoomMessageV1({ roomId: room, senderIdentityReference: await remoteCommitment(),
+        recipientIdentityReference: own.ownFingerprint, eventId: 'ffffffff-ffff-4fff-8fff-ffffffffffff', kind: 'text',
+        payload: new TextEncoder().encode('authenticated transition') });
+    const inbound: EncryptedEnvelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1,
+        olmMessage: JSON.stringify({ version: 1, message_type: 1, ciphertext: 'opaque-latch-transition' }) } };
+    decryptedBytes = new Uint8Array([1, 1, ...v1]);
+    await expect(receiveFirstMessage(conversation, inbound, remoteAddress)).resolves.toBe(true);
+    const held = JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!)) as Array<Record<string, unknown>>;
+    expect(held).toEqual([expect.objectContaining({ clientId: oldClientId, heldNotSentSecurely: true })]);
+    expect(heldUpdates).toContain(oldClientId);
+    await conversation.retryPending();
+    expect(legacyTransport.sent).toHaveLength(1); // The legacy event was relayed before the floor transition.
+    await conversation.acceptDelivery('relay-1');
+    expect(deliveryStates).not.toContainEqual({ id: oldClientId, state: 'accepted' });
+    expect(await conversation.isHeldNotSentSecurely(oldClientId)).toBe(true);
+    await conversation.rejectDelivery('relay-1');
+    expect(deliveryStates.at(-1)).toEqual({ id: oldClientId, state: 'held' });
+
+    const newClientId = await conversation.sendWithReceipt('keep this user text for explicit retry', undefined, oldClientId);
+    expect(newClientId).not.toBe(oldClientId);
+    expect(legacyTransport.sent).toHaveLength(2);
+    const next = JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!)) as Array<Record<string, unknown>>;
+    expect(next).toEqual([expect.objectContaining({ clientId: newClientId, roomMessageVersion: 1 })]);
+    await conversation.close(false);
+});
+
+it('terminally rejects legacy after the floor is latched and accepts the next valid V1 message', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    const storage = new Storage();
+    const conversation = new ModernConversation(storage, loader, fakeTransport().transport);
+    const own = await conversation.connect(room, key(9), remoteAddress, await remoteCommitment(), messageAcceptance(storage));
+    const makeEnvelope = (tag: string): EncryptedEnvelope => ({ version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1,
+        olmMessage: JSON.stringify({ version: 1, message_type: 1, ciphertext: tag }) } });
+    const establish = encodeRoomMessageV1({ roomId: room, senderIdentityReference: await remoteCommitment(),
+        recipientIdentityReference: own.ownFingerprint, eventId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', kind: 'text',
+        payload: new TextEncoder().encode('establish floor') });
+    decryptedBytes = new Uint8Array([1, 1, ...establish]);
+    await expect(receiveFirstMessage(conversation, makeEnvelope('opaque-latch-establish'), remoteAddress)).resolves.toBe(true);
+    const legacy = new TextEncoder().encode('late legacy from prior mailbox');
+    decryptedBytes = new Uint8Array([1, 1, ...legacy]);
+    await expect(receiveDecision(conversation, makeEnvelope('opaque-late-legacy'), remoteAddress)).resolves.toEqual({
+        outcome: 'permanent-rejection', reasonClass: 'unsupported-message',
+    });
+    const nextV1 = encodeRoomMessageV1({ roomId: room, senderIdentityReference: await remoteCommitment(),
+        recipientIdentityReference: own.ownFingerprint, eventId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', kind: 'text',
+        payload: new TextEncoder().encode('valid after poison') });
+    decryptedBytes = new Uint8Array([1, 1, ...nextV1]);
+    await expect(receiveFirstMessage(conversation, makeEnvelope('opaque-next-v1'), remoteAddress)).resolves.toBe(true);
+    const history = JSON.parse(new TextDecoder().decode((await storage.read('product-messages', room))!)) as Array<{ text: string }>;
+    expect(history.map((item) => item.text)).toEqual(['establish floor', 'valid after poison']);
+    await conversation.close(false);
+});
+
+it('fails closed on corrupted floor state without encrypting or submitting a legacy message', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    const storage = new Storage();
+    const transport = fakeTransport(false, 0, false);
+    const conversation = new ModernConversation(storage, loader, transport.transport);
+    await conversation.connect(room, key(9), remoteAddress, await remoteCommitment());
+    const recordId = await roomMessageVersionFloorRecordId(room, await remoteCommitment());
+    await storage.write(ROOM_MESSAGE_VERSION_FLOOR_RECORD, recordId, new TextEncoder().encode('{broken').buffer as ArrayBuffer);
+    await expect(conversation.sendWithReceipt('must not become legacy')).rejects.toThrow('corrupted');
+    expect(encryptions).toBe(0);
+    expect(transport.sent).toHaveLength(0);
+    expect(await storage.read('modern-outbox', room)).toBeUndefined();
+    await conversation.close(false);
 });
 
 it('rejects reserved protocol-looking text and oversize UTF-8 before writing an outbox item', async () => {

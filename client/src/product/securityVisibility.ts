@@ -23,6 +23,7 @@ export type MessageVisibilityState =
   | 'relay-accepted-outcome-unknown'
   | 'recipient-app-accepted-relay-reported'
   | 'could-not-confirm'
+  | 'held-not-sent-securely'
   | 'unknown';
 
 export interface MessageDeliveryVisibility {
@@ -59,7 +60,7 @@ export const deriveSecurityVisibility = (input: {
 };
 
 export const deriveMessageDeliveryVisibility = (
-  delivery: 'pending' | 'accepted' | 'failed' | undefined,
+  delivery: 'pending' | 'accepted' | 'failed' | 'held' | undefined,
   protocol: ConversationProtocol,
 ): MessageDeliveryVisibility => {
   if (delivery === 'pending') {
@@ -92,6 +93,14 @@ export const deriveMessageDeliveryVisibility = (
       label: 'Could not confirm · Retry',
       summaryLabel: 'Failed · Retry',
       explanation: 'The send operation did not complete with a confirmed result. A timeout can leave the relay outcome unknown.',
+    };
+  }
+  if (delivery === 'held') {
+    return {
+      state: 'held-not-sent-securely',
+      label: 'Not sent — retry required',
+      summaryLabel: 'Not sent — retry required',
+      explanation: 'This message was held on this device because the conversation now requires a newer secure message format. Retry creates a new encrypted message; the old message was not sent again.',
     };
   }
   return {

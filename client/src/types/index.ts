@@ -16,7 +16,7 @@ export interface Message {
   type: 'sent' | 'received';
   timestamp: Date;
   callEvent?: import('../product/callHistory').LocalCallEvent;
-  delivery?: 'pending' | 'accepted' | 'failed';
+  delivery?: 'pending' | 'accepted' | 'failed' | 'held';
   media?: { kind: 'image' | 'file' | 'voice' | 'video'; mimeType?: string; size?: number; reference?: string };
 }
 

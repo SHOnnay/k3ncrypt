@@ -14,7 +14,7 @@ const TYPE = 'product-messages';
 const QUARANTINE_TYPE = 'product-message-quarantine';
 const MAX_MESSAGES = 2000;
 const MAX_QUARANTINE_BYTES = 3 * 1024 * 1024;
-const deliveryRank = (delivery: StoredMessage['delivery']): number => delivery === 'accepted' ? 2 : delivery === 'failed' ? 1 : 0;
+const deliveryRank = (delivery: StoredMessage['delivery']): number => delivery === 'accepted' ? 3 : delivery === 'held' ? 2 : delivery === 'failed' ? 1 : 0;
 
 const valid = (value: unknown): value is StoredMessage => {
   if (!value || typeof value !== 'object') return false;
@@ -24,7 +24,7 @@ const valid = (value: unknown): value is StoredMessage => {
     && (item.type === 'sent' || item.type === 'received') && typeof item.timestamp === 'string'
     && Number.isFinite(Date.parse(item.timestamp))
     && (item.callEvent === undefined || item.id.startsWith('local-call:') && validLocalCallEvent(item.callEvent))
-    && (item.delivery === undefined || ['pending', 'accepted', 'failed'].includes(String(item.delivery)));
+    && (item.delivery === undefined || ['pending', 'accepted', 'failed', 'held'].includes(String(item.delivery)));
 };
 
 const decode = (bytes: ArrayBuffer | undefined): StoredMessage[] => {
@@ -110,6 +110,24 @@ export const prepareMessageAcceptance = async (
     return { recordType: TYPE, recordId: roomId, expected, next: expected?.slice(0) ?? encode(current) };
   }
   return { recordType: TYPE, recordId: roomId, expected, next: encode([...current, stored]) };
+};
+
+/** Replace only an explicitly held local text intent with its newly encrypted event. */
+export const prepareHeldTextRetry = async (
+  storage: ProductSecureStorage,
+  roomId: string,
+  previousMessageId: string,
+  replacement: Message,
+): Promise<SecureRecordUpdate> => {
+  const expected = await storage.read(TYPE, roomId);
+  const current = decode(expected);
+  const previous = current.find((item) => item.id === previousMessageId && item.type === 'sent');
+  if (!previous || previous.delivery !== 'held' || previous.text.startsWith('k3ncrypt-file-') || previous.text !== replacement.text) {
+    throw new Error('This message needs a new secure send action.');
+  }
+  const next = current.filter((item) => item.id !== previousMessageId);
+  next.push(toStored(replacement));
+  return { recordType: TYPE, recordId: roomId, expected, next: encode(next) };
 };
 
 /** Merge React's history projection without letting an older render erase a committed inbound message. */
