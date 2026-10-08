@@ -18,6 +18,12 @@ const equalBytes = (left: ArrayBuffer | undefined, right: ArrayBuffer | undefine
     const b = new Uint8Array(right);
     return a.every((byte, index) => byte === b[index]);
 };
+const MAX_FIRST_PREKEY_ACCOUNT_CAS_RETRIES = 3;
+class RetryableFirstPrekeyAccountConflict extends Error {}
+const isAccountOnlyFirstPrekeyConflict = (updates: readonly SecureRecordUpdate[], durable: readonly (ArrayBuffer | undefined)[]): boolean =>
+    updates.length >= 2 && durable.length === updates.length &&
+    !equalBytes(durable[0], updates[0].expected) &&
+    updates.slice(1).every((item, index) => equalBytes(durable[index + 1], item.expected));
 
 export type InboundAcceptanceUpdateBuilder = (plaintext: ArrayBuffer) => Promise<readonly SecureRecordUpdate[]>;
 export interface OutboundSessionInitialization {
@@ -363,7 +369,10 @@ export class VodozemacRuntime {
         preKeyMessage: string,
         buildUpdates: InboundAcceptanceUpdateBuilder,
     ): Promise<void> {
-        return this.sessionMutex.runExclusive(async () => {
+        let retries = 0;
+        for (;;) {
+            try {
+                return await this.sessionMutex.runExclusive(async () => {
             this.requireState('identity-restored', 'persisted');
             const identity = this.identity;
             if (!identity || !senderIdentityKey || !preKeyMessage || !this.storage.compareAndSwapRecords) {
@@ -416,6 +425,11 @@ export class VodozemacRuntime {
                             accountMayHaveMutated = false;
                             return;
                         }
+                        if (isAccountOnlyFirstPrekeyConflict(updates, durable)) {
+                            await this.resetUncommittedFirstSession(identity);
+                            accountMayHaveMutated = false;
+                            throw new RetryableFirstPrekeyAccountConflict();
+                        }
                         const unchanged = updates.every((item, index) => equalBytes(durable[index], item.expected));
                         if (unchanged) {
                             await this.resetUncommittedFirstSession(identity);
@@ -438,6 +452,11 @@ export class VodozemacRuntime {
                 }
                 const durable = await Promise.all(updates.map((item) => this.storage.read(item.recordType, item.recordId)));
                 try {
+                    if (isAccountOnlyFirstPrekeyConflict(updates, durable)) {
+                        await this.resetUncommittedFirstSession(identity);
+                        accountMayHaveMutated = false;
+                        throw new RetryableFirstPrekeyAccountConflict();
+                    }
                     const unchanged = updates.every((item, index) => equalBytes(durable[index], item.expected));
                     if (unchanged) {
                         await this.resetUncommittedFirstSession(identity);
@@ -452,6 +471,7 @@ export class VodozemacRuntime {
                 } finally { durable.forEach((value) => { if (value) new Uint8Array(value).fill(0); }); }
                 throw new Error('Inbound acceptance transaction conflicted.');
             } catch (error) {
+                if (error instanceof RetryableFirstPrekeyAccountConflict) throw error;
                 if (plaintext) new Uint8Array(plaintext).fill(0);
                 if (accountMayHaveMutated) {
                     try {
@@ -475,6 +495,7 @@ export class VodozemacRuntime {
                     }
                 }
                 if (acceptanceBuildError) throw acceptanceBuildError;
+                if (error instanceof RetryableFirstPrekeyAccountConflict) throw error;
                 throw error instanceof VodozemacBoundaryError ? error
                     : new VodozemacBoundaryError('CORRUPTED_SESSION', 'The inbound message could not be safely accepted.');
             } finally {
@@ -488,7 +509,12 @@ export class VodozemacRuntime {
                 }
                 if (inbound) { try { inbound.plaintext().fill(0); } catch { /* already cleared */ } }
             }
-        });
+                });
+            } catch (error) {
+                if (!(error instanceof RetryableFirstPrekeyAccountConflict) || retries >= MAX_FIRST_PREKEY_ACCOUNT_CAS_RETRIES) throw error;
+                retries += 1;
+            }
+        }
     }
 
     public testOnlyInboundFailureStage(): string | undefined {

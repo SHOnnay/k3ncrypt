@@ -70,7 +70,27 @@ describe('call signaling security', () => {
     await expect(signaling.receive({ ...current, protocolVersion: 1 }, async () => undefined)).rejects.toThrow('Invalid call signal');
     expect(claims).toEqual([]);
     await signaling.receive(current, async () => undefined);
-    expect(claims).toEqual([`${current.callId}:a:${current.sequence}`]);
+    expect(claims).toEqual([`${current.conversationId}:${current.callId}:a:${current.sequence}`]);
+  });
+  it('isolates replay identities by room when call IDs and sender sequences collide', async () => {
+    const now = Date.now();
+    const claims: string[] = [];
+    const replay = { claim: async (key: string) => { claims.push(key); return 'accepted' as const; }, cleanup: async () => undefined };
+    const verifier = new VerifiedCallIdentityVerifier(new Set(['a', 'b']), new Map([['a', 'verified'], ['b', 'verified']]));
+    const signaling = new SecureCallSignaling(verifier, {} as never, replay);
+    const common = { ...base(), protocolVersion: 2, callId: 'same-call-id', sender: { participantId: 'a', identityId: 'id', verification: 'verified' as const }, payload: undefined, event: 'invite' as const, kind: 'control' as const, timestamp: now, expiresAt: now + 60_000 };
+    const roomA = { ...common, conversationId: '11111111-1111-4111-8111-111111111111', identityBinding: 'binding-a' };
+    const roomB = { ...common, conversationId: '22222222-2222-4222-8222-222222222222', identityBinding: 'binding-b' };
+    const signalA = { ...roomA, payloadDigest: await signalDigest(roomA) };
+    const signalB = { ...roomB, payloadDigest: await signalDigest(roomB) };
+    const accepted: string[] = [];
+    await signaling.receive(signalA, async signal => { accepted.push(signal.conversationId); });
+    await signaling.receive(signalB, async signal => { accepted.push(signal.conversationId); });
+    expect(accepted).toEqual([roomA.conversationId, roomB.conversationId]);
+    expect(claims).toEqual([
+      `${roomA.conversationId}:same-call-id:a:1`,
+      `${roomB.conversationId}:same-call-id:a:1`,
+    ]);
   });
   it('binds wire origin to the existing authenticated session identity', async () => {
     const participant = { participantId: 'bob', identityId: 'bob-id', verification: 'verified' as const };

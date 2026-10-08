@@ -1715,7 +1715,13 @@ export class ModernConversation {
 
     private prepareDeviceControl(): void {
         if (this.deviceControlChannel || !this.deviceLifecyclePersistence || !['active', 'persisted'].includes(this.runtime.lifecycle)) return;
-        this.deviceControlChannel = new AuthenticatedDeviceControlChannel(this.runtime.getAuthenticatedSession(), this.transport);
+        if (!this.roomId || !this.localIdentityId || !this.remoteIdentityCommitment) return;
+        this.deviceControlChannel = new AuthenticatedDeviceControlChannel(this.runtime.getAuthenticatedSession(), this.transport, {
+            conversationId: this.roomId,
+            localIdentityReference: this.localIdentityId,
+            remoteIdentityReference: this.remoteIdentityCommitment,
+            requiresRoomBinding: () => this.transport.activeTransport()?.requiresRoomMessageV1 === true,
+        });
         this.deviceLifecycle = new DeviceLifecycleService(this.deviceLifecyclePersistence, {
             verify: async (context, authorization) => {
                 const sender = context.authenticatedSender;

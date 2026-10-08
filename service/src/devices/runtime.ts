@@ -11,10 +11,30 @@ const HIGHWATER_RECORD_TYPE = 'device-lifecycle-highwater';
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const CONTROL_PREFIX = 'k3ncrypt-device-control-v1:';
+const ROOM_CONTROL_PREFIX = 'k3ncrypt-device-control-room-v2:';
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const IDENTITY_REFERENCE = /^K3 (?:[A-Z0-9_-]{4} ){10}[A-Z0-9_-]{3}$/;
 
 export type DeviceControlMessage = {
     readonly type: 'enrollment-request' | 'enrollment-approval' | 'enrollment-confirmation' | 'enrollment-rejection' | 'revocation' | 'trust-state' | 'trust-state-request' | 'trust-state-snapshot';
     readonly payload: unknown;
+};
+
+export interface DeviceControlRoomBinding {
+    readonly conversationId: string;
+    readonly localIdentityReference: string;
+    readonly remoteIdentityReference: string;
+    /** A transport policy bit, never populated from relay peer-feature metadata. */
+    readonly requiresRoomBinding: () => boolean;
+}
+
+type RoomBoundDeviceControl = {
+    version: 2;
+    conversationId: string;
+    senderIdentityReference: string;
+    recipientIdentityReference: string;
+    eventId: string;
+    message: DeviceControlMessage;
 };
 
 const bytes = (value: unknown): ArrayBuffer => encoder.encode(JSON.stringify(value)).buffer as ArrayBuffer;
@@ -28,6 +48,38 @@ export const decodeDeviceControl = (value: ArrayBuffer): DeviceControlMessage | 
     const record = parsed as Record<string, unknown>;
     if (Object.keys(record).some((key) => !['type', 'payload'].includes(key)) || !['enrollment-request', 'enrollment-approval', 'enrollment-confirmation', 'enrollment-rejection', 'revocation', 'trust-state', 'trust-state-request', 'trust-state-snapshot'].includes(record.type as string) || !('payload' in record)) throw new Error('Invalid device control message.');
     return { type: record.type as DeviceControlMessage['type'], payload: record.payload };
+};
+
+const encodeRoomBoundDeviceControl = (message: DeviceControlMessage, binding: DeviceControlRoomBinding): ArrayBuffer => {
+    if (!UUID.test(binding.conversationId) || !IDENTITY_REFERENCE.test(binding.localIdentityReference) || !IDENTITY_REFERENCE.test(binding.remoteIdentityReference)) throw new Error('Room-bound device control context unavailable.');
+    const packet: RoomBoundDeviceControl = {
+        version: 2,
+        conversationId: binding.conversationId,
+        senderIdentityReference: binding.localIdentityReference,
+        recipientIdentityReference: binding.remoteIdentityReference,
+        eventId: crypto.randomUUID(),
+        message,
+    };
+    return encoder.encode(`${ROOM_CONTROL_PREFIX}${JSON.stringify(packet)}`).buffer as ArrayBuffer;
+};
+
+const decodeRoomBoundDeviceControl = (value: ArrayBuffer, binding: DeviceControlRoomBinding): DeviceControlMessage => {
+    let packet: unknown;
+    try { packet = JSON.parse(decoder.decode(value).slice(ROOM_CONTROL_PREFIX.length)); }
+    catch { throw new Error('Room-bound device control rejected.'); }
+    if (!packet || typeof packet !== 'object' || Array.isArray(packet)) throw new Error('Room-bound device control rejected.');
+    const item = packet as Record<string, unknown>;
+    const keys = ['conversationId', 'eventId', 'message', 'recipientIdentityReference', 'senderIdentityReference', 'version'];
+    if (Object.keys(item).sort().join(',') !== keys.join(',') || item.version !== 2 || item.conversationId !== binding.conversationId ||
+        item.senderIdentityReference !== binding.remoteIdentityReference || item.recipientIdentityReference !== binding.localIdentityReference ||
+        typeof item.eventId !== 'string' || !UUID.test(item.eventId) || !item.message || typeof item.message !== 'object' || Array.isArray(item.message)) {
+        throw new Error('Room-bound device control rejected.');
+    }
+    const message = item.message as Record<string, unknown>;
+    if (Object.keys(message).sort().join(',') !== 'payload,type' ||
+        !['enrollment-request', 'enrollment-approval', 'enrollment-confirmation', 'enrollment-rejection', 'revocation', 'trust-state', 'trust-state-request', 'trust-state-snapshot'].includes(message.type as string) ||
+        !('payload' in message)) throw new Error('Room-bound device control rejected.');
+    return { type: message.type as DeviceControlMessage['type'], payload: message.payload };
 };
 
 interface LifecycleRecord {
@@ -185,16 +237,31 @@ export class SecureStorageDeviceLifecyclePersistence implements DeviceLifecycleP
 
 /** Encrypts device-control messages through the existing signaling session; no raw send path is exposed. */
 export class AuthenticatedDeviceControlChannel {
-    public constructor(private readonly session: { encrypted: boolean; ready: boolean; encrypt(channel: 'signaling', plaintext: ArrayBuffer): Promise<EncryptedEnvelope>; decrypt(channel: 'signaling', envelope: EncryptedEnvelope): Promise<ArrayBuffer> }, private readonly transport: TransportManager) {}
+    public constructor(
+        private readonly session: { encrypted: boolean; ready: boolean; encrypt(channel: 'signaling', plaintext: ArrayBuffer): Promise<EncryptedEnvelope>; decrypt(channel: 'signaling', envelope: EncryptedEnvelope): Promise<ArrayBuffer> },
+        private readonly transport: TransportManager,
+        private readonly roomBinding?: DeviceControlRoomBinding,
+    ) {}
     public async send(message: DeviceControlMessage): Promise<void> {
         if (!this.session.encrypted || !this.session.ready) throw new Error('Authenticated device control is unavailable.');
-        const encoded = encoder.encode(`${CONTROL_PREFIX}${JSON.stringify(message)}`).buffer as ArrayBuffer;
-        if (!decodeDeviceControl(encoded)) throw new Error('Invalid device control message.');
+        const legacy = encoder.encode(`${CONTROL_PREFIX}${JSON.stringify(message)}`).buffer as ArrayBuffer;
+        if (!decodeDeviceControl(legacy)) throw new Error('Invalid device control message.');
+        const encoded = this.roomBinding?.requiresRoomBinding()
+            ? encodeRoomBoundDeviceControl(message, this.roomBinding)
+            : legacy;
         await this.transport.sendEnvelope('signaling', await this.session.encrypt('signaling', encoded), undefined, 'device-control');
     }
     public async receive(envelope: EncryptedEnvelope): Promise<DeviceControlMessage | undefined> {
         if (!this.session.encrypted || !this.session.ready) throw new Error('Authenticated device control is unavailable.');
         return this.decode(await this.session.decrypt('signaling', envelope));
     }
-    public decode(plaintext: ArrayBuffer): DeviceControlMessage | undefined { return decodeDeviceControl(plaintext); }
+    public decode(plaintext: ArrayBuffer): DeviceControlMessage | undefined {
+        const text = decoder.decode(plaintext);
+        if (text.startsWith(ROOM_CONTROL_PREFIX)) {
+            if (!this.roomBinding) throw new Error('Room-bound device control context unavailable.');
+            return decodeRoomBoundDeviceControl(plaintext, this.roomBinding);
+        }
+        if (this.roomBinding?.requiresRoomBinding() && text.startsWith(CONTROL_PREFIX)) throw new Error('Legacy device control is not permitted on a room-bound transport.');
+        return decodeDeviceControl(plaintext);
+    }
 }
