@@ -343,7 +343,7 @@ export class ModernConversation {
                             testOnlyCallSignalStage('signal-decrypt-started');
                             const plaintext = await this.runtime.decrypt('signaling', message.envelope);
                             testOnlyCallSignalStage('signal-decrypted');
-                            const control = this.deviceControlChannel.decode(plaintext);
+                            const control = await this.deviceControlChannel.decode(plaintext);
                             if (control) await this.handleDeviceControl(control);
                             else if (this.callSignalTransport) {
                                 await this.callSignalTransport.receivePlaintext(plaintext);
@@ -653,6 +653,7 @@ export class ModernConversation {
     }
 
     public async requestTrustRefresh(): Promise<void> {
+        this.prepareDeviceControl();
         if (!this.deviceControlChannel || !this.userScope || !this.localDeviceId) throw new Error('Device trust refresh is unavailable.');
         await this.deviceControlChannel.send({ type: 'trust-state-request', payload: { version: 1, scope: this.userScope, requesterDeviceId: this.localDeviceId, requestedAt: Date.now() } });
     }
@@ -1478,7 +1479,11 @@ export class ModernConversation {
                 } catch (error) {
                     this.lastInboundFailureCategory = 'message-frame-parsing-failure';
                     if (error instanceof RoomMessageDecodeError) {
-                        const reasonClass = error.failure === 'unsupported-version' || error.failure === 'unsupported-kind' || error.failure === 'legacy-forbidden'
+                        // A future authenticated wrapper may become readable after an
+                        // upgrade. Keep it retryable instead of irreversibly tombstoning
+                        // the sender's potentially legitimate event.
+                        if (error.failure === 'unsupported-version' || error.failure === 'unsupported-kind') throw error;
+                        const reasonClass = error.failure === 'legacy-forbidden'
                             ? 'unsupported-message' : 'authenticated-invalid';
                         throw new PermanentInboundRejection(reasonClass, error.message);
                     }
@@ -1715,7 +1720,28 @@ export class ModernConversation {
 
     private prepareDeviceControl(): void {
         if (this.deviceControlChannel || !this.deviceLifecyclePersistence || !['active', 'persisted'].includes(this.runtime.lifecycle)) return;
-        this.deviceControlChannel = new AuthenticatedDeviceControlChannel(this.runtime.getAuthenticatedSession(), this.transport);
+        if (!this.roomId || !this.remoteAddress || !this.localIdentityId || !this.remoteIdentityCommitment) return;
+        const roomId = this.roomId;
+        const remoteAddress = this.remoteAddress;
+        const localIdentityReference = this.localIdentityId;
+        const remoteIdentityReference = this.remoteIdentityCommitment;
+        this.deviceControlChannel = new AuthenticatedDeviceControlChannel(this.runtime.getAuthenticatedSession(), this.transport, {
+            conversationId: roomId,
+            localIdentityReference,
+            remoteIdentityReference,
+            requiresRoomBoundControlV2: async () => {
+                const floor = await readRoomMessageVersionFloor(this.storage, roomId, remoteIdentityReference);
+                return floor >= 1 || this.transport.activeTransport()?.requiresRoomMessageV1 === true;
+            },
+            assertCurrentIdentity: async () => {
+                if (this.roomId !== roomId || this.remoteAddress !== remoteAddress || this.localIdentityId !== localIdentityReference ||
+                    this.remoteIdentityCommitment !== remoteIdentityReference) throw new Error('Device control identity binding changed.');
+                const contact = await this.registry.get(remoteAddress);
+                if (!contact || contact.identityId !== remoteIdentityReference || contact.changeStatus !== 'unchanged') {
+                    throw new Error('Device control identity requires review.');
+                }
+            },
+        });
         this.deviceLifecycle = new DeviceLifecycleService(this.deviceLifecyclePersistence, {
             verify: async (context, authorization) => {
                 const sender = context.authenticatedSender;

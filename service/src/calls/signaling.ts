@@ -15,6 +15,9 @@ const validSignalSemantics = (signal: CallSignal): boolean => {
   return false;
 };
 
+const replayKey = (signal: CallSignal): string =>
+  JSON.stringify([signal.conversationId, signal.callId, signal.sender.participantId, signal.sequence]);
+
 export class SecureCallSignaling {
   constructor(private readonly identity: CallIdentityVerifier, private readonly transport: CallSignalTransport, private readonly replay: ReplayProtectionStore = new MemoryReplayProtectionStore()) {}
   async send(session: CallSession, signal: CallSignal): Promise<void> {
@@ -23,7 +26,7 @@ export class SecureCallSignaling {
     if (!(await this.identity.isParticipant(session.conversationId, signal.sender.participantId))) throw new Error('Unauthorized call participant.');
     if (await this.identity.getVerification(signal.sender.participantId) !== 'verified') throw new Error('Verification required for calls.');
     if (signal.sender.verification === 'changed-pending-review') throw new Error('Call identity requires review.');
-    const key = `${signal.callId}:${signal.sender.participantId}:${signal.sequence}`;
+    const key = replayKey(signal);
     const result = await this.replay.claim(key, signal.expiresAt, now);
     if (result !== 'accepted') throw new Error(`Call signal rejected: ${result}.`);
     await this.transport.send(signal);
@@ -37,7 +40,7 @@ export class SecureCallSignaling {
     if (!(await this.identity.isParticipant(signal.conversationId, signal.sender.participantId)) || await this.identity.getVerification(signal.sender.participantId) !== 'verified' || signal.sender.verification !== 'verified') {
       throw new Error('Unauthorized call participant.');
     }
-    const key = `${signal.callId}:${signal.sender.participantId}:${signal.sequence}`;
+    const key = replayKey(signal);
     const result = await this.replay.claim(key, signal.expiresAt, now);
     if (result !== 'accepted') throw new Error(`Call signal rejected: ${result}.`);
     await listener(signal);

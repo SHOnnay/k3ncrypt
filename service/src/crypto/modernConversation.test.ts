@@ -1297,6 +1297,69 @@ it('latches authenticated V1 per room and pinned identity, then sends V1 offline
     await restarted.close(false);
 });
 
+it('requires room-bound device control from the persisted message floor across reconnect without relay features', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
+    const storage = new Storage();
+    const remoteIdentityReference = await remoteCommitment();
+    const recordId = await roomMessageVersionFloorRecordId(room, remoteIdentityReference);
+    await storage.write(ROOM_MESSAGE_VERSION_FLOOR_RECORD, recordId, new TextEncoder().encode(JSON.stringify({
+        version: 1, roomId: room, remoteIdentityReference, minimumWrapperVersion: 1,
+    })).buffer as ArrayBuffer);
+
+    const firstTransport = fakeTransport(); // No room-message feature advertisement.
+    const first = new ModernConversation(storage, loader, firstTransport.transport);
+    await first.connect(room, key(9), remoteAddress, remoteIdentityReference);
+    await first.sendWithReceipt('restore room session without relay features');
+    await first.requestTrustRefresh();
+    const prefix = 'k3ncrypt-device-control-room-v2:';
+    const firstControl = encryptedPlaintexts.map((value) => new TextDecoder().decode(value.slice(2))).find((value) => value.startsWith(prefix));
+    expect(firstControl).toBeDefined();
+    expect(JSON.parse(firstControl!.slice(prefix.length))).toMatchObject({ version: 2, conversationId: room,
+        senderIdentityReference: expect.any(String), recipientIdentityReference: remoteIdentityReference,
+        message: { type: 'trust-state-request' } });
+    expect(await readRoomMessageVersionFloor(storage, room, remoteIdentityReference)).toBe(1);
+    const channel = (first as unknown as { deviceControlChannel: { decode(value: ArrayBuffer): Promise<unknown> } }).deviceControlChannel;
+    for (const type of ['enrollment-request', 'revocation', 'trust-state-request', 'trust-state-snapshot']) {
+        const legacyControl = new TextEncoder().encode(`k3ncrypt-device-control-v1:${JSON.stringify({ type, payload: {} })}`).buffer as ArrayBuffer;
+        await expect(channel.decode(legacyControl)).rejects.toThrow('Legacy device control');
+    }
+    await first.close(false);
+
+    const noFeaturesAfterReconnect = fakeTransport();
+    const reloaded = new ModernConversation(storage, loader, noFeaturesAfterReconnect.transport);
+    await reloaded.connect(room, key(9), remoteAddress, remoteIdentityReference);
+    await reloaded.sendWithReceipt('room session remains V1 after reconnect');
+    await reloaded.requestTrustRefresh();
+    const reloadedControl = encryptedPlaintexts.map((value) => new TextDecoder().decode(value.slice(2))).find((value) => value.startsWith(prefix));
+    expect(reloadedControl).toBeDefined();
+    expect(await readRoomMessageVersionFloor(storage, room, remoteIdentityReference)).toBe(1);
+
+    await setContactChangeStatus(storage, remoteAddress, 'changed-pending-review');
+    await expect(reloaded.requestTrustRefresh()).rejects.toThrow('identity requires review');
+    const reloadedChannel = (reloaded as unknown as { deviceControlChannel: { decode(value: ArrayBuffer): Promise<unknown> } }).deviceControlChannel;
+    const plaintext = new TextEncoder().encode(reloadedControl!).buffer as ArrayBuffer;
+    await expect(reloadedChannel.decode(plaintext)).rejects.toThrow('identity requires review');
+    await reloaded.close(false);
+});
+
+it('does not raise the message V1 floor when strict transport policy independently requires control v2', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
+    const storage = new Storage();
+    const transport = fakeTransport(false, 0, true, true);
+    const conversation = new ModernConversation(storage, loader, transport.transport);
+    await conversation.connect(room, key(9), remoteAddress, await remoteCommitment());
+    await conversation.sendWithReceipt('peer advertises message V1; do not infer from control V2');
+    await expect(readRoomMessageVersionFloor(storage, room, await remoteCommitment())).resolves.toBe(0);
+    await conversation.requestTrustRefresh();
+    expect(encryptedPlaintexts.map((value) => new TextDecoder().decode(value.slice(2))).some((value) => value.startsWith('k3ncrypt-device-control-room-v2:'))).toBe(true);
+    await expect(readRoomMessageVersionFloor(storage, room, await remoteCommitment())).resolves.toBe(0);
+    await conversation.close(false);
+});
+
 it('atomically holds legacy outbox ciphertext on authenticated V1 transition and supports only a fresh V1 text retry', async () => {
     jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
     jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
@@ -1742,8 +1805,34 @@ it('maps a strict authenticated legacy frame to terminal unsupported-message wit
     await conversation.close();
 });
 
+it('keeps an authenticated future room-wrapper version retryable without durable acceptance', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    const storage = new Storage();
+    const delivered = jest.fn(messageAcceptance(storage));
+    const conversation = new ModernConversation(storage, loader, fakeTransport().transport);
+    const own = await conversation.connect(room, key(9), remoteAddress, await remoteCommitment(), delivered);
+    const futureVersion = encodeRoomMessageV1({ roomId: room, senderIdentityReference: await remoteCommitment(),
+        recipientIdentityReference: own.ownFingerprint, eventId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1', kind: 'text',
+        payload: new TextEncoder().encode('recover after software upgrade') });
+    futureVersion[new TextEncoder().encode('K3NCRYPT/ROOM-MESSAGE\0').byteLength] = 2;
+    decryptedBytes = new Uint8Array([1, 1, ...futureVersion]);
+    const envelope: EncryptedEnvelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1,
+        olmMessage: JSON.stringify({ version: 1, message_type: 1, ciphertext: 'authenticated-future-wrapper' }) } };
+    const accountBefore = await storage.read('vodozemac-account', 'local');
+
+    await expect(receiveDecision(conversation, envelope, remoteAddress)).resolves.toEqual({ outcome: 'retryable' });
+    expect(await storage.read('vodozemac-account', 'local')).toEqual(accountBefore);
+    expect(await storage.read('vodozemac-session', room)).toBeUndefined();
+    expect(await storage.read('product-messages', room)).toBeUndefined();
+    expect(await storage.read('modern-seen-m1-v1', room)).toBeUndefined();
+    expect(delivered).not.toHaveBeenCalled();
+    await conversation.close();
+});
+
 it('keeps unauthenticated malformed Olm ciphertext retryable without exposing a rejection class', async () => {
     jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
     const conversation = new ModernConversation(new Storage(), loader, fakeTransport().transport);
     await conversation.connect(room, key(9), remoteAddress, await remoteCommitment());
     const malformed: EncryptedEnvelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1, olmMessage: 'not-an-olm-message' } };
