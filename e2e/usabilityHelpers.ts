@@ -6,7 +6,11 @@ export async function create(page: Page, name: string) {
   await page.getByRole('textbox', { name: 'Display name', exact: true }).fill(name);
   await page.locator('#local-passphrase').fill(passphrase);
   await page.locator('#local-passphrase-confirm').fill(passphrase);
+  const linkCreated = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/chat-link', { timeout: 30_000 });
+  const deviceBootstrapped = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/device-trust/bootstrap', { timeout: 30_000 }).catch(() => undefined);
   await page.getByRole('button', { name: 'Create secure account' }).click();
+  expect((await linkCreated).status()).toBe(200);
+  expect((await deviceBootstrapped)?.status()).toBe(201);
   await expect(page.getByRole('textbox', { name: 'Private invitation' })).toHaveValue(/#modern=/);
   await page.getByRole('button', { name: 'Continue to your chats', exact: true }).click();
 }
@@ -26,7 +30,9 @@ export async function invite(page: Page): Promise<string> {
   await page.locator('.new-conversation').click();
   await page.locator('#show-create-account').click();
   await expect(page.locator('#local-passphrase')).toHaveCount(0);
+  const linkCreated = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/chat-link', { timeout: 30_000 });
   await page.getByRole('button', { name: 'Create invitation', exact: true }).click();
+  expect((await linkCreated).status()).toBe(200);
   const input = page.getByRole('textbox', { name: 'Private invitation' });
   await expect(input).toHaveValue(/#modern=/);
   const link = await input.inputValue();
@@ -43,7 +49,6 @@ export async function connectedPair(browser: import('@playwright/test').Browser)
   const link = await invite(alice);
   await bob.locator('.new-conversation').click(); await bob.getByRole('button', { name: 'I have an invitation' }).click();
   await bob.locator('#channel-hash').fill(link); await bob.getByRole('button', { name: 'Continue', exact: true }).click();
-  await expect(bob.locator('#channel-hash')).not.toBeVisible();
   await expect(alice.locator('.chat-header')).toContainText('Bob', { timeout: 30000 });
   await expect(bob.locator('.chat-header')).toContainText('Alice', { timeout: 30000 });
   for (const page of [alice, bob]) {

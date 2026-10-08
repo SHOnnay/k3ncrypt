@@ -10,9 +10,10 @@ describe('opaque offline message mailbox', () => {
     const duplicate = await storeOfflineMessage({ ...message, id: randomUUID() });
     expect(duplicate.id).toBe(first.id);
     expect(await countOfflineMessages({ mailbox: message.mailbox, channel: message.channel })).toBe(1);
-    expect(await claimOfflineMessage(message.mailbox, message.channel, new Date(Date.now() + 30_000), randomUUID())).toEqual(expect.objectContaining({ id: message.id }));
+    const claimId = randomUUID();
+    expect(await claimOfflineMessage(message.mailbox, message.channel, new Date(Date.now() + 30_000), claimId)).toEqual(expect.objectContaining({ id: message.id }));
     expect(await claimOfflineMessage(message.mailbox, message.channel, new Date(Date.now() + 30_000), randomUUID())).toBeFalsy();
-    expect(await ackOfflineMessage(message.id, message.mailbox, message.channel)).toBe(true);
+    expect(await ackOfflineMessage(message.id, message.mailbox, message.channel, claimId)).toBe(true);
     expect(await countOfflineMessages({ mailbox: message.mailbox, channel: message.channel })).toBe(0);
   });
 
@@ -55,6 +56,8 @@ describe('opaque offline message mailbox', () => {
     const currentClaim = randomUUID();
     const current = await claimOfflineMessage<{ claimId: string }>(message.mailbox, message.channel, new Date(Date.now() + 30_000), currentClaim);
     expect(current?.claimId).toBe(currentClaim);
+    expect(await ackOfflineMessage(message.id, message.mailbox, message.channel)).toBe(false);
+    expect(await ackOfflineMessage(message.id, message.mailbox, message.channel, '')).toBe(false);
     expect(await rejectOfflineMessage(message.id, message.mailbox, message.channel, staleClaim, 'authenticated-invalid')).toBe('stale');
     expect(await countOfflineMessages({ mailbox: message.mailbox, channel: message.channel })).toBe(1);
     expect(await rejectOfflineMessage(message.id, message.mailbox, message.channel, currentClaim, 'authenticated-invalid')).toBe('rejected');

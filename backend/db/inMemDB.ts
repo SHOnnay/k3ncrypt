@@ -98,7 +98,8 @@ export const claimOfflineMessage = (condition: Record<string, unknown>, leaseUnt
 
 export const ackOfflineMessage = (condition: Record<string, unknown>, collectionName: string): boolean => {
   const collection = storage[collectionName] || [];
-  const index = collection.findIndex((entry) => Object.keys(condition).every((key) => entry[key] === condition[key]));
+  const index = collection.findIndex((entry) => Object.keys(condition).every((key) => entry[key] === condition[key]) &&
+    (Object.prototype.hasOwnProperty.call(condition, 'claimId') ? entry.claimId === condition.claimId : entry.claimId === undefined));
   if (index < 0) return false;
   collection.splice(index, 1);
   return true;
@@ -112,9 +113,11 @@ export const rejectOfflineMessage = (condition: Record<string, unknown>, reasonC
     active.terminalReason = reasonClass;
     active.terminalAt = now;
     active.terminalClaimId = condition.claimId;
+    // Previous relays do not filter `state`; keep their legacy lease query
+    // from claiming an empty terminal row until the original TTL expires.
+    active.claimedUntil = active.expiresAt;
     delete active.envelope;
     delete active.claimId;
-    delete active.claimedUntil;
     delete active.slot;
     return 'rejected';
   }
@@ -131,13 +134,13 @@ export const recordOfflineRejection = (data: Record<string, unknown>, collection
     existing.terminalReason = data.terminalReason;
     existing.terminalAt = data.terminalAt;
     existing.terminalClaimId = undefined;
+    existing.claimedUntil = existing.expiresAt;
     delete existing.envelope;
     delete existing.claimId;
-    delete existing.claimedUntil;
     delete existing.slot;
     return 'rejected';
   }
-  collection.push({ pk: pk++, ...data, state: 'rejected' });
+  collection.push({ pk: pk++, ...data, state: 'rejected', claimedUntil: data.expiresAt });
   return 'rejected';
 };
 

@@ -11,6 +11,7 @@ const fixtures = [
 async function transfer(sender: Page, recipient: Page, file: typeof fixtures[number], output: string) {
   const before = await recipient.getByRole('button', { name: 'Download protected file', exact: true }).count();
   await sender.locator('input[type=file]').setInputFiles(file);
+  await expect(sender.locator('.media-transfer-status')).toContainText(file.name, { timeout: 30000 });
   await expect(sender.locator('.media-transfer-status')).toContainText('Sent', { timeout: 300000 });
   const buttons = recipient.getByRole('button', { name: 'Download protected file', exact: true });
   await expect(buttons).toHaveCount(before + 1); await buttons.last().click();
@@ -38,9 +39,14 @@ test('retry, cancel, next transfer, oversize photo and scoped state after reload
   await alice.getByRole('button', { name: 'Retry', exact: true }).click(); await expect(alice.locator('.media-transfer-status')).toContainText('Sent', { timeout: 300000 });
   await alice.unroute('**/api/attachments/v2/*/chunks/*');
   let release: (() => void) | undefined; const gate = new Promise<void>(resolve => { release = resolve; });
-  await alice.route('**/api/attachments/v2/*/chunks/*', async route => { await gate; await route.continue().catch(() => undefined); });
-  await alice.locator('input[type=file]').setInputFiles(fixtures[1]); await alice.getByRole('button', { name: 'Cancel', exact: true }).click(); release?.();
+  let uploadBlocked!: () => void; const blocked = new Promise<void>(resolve => { uploadBlocked = resolve; });
+  await alice.route('**/api/attachments/v2/*/chunks/*', async route => { uploadBlocked(); await gate; await route.continue().catch(() => undefined); });
+  const uploadAborted = alice.waitForEvent('requestfailed', request => request.method() === 'PUT' && new URL(request.url()).pathname.includes('/chunks/'));
+  await alice.locator('input[type=file]').setInputFiles(fixtures[1]); await blocked;
+  const serverCanceled = alice.waitForResponse(response => response.request().method() === 'DELETE' && new URL(response.url()).pathname.startsWith('/api/attachments/v2/'));
+  await alice.getByRole('button', { name: 'Cancel', exact: true }).click(); release?.();
   await expect(alice.locator('.media-transfer-status')).toContainText('canceled'); await alice.unroute('**/api/attachments/v2/*/chunks/*');
+  await Promise.all([uploadAborted, serverCanceled]);
   await transfer(alice, bob, fixtures[2], testInfo.outputPath('after-cancel'));
   await alice.locator('input[type=file]').setInputFiles({ name: 'large-photo.png', mimeType: 'image/png', buffer: Buffer.alloc(8 * 1024 * 1024 + 1) });
   await expect(alice.locator('.composer-feedback').filter({ hasText: 'This photo is larger than the current 8 MiB limit.' })).toBeVisible();

@@ -176,8 +176,8 @@ export const claimOfflineMessage = async <T>(mailbox: string, channel: string, l
 };
 
 export const ackOfflineMessage = async (id: string, mailbox: string, channel: string, claimId?: string): Promise<boolean> => {
-  const condition = { id, mailbox, channel, ...(claimId ? { claimId } : {}) };
-  if (inMem) return _ackOfflineMessage(condition, OFFLINE_MESSAGE_COLLECTION);
+  if (inMem) return _ackOfflineMessage({ id, mailbox, channel, ...(claimId !== undefined ? { claimId } : {}) }, OFFLINE_MESSAGE_COLLECTION);
+  const condition = { id, mailbox, channel, claimId: claimId ?? { $exists: false } };
   const result = await db.collection(OFFLINE_MESSAGE_COLLECTION).deleteOne(condition);
   return result.deletedCount === 1;
 };
@@ -189,8 +189,10 @@ export const rejectOfflineMessage = async (id: string, mailbox: string, channel:
   const collection = db.collection(OFFLINE_MESSAGE_COLLECTION);
   const result = await collection.updateOne(
     { id, mailbox, channel, state: 'active', claimId },
-    { $set: { state: 'rejected', terminalReason: reasonClass, terminalAt: new Date(), terminalClaimId: claimId },
-      $unset: { envelope: '', claimId: '', claimedUntil: '', slot: '' } },
+    [
+      { $set: { state: 'rejected', terminalReason: reasonClass, terminalAt: new Date(), terminalClaimId: claimId, claimedUntil: '$expiresAt' } },
+      { $unset: ['envelope', 'claimId', 'slot'] },
+    ],
   );
   if (result.modifiedCount === 1) return 'rejected';
   const prior = await collection.findOne({ id, mailbox, channel, state: 'rejected', terminalClaimId: claimId }, { projection: { _id: 1 } });
@@ -199,13 +201,16 @@ export const rejectOfflineMessage = async (id: string, mailbox: string, channel:
 
 export const recordOfflineRejection = async (data: { id: string; dedupeKey: string; channel: string; mailbox: string; sender: string; timestamp: number; expiresAt: Date; terminalReason: OfflineRejectionReason }): Promise<'rejected' | 'duplicate'> => {
   const terminalData = { id: data.id, dedupeKey: data.dedupeKey, channel: data.channel, mailbox: data.mailbox, sender: data.sender,
-    timestamp: data.timestamp, expiresAt: data.expiresAt, terminalReason: data.terminalReason, state: 'rejected', terminalAt: new Date() };
+    timestamp: data.timestamp, expiresAt: data.expiresAt, claimedUntil: data.expiresAt, terminalReason: data.terminalReason, state: 'rejected', terminalAt: new Date() };
   if (inMem) return _recordOfflineRejection(terminalData, OFFLINE_MESSAGE_COLLECTION);
   const collection = db.collection(OFFLINE_MESSAGE_COLLECTION);
   const existing = await collection.findOne({ dedupeKey: data.dedupeKey });
   if (existing?.state === 'rejected') return 'duplicate';
   if (existing) {
-    await collection.updateOne({ _id: existing._id, dedupeKey: data.dedupeKey }, { $set: { state: 'rejected', terminalReason: data.terminalReason, terminalAt: terminalData.terminalAt }, $unset: { envelope: '', claimId: '', claimedUntil: '', slot: '' } });
+    await collection.updateOne({ _id: existing._id, dedupeKey: data.dedupeKey }, [
+      { $set: { state: 'rejected', terminalReason: data.terminalReason, terminalAt: terminalData.terminalAt, claimedUntil: '$expiresAt' } },
+      { $unset: ['envelope', 'claimId', 'slot'] },
+    ]);
     return 'rejected';
   }
   try { await collection.insertOne(terminalData); return 'rejected'; }

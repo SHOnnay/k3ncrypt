@@ -388,13 +388,17 @@ active device epoch and room, and conditionally updates the exact current
 claim. Reason classes are coarse: `authenticated-invalid`,
 `unsupported-message`, or `identity-changed`.
 
-Accepted terminal rows retain only dedupe/routing/timestamp/expiry and bounded
-reason accounting; the opaque envelope is removed, the claim is released, and
-the mailbox slot is freed. The tombstone shares the original TTL and is not
-replayed or counted against active quota. It prevents retry of the same
-ciphertext from silently recreating a poison row. The sender keeps its durable
-outbox item marked terminal and does not auto-retry it; the existing safe
-failure/retry UI starts a new encrypted event when the user retries.
+Terminal rows retain only dedupe/routing/timestamp/expiry and bounded reason
+accounting; the opaque envelope, claim generation, and active quota slot are
+removed. `claimedUntil` is retained at the original `expiresAt` as a rollback
+barrier: old relays, which do not filter `state`, will not claim an empty
+tombstone before TTL cleanup. New relays exclude `state: rejected`; the
+tombstone is not replayed or counted against active quota. Unversioned legacy
+ACKs can remove only rows that have no claim generation, so they cannot ACK a
+newer claim. The tombstone prevents retry of the same ciphertext from silently
+recreating a poison row. The sender keeps its durable outbox item marked
+terminal and does not auto-retry it; the existing safe failure/retry UI starts
+a new encrypted event when the user retries.
 
 Authenticated ROOM_MESSAGE_V1 room/participant mismatch, event-content
 conflict, malformed authenticated application payload, and forbidden legacy
@@ -407,6 +411,30 @@ authentication, device-trust/database uncertainty, and network interruption
 remain retryable and do not disclose a rejection class; this intentionally
 avoids an unauthenticated crypto-failure oracle. Such undecided entries remain
 subject to the existing 64-row quota and seven-day expiry.
+
+#### Deployment and mixed-version behavior
+
+Production does not apply schema changes during server startup. Run
+`npm run migrate` successfully before routing traffic to this version. The
+migration backfills rows without `state` to `active`, preserves their opaque
+envelopes, then replaces the old unconditional slot index with a unique partial
+index for active rows. Existing active rows without `claimId` remain readable;
+the next new claim adds a fresh generation. A new client receiving a
+claim-less live event uses the legacy `received` ACK path; it does not submit a
+terminal mailbox event without a claim. A legacy client can still ACK a
+mailbox callback as accepted; the relay itself conditionally commits that ACK
+against its server-held claim generation.
+
+Deploy the backend before terminal-aware clients. New clients talking to an
+old backend cannot commit `recipient-rejected`; the old backend will treat the
+negative callback as unaccepted and retry under its legacy lease behavior.
+Rolling back the backend is safe for stored tombstones: their legacy lease
+field keeps old relays from replaying them until the original TTL removes them.
+During rollback, terminal notices are not understood by old code, so sender
+outbox UI may remain pending until the client reconnects to a terminal-aware
+backend; this does not represent acceptance or `Delivered`. Mixed backend
+versions should not serve the same mailbox concurrently during the migration
+window.
 
 ## 7. Calls (Stage 2)
 

@@ -96,6 +96,15 @@ test('audio call support follows the selected contact and decline permits a call
   await expect(bob.locator('.call-info')).not.toBeVisible();
   await openContact(alice, 'Cara');
   await startAndDecline(alice, cara);
+  await alice.getByRole('button', { name: 'Calls', exact: true }).click();
+  await alice.getByRole('button', { name: 'Start audio call', exact: true }).click();
+  await cara.getByRole('button', { name: 'Accept call', exact: true }).click({ timeout: 20000 });
+  await expect(alice.locator('#call-status')).toHaveText('Connected', { timeout: 20000 });
+  await expect(cara.locator('#call-status')).toHaveText('Connected', { timeout: 20000 });
+  await expect(alice.locator('.call-contact-name')).toHaveText('Cara');
+  await cara.getByRole('button', { name: 'End call', exact: true }).click();
+  await expect(alice.locator('.call-info')).not.toBeVisible();
+  await expect(cara.locator('.call-info')).not.toBeVisible();
   const observed = async (receiver: Page) => {
     try { await startAndDecline(alice, receiver); }
     catch (error) { console.log('SAFE_CALL_DIAGNOSTICS', callDiagnostics.sort().join(',')); throw error; }

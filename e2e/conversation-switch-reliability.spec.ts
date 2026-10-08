@@ -151,6 +151,8 @@ async function fileTransfer(sender: Page, recipient: Page, file: Buffer, output:
 }
 
 async function openContact(page: Page, name: string) {
+  const switchPaceMs = Number(process.env.PLAYWRIGHT_SWITCH_PACE_MS ?? 0);
+  if (switchPaceMs > 0) await page.waitForTimeout(Math.min(switchPaceMs, 60_000));
   await page.evaluate(() => {
     (globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean }).__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ = true;
   });
