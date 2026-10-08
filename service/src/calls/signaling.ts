@@ -16,7 +16,7 @@ const validSignalSemantics = (signal: CallSignal): boolean => {
 };
 
 const replayKey = (signal: CallSignal): string =>
-  `${signal.conversationId}:${signal.callId}:${signal.sender.participantId}:${signal.sequence}`;
+  JSON.stringify([signal.conversationId, signal.callId, signal.sender.participantId, signal.sequence]);
 
 export class SecureCallSignaling {
   constructor(private readonly identity: CallIdentityVerifier, private readonly transport: CallSignalTransport, private readonly replay: ReplayProtectionStore = new MemoryReplayProtectionStore()) {}

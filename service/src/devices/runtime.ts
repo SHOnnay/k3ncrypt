@@ -60,10 +60,13 @@ const encodeRoomBoundDeviceControl = (message: DeviceControlMessage, binding: De
         eventId: crypto.randomUUID(),
         message,
     };
-    return encoder.encode(`${ROOM_CONTROL_PREFIX}${JSON.stringify(packet)}`).buffer as ArrayBuffer;
+    const encoded = encoder.encode(`${ROOM_CONTROL_PREFIX}${JSON.stringify(packet)}`);
+    if (encoded.byteLength > 65536) throw new Error('Invalid device control message.');
+    return encoded.buffer as ArrayBuffer;
 };
 
 const decodeRoomBoundDeviceControl = (value: ArrayBuffer, binding: DeviceControlRoomBinding): DeviceControlMessage => {
+    if (value.byteLength > 65536) throw new Error('Room-bound device control rejected.');
     let packet: unknown;
     try { packet = JSON.parse(decoder.decode(value).slice(ROOM_CONTROL_PREFIX.length)); }
     catch { throw new Error('Room-bound device control rejected.'); }

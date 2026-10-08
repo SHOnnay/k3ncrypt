@@ -70,7 +70,7 @@ describe('call signaling security', () => {
     await expect(signaling.receive({ ...current, protocolVersion: 1 }, async () => undefined)).rejects.toThrow('Invalid call signal');
     expect(claims).toEqual([]);
     await signaling.receive(current, async () => undefined);
-    expect(claims).toEqual([`${current.conversationId}:${current.callId}:a:${current.sequence}`]);
+    expect(claims).toEqual([JSON.stringify([current.conversationId, current.callId, 'a', current.sequence])]);
   });
   it('isolates replay identities by room when call IDs and sender sequences collide', async () => {
     const now = Date.now();
@@ -88,8 +88,8 @@ describe('call signaling security', () => {
     await signaling.receive(signalB, async signal => { accepted.push(signal.conversationId); });
     expect(accepted).toEqual([roomA.conversationId, roomB.conversationId]);
     expect(claims).toEqual([
-      `${roomA.conversationId}:same-call-id:a:1`,
-      `${roomB.conversationId}:same-call-id:a:1`,
+      JSON.stringify([roomA.conversationId, 'same-call-id', 'a', 1]),
+      JSON.stringify([roomB.conversationId, 'same-call-id', 'a', 1]),
     ]);
   });
   it('binds wire origin to the existing authenticated session identity', async () => {

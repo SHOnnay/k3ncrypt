@@ -54,6 +54,7 @@ describe('authenticated device control channel', () => {
     await a.send(message);
     await expect(b.receive(sent[0])).resolves.toEqual(message);
     await expect(wrongRoom.receive(sent[0])).rejects.toThrow('Room-bound device control rejected');
+    await expect(a.send({ type: 'trust-state-request', payload: 'x'.repeat(65_300) })).rejects.toThrow('Invalid device control message');
 
     const legacySender = new AuthenticatedDeviceControlChannel(session, transport);
     const roomRequiredReceiver = new AuthenticatedDeviceControlChannel(session, transport, { conversationId: roomA, localIdentityReference: ID_B, remoteIdentityReference: ID_A, requiresRoomBinding: () => true });
