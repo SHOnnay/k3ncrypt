@@ -594,15 +594,36 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const diagnostics = globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean };
     const target = window as Window & {
       __K3NCRYPT_MUX_SNAPSHOT__?: () => ReturnType<MultiplexedRelayConnection['testOnlySnapshot']> | undefined;
+      __K3NCRYPT_MUX_ROOM_BINDINGS__?: () => ReturnType<MultiplexedRelayConnection['testOnlyRoomBindings']> | undefined;
+      __K3NCRYPT_MUX_REPLAY_ROOM__?: (roomId: string) => Promise<void>;
+      __K3NCRYPT_MUX_RECONNECT__?: () => Promise<void>;
+      __K3NCRYPT_MUX_UNSUBSCRIBE_ROOM__?: (roomId: string) => Promise<void>;
+      __K3NCRYPT_MUX_RESUBSCRIBE_ROOM__?: (roomId: string) => Promise<void>;
+      __K3NCRYPT_MUX_REPLAY_LAST_PROOF__?: () => Promise<boolean>;
+      __K3NCRYPT_MUX_FORGED_ACK__?: (payload: Record<string, unknown>) => void;
       __K3NCRYPT_ACTIVE_ROOM_TRANSPORT__?: () => ReturnType<ModernConversation['testOnlyTransportKind']> | undefined;
       __K3NCRYPT_ACTIVE_ROOM_V1_PEER__?: () => boolean | undefined;
     };
     if (diagnostics.__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ === true) {
       target.__K3NCRYPT_MUX_SNAPSHOT__ = () => muxConnection.current?.testOnlySnapshot();
+      target.__K3NCRYPT_MUX_ROOM_BINDINGS__ = () => muxConnection.current?.testOnlyRoomBindings();
+      target.__K3NCRYPT_MUX_REPLAY_ROOM__ = roomId => muxConnection.current!.testOnlyReplayRoom(roomId);
+      target.__K3NCRYPT_MUX_RECONNECT__ = () => muxConnection.current!.testOnlyReconnect();
+      target.__K3NCRYPT_MUX_UNSUBSCRIBE_ROOM__ = roomId => muxConnection.current!.testOnlyUnsubscribeRoom(roomId);
+      target.__K3NCRYPT_MUX_RESUBSCRIBE_ROOM__ = roomId => muxConnection.current!.testOnlyResubscribeRoom(roomId);
+      target.__K3NCRYPT_MUX_REPLAY_LAST_PROOF__ = () => muxConnection.current!.testOnlyReplayLastMessageProof();
+      target.__K3NCRYPT_MUX_FORGED_ACK__ = payload => muxConnection.current!.testOnlyEmitForgedAck(payload);
       target.__K3NCRYPT_ACTIVE_ROOM_TRANSPORT__ = () => selectedConversation.current?.testOnlyTransportKind();
       target.__K3NCRYPT_ACTIVE_ROOM_V1_PEER__ = () => selectedConversation.current?.testOnlyPeerSupportsRoomMessageV1();
     }
-    return () => { delete target.__K3NCRYPT_MUX_SNAPSHOT__; delete target.__K3NCRYPT_ACTIVE_ROOM_TRANSPORT__; delete target.__K3NCRYPT_ACTIVE_ROOM_V1_PEER__; };
+    return () => {
+      delete target.__K3NCRYPT_MUX_SNAPSHOT__; delete target.__K3NCRYPT_MUX_ROOM_BINDINGS__;
+      delete target.__K3NCRYPT_MUX_REPLAY_ROOM__; delete target.__K3NCRYPT_MUX_RECONNECT__;
+      delete target.__K3NCRYPT_MUX_UNSUBSCRIBE_ROOM__; delete target.__K3NCRYPT_MUX_RESUBSCRIBE_ROOM__;
+      delete target.__K3NCRYPT_MUX_REPLAY_LAST_PROOF__;
+      delete target.__K3NCRYPT_MUX_FORGED_ACK__; delete target.__K3NCRYPT_ACTIVE_ROOM_TRANSPORT__;
+      delete target.__K3NCRYPT_ACTIVE_ROOM_V1_PEER__;
+    };
   }, []);
 
   useEffect(() => {

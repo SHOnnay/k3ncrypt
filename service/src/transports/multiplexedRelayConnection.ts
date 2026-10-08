@@ -12,6 +12,7 @@ export type MuxDeviceProofProvider = { acquire(operation: DeviceProofOperation, 
 type RoomConfig = { roomId: string; localRoutingAddress: string; peerRoutingAddress: string; controlCapability: string; routingProof: string; protocolFeatures: string[] };
 type RoomState = RoomConfig & { manager: MultiplexedRoomTransportManager; handler?: TransportEnvelopeHandler; nonce?: string; expiresAt?: number; peerFeatures: Set<string>; renewalTimer?: ReturnType<typeof setTimeout>; joining?: Promise<void> };
 type Ack = Record<string, unknown> & { error?: string };
+type TestAckInterceptor = (response: Record<string, unknown>, acknowledge?: (response: Record<string, unknown>) => void) => boolean;
 
 const ALLOWED_FEATURES = new Set(['join-introduction-v1', 'room-message-v1', ROOM_CALL_SIGNAL_V2_FEATURE]);
 const strictFeatures = (features: readonly string[]): string[] => {
@@ -27,6 +28,7 @@ export class MultiplexedRelayConnection {
   private authenticatedGeneration?: string;
   private authenticating?: Promise<void>;
   private disposed = false;
+  private lastMessageRequestForTest?: { event: string; payload: Record<string, unknown> };
   private readonly diagnostics = { sendAttempts: 0, storedMessages: 0, receivedFrames: 0, acceptedFrames: 0, retryableFrames: 0, acceptedStatuses: 0, rejectedStatuses: 0, subscriptionProofAcquisitions: 0, subscriptionRenewals: 0 };
 
   constructor(socket?: Socket) {
@@ -78,6 +80,54 @@ export class MultiplexedRelayConnection {
     if (!testDiagnosticsEnabled()) throw new Error('Test-only diagnostics are disabled.');
     return { connected: this.socket.connected, authenticated: this.currentGeneration() !== undefined, socketCount: 1,
       roomSubscriptionCount: [...this.rooms.values()].filter((room) => !!room.nonce && (room.expiresAt ?? 0) > Date.now()).length, ...this.diagnostics };
+  }
+
+  public testOnlyRoomBindings(): Array<{ roomId: string; localRoutingAddress: string; peerRoutingAddress: string }> {
+    if (!testDiagnosticsEnabled()) throw new Error('Test-only diagnostics are disabled.');
+    return [...this.rooms.values()].map(({ roomId, localRoutingAddress, peerRoutingAddress }) => ({ roomId, localRoutingAddress, peerRoutingAddress }));
+  }
+
+  public async testOnlyReplayRoom(roomId: string): Promise<void> {
+    if (!testDiagnosticsEnabled()) throw new Error('Test-only diagnostics are disabled.');
+    const room = this.requireRoom(roomId);
+    await this.ensureAuthenticated();
+    if (!room.nonce || !room.expiresAt || room.expiresAt <= Date.now()) throw new Error('An active room subscription is required.');
+    await this.emitAck('mux-mailbox-replay', { version: MUX_RELAY_PROTOCOL_VERSION, roomId,
+      connectionGeneration: this.socket.id, subscriptionNonce: room.nonce });
+  }
+
+  public async testOnlyReconnect(): Promise<void> {
+    if (!testDiagnosticsEnabled()) throw new Error('Test-only diagnostics are disabled.');
+    this.socket.disconnect();
+    this.socket.connect();
+  }
+
+  public async testOnlyUnsubscribeRoom(roomId: string): Promise<void> {
+    if (!testDiagnosticsEnabled()) throw new Error('Test-only diagnostics are disabled.');
+    const room = this.requireRoom(roomId);
+    const generation = this.socket.id;
+    if (!this.socket.connected || !generation || this.authenticatedGeneration !== generation || !room.nonce) throw new Error('An active room subscription is required.');
+    await this.emitAck('mux-unsubscribe', { roomId, connectionGeneration: generation, subscriptionNonce: room.nonce });
+    if (room.renewalTimer) clearTimeout(room.renewalTimer);
+    room.renewalTimer = undefined; room.nonce = undefined; room.expiresAt = undefined; room.peerFeatures.clear();
+  }
+
+  public async testOnlyResubscribeRoom(roomId: string): Promise<void> {
+    if (!testDiagnosticsEnabled()) throw new Error('Test-only diagnostics are disabled.');
+    const room = this.requireRoom(roomId);
+    await this.subscribeState(room);
+  }
+
+  public async testOnlyReplayLastMessageProof(): Promise<boolean> {
+    if (!testDiagnosticsEnabled()) throw new Error('Test-only diagnostics are disabled.');
+    if (!this.lastMessageRequestForTest) throw new Error('No prior Mux message proof is available.');
+    try { await this.emitAck(this.lastMessageRequestForTest.event, this.lastMessageRequestForTest.payload); return false; }
+    catch { return true; }
+  }
+
+  public testOnlyEmitForgedAck(payload: Record<string, unknown>): void {
+    if (!testDiagnosticsEnabled()) throw new Error('Test-only diagnostics are disabled.');
+    this.socket.emit('mux-ack', payload);
   }
 
   public createRoom(roomId: string, peerRoutingAddress: string, manager: MultiplexedRoomTransportManager): void {
@@ -226,13 +276,15 @@ export class MultiplexedRelayConnection {
       peerRoutingAddress: room.peerRoutingAddress,
       connectionGeneration: generation,
     });
-    const response = await this.emitAck('mux-send-message', {
+    const request = {
       version: MUX_RELAY_PROTOCOL_VERSION,
       roomId: room.roomId,
       envelope,
       ...proof,
       proofOperation: 'relay:message',
-    });
+    };
+    if (testDiagnosticsEnabled()) this.lastMessageRequestForTest = { event: 'mux-send-message', payload: request };
+    const response = await this.emitAck('mux-send-message', request);
     if (response.terminalRejection === true && typeof response.id === 'string' && Number.isSafeInteger(response.timestamp)) {
       return { id: response.id, timestamp: response.timestamp as number, terminalRejection: true };
     }
@@ -245,9 +297,14 @@ export class MultiplexedRelayConnection {
     const body = frame as Record<string, unknown> | null;
     const room = body && typeof body.roomId === 'string' ? this.rooms.get(body.roomId) : undefined;
     this.diagnostics.receivedFrames += 1;
+    const respond = (response: Record<string, unknown>): void => {
+      const diagnostics = globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_MUX_ACK_INTERCEPTOR__?: TestAckInterceptor };
+      if (testDiagnosticsEnabled() && diagnostics.__K3NCRYPT_TEST_ONLY_MUX_ACK_INTERCEPTOR__?.(response, ack) === true) return;
+      ack?.(response);
+    };
     const failure = (outcome: 'retryable' | 'permanent-rejection', reasonClass?: string): void => {
       if (!room || !body) return;
-      ack?.({ outcome, ...(reasonClass ? { reasonClass } : {}), roomId: room.roomId, id: body.id,
+      respond({ outcome, ...(reasonClass ? { reasonClass } : {}), roomId: room.roomId, id: body.id,
         claimId: body.claimId, connectionGeneration: body.connectionGeneration, subscriptionNonce: body.subscriptionNonce });
     };
     if (!body || typeof body !== 'object' || Array.isArray(body) || !room || !room.handler ||
@@ -270,7 +327,7 @@ export class MultiplexedRelayConnection {
       if (decision.outcome === 'permanent-rejection') failure('permanent-rejection', decision.reasonClass);
       else if (decision.outcome === 'accepted') {
         this.diagnostics.acceptedFrames += 1;
-        ack?.({ outcome: 'accepted', roomId: room.roomId, id: body.id, claimId: body.claimId,
+        respond({ outcome: 'accepted', roomId: room.roomId, id: body.id, claimId: body.claimId,
           connectionGeneration: body.connectionGeneration, subscriptionNonce: body.subscriptionNonce });
       } else { this.diagnostics.retryableFrames += 1; failure('retryable'); }
     } catch { this.diagnostics.retryableFrames += 1; failure('retryable'); }
