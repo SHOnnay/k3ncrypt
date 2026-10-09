@@ -11,12 +11,13 @@ import type { DeviceProofRequest, NetworkMembershipEvent } from '../../service/s
 
 const suite = process.env.MONGO_URI && process.env.MONGO_DB_NAME ? describe : describe.skip;
 const secret = process.env.K3NCRYPT_DEVICE_TRUST_PROOF_SECRET ?? 'phase8m-membership-test-secret-at-least-32';
+const previousProofSecret = process.env.K3NCRYPT_DEVICE_TRUST_PROOF_SECRET;
 const rawPublic = (key: ReturnType<typeof generateKeyPairSync>['publicKey']): string => key.export({ format: 'der', type: 'spki' }).subarray(-32).toString('base64url');
 const signed = (value: Record<string, unknown>, privateKey: ReturnType<typeof generateKeyPairSync>['privateKey']): string => sign(null, Buffer.from(JSON.stringify(value)), privateKey).toString('base64url');
 const wait = <T>(socket: Socket, event: string): Promise<T> => new Promise((resolve, reject) => { socket.once(event, resolve); socket.once('connect_error', reject); });
 
 suite('private-network durable membership enforcement', () => {
-  let mongo: MongoClient; let database: Db; let http: HttpServer; let url: string; const sockets: Socket[] = [];
+  let mongo: MongoClient; let database: Db; let http: HttpServer; let relay: ReturnType<typeof initPrivateNetworkRelay> | undefined; let url: string; const sockets: Socket[] = [];
   const accountA = `account-a-${randomUUID()}`; const accountB = `account-b-${randomUUID()}`; const network = randomUUID();
   const ownerId = randomUUID(); const memberId = randomUUID(); const foreignId = randomUUID();
   const owner = generateKeyPairSync('ed25519'); const member = generateKeyPairSync('ed25519'); const foreign = generateKeyPairSync('ed25519');
@@ -27,15 +28,18 @@ suite('private-network durable membership enforcement', () => {
   };
 
   beforeAll(async () => {
+    // The relay builds its durable proof authority from this environment value.
+    // Keep the local test fallback consistent with the proofs issued below.
+    process.env.K3NCRYPT_DEVICE_TRUST_PROOF_SECRET = secret;
     mongo = new MongoClient(process.env.MONGO_URI!); await mongo.connect(); database = mongo.db(process.env.MONGO_DB_NAME); await applyMigrations(database);
     await database.collection('device_lifecycle').deleteMany({ deviceId: { $in: [ownerId, memberId, foreignId] } });
     await database.collection('private_network_members').deleteMany({ networkId: network }); await database.collection('private_network_membership_events').deleteMany({ networkId: network });
     await storeRecord(accountA, ownerId, 'owner-identity', rawPublic(owner.publicKey)); await storeRecord(accountA, memberId, 'member-identity', rawPublic(member.publicKey)); await storeRecord(accountB, foreignId, 'foreign-identity', rawPublic(foreign.publicKey));
     await database.collection('private_network_members').insertOne({ networkId: network, accountIdentityReference: accountA, deviceId: ownerId, identityReference: 'owner-identity', state: 'active', epoch: 1, deviceTrustEpoch: 1, capabilities: ['network-owner'], updatedAt: Date.now() });
     await database.collection('private_network_members').insertOne({ networkId: network, accountIdentityReference: accountA, deviceId: memberId, identityReference: 'member-identity', state: 'active', epoch: 1, deviceTrustEpoch: 1, capabilities: [], updatedAt: Date.now() });
-    await db.connectDb(); http = createServer(); initPrivateNetworkRelay(http); await new Promise<void>((resolve) => http.listen(0, '127.0.0.1', resolve)); const port = (http.address() as { port: number }).port; url = `http://127.0.0.1:${port}`;
+    await db.connectDb(); http = createServer(); relay = initPrivateNetworkRelay(http); await new Promise<void>((resolve) => http.listen(0, '127.0.0.1', resolve)); const port = (http.address() as { port: number }).port; url = `http://127.0.0.1:${port}`;
   });
-  afterAll(async () => { sockets.forEach((socket) => socket.disconnect()); await new Promise<void>((resolve) => setTimeout(resolve, 10)); await new Promise<void>((resolve) => http.close(() => resolve())); await mongo.close(); });
+  afterAll(async () => { sockets.forEach((socket) => socket.disconnect()); await new Promise<void>((resolve) => setTimeout(resolve, 10)); if (relay) await new Promise<void>((resolve) => relay!.close(() => resolve())); else if (http?.listening) await new Promise<void>((resolve) => http.close(() => resolve())); await db.disconnectDb(); await mongo?.close(); if (previousProofSecret === undefined) delete process.env.K3NCRYPT_DEVICE_TRUST_PROOF_SECRET; else process.env.K3NCRYPT_DEVICE_TRUST_PROOF_SECRET = previousProofSecret; });
 
   it('disconnects an existing member after durable removal and blocks subsequent packets', async () => {
     const authority = new DurableDeviceTrustAuthority(new MongoDeviceTrustStore(database), secret);
