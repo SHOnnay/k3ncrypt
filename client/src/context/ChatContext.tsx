@@ -27,11 +27,17 @@ import { createRoomState, updateRoomState, type RoomState } from '../product/roo
 import { encodeSignedModernInvitation, type ParsedModernInvite } from '../utils/urlHash';
 
 import { PROFILE_PREFIX, decodeProfileMessage, encodeProfileMessage, prepareProfileAcceptance } from '../product/profileMetadata';
+import { muxClientEnabled } from '../product/muxFeatureGate';
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
 const MUX_STAGE1_ENABLED = (() => {
-  const env = (import.meta as ImportMeta & { env?: { DEV?: boolean; VITE_K3NCRYPT_MUX_STAGE1?: string } }).env;
-  return env?.DEV === true && env.VITE_K3NCRYPT_MUX_STAGE1 === 'true';
+  const env = (import.meta as ImportMeta & { env?: {
+    DEV?: boolean;
+    PROD?: boolean;
+    VITE_K3NCRYPT_MUX_STAGE1?: string;
+    VITE_K3NCRYPT_MUX_PRODUCTION_OPT_IN?: string;
+  } }).env;
+  return muxClientEnabled(env);
 })();
 
 const callSetupFailure = (error: unknown): { kind: 'verification-required' | 'media-denied' | 'media-failed' | 'signaling-failed'; message: string } => {

@@ -14,7 +14,7 @@ const events = ['mux-authenticate', 'mux-subscribe', 'mux-unsubscribe', 'mux-sen
 const envelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { opaque: 'test-ciphertext' } };
 type RecordResponse = Record<string, unknown>;
 const ack = (socket: Socket, event: string, payload: unknown): Promise<RecordResponse> => socket.timeout(2_000).emitWithAck(event, payload);
-const savedEnv = { node: process.env.NODE_ENV, flag: process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY };
+const savedEnv = { node: process.env.NODE_ENV, flag: process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY, productionOptIn: process.env.K3NCRYPT_MUX_PRODUCTION_OPT_IN };
 const records = new Map<string, { deviceId: string; accountIdentityReference: string; trustEpoch: number; state: string }>();
 const verify = jest.fn(async (proof: { deviceId: string; trustEpoch?: number }) => {
   const record = records.get(proof.deviceId);
@@ -23,6 +23,7 @@ const verify = jest.fn(async (proof: { deviceId: string; trustEpoch?: number }) 
 });
 let http: HttpServer; let relay: Server; let url: string;
 const sockets: Socket[] = [];
+let persistentReadySpy: jest.SpyInstance<boolean> | undefined;
 
 const peer = async (identity?: { deviceId: string; accountIdentityReference: string }) => {
   const deviceId = identity?.deviceId ?? randomUUID(); const accountIdentityReference = identity?.accountIdentityReference ?? `gate-${randomUUID()}`;
@@ -78,6 +79,8 @@ afterEach(async () => {
   await new Promise<void>(resolve => setImmediate(resolve));
   relay.disconnectSockets(true);
   testOnlyResetMuxDeviceRegistry();
+  persistentReadySpy?.mockRestore();
+  persistentReadySpy = undefined;
   jest.clearAllMocks();
 });
 afterAll(async () => {
@@ -85,14 +88,20 @@ afterAll(async () => {
   jest.restoreAllMocks();
   if (savedEnv.node === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = savedEnv.node;
   if (savedEnv.flag === undefined) delete process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY; else process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY = savedEnv.flag;
+  if (savedEnv.productionOptIn === undefined) delete process.env.K3NCRYPT_MUX_PRODUCTION_OPT_IN; else process.env.K3NCRYPT_MUX_PRODUCTION_OPT_IN = savedEnv.productionOptIn;
 });
 
 it.each([
-  ['production', undefined], ['production', 'true'], ['development', undefined], ['development', 'false'],
-  ['test', undefined], ['test', 'false'],
-])('disables the full Mux surface in %s with flag %s while legacy messages remain usable', async (node, flag) => {
-  process.env.NODE_ENV = node;
+  ['production', undefined, 'true'], ['production', 'true', undefined], ['production', 'true', 'false'],
+  ['production', 'true', 'TRUE'], ['production', 'false', 'true'], ['production', 'TRUE', 'true'],
+  ['production', 'yes', 'true'],
+  ['staging', 'true', undefined], ['<missing>', 'true', undefined],
+  ['development', undefined, 'true'], ['development', 'false', 'true'], ['development', 'TRUE', 'true'],
+  ['test', undefined, 'true'], ['test', 'false', 'true'],
+])('disables the full Mux surface in %s with message flag %s and production opt-in %s while legacy messages remain usable', async (node, flag, productionOptIn) => {
+  if (node === '<missing>') delete process.env.NODE_ENV; else process.env.NODE_ENV = node;
   if (flag === undefined) delete process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY; else process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY = flag;
+  if (productionOptIn === undefined) delete process.env.K3NCRYPT_MUX_PRODUCTION_OPT_IN; else process.env.K3NCRYPT_MUX_PRODUCTION_OPT_IN = productionOptIn;
   const r = await room(); const alice = await peer(); const bob = await peer();
   const databaseReads = jest.mocked(db.getDatabase);
   const verificationBoundary = jest.mocked(durableTrust.durableDeviceTrustAuthority);
@@ -124,8 +133,14 @@ it.each([
   expect(await received).toMatchObject({ envelope, sender: r.routes[0] });
 });
 
-it('enables two rooms, background delivery and call signaling only with an explicit development opt-in', async () => {
-  process.env.NODE_ENV = 'development'; process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY = 'true';
+it.each([
+  ['development', undefined], ['production', 'true'],
+])('enables two rooms, background delivery and call signaling with valid %s opt-ins', async (node, productionOptIn) => {
+  process.env.NODE_ENV = node;
+  process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY = 'true';
+  if (productionOptIn === undefined) delete process.env.K3NCRYPT_MUX_PRODUCTION_OPT_IN;
+  else process.env.K3NCRYPT_MUX_PRODUCTION_OPT_IN = productionOptIn;
+  if (node === 'production') persistentReadySpy = jest.spyOn(db, 'persistentStorageReady').mockReturnValue(true);
   const first = await room(); const second = await room(); const alice = await peer(); const bob = await peer(); const carol = await peer();
   for (const p of [alice, bob, carol]) expect(await authenticate(p)).toMatchObject({ status: 'authenticated' });
   for (const [p, r, side] of [[alice, first, 0], [alice, second, 0], [bob, first, 1], [carol, second, 1]] as const)
