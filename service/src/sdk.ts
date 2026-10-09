@@ -309,6 +309,7 @@ class ChatE2EE implements IChatE2EE {
     public dispose(): void {
         this.checkInitialized();
         logger.log('dispose()');
+        this.clearOutgoingInviteTimeout();
         void this.transportManager.stop();
         this.subscriptions.clear();
         this.clearChannelSecrets();

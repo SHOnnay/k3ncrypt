@@ -5,6 +5,7 @@ const env = (overrides: MuxClientFeatureEnvironment): MuxClientFeatureEnvironmen
 it.each([
   [{ DEV: true, VITE_K3NCRYPT_MUX_STAGE1: 'true' }, true],
   [{ DEV: true, PROD: true, VITE_K3NCRYPT_MUX_STAGE1: 'true' }, false],
+  [{ DEV: true, PROD: true, VITE_K3NCRYPT_MUX_STAGE1: 'true', VITE_K3NCRYPT_MUX_PRODUCTION_OPT_IN: 'true' }, false],
   [{ DEV: true, VITE_K3NCRYPT_MUX_STAGE1: 'false' }, false],
   [{ DEV: true }, false],
   [{ DEV: true, VITE_K3NCRYPT_MUX_STAGE1: 'TRUE' }, false],

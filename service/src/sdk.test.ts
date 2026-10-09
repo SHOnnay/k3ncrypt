@@ -479,6 +479,7 @@ describe('receiving webrtc signal', () => {
         await flushAsync();
 
         expect(cb).toHaveBeenCalledWith(expect.objectContaining({ callId: 'call-1' }));
+        instance.dispose();
     });
 
     it('delivers the authenticated video media mode with an incoming invitation', async () => {
@@ -492,6 +493,7 @@ describe('receiving webrtc signal', () => {
         await flushAsync();
 
         expect(cb).toHaveBeenCalledWith({ callId: 'video-call', mediaKind: 'video' });
+        instance.dispose();
     });
 
     it('drops a replayed/duplicate signal (same sequence number twice for the same call)', async () => {
@@ -509,6 +511,7 @@ describe('receiving webrtc signal', () => {
         await flushAsync();
 
         expect(cb).toHaveBeenCalledTimes(1);
+        instance.dispose();
     });
 
     it('drops an out-of-order/lower sequence number signal for the same call', async () => {
@@ -527,6 +530,7 @@ describe('receiving webrtc signal', () => {
         await flushAsync();
 
         expect(cb).toHaveBeenCalledTimes(1);
+        instance.dispose();
     });
 
     it('does not drop a signal for a different call id, even with a lower/equal sequence number', async () => {
@@ -545,6 +549,31 @@ describe('receiving webrtc signal', () => {
         await flushAsync();
 
         expect(cb).toHaveBeenCalledTimes(2);
+        instance.dispose();
+    });
+
+    it('clears an unanswered incoming invite timeout when the instance is disposed', async () => {
+        const instance = await buildInitializedInstance();
+        await instance.setChannel(ROOM_ID, SECRET, USER_ID, CONTROL_CAPABILITY);
+        const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
+        const clearTimeoutSpy = jest.spyOn(global, 'clearTimeout');
+        let disposed = false;
+        try {
+            const envelope = await sealWithDefaultStrategy('signaling', { type: 'call-invite', callId: 'unanswered-call', seq: 1, timestamp: 1 });
+            wireHandlerFor('webrtc-session-description')({ envelope });
+            await flushAsync();
+
+            const inviteTimeoutIndex = setTimeoutSpy.mock.calls.findIndex(([, delay]) => delay === 30_000);
+            expect(inviteTimeoutIndex).toBeGreaterThanOrEqual(0);
+            const inviteTimeout = setTimeoutSpy.mock.results[inviteTimeoutIndex].value;
+            instance.dispose();
+            disposed = true;
+            expect(clearTimeoutSpy).toHaveBeenCalledWith(inviteTimeout);
+        } finally {
+            if (!disposed) instance.dispose();
+            setTimeoutSpy.mockRestore();
+            clearTimeoutSpy.mockRestore();
+        }
     });
 });
 
