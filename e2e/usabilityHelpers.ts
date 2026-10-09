@@ -11,7 +11,7 @@ export async function create(page: Page, name: string) {
   await page.getByRole('button', { name: 'Create secure account' }).click();
   expect((await linkCreated).status()).toBe(200);
   expect((await deviceBootstrapped)?.status()).toBe(201);
-  await expect(page.getByRole('textbox', { name: 'Private invitation' })).toHaveValue(/#modern=/);
+  await expect(page.getByRole('textbox', { name: 'Private invitation' })).toHaveValue(/#(?:invite|modern)=/);
   await page.getByRole('button', { name: 'Continue to your chats', exact: true }).click();
 }
 async function security(page: Page) {
@@ -34,7 +34,7 @@ export async function invite(page: Page): Promise<string> {
   await page.getByRole('button', { name: 'Create invitation', exact: true }).click();
   expect((await linkCreated).status()).toBe(200);
   const input = page.getByRole('textbox', { name: 'Private invitation' });
-  await expect(input).toHaveValue(/#modern=/);
+  await expect(input).toHaveValue(/#(?:invite|modern)=/);
   const link = await input.inputValue();
   await page.getByRole('button', { name: 'Continue to your chats', exact: true }).click();
   return link;

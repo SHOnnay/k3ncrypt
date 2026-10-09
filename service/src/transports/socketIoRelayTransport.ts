@@ -33,6 +33,22 @@ export type RawSignalMessage = { envelope: EncryptedEnvelope };
 export const JOIN_INTRODUCTION_FEATURE = 'join-introduction-v1';
 const SUPPORTED_PROTOCOL_FEATURES = [JOIN_INTRODUCTION_FEATURE, ROOM_MESSAGE_V1_FEATURE, ROOM_CALL_SIGNAL_V2_FEATURE] as const;
 
+const testOnlyTraceRecipientAck = (conversationId: string, relayId: string, mailboxClaimed: boolean): void => {
+    const diagnostic = globalThis as typeof globalThis & {
+        __k3ncryptMessageFlowEvents?: Array<{ eventId: string; roomId: string; relayId?: string; stage: string; state?: string }>;
+        __K3NCRYPT_RECORD_MESSAGE_FLOW__?: (event: { eventId: string; roomId: string; relayId?: string; stage: string; state?: string }) => void;
+    };
+    if (!testDiagnosticsEnabled()) return;
+    const prior = [...(diagnostic.__k3ncryptMessageFlowEvents ?? [])].reverse().find(event =>
+        event.roomId === conversationId && event.relayId === relayId && event.stage === 'recipient-acceptance-returned');
+    if (!prior) return;
+    const event = { eventId: prior.eventId, roomId: conversationId, relayId, stage: 'recipient-transport-ack-issued', state: mailboxClaimed ? 'durable-mailbox-ack' : 'live-recipient-ack' };
+    const events = diagnostic.__k3ncryptMessageFlowEvents ??= [];
+    events.push(event);
+    if (events.length > 256) events.splice(0, events.length - 256);
+    diagnostic.__K3NCRYPT_RECORD_MESSAGE_FLOW__?.(event);
+};
+
 const WIRE_EVENTS = {
     LIMIT_REACHED: 'limit-reached',
     DELIVERED: 'delivered',
@@ -309,6 +325,7 @@ export class SocketIoRelayTransport implements Transport {
                 ? { outcome: result ? 'accepted' : 'retryable' } : result;
             if (decision.outcome === 'accepted') {
                 if (!message.claimId) this.socket.emit('received', { id: message.id });
+                testOnlyTraceRecipientAck(conversationId, message.id, Boolean(message.claimId));
                 ack?.({ accepted: true, outcome: 'accepted' });
                 return;
             }

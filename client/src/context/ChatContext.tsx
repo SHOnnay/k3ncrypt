@@ -24,6 +24,7 @@ import { readPrivacyPreferences, writePrivacyPreferences, type PrivacyPreference
 import { deliverNotification } from '../product/notifications';
 import { prepareHeldTextRetry, prepareMessageAcceptance, readMessages, writeMessages } from '../product/messageStore';
 import { createRoomState, updateRoomState, type RoomState } from '../product/roomState';
+import { encodeSignedModernInvitation, type ParsedModernInvite } from '../utils/urlHash';
 
 import { PROFILE_PREFIX, decodeProfileMessage, encodeProfileMessage, prepareProfileAcceptance } from '../product/profileMetadata';
 
@@ -69,6 +70,20 @@ const conversationOpenStage = (stage: 'started' | 'same-room' | 'eligible' | 'ca
     document.documentElement.dataset.k3ncryptConversationOpen = stage;
     console.info(`k3ncrypt-conversation-open:${stage}`);
   }
+};
+
+const testOnlyMessageFlow = (eventId: string | undefined, roomId: string, stage: string, state?: string): void => {
+  const diagnostics = globalThis as typeof globalThis & {
+    __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean;
+    __k3ncryptMessageFlowEvents?: Array<{ eventId: string; roomId: string; stage: string; state?: string }>;
+    __K3NCRYPT_RECORD_MESSAGE_FLOW__?: (event: { eventId: string; roomId: string; stage: string; state?: string }) => void;
+  };
+  if (process.env.NODE_ENV === 'production' || diagnostics.__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ !== true || !eventId || !/^[0-9a-f-]{36}$/i.test(eventId) || !/^[0-9a-f-]{36}$/i.test(roomId)) return;
+  const event = { eventId, roomId, stage, ...(state ? { state } : {}) };
+  const events = diagnostics.__k3ncryptMessageFlowEvents ??= [];
+  events.push(event);
+  if (events.length > 256) events.splice(0, events.length - 256);
+  diagnostics.__K3NCRYPT_RECORD_MESSAGE_FLOW__?.(event);
 };
 
 const displayMessage = (sender: string, text: string, type: Message['type']): Message => {
@@ -372,7 +387,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       (!mode.remoteAddress || mode.remoteAddress === descriptor.remoteAddress));
   };
 
-  const resolveModern = async (secureVault: BrowserSecureStorage, descriptor: ConversationDescriptor, sendJoinIntroduction = false, operationId?: number, background = false): Promise<ModernConnectionDetails> => {
+  const resolveModern = async (secureVault: BrowserSecureStorage, descriptor: ConversationDescriptor, sendJoinIntroduction = false, operationId?: number, background = false, createInvitation = false): Promise<ModernConnectionDetails> => {
     if (!background && muxRoomIds.current.has(descriptor.roomId)) {
       const existing = roomStatesRef.current[descriptor.roomId]?.conversation;
       const details = muxDetails.current.get(descriptor.roomId);
@@ -435,7 +450,19 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     conversation.onDeliveryUpdate((clientId, state) => {
       if (state === 'accepted') acceptedDeliveries.current.add(clientId);
       else if (state === 'rejected') rejectedDeliveries.current.add(clientId);
+      testOnlyMessageFlow(clientId, descriptor.roomId, 'sender-delivery-status', state);
       setMessages((current) => current.map((message) => message.id === clientId ? { ...message, delivery: state === 'accepted' ? 'accepted' : state === 'held' ? 'held' : 'failed' } : message));
+      if (state === 'accepted' || state === 'rejected') {
+        void (async () => {
+          const latest = (await readConversationDescriptors(secureVault)).find(item => item.roomId === descriptor.roomId);
+          if (!latest || latest.bootstrapState === 'ESTABLISHED') return;
+          const nextState = state === 'accepted' ? 'ESTABLISHED' as const : 'FAILED_OR_UNSUPPORTED' as const;
+          await saveConversationDescriptor(secureVault, { ...latest, bootstrapState: nextState, updatedAt: Date.now() });
+          setRoomState(descriptor.roomId, { connection: state === 'accepted' ? 'connected' : 'pending' });
+          await refreshConversations(secureVault);
+          if (selectedConversation.current === conversation && state === 'accepted') setIsConnected(true);
+        })().catch(() => undefined);
+      }
     });
     try {
       conversationOpenStage('candidate-connect-started');
@@ -510,12 +537,21 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }, (event: DeviceControlEvent) => {
         if (event.type === 'enrollment-request') setPendingDeviceEnrollment(event.payload as EnrollmentRequest);
         if (event.type === 'enrollment-approval') setPendingDeviceApproval(event.payload as EnrollmentApprovalPacket);
-      }, { sendJoinIntroduction });
+      }, { sendJoinIntroduction, ...(descriptor.signedInvitation ? { invitation: descriptor.signedInvitation } : {}), ...(createInvitation ? { createInvitation: true } : {}) });
       conversationOpenStage('session-connected');
       const restoredContact = await conversation.getContact();
       const lifecycle = await conversation.getDeviceLifecycleState();
       const trust = await conversation.getDeviceTrust();
-      if (descriptor.remoteAddress && (!conversation.hasEstablishedSession() || conversation.getSessionHealth() === 'unhealthy')) throw conversationFailure('CONVERSATION_SESSION_MISSING');
+      const storedBootstrapState = await conversation.getBootstrapState();
+      const bootstrapState = storedBootstrapState ?? descriptor.bootstrapState;
+      const established = conversation.hasEstablishedSession() && conversation.getSessionHealth() !== 'unhealthy' && (!bootstrapState || bootstrapState === 'ESTABLISHED');
+      if (descriptor.remoteAddress && !established) {
+        const state = bootstrapState;
+        if (!state) throw conversationFailure('CONVERSATION_SESSION_MISSING');
+        await saveConversationDescriptor(secureVault, { ...descriptor, bootstrapState: state, updatedAt: Date.now() });
+      } else if (established && descriptor.remoteAddress && descriptor.bootstrapState !== 'ESTABLISHED') {
+        await saveConversationDescriptor(secureVault, { ...descriptor, bootstrapState: 'ESTABLISHED', updatedAt: Date.now() });
+      }
       const heldClientIds = new Set(await conversation.heldNotSentSecurelyClientIds());
       const finalHistory = (await readMessages(secureVault, descriptor.roomId)).map(message =>
         heldClientIds.has(message.id) && message.type === 'sent' ? { ...message, delivery: 'held' as const } : message);
@@ -523,7 +559,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (operationId !== undefined && conversationOpenGeneration.current !== operationId) throw new Error('Conversation open was superseded.');
       const previous = selectedConversation.current;
       if (!background) selectedConversation.current = conversation;
-      setRoomState(descriptor.roomId, { conversation, connection: 'connected', contactIdentity: restoredContact });
+      setRoomState(descriptor.roomId, { conversation, connection: established || !descriptor.remoteAddress ? 'connected' : 'pending', contactIdentity: restoredContact });
       setRoomMessages(descriptor.roomId, current => {
         const merged = new Map(finalHistory.map(message => [message.id, message]));
         current.forEach(message => {
@@ -549,9 +585,11 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         setOwnFingerprint(details.ownFingerprint);
         setUserId(details.ownAddress);
         setDeviceLifecycleState(lifecycle);
-        setIsConnected(true);
-        setSyncStatus(restoredSessionHealth !== 'healthy' ? 'blocked' : trust === 'trusted' ? 'ready' : 'blocked');
-        setSessionError(restoredSessionHealth === 'unhealthy'
+        setIsConnected(established || !descriptor.remoteAddress);
+        setSyncStatus(!established ? 'blocked' : restoredSessionHealth !== 'healthy' ? 'blocked' : trust === 'trusted' ? 'ready' : 'blocked');
+        setSessionError(!established
+          ? bootstrapState === 'FAILED_OR_UNSUPPORTED' ? 'This invitation cannot safely establish a contact. Ask them to create and share a current invitation.' : 'Waiting for the contact to accept this encrypted introduction. Messaging and calls are not ready yet.'
+          : restoredSessionHealth === 'unhealthy'
           ? 'This conversation’s encrypted session is missing. Your identity, verification, and saved messages remain available; sending and calls are paused until verified renewal.'
           : restoredSessionHealth === 'renewal-pending' ? 'Verified renewal awaits accepted encrypted delivery.' : undefined);
       }
@@ -575,9 +613,9 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       throw conversationFailure(code === 'UNKNOWN_SAFE_FAILURE' ? 'CONVERSATION_RESTORE_FAILED' : code);
     }
   };
-  const connectModern = (storage: BrowserSecureStorage, descriptor: ConversationDescriptor, introduce = false, operationId?: number, background = false) =>
+  const connectModern = (storage: BrowserSecureStorage, descriptor: ConversationDescriptor, introduce = false, operationId?: number, background = false, createInvitation = false) =>
     selections.current.run(async () => {
-      const details = await resolveModern(storage, descriptor, introduce, operationId, background);
+      const details = await resolveModern(storage, descriptor, introduce, operationId, background, createInvitation);
       if (!background && muxRoomIds.current.has(descriptor.roomId)) {
         const saved = await readConversationDescriptors(storage);
         for (const candidate of saved) {
@@ -627,7 +665,65 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, []);
 
   useEffect(() => {
+    const diagnostics = globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean };
+    const target = window as Window & {
+      __K3NCRYPT_ACTIVE_CRYPTO_DIAGNOSTICS__?: () => Promise<{
+        inboundEvents: Array<{ stage: string; failureCategory?: string }>;
+        inboundFailureCategory?: string;
+        connectionFailureCategory?: string;
+        selectedRoom?: string;
+        activeMessageMetadata?: Array<{ id: string; type: string; delivery?: string; textLength: number }>;
+      }>;
+      __K3NCRYPT_TEST_ROOM_LIFECYCLE__?: () => Promise<{
+        selectedRoom?: string;
+        selectedConversationRoom?: string;
+        selectedTransportRoom?: string;
+        sessionEstablished?: boolean;
+        bootstrapState?: string;
+        descriptors: Array<{ roomId: string; label: string; contactName?: string; relationship?: string; bootstrapState?: string; signedInvitationRoom?: string; invitationId?: string; hasSessionMode: boolean }>;
+      }>;
+    };
+    if (diagnostics.__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ === true) {
+      target.__K3NCRYPT_ACTIVE_CRYPTO_DIAGNOSTICS__ = async () => {
+        const snapshot = await selectedConversation.current?.testOnlyCryptoSnapshot();
+        return {
+          inboundEvents: snapshot?.inboundEvents.map(({ stage, failureCategory }) => ({ stage, ...(failureCategory ? { failureCategory } : {}) })) ?? [],
+          ...(snapshot?.inboundFailureCategory ? { inboundFailureCategory: snapshot.inboundFailureCategory } : {}),
+          ...(snapshot?.connectionFailureCategory ? { connectionFailureCategory: snapshot.connectionFailureCategory } : {}),
+          selectedRoom: channelHash,
+          activeMessageMetadata: messages.map(message => ({ id: message.id, type: message.type, ...(message.delivery ? { delivery: message.delivery } : {}), textLength: message.text.length })),
+        };
+      };
+      target.__K3NCRYPT_TEST_ROOM_LIFECYCLE__ = async () => {
+        const descriptors = vault ? await readConversationDescriptors(vault) : [];
+        const modeStore = vault ? new ConversationModeStore(vault) : undefined;
+        const current = await selectedConversation.current?.testOnlyCryptoSnapshot();
+        return {
+          selectedRoom: channelHash,
+          ...(current?.conversationId ? { selectedConversationRoom: current.conversationId } : {}),
+          ...(current?.roomTransportId ? { selectedTransportRoom: current.roomTransportId } : {}),
+          ...(current ? { sessionEstablished: current.sessionEstablished, ...(current.bootstrapState ? { bootstrapState: current.bootstrapState } : {}) } : {}),
+          descriptors: await Promise.all(descriptors.map(async descriptor => ({
+            roomId: descriptor.roomId,
+            label: descriptor.label,
+            ...(descriptor.remoteDisplayName ? { contactName: descriptor.remoteDisplayName } : {}),
+            ...(descriptor.relationship ? { relationship: descriptor.relationship } : {}),
+            ...(descriptor.bootstrapState ? { bootstrapState: descriptor.bootstrapState } : {}),
+            ...(descriptor.signedInvitation ? { signedInvitationRoom: descriptor.signedInvitation.roomId, invitationId: descriptor.signedInvitation.invitationId } : {}),
+            hasSessionMode: Boolean(await modeStore?.read(descriptor.roomId).catch(() => undefined)),
+          }))),
+        };
+      };
+    }
+    return () => { delete target.__K3NCRYPT_ACTIVE_CRYPTO_DIAGNOSTICS__; delete target.__K3NCRYPT_TEST_ROOM_LIFECYCLE__; };
+  }, [channelHash, messages, vault]);
+
+  useEffect(() => {
     const history = activeRoom?.messages;
+    const roomId = channelHash;
+    if (roomId && history) {
+      for (const message of history) testOnlyMessageFlow(message.id, roomId, 'react-history-projection', message.delivery ?? 'accepted');
+    }
     if (vault && channelHash && protocolMode === 'modern' && history) void writeMessages(vault, channelHash, history).catch((error) => debugError('Message history persistence failed', error));
   }, [activeRoom?.messages, channelHash, protocolMode, vault]);
 
@@ -637,20 +733,25 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const secureVault = vault ?? await openModernVault(passphrase);
     if (displayName !== undefined) setProfileDisplayNameState(await writeProfileName(secureVault, displayName));
     const descriptor: ConversationDescriptor = { version: 1, relationship: 'invitation', roomId: invite.hash, controlCapability: invite.controlCapability, label: 'Private contact', updatedAt: Date.now() };
-    const details = await connectModern(secureVault, descriptor);
+    const details = await connectModern(secureVault, descriptor, false, undefined, false, true);
     await saveConversationDescriptor(secureVault, (await readConversationDescriptors(secureVault)).find(item => item.roomId === descriptor.roomId) ?? descriptor); await refreshConversations(secureVault);
-    const fragment = `modern=${encodeURIComponent(invite.hash)}&control=${encodeURIComponent(invite.controlCapability)}&address=${encodeURIComponent(details.ownAddress)}&identity=${encodeURIComponent(details.ownFingerprint)}`;
+    if (!details.signedInvitation) throw new Error('A signed first-contact invitation could not be created.');
+    const fragment = encodeSignedModernInvitation(details.signedInvitation);
     return `${window.location.origin}${window.location.pathname}#${fragment}`;
   }, [chat, modern, vault]);
 
-  const joinModernChannel = useCallback(async (roomId: string, capability: string, address: string, identityCommitment: string, passphrase: string, displayName?: string): Promise<void> => {
+  const joinModernChannel = useCallback(async (parsed: ParsedModernInvite, passphrase: string, displayName?: string): Promise<void> => {
     const secureVault = vault ?? await openModernVault(passphrase);
     if (displayName !== undefined) setProfileDisplayNameState(await writeProfileName(secureVault, displayName));
-    const descriptor: ConversationDescriptor = { version: 1, relationship: 'accepted', roomId, controlCapability: capability, remoteAddress: address, remoteIdentityCommitment: identityCommitment, label: 'Private contact', updatedAt: Date.now() };
+    const { roomId, controlCapability: capability, address, identityCommitment } = parsed;
+    const descriptor: ConversationDescriptor = { version: 1, relationship: 'accepted', roomId, controlCapability: capability, remoteAddress: address, remoteIdentityCommitment: identityCommitment, label: 'Private contact',
+      ...(parsed.version === 2 ? { signedInvitation: parsed.invitation, bootstrapState: 'PENDING_LOCAL' as const } : { bootstrapState: 'FAILED_OR_UNSUPPORTED' as const }), updatedAt: Date.now() };
     const existing = (await readConversationDescriptors(secureVault)).find((item) => item.roomId === roomId);
     if (existing && existing.remoteIdentityCommitment && existing.remoteIdentityCommitment !== identityCommitment) throw new Error('The invitation identity differs from the saved contact.');
-    if (!(existing && roomId === channelHash && modern)) await connectModern(secureVault, existing ?? descriptor, !existing);
-    await saveConversationDescriptor(secureVault, existing ?? descriptor); await refreshConversations(secureVault);
+    const saved = existing && existing.bootstrapState === 'ESTABLISHED' ? existing : { ...existing, ...descriptor, updatedAt: Date.now() };
+    await saveConversationDescriptor(secureVault, saved);
+    if (!(existing && roomId === channelHash && modern)) await connectModern(secureVault, saved, parsed.version === 2, undefined, false);
+    await refreshConversations(secureVault);
   }, [modern, vault, channelHash]);
 
   const updateProfileDisplayName = useCallback(async (name: string): Promise<void> => {
@@ -870,11 +971,26 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         if (protocolMode === 'modern') {
           const roomId = ownerRoomId;
           const activeConversation = modern!;
+          let activeConversationRoomId: string | undefined;
+          if (process.env.NODE_ENV !== 'production' && (globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean }).__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ === true) {
+            activeConversationRoomId = (await activeConversation.testOnlyCryptoSnapshot()).conversationId;
+          }
+          const diag = globalThis as typeof globalThis & { __K3NCRYPT_NEXT_MESSAGE_EVENT_ID__?: string };
+          testOnlyMessageFlow(diag.__K3NCRYPT_NEXT_MESSAGE_EVENT_ID__, roomId, 'visible-send-action', 'selected-room');
+          testOnlyMessageFlow(diag.__K3NCRYPT_NEXT_MESSAGE_EVENT_ID__, roomId, 'active-room-selection', selectedConversation.current === activeConversation && channelHash === roomId ? 'same-room' : 'mismatch');
+          if (process.env.NODE_ENV !== 'production' && (globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean }).__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ === true) {
+            const binding = await activeConversation.testOnlyCryptoSnapshot();
+            testOnlyMessageFlow(diag.__K3NCRYPT_NEXT_MESSAGE_EVENT_ID__, roomId, 'context-selected-room-at-send', channelHash === roomId ? 'bound' : 'mismatch');
+            testOnlyMessageFlow(diag.__K3NCRYPT_NEXT_MESSAGE_EVENT_ID__, binding.conversationId ?? '', 'modern-object-room-at-send', binding.conversationId === roomId ? 'matches-context' : 'mismatch');
+          }
           const clientId = await modern!.sendWithReceipt(text, async (id) =>
             prepareMessageAcceptance(vault!, roomId, { ...outgoing, id }));
           const accepted = acceptedDeliveries.current.delete(clientId);
           const rejected = rejectedDeliveries.current.delete(clientId);
+          testOnlyMessageFlow(clientId, roomId, 'context-send-room', selectedConversation.current === activeConversation && channelHash === roomId ? 'same-active-room' : 'selection-changed-during-send');
+          if (activeConversationRoomId) testOnlyMessageFlow(clientId, activeConversationRoomId, 'context-send-modern-object-room', activeConversationRoomId === roomId ? 'matches-selected-room' : 'mismatch');
           addMessage(roomId, { ...outgoing, id: clientId, delivery: accepted ? 'accepted' : rejected ? 'failed' : 'pending' });
+          testOnlyMessageFlow(clientId, roomId, 'sender-history-projected', accepted ? 'accepted' : rejected ? 'failed' : 'pending');
           const contact = await activeConversation.getContact();
           if (!callActiveRef.current && activeConversation.hasEstablishedSession() && contact?.verification === 'verified' && contact.changeStatus === 'unchanged' && selectedConversation.current === activeConversation) {
             await installModernCallSupport(activeConversation, true).catch(() => setCallError('Call signaling is unavailable for this saved contact.'));

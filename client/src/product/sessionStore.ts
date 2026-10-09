@@ -1,4 +1,5 @@
 import { readRemoteProfile } from './profileMetadata';
+import type { SignedModernInvitation } from '@chat-e2ee/service';
 
 export interface ProductSecureStorage {
   read(recordType: string, recordId: string): Promise<ArrayBuffer | undefined>;
@@ -14,6 +15,8 @@ export interface ConversationDescriptor {
   remoteAddress?: string;
   /** Fingerprint carried by the out-of-band modern invitation. */
   remoteIdentityCommitment?: string;
+  signedInvitation?: SignedModernInvitation;
+  bootstrapState?: 'PENDING_LOCAL' | 'PENDING_REMOTE' | 'ESTABLISHED' | 'FAILED_OR_UNSUPPORTED';
   label: string;
   /** Projection only: read from an encrypted, identity-bound profile record. */
   remoteDisplayName?: string;
@@ -34,6 +37,8 @@ export const validateConversationDescriptor = (value: unknown): ConversationDesc
     || typeof item.controlCapability !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(item.controlCapability)
     || (item.remoteAddress !== undefined && (typeof item.remoteAddress !== 'string' || item.remoteAddress.length < 8))
     || (item.remoteIdentityCommitment !== undefined && (typeof item.remoteIdentityCommitment !== 'string' || !/^K3 [A-Z0-9_ -]{20,128}$/.test(item.remoteIdentityCommitment)))
+    || (item.bootstrapState !== undefined && !['PENDING_LOCAL', 'PENDING_REMOTE', 'ESTABLISHED', 'FAILED_OR_UNSUPPORTED'].includes(String(item.bootstrapState)))
+    || (item.signedInvitation !== undefined && (!item.signedInvitation || typeof item.signedInvitation !== 'object' || (item.signedInvitation as Record<string, unknown>).version !== 2))
     || (item.localNickname !== undefined && (typeof item.localNickname !== 'string' || !item.localNickname.trim() || item.localNickname.length > 80 || /[\u0000-\u001f\u007f]/.test(item.localNickname)))
     || typeof item.label !== 'string' || !item.label.trim() || item.label.length > 80
     || typeof item.updatedAt !== 'number' || !Number.isSafeInteger(item.updatedAt) || item.updatedAt < 0) {
@@ -46,6 +51,8 @@ export const validateConversationDescriptor = (value: unknown): ConversationDesc
     controlCapability: item.controlCapability,
     ...(item.remoteAddress ? { remoteAddress: item.remoteAddress as string } : {}),
     ...(item.remoteIdentityCommitment ? { remoteIdentityCommitment: item.remoteIdentityCommitment as string } : {}),
+    ...(item.signedInvitation ? { signedInvitation: item.signedInvitation as SignedModernInvitation } : {}),
+    ...(item.bootstrapState ? { bootstrapState: item.bootstrapState as ConversationDescriptor['bootstrapState'] } : {}),
     label: item.label.trim(),
     ...(typeof item.localNickname === 'string' && item.localNickname.trim() && item.localNickname.length <= 80 && !/[\u0000-\u001f\u007f]/.test(item.localNickname) ? { localNickname: item.localNickname.trim() } : {}),
     updatedAt: item.updatedAt,

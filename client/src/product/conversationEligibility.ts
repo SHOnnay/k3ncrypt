@@ -16,6 +16,11 @@ export async function conversationEligibility(storage: ProductSecureStorage, val
     if (unavailable) return unavailable;
     const mode = await new ConversationModeStore(view).read(descriptor.roomId);
     if (!mode) return 'CONVERSATION_STATE_INCOMPLETE';
+    if (descriptor.remoteAddress && descriptor.bootstrapState && descriptor.bootstrapState !== 'ESTABLISHED' && mode.localAddress && mode.routingProof) return undefined;
+    // A locally created invitation can be reopened to listen for its first
+    // authenticated introduction. Opening an unanswered room carries no
+    // contact, trust, or established-session claim.
+    if (descriptor.relationship === 'invitation' && !descriptor.remoteAddress && mode.localAddress && mode.routingProof) return undefined;
     if (!mode.remoteAddress && !descriptor.remoteAddress) return 'CONVERSATION_INVITATION_UNACCEPTED';
     if (!mode.localAddress || !mode.routingProof) return 'CONVERSATION_STATE_INCOMPLETE';
     if (!mode.remoteAddress || !descriptor.remoteAddress || mode.remoteAddress !== descriptor.remoteAddress || mode.localAddress === mode.remoteAddress) return 'ROOM_MEMBERSHIP_MISMATCH';

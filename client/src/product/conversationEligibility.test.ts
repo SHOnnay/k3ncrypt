@@ -29,6 +29,7 @@ it('quarantines old unaccepted, expired, missing session, malformed and mismatch
   const pending = { ...descriptor, remoteAddress: undefined, remoteIdentityCommitment: undefined };
   await store.put('conversation-protocol', room, { version: 1, mode: 'modern', localAddress: 'self-address', routingProof: 'b'.repeat(43) });
   expect(await conversationEligibility(store, pending)).toBe('CONVERSATION_INVITATION_UNACCEPTED');
+  expect(await conversationEligibility(store, { ...pending, relationship: 'invitation' })).toBeUndefined();
   expect(await conversationEligibility(store, { bad: true })).toBe('CONVERSATION_RECORD_INVALID');
   expect(await conversationEligibility(store, descriptor)).toBe('ROOM_MEMBERSHIP_MISMATCH');
 });

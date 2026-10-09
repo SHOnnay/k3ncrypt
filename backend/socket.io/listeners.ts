@@ -32,6 +32,11 @@ const acceptedOutcome = (value: RecipientOutcome | undefined): boolean => value?
 const traceDelivery = (stage: string, reached: boolean): void => {
   if (process.env.NODE_ENV !== 'production' && process.env.K3NCRYPT_TEST_ONLY_DIAGNOSTICS === 'true') console.info(`delivery-stage ${stage}=${reached}`);
 };
+const traceMessageRelay = (stage: string, roomId: string, relayId: string, state: string, actor?: { userId?: string; deviceId?: string; recipientRoutingId?: string }): void => {
+  if (process.env.NODE_ENV !== 'production' && process.env.K3NCRYPT_TEST_ONLY_DIAGNOSTICS === 'true') {
+    console.log(`message-relay room=${roomId} relay=${relayId} stage=${stage} state=${state}${actor?.userId ? ` user=${actor.userId}` : ''}${actor?.deviceId ? ` device=${actor.deviceId}` : ''}${actor?.recipientRoutingId ? ` recipient=${actor.recipientRoutingId}` : ''}`);
+  }
+};
 const traceCallRelay = (stage: 'signal-received' | 'signal-authorized' | 'recipient-found' | 'forward-attempted' | 'forward-socket-present', reached: boolean): void => {
   if (process.env.NODE_ENV !== 'production' && process.env.K3NCRYPT_TEST_ONLY_DIAGNOSTICS === 'true') console.info(`call-relay-stage ${stage}=${reached}`);
 };
@@ -148,6 +153,7 @@ const deliverOffline = async (socket: CustomSocket): Promise<void> => {
     const message = await db.claimOfflineMessage<{ id: string; timestamp: number; sender: string; envelope: WireEnvelope; mailbox: string; channel: string; claimId: string }>(
       socket.userID, socket.channelID, new Date(Date.now() + OFFLINE_LEASE_MS), claimId);
     if (!message) return;
+    traceMessageRelay('mailbox-replay-claimed', socket.channelID, message.id, 'claimed', { userId: socket.userID });
     const outcome = await new Promise<RecipientOutcome | undefined>((resolve) => {
       const timeout = setTimeout(() => resolve({ outcome: 'retryable' }), OFFLINE_REPLAY_ACK_MS);
       socket.emit(SOCKET_TOPIC.CHAT_MESSAGE, { id: message.id, timestamp: message.timestamp, sender: message.sender, envelope: message.envelope, claimId: message.claimId }, (response?: RecipientOutcome) => {
@@ -156,6 +162,7 @@ const deliverOffline = async (socket: CustomSocket): Promise<void> => {
       });
     });
     const accepted = acceptedOutcome(outcome);
+    traceMessageRelay('recipient-acceptance-result', socket.channelID, message.id, accepted ? 'accepted' : 'pending', { userId: socket.userID, deviceId: socket.deviceId });
     traceDelivery('mailbox-replay-accepted', accepted);
     if (outcome?.outcome === 'permanent-rejection' && permanentReason(outcome.reasonClass)) {
       if (!await activeBoundDevice(socket)) return;
@@ -171,6 +178,7 @@ const deliverOffline = async (socket: CustomSocket): Promise<void> => {
     if (!accepted || !await activeBoundDevice(socket)) return;
     const removed = await db.ackOfflineMessage(message.id, socket.userID, socket.channelID, message.claimId);
     if (!removed) return;
+    traceMessageRelay('mailbox-removed-after-recipient-acceptance', socket.channelID, message.id, 'durably-acked', { userId: socket.userID, deviceId: socket.deviceId });
     const senderSid = clients.getSIDByIDs(message.sender, socket.channelID)?.sid;
     if (senderSid) socketEmit<SOCKET_TOPIC.DELIVERED>(SOCKET_TOPIC.DELIVERED, senderSid, message.id);
     traceDelivery('mailbox-deleted-after-ack', true);
@@ -296,6 +304,7 @@ const connectionListener = (socket: CustomSocket, io) => {
       if (!mailbox) { ack({ error: "No receiver is in the channel." }); return; }
       try {
         const existing = await retainUndeliveredEnvelope(socket.channelID, mailbox, socket.userID, payload.envelope, id, timestamp);
+        traceMessageRelay('mailbox-durable', socket.channelID, existing.id, existing.terminalRejection ? 'terminal-rejection' : 'stored', { userId: socket.userID, recipientRoutingId: mailbox });
         traceDelivery('envelope-stored', true);
         ack({ id: existing.id, timestamp: existing.timestamp, stored: !existing.terminalRejection, ...(existing.terminalRejection ? { terminalRejection: true } : {}) });
       } catch (error) { ack({ error: error instanceof Error && error.message === 'MAILBOX_QUOTA' ? "Mailbox quota exceeded." : "Message could not be queued." }); }
@@ -328,6 +337,7 @@ const connectionListener = (socket: CustomSocket, io) => {
       });
     });
     const accepted = acceptedOutcome(delivered);
+    traceMessageRelay('live-recipient-acceptance-result', socket.channelID, id, accepted ? 'accepted' : 'pending', { userId: socket.userID, recipientRoutingId: receiverId, deviceId: receiverSocket.deviceId });
     traceDelivery('socket-dispatch-success', accepted);
     if (delivered?.outcome === 'permanent-rejection' && permanentReason(delivered.reasonClass) && await activeBoundDevice(receiverSocket as CustomSocket)) {
       try {
@@ -352,6 +362,7 @@ const connectionListener = (socket: CustomSocket, io) => {
     if (!receiverId) { ack({ error: 'Receiver is unavailable.' }); return; }
     try {
       const stored = await retainUndeliveredEnvelope(socket.channelID, receiverId, socket.userID, payload.envelope, id, timestamp);
+      traceMessageRelay('mailbox-durable-after-live-failure', socket.channelID, stored.id, stored.terminalRejection ? 'terminal-rejection' : 'stored', { userId: socket.userID, recipientRoutingId: receiverId });
       traceDelivery('envelope-stored', true);
       ack({ ...stored, stored: !stored.terminalRejection, ...(stored.terminalRejection ? { terminalRejection: true } : {}) });
     } catch (error) {
@@ -430,6 +441,7 @@ const connectionListener = (socket: CustomSocket, io) => {
     }
     const { id, claimId } = payload as { id: string; claimId?: string };
     if (!socket.userID || !socket.channelID || !await activeBoundDevice(socket)) return;
+    traceMessageRelay('recipient-received-callback', socket.channelID, id, 'application-accepted', { userId: socket.userID, deviceId: socket.deviceId });
     const removed = await db.ackOfflineMessage(id, socket.userID, socket.channelID, claimId);
     if (claimId && !removed) return;
     const receiverSid = findPeerSid(socket);

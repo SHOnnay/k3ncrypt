@@ -43,6 +43,7 @@ export default defineConfig({
         MONGO_URI: mongoUri,
         MONGO_DB_NAME: mongoDbName,
         K3NCRYPT_DEVICE_TRUST_PROOF_SECRET: deviceTrustTestSecret,
+        K3NCRYPT_TEST_ONLY_DIAGNOSTICS: 'true',
         ...(muxStage1 ? { K3NCRYPT_MUX_MESSAGE_DELIVERY: 'true', K3NCRYPT_TEST_MUX_SUBSCRIPTION_LEASE_MS: '90000' } : {}),
       },
       reuseExistingServer: false,

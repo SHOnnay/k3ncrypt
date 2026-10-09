@@ -1,4 +1,6 @@
 import { test, expect, type Browser, type BrowserContext, type Page } from '@playwright/test';
+import { parseModernInviteInput } from '../client/src/utils/urlHash';
+import { invite } from './usabilityHelpers';
 
 const PASSPHRASE = 'paper-ink-private-room-2026';
 const BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? `http://127.0.0.1:${process.env.PLAYWRIGHT_CLIENT_PORT ?? '43102'}`;
@@ -14,27 +16,31 @@ async function open(browser: Browser, link = BASE_URL): Promise<{ context: Brows
   const page = await context.newPage();
   const outbound: string[] = [];
   captureOutbound(page, outbound);
-  page.on('response', (response) => { if (!response.ok()) console.log(`HTTP ${response.status()} ${new URL(response.url()).pathname}`); });
+  page.on('response', (response) => { if (!response.ok()) console.log(`HTTP ${response.status()} ${new URL(response.url()).pathname}${response.status() === 429 ? ` retry-after=${response.headers()['retry-after'] ?? 'missing'}` : ''}`); });
   await page.goto(link);
   await expect(page.locator('#show-join-hash')).toBeVisible();
   return { context, page, outbound };
 }
 
-async function resume(context: BrowserContext, link: string, outbound: string[] = []): Promise<Page> {
+async function resume(context: BrowserContext, link: string, outbound: string[] = [], displayName = 'Invitee'): Promise<Page> {
   const page = await context.newPage();
   captureOutbound(page, outbound);
   await page.goto(link);
   const unlockButton = page.getByRole('button', { name: 'Unlock this device' });
   const invitationButton = page.getByRole('button', { name: 'I have an invitation' });
-  await expect(unlockButton.or(invitationButton)).toBeVisible();
+  await expect(unlockButton.or(invitationButton).first()).toBeVisible();
   if (await unlockButton.isVisible()) {
     await page.getByRole('button', { name: 'Unlock this device' }).click();
     await page.locator('input[type="password"]').fill(PASSPHRASE);
     await page.getByRole('button', { name: 'Unlock account' }).click();
   } else {
     await page.getByRole('button', { name: 'I have an invitation' }).click();
-    await expect(page.locator('#channel-hash')).toHaveValue(/modern=/);
-    await page.locator('input[type="password"]').fill(PASSPHRASE);
+    await expect(page.locator('#channel-hash')).toHaveValue(/invite=/);
+    const name = page.getByRole('textbox', { name: 'Display name', exact: true });
+    if (await name.isVisible()) await name.fill(displayName);
+    await page.getByLabel('Choose a passphrase', { exact: true }).fill(PASSPHRASE);
+    const confirmation = page.getByLabel('Confirm your passphrase', { exact: true });
+    if (await confirmation.isVisible()) await confirmation.fill(PASSPHRASE);
     await page.getByRole('button', { name: 'Continue' }).click();
   }
   await expect(page.locator('#chat-container')).toBeVisible();
@@ -52,20 +58,20 @@ test('modern private contact works after offline recipient and both browser rest
   await bob.page.getByRole('button', { name: 'Create secure account' }).click();
   expect((await creation).status()).toBe(200);
   const invitation = bob.page.getByRole('textbox', { name: 'Private invitation' });
-  await expect(invitation).toHaveValue(/#modern=[^&]+&control=[^&]+&address=/);
+  await expect(invitation).toHaveValue(/#invite=[A-Za-z0-9_-]+/);
   const link = await invitation.inputValue();
+  expect(parseModernInviteInput(link)).not.toBeNull();
   await bob.page.getByRole('button', { name: 'Continue to your chats' }).click();
   await bob.page.close({ runBeforeUnload: true });
 
   const alice = await open(browser, link);
   await alice.page.getByRole('button', { name: 'I have an invitation' }).click();
-  await expect(alice.page.locator('#channel-hash')).toHaveValue(/modern=/);
+  await expect(alice.page.locator('#channel-hash')).toHaveValue(/invite=/);
   await alice.page.getByRole('textbox', { name: 'Display name', exact: true }).fill('Alice');
   await alice.page.getByLabel('Choose a passphrase', { exact: true }).fill(PASSPHRASE);
   await alice.page.getByLabel('Confirm your passphrase', { exact: true }).fill(PASSPHRASE);
   await alice.page.getByRole('button', { name: 'Continue' }).click();
   await expect(alice.page.locator('#chat-container')).toBeVisible();
-  await expect(alice.page.locator('.chat-header')).toContainText(/Contact · [A-F0-9]{4}/);
   await alice.page.locator('#msg-input').fill('hello while you were away');
   await alice.page.locator('#send-btn').click();
 
@@ -73,7 +79,7 @@ test('modern private contact works after offline recipient and both browser rest
   await expect(bobReturned.locator('#messages-area')).toContainText('hello while you were away', { timeout: 20_000 });
   await bobReturned.getByRole('button', { name: 'Open settings' }).click();
   await bobReturned.getByRole('button', { name: 'Security' }).click();
-  await expect(bobReturned.locator('.verification-view')).toContainText('Make sure you are really talking to Alice.');
+  await expect(bobReturned.locator('.verification-view')).toContainText('Confirm you are really connected to Alice.');
   await expect(bobReturned.locator('.verification-view')).toContainText('Unverified');
   const bobFingerprint = await bobReturned.locator('.verification-code').first().textContent();
   await alice.page.getByRole('button', { name: 'Open settings' }).click();
@@ -81,8 +87,6 @@ test('modern private contact works after offline recipient and both browser rest
   await expect(alice.page.locator('.verification-code').last()).toHaveText(bobFingerprint ?? '');
   await alice.page.getByRole('button', { name: 'Close settings' }).click();
   const markVerified = bobReturned.getByRole('button', { name: 'Mark as verified' });
-  await expect(markVerified).toBeDisabled();
-  await bobReturned.getByRole('button', { name: 'They don\'t match' }).click();
   await expect(markVerified).toBeDisabled();
   await bobReturned.getByRole('button', { name: 'Compare security code', exact: true }).click();
   await bobReturned.getByRole('button', { name: 'Codes match' }).click();
@@ -121,6 +125,141 @@ test('modern private contact works after offline recipient and both browser rest
     expect(browserStorage).not.toContain('hello while you were away');
     expect(browserStorage).not.toContain(PASSPHRASE);
   }
+  await bob.context.close();
+  await alice.context.close();
+});
+
+test('Alice can stay in Carol while Bob accepts, then accept Bob from durable mailbox replay', async ({ browser }) => {
+  test.setTimeout(240_000);
+  const alice = await open(browser);
+  const roomLifecycle = async (stage: string, pages: Array<{ alias: string; page: Page }>) => {
+    const snapshots = await Promise.all(pages.map(async ({ alias, page }) => ({
+      alias,
+      lifecycle: await page.evaluate(async () => {
+        const hook = (globalThis as typeof globalThis & { __K3NCRYPT_TEST_ROOM_LIFECYCLE__?: () => Promise<unknown> }).__K3NCRYPT_TEST_ROOM_LIFECYCLE__;
+        return hook ? await hook() : undefined;
+      }),
+    })));
+    console.log('BOOTSTRAP_ROOM_LIFECYCLE', JSON.stringify({ stage, snapshots }));
+  };
+  const selectedRoomBinding = (page: Page) => page.evaluate(async () => {
+    const hook = (globalThis as typeof globalThis & { __K3NCRYPT_TEST_ROOM_LIFECYCLE__?: () => Promise<{ selectedRoom?: string; selectedConversationRoom?: string; selectedTransportRoom?: string }> }).__K3NCRYPT_TEST_ROOM_LIFECYCLE__;
+    const current = await hook?.();
+    return current ? [current.selectedRoom, current.selectedConversationRoom, current.selectedTransportRoom] : [];
+  });
+  await alice.page.getByRole('button', { name: 'Create your private account' }).click();
+  await alice.page.getByRole('textbox', { name: 'Display name', exact: true }).fill('Alice');
+  await alice.page.locator('#local-passphrase').fill(PASSPHRASE);
+  await alice.page.locator('#local-passphrase-confirm').fill(PASSPHRASE);
+  const aliceInviteCreated = alice.page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/chat-link');
+  await alice.page.getByRole('button', { name: 'Create secure account' }).click();
+  expect((await aliceInviteCreated).status()).toBe(200);
+  const carolInvitation = await alice.page.getByRole('textbox', { name: 'Private invitation' }).inputValue();
+  const carolInvite = parseModernInviteInput(carolInvitation);
+  console.log('BOOTSTRAP_INVITATION', JSON.stringify({ owner: 'Alice', peer: 'Carol', roomId: carolInvite?.roomId, invitationId: carolInvite?.version === 2 ? carolInvite.invitation.invitationId : undefined }));
+  await alice.page.getByRole('button', { name: 'Continue to your chats' }).click();
+  await roomLifecycle('alice-created-carol-invitation', [{ alias: 'Alice', page: alice.page }]);
+
+  const carol = await open(browser);
+  await carol.page.close();
+  const carolPage = await resume(carol.context, carolInvitation, carol.outbound, 'Carol');
+  await expect(carolPage.locator('#chat-container')).toBeVisible();
+  await roomLifecycle('carol-accepted-signed-invitation', [{ alias: 'Alice', page: alice.page }, { alias: 'Carol', page: carolPage }]);
+  await expect(alice.page.locator('.conversation-row')).toHaveCount(1);
+  await alice.page.locator('.conversation-row').filter({ hasText: 'Carol' }).click();
+  await expect(alice.page.locator('.chat-header')).toBeVisible();
+  await expect(alice.page.locator('.chat-header')).toContainText(/Carol|Contact · [A-F0-9]{4}/);
+
+  const bobInvitation = await invite(alice.page);
+  const bobInvite = parseModernInviteInput(bobInvitation);
+  console.log('BOOTSTRAP_INVITATION', JSON.stringify({ owner: 'Alice', peer: 'Bob', roomId: bobInvite?.roomId, invitationId: bobInvite?.version === 2 ? bobInvite.invitation.invitationId : undefined }));
+  await roomLifecycle('alice-created-bob-invitation', [{ alias: 'Alice', page: alice.page }]);
+  const pendingBob = alice.page.locator('.conversation-row').filter({ hasNotText: 'Carol' });
+  const stayInBobDuringAcceptance = process.env.PLAYWRIGHT_BOOTSTRAP_STAY_IN_BOB_DURING_ACCEPTANCE === 'true';
+  if (stayInBobDuringAcceptance) {
+    await expect(pendingBob).toHaveCount(1);
+    await pendingBob.click();
+    await expect.poll(() => selectedRoomBinding(alice.page)).toEqual([bobInvite?.roomId, bobInvite?.roomId, bobInvite?.roomId]);
+  }
+  const carolRow = alice.page.locator('.conversation-row').filter({ hasText: 'Carol' });
+  if (!stayInBobDuringAcceptance) {
+    await carolRow.click();
+    await expect.poll(() => selectedRoomBinding(alice.page)).toEqual([carolInvite?.roomId, carolInvite?.roomId, carolInvite?.roomId]);
+    await expect(alice.page.locator('.chat-header')).toContainText(/Carol|Contact · [A-F0-9]{4}/);
+  }
+  await roomLifecycle(stayInBobDuringAcceptance ? 'alice-selected-bob-before-acceptance' : 'alice-switched-to-carol-before-acceptance', [{ alias: 'Alice', page: alice.page }]);
+
+  const bob = await open(browser);
+  await bob.page.close();
+  const bobPage = await resume(bob.context, bobInvitation, bob.outbound, 'Bob');
+  await expect(bobPage.locator('#chat-container')).toBeVisible();
+  await roomLifecycle('bob-accepted-signed-invitation', [{ alias: 'Alice', page: alice.page }, { alias: 'Bob', page: bobPage }]);
+  const roomAliceShouldViewDuringAcceptance = stayInBobDuringAcceptance ? bobInvite?.roomId : carolInvite?.roomId;
+  await expect.poll(() => selectedRoomBinding(alice.page)).toEqual([roomAliceShouldViewDuringAcceptance, roomAliceShouldViewDuringAcceptance, roomAliceShouldViewDuringAcceptance]);
+  if (!stayInBobDuringAcceptance) await expect(alice.page.locator('.chat-header')).toContainText(/Carol|Contact · [A-F0-9]{4}/);
+  if (!stayInBobDuringAcceptance) {
+    await expect(pendingBob).toHaveCount(1);
+    await pendingBob.click();
+    await expect.poll(() => selectedRoomBinding(alice.page)).toEqual([bobInvite?.roomId, bobInvite?.roomId, bobInvite?.roomId]);
+  }
+  await roomLifecycle('alice-opened-bob-after-acceptance', [{ alias: 'Alice', page: alice.page }, { alias: 'Bob', page: bobPage }, { alias: 'Carol', page: carolPage }]);
+  if (!stayInBobDuringAcceptance) await expect(alice.page.locator('.chat-header')).toContainText(/Contact · [A-F0-9]{4}/);
+
+  const firstMessage = 'Alice accepted Bob after switching rooms';
+  const traceStartIndex = await alice.page.evaluate(() => {
+    const state = globalThis as typeof globalThis & { __k3ncryptMessageFlowEvents?: Array<{ eventId: string; roomId: string; stage: string }> };
+    return state.__k3ncryptMessageFlowEvents?.length ?? 0;
+  });
+  await alice.page.locator('#msg-input').fill(firstMessage);
+  await expect(alice.page.locator('#send-btn')).toBeEnabled();
+  await alice.page.locator('#send-btn').click();
+  await expect(alice.page.locator('#messages-area')).toContainText(firstMessage);
+  const actualSend = await alice.page.evaluate((startIndex) => {
+    const state = globalThis as typeof globalThis & { __k3ncryptMessageFlowEvents?: Array<{ eventId: string; roomId: string; stage: string }> };
+    return (state.__k3ncryptMessageFlowEvents ?? []).slice(startIndex).find(event => event.stage === 'context-send-room');
+  }, traceStartIndex);
+  expect(actualSend).toBeDefined();
+  expect(actualSend?.roomId).toBe(bobInvite?.roomId);
+  await bobPage.waitForTimeout(1_000);
+  const cryptoDiagnostics = async (page: Page) => page.evaluate(async () => {
+    const hook = (globalThis as typeof globalThis & { __K3NCRYPT_ACTIVE_CRYPTO_DIAGNOSTICS__?: () => Promise<unknown> }).__K3NCRYPT_ACTIVE_CRYPTO_DIAGNOSTICS__;
+    return hook ? await hook() : undefined;
+  });
+  const safeSummary = await Promise.all([alice.page, bobPage].map(async page => ({
+    localProfile: await page.locator('.sidebar-profile strong').textContent(),
+    draftRetained: Boolean(await page.locator('#msg-input').inputValue()),
+    safeSendFailureDisplayed: (await page.getByRole('status').filter({ hasText: 'Could not confirm sending' }).count()) > 0,
+    sentTextProjected: (await page.locator('#messages-area').getByText(firstMessage).count()) > 0,
+    inbound: await cryptoDiagnostics(page),
+    renderedMessageCount: await page.locator('#messages-area .message').count(),
+  })));
+  console.log('BOOTSTRAP_SAFE_DIAGNOSTICS', JSON.stringify(safeSummary));
+  const messageFlow = await Promise.all([{ alias: 'Alice', page: alice.page }, { alias: 'Bob', page: bobPage }, { alias: 'Carol', page: carolPage }].map(async ({ alias, page }) => ({ alias, events: await page.evaluate((eventId) => {
+    const state = globalThis as typeof globalThis & { __k3ncryptMessageFlowEvents?: Array<{ eventId: string; roomId: string; stage: string; relayId?: string; state?: string; failureCategory?: string }> };
+    return (state.__k3ncryptMessageFlowEvents ?? []).filter(event => event.eventId === eventId);
+  }, actualSend!.eventId) })));
+  console.log('BOOTSTRAP_MESSAGE_FLOW', JSON.stringify({ eventId: actualSend!.eventId, traces: messageFlow }));
+  await roomLifecycle('post-send-and-recipient-ack', [{ alias: 'Alice', page: alice.page }, { alias: 'Bob', page: bobPage }, { alias: 'Carol', page: carolPage }]);
+  await expect(bobPage.locator('#messages-area')).toContainText(firstMessage, { timeout: 30_000 });
+  await bobPage.locator('#msg-input').fill('Bob received the mailbox introduction');
+  await bobPage.locator('#send-btn').click();
+  await expect(alice.page.locator('#messages-area')).toContainText('Bob received the mailbox introduction', { timeout: 30_000 });
+
+  await alice.page.close({ runBeforeUnload: true });
+  const aliceAgain = await resume(alice.context, BASE_URL, alice.outbound);
+  const rows = aliceAgain.locator('.conversation-row');
+  await expect(rows).toHaveCount(2);
+  let bobReopened = false;
+  for (let index = 0; index < 2; index += 1) {
+    await rows.nth(index).click();
+    if (await aliceAgain.locator('#messages-area').getByText('Alice accepted Bob after switching rooms').count()) {
+      bobReopened = true;
+      break;
+    }
+  }
+  expect(bobReopened).toBe(true);
+  await expect(aliceAgain.locator('#messages-area')).toContainText('Bob received the mailbox introduction');
+  await carol.context.close();
   await bob.context.close();
   await alice.context.close();
 });

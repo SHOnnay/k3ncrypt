@@ -1,6 +1,6 @@
 import type { Message } from '../types';
 
-export type RoomConnectionState = 'saved' | 'connecting' | 'connected' | 'failed';
+export type RoomConnectionState = 'saved' | 'connecting' | 'connected' | 'pending' | 'failed';
 
 /** Room-owned state. UI selection points at this record; it does not own it. */
 export interface RoomState<Conversation = unknown> {

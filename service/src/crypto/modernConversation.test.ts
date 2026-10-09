@@ -36,6 +36,13 @@ const remoteSigningPair = generateKeyPairSync('ed25519');
 const bundle = { version: 1 as const, protocol: 'vodozemac-olm-v1' as const,
     identity: { curve25519: key(3), ed25519: rawEd25519Public(remoteSigningPair) }, oneTimeKeys: [{ id: 'otk-remote-test', key: key(5) }] };
 const remoteCommitment = async (): Promise<string> => fingerprintVodozemacIdentity(bundle.identity);
+const signedInvitation = async () => {
+    const now = Date.now();
+    const unsigned = { version: 2 as const, type: 'k3ncrypt-first-contact-invitation' as const, invitationId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', roomId: room,
+        controlCapability: key(9), inviterAddress: remoteAddress, identityCommitment: await remoteCommitment(), capabilities: ['join-introduction-v1', 'room-message-v1'] as const,
+        createdAt: now, expiresAt: now + 24 * 60 * 60 * 1000 };
+    return { ...unsigned, signature: ed25519Sign(null, Buffer.from(`K3NCRYPT_FIRST_CONTACT_INVITATION_V2\0${JSON.stringify(unsigned)}`), remoteSigningPair.privateKey).toString('base64url') };
+};
 
 class Storage implements SecureStorage {
     async compareAndSwapRecords(updates: readonly import('../core/contracts').SecureRecordUpdate[]): Promise<boolean> {
@@ -100,12 +107,14 @@ const loader = async () => ({ protocolVersion: 1 as const,
 
 const fakeTransport = (supportsJoinIntroduction = false, failSends = 0, supportsRoomMessage = false, requiresRoomMessageV1 = false, terminalRejects = 0) => {
     const sent: EncryptedEnvelope[] = [];
+    let beforeSubmitReturns: ((relayId: string) => Promise<void>) | undefined;
     const transport = {
         start: async () => undefined, stop: async () => undefined, join: () => undefined,
         sendEnvelope: async (_channel: unknown, envelope: EncryptedEnvelope) => {
             if (failSends > 0) { failSends -= 1; throw new Error('simulated relay interruption'); }
             sent.push(envelope);
             if (terminalRejects > 0) { terminalRejects -= 1; return { id: `relay-${sent.length}`, terminalRejection: true as const }; }
+            await beforeSubmitReturns?.(`relay-${sent.length}`);
             return { id: `relay-${sent.length}` };
         },
         activeTransport: () => undefined as unknown as import('../core/contracts').Transport,
@@ -114,7 +123,7 @@ const fakeTransport = (supportsJoinIntroduction = false, failSends = 0, supports
             (feature === ROOM_MESSAGE_V1_FEATURE && supportsRoomMessage),
     } as unknown as TransportManager & { peerSupportsFeature: (feature: string) => boolean };
     transport.activeTransport = () => transport as unknown as import('../core/contracts').Transport;
-    return { transport, sent };
+    return { transport, sent, setBeforeSubmitReturns: (callback: (relayId: string) => Promise<void>) => { beforeSubmitReturns = callback; } };
 };
 
 const signedJoinIntroductionPlaintext = async (overrides: Partial<{ eventId: string; conversationId: string; senderAddress: string; identityCommitment: string }> = {}): Promise<Uint8Array> => {
@@ -689,15 +698,17 @@ it('creates the browser outbound session only when the browser sends first', asy
     await conversation.close();
 });
 
-it('sends a signed encrypted join introduction only when the peer advertises support', async () => {
+it('sends a signed encrypted join introduction from authenticated invitation capabilities without peer feature hints', async () => {
     jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
     jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
     jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
     const storage = new Storage();
-    const transport = fakeTransport(true);
-    const conversation = new ModernConversation(storage, loader, transport.transport);
+    const transport = fakeTransport(false, 0, false, true);
+    let conversation!: ModernConversation;
+    transport.setBeforeSubmitReturns(async (relayId) => conversation.acceptDelivery(relayId));
+    conversation = new ModernConversation(storage, loader, transport.transport);
     const compareAndSwap = jest.spyOn(storage, 'compareAndSwapRecords');
-    await conversation.connect(room, key(9), remoteAddress, await remoteCommitment(), undefined, undefined, undefined, { sendJoinIntroduction: true });
+    await conversation.connect(room, key(9), remoteAddress, await remoteCommitment(), undefined, undefined, undefined, { sendJoinIntroduction: true, invitation: await signedInvitation() });
 
     expect(compareAndSwap.mock.calls.some(([updates]) =>
         ['vodozemac-account', 'vodozemac-session', 'conversation-join-introduction', 'conversation-protocol', 'conversation-session-audit']
@@ -711,8 +722,30 @@ it('sends a signed encrypted join introduction only when the peer advertises sup
     const intro = JSON.parse(new TextDecoder().decode((await storage.read('conversation-join-introduction', room))!));
     expect(intro).toMatchObject({ version: 1, recipientAddress: remoteAddress, recipientIdentityCommitment: await remoteCommitment() });
     expect(intro).toMatchObject({ clientId: expect.any(String), senderOrigin: { version: 1, basis: 'durable-commit' } });
+    expect(intro).toMatchObject({ state: 'ESTABLISHED', relayId: 'relay-1' });
     expect(intro.envelope).toEqual(transport.sent[0]);
     await conversation.close();
+});
+
+it('rejects a forged or room-mismatched signed invitation before claiming an OTK', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    const storage = new Storage();
+    const forged = { ...(await signedInvitation()), signature: 'A'.repeat(86) };
+    const conversation = new ModernConversation(storage, loader, fakeTransport(false).transport);
+    await expect(conversation.connect(room, key(9), remoteAddress, await remoteCommitment(), undefined, undefined, undefined,
+        { sendJoinIntroduction: true, invitation: forged })).rejects.toThrow(/signed invitation|identity/i);
+    expect(claimVodozemacOneTimeKey).not.toHaveBeenCalled();
+    expect(await storage.read('vodozemac-session', room)).toBeUndefined();
+    expect(JSON.parse(new TextDecoder().decode((await storage.read('conversation-join-introduction', room))!)).state).toBe('FAILED_OR_UNSUPPORTED');
+    await conversation.close();
+
+    const second = new ModernConversation(new Storage(), loader, fakeTransport(false).transport);
+    const mismatched = { ...(await signedInvitation()), roomId: localAddress };
+    await expect(second.connect(room, key(9), remoteAddress, await remoteCommitment(), undefined, undefined, undefined,
+        { sendJoinIntroduction: true, invitation: mismatched })).rejects.toThrow(/signed invitation/i);
+    expect(claimVodozemacOneTimeKey).not.toHaveBeenCalled();
+    await second.close();
 });
 
 it('keeps legacy peers on the existing first-message route when they do not advertise introductions', async () => {

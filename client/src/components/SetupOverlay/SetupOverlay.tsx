@@ -136,7 +136,7 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onM
       try {
         setIsLoading(true);
         setStatus('Opening your private contact…');
-        await joinModernChannel(modern.roomId, modern.controlCapability, modern.address, modern.identityCommitment, localPassphrase, accountState === 'new' ? displayName : undefined);
+        await joinModernChannel(modern, localPassphrase, accountState === 'new' ? displayName : undefined);
         onModernSetupComplete();
         setStatus('');
       } catch { setStatus('Could not open this contact. Check the invitation and local passphrase.'); }
