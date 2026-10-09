@@ -72,11 +72,19 @@ export const deleteExpiredPrekeyBundles = (now: number, collectionName: string):
   return removed;
 };
 
+const offlineMessageFifo = (left, right): number => (left.timestamp ?? 0) - (right.timestamp ?? 0) ||
+  (left.pk ?? 0) - (right.pk ?? 0) || String(left.id ?? '').localeCompare(String(right.id ?? ''));
+
+const nextActiveOfflineMessage = (condition: Record<string, unknown>, collectionName: string): any =>
+  (storage[collectionName] || []).filter((entry) => entry.state === 'active' &&
+    Object.keys(condition).every((key) => entry[key] === condition[key]) && (!entry.expiresAt || entry.expiresAt.getTime() > Date.now()))
+    .sort(offlineMessageFifo)[0];
+
 export const findOfflineMessages = (condition: Record<string, unknown>, collectionName: string, limit: number): any[] => {
-  const collection = storage[collectionName] || [];
-  return collection.filter((entry) => entry.state !== 'rejected' && Object.keys(condition).every((key) => entry[key] === condition[key]) &&
-    (!entry.expiresAt || entry.expiresAt.getTime() > Date.now()) && (!entry.claimedUntil || entry.claimedUntil.getTime() <= Date.now()))
-    .slice(0, limit);
+  const now = Date.now();
+  return (storage[collectionName] || []).filter((entry) => entry.state === 'active' &&
+    Object.keys(condition).every((key) => entry[key] === condition[key]) && (!entry.expiresAt || entry.expiresAt.getTime() > now) &&
+    (!entry.claimedUntil || entry.claimedUntil.getTime() <= now)).sort(offlineMessageFifo).slice(0, limit);
 };
 
 export const insertOfflineMessage = (data: any, collectionName: string): any => {
@@ -89,11 +97,20 @@ export const insertOfflineMessage = (data: any, collectionName: string): any => 
 };
 
 export const claimOfflineMessage = (condition: Record<string, unknown>, leaseUntil: Date, claimId: string, collectionName: string): any => {
-  const message = findOfflineMessages(condition, collectionName, 1)[0];
+  // Do not skip an already-claimed FIFO head to claim a later row. A slow or
+  // recovering head intentionally blocks this mailbox until ACK, rejection,
+  // expiry, or lease recovery.
+  const message = nextActiveOfflineMessage(condition, collectionName);
   if (!message) return null;
+  if (message.claimedUntil instanceof Date && message.claimedUntil.getTime() > Date.now()) return null;
   message.claimedUntil = leaseUntil;
   message.claimId = claimId;
   return message;
+};
+
+export const offlineMessageClaimUntil = (condition: Record<string, unknown>, collectionName: string): Date | undefined => {
+  const message = nextActiveOfflineMessage(condition, collectionName);
+  return message?.claimedUntil instanceof Date && message.claimedUntil.getTime() > Date.now() ? message.claimedUntil : undefined;
 };
 
 export const ackOfflineMessage = (condition: Record<string, unknown>, collectionName: string): boolean => {

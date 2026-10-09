@@ -1,4 +1,4 @@
-import { ackOfflineMessage, claimOfflineMessage, cleanupExpiredOfflineMessages, countOfflineMessages, recordOfflineRejection, rejectOfflineMessage, storeOfflineMessage } from './index';
+import { ackOfflineMessage, claimOfflineMessage, cleanupExpiredOfflineMessages, countOfflineMessages, offlineMessageClaimUntil, recordOfflineRejection, rejectOfflineMessage, storeOfflineMessage } from './index';
 import { randomUUID } from 'crypto';
 
 describe('opaque offline message mailbox', () => {
@@ -15,6 +15,60 @@ describe('opaque offline message mailbox', () => {
     expect(await claimOfflineMessage(message.mailbox, message.channel, new Date(Date.now() + 30_000), randomUUID())).toBeFalsy();
     expect(await ackOfflineMessage(message.id, message.mailbox, message.channel, claimId)).toBe(true);
     expect(await countOfflineMessages({ mailbox: message.mailbox, channel: message.channel })).toBe(0);
+  });
+
+  it('claims only the FIFO head under concurrency and advances after its matching ACK', async () => {
+    const room = randomUUID(); const mailbox = randomUUID(); const now = Date.now();
+    const first = { ...base(), channel: room, mailbox, timestamp: now, dedupeKey: `fifo-${randomUUID()}` };
+    const second = { ...base(), channel: room, mailbox, timestamp: now + 1, dedupeKey: `fifo-${randomUUID()}` };
+    // Insert out of order to assert ordering comes from durable message order.
+    await storeOfflineMessage(second);
+    await storeOfflineMessage(first);
+
+    const [one, competing] = await Promise.all([
+      claimOfflineMessage<typeof first & { claimId: string }>(mailbox, room, new Date(Date.now() + 30_000), randomUUID()),
+      claimOfflineMessage<typeof second & { claimId: string }>(mailbox, room, new Date(Date.now() + 30_000), randomUUID()),
+    ]);
+    const owner = one ?? competing;
+    expect(owner?.id).toBe(first.id);
+    expect(Number(!!one) + Number(!!competing)).toBe(1);
+    expect(await claimOfflineMessage(mailbox, room, new Date(Date.now() + 30_000), randomUUID())).toBeFalsy();
+    expect(await ackOfflineMessage(first.id, mailbox, room, owner!.claimId)).toBe(true);
+
+    const next = await claimOfflineMessage<typeof second & { claimId: string }>(mailbox, room, new Date(Date.now() + 30_000), randomUUID());
+    expect(next?.id).toBe(second.id);
+    expect(await ackOfflineMessage(second.id, mailbox, room, next!.claimId)).toBe(true);
+  });
+
+  it('preserves insertion order when mailbox timestamps have the same millisecond', async () => {
+    const room = randomUUID(); const mailbox = randomUUID(); const timestamp = Date.now();
+    const first = { ...base(), channel: room, mailbox, timestamp, dedupeKey: `same-time-${randomUUID()}` };
+    const second = { ...base(), channel: room, mailbox, timestamp, dedupeKey: `same-time-${randomUUID()}` };
+    await storeOfflineMessage(first); await storeOfflineMessage(second);
+    const claim = await claimOfflineMessage<{ id: string; claimId: string }>(mailbox, room, new Date(Date.now() + 30_000), randomUUID());
+    expect(claim?.id).toBe(first.id);
+  });
+
+  it('recovers the FIFO head after its lease expires without skipping it', async () => {
+    let now = Date.now();
+    const nowSpy = jest.spyOn(Date, 'now').mockImplementation(() => now);
+    const room = randomUUID(); const mailbox = randomUUID();
+    const first = { ...base(), channel: room, mailbox, timestamp: now, dedupeKey: `lease-head-${randomUUID()}` };
+    const second = { ...base(), channel: room, mailbox, timestamp: now + 1, dedupeKey: `lease-next-${randomUUID()}` };
+    await storeOfflineMessage(first); await storeOfflineMessage(second);
+    const abandoned = await claimOfflineMessage<typeof first & { claimId: string }>(mailbox, room, new Date(now + 1_000), randomUUID());
+    expect(abandoned?.id).toBe(first.id);
+    expect(await claimOfflineMessage(mailbox, room, new Date(now + 30_000), randomUUID())).toBeFalsy();
+    expect(await offlineMessageClaimUntil(mailbox, room)).toEqual(new Date(now + 1_000));
+
+    now += 1_001;
+    const recovered = await claimOfflineMessage<typeof first & { claimId: string }>(mailbox, room, new Date(now + 30_000), randomUUID());
+    expect(recovered?.id).toBe(first.id);
+    expect(await ackOfflineMessage(first.id, mailbox, room, recovered!.claimId)).toBe(true);
+    const next = await claimOfflineMessage<typeof second & { claimId: string }>(mailbox, room, new Date(now + 30_000), randomUUID());
+    expect(next?.id).toBe(second.id);
+    expect(await ackOfflineMessage(second.id, mailbox, room, next!.claimId)).toBe(true);
+    nowSpy.mockRestore();
   });
 
   it('allows the same envelope key to be stored again after its mailbox row is deleted', async () => {
@@ -67,16 +121,19 @@ describe('opaque offline message mailbox', () => {
 
   it('removes 64 terminal poison entries from active quota while keeping bounded metadata only', async () => {
     const seed = base();
-    const poisoned = [] as Array<{ id: string; claimId: string }>;
     for (let index = 0; index < 64; index += 1) {
       const message = { ...seed, id: randomUUID(), dedupeKey: `poison-${randomUUID()}` };
       await storeOfflineMessage(message);
-      const claimId = randomUUID();
-      await claimOfflineMessage(message.mailbox, message.channel, new Date(Date.now() + 30_000), claimId);
-      poisoned.push({ id: message.id, claimId });
     }
     expect(await countOfflineMessages({ mailbox: seed.mailbox, channel: seed.channel })).toBe(64);
-    for (const item of poisoned) expect(await rejectOfflineMessage(item.id, seed.mailbox, seed.channel, item.claimId, 'unsupported-message')).toBe('rejected');
+    // Terminal rows are handled in FIFO order, just like delivery. Claiming
+    // every row concurrently would bypass the mailbox head-of-line guarantee.
+    for (let index = 0; index < 64; index += 1) {
+      const claimId = randomUUID();
+      const item = await claimOfflineMessage<{ id: string; claimId: string }>(seed.mailbox, seed.channel, new Date(Date.now() + 30_000), claimId);
+      expect(item).toBeDefined();
+      expect(await rejectOfflineMessage(item!.id, seed.mailbox, seed.channel, item!.claimId, 'unsupported-message')).toBe('rejected');
+    }
     expect(await countOfflineMessages({ mailbox: seed.mailbox, channel: seed.channel })).toBe(0);
     const next = { ...seed, id: randomUUID(), dedupeKey: `legitimate-${randomUUID()}` };
     await expect(storeOfflineMessage(next)).resolves.toMatchObject({ id: next.id, state: 'active' });

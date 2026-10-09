@@ -3,7 +3,7 @@ import { randomInt } from 'crypto';
 
 import {
     findOneFromDB as _findOneFromDB, insertInDb as _insertInDb, updateOneFromDb as _updateOneFromDb, claimOneTimeKey as _claimOneTimeKey, deleteExpiredPrekeyBundles as _deleteExpiredPrekeyBundles
-    , insertOfflineMessage as _insertOfflineMessage, claimOfflineMessage as _claimOfflineMessage, ackOfflineMessage as _ackOfflineMessage, rejectOfflineMessage as _rejectOfflineMessage, recordOfflineRejection as _recordOfflineRejection, deleteExpiredOfflineMessages as _deleteExpiredOfflineMessages, countOfflineMessages as _countOfflineMessages
+    , insertOfflineMessage as _insertOfflineMessage, claimOfflineMessage as _claimOfflineMessage, offlineMessageClaimUntil as _offlineMessageClaimUntil, ackOfflineMessage as _ackOfflineMessage, rejectOfflineMessage as _rejectOfflineMessage, recordOfflineRejection as _recordOfflineRejection, deleteExpiredOfflineMessages as _deleteExpiredOfflineMessages, countOfflineMessages as _countOfflineMessages
 } from './inMemDB';
 import { LINK_COLLECTION, PREKEY_COLLECTION, OFFLINE_MESSAGE_COLLECTION } from './const';
 import { applyMigrations } from './migrations';
@@ -168,11 +168,25 @@ export const storeOfflineMessage = async <T extends Record<string, unknown>>(dat
 
 export const claimOfflineMessage = async <T>(mailbox: string, channel: string, leaseUntil: Date, claimId: string): Promise<T | undefined> => {
   if (inMem) return _claimOfflineMessage({ mailbox, channel }, leaseUntil, claimId, OFFLINE_MESSAGE_COLLECTION) as T | undefined;
-  const result = await db.collection(OFFLINE_MESSAGE_COLLECTION).findOneAndUpdate(
-    { mailbox, channel, state: 'active', expiresAt: { $gt: new Date() }, $or: [{ claimedUntil: { $exists: false } }, { claimedUntil: { $lte: new Date() } }] },
+  const collection = db.collection(OFFLINE_MESSAGE_COLLECTION);
+  const now = new Date();
+  const head = await collection.findOne({ mailbox, channel, state: 'active', expiresAt: { $gt: now } }, { sort: { timestamp: 1, _id: 1, id: 1 } });
+  if (!head || (head.claimedUntil instanceof Date && head.claimedUntil.getTime() > now.getTime())) return undefined;
+  // Pick the FIFO head first, then conditionally claim that exact row. Racing
+  // workers cannot advance to later rows while this row is owned by another
+  // worker; a failed CAS is retryable and leaves mailbox state intact.
+  const result = await collection.findOneAndUpdate(
+    { _id: head._id, mailbox, channel, state: 'active', expiresAt: { $gt: now }, $or: [{ claimedUntil: { $exists: false } }, { claimedUntil: { $lte: now } }] },
     { $set: { claimedUntil: leaseUntil, claimId } }, { returnDocument: 'after' },
   );
   return ((result && typeof result === 'object' && 'value' in result) ? (result as { value?: unknown }).value : result) as T | undefined;
+};
+
+export const offlineMessageClaimUntil = async (mailbox: string, channel: string): Promise<Date | undefined> => {
+  if (inMem) return _offlineMessageClaimUntil({ mailbox, channel }, OFFLINE_MESSAGE_COLLECTION);
+  const head = await db.collection(OFFLINE_MESSAGE_COLLECTION).findOne(
+    { mailbox, channel, state: 'active', expiresAt: { $gt: new Date() } }, { sort: { timestamp: 1, _id: 1, id: 1 } });
+  return head?.claimedUntil instanceof Date && head.claimedUntil.getTime() > Date.now() ? head.claimedUntil : undefined;
 };
 
 export const ackOfflineMessage = async (id: string, mailbox: string, channel: string, claimId?: string): Promise<boolean> => {
@@ -240,6 +254,7 @@ export default {
   cleanupExpiredPrekeyBundles,
   storeOfflineMessage,
   claimOfflineMessage,
+  offlineMessageClaimUntil,
   ackOfflineMessage,
   rejectOfflineMessage,
   recordOfflineRejection,

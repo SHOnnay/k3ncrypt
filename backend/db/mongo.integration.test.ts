@@ -81,6 +81,33 @@ suite('MongoDB mailbox terminal-rejection integration', () => {
     expect(await database.collection('offline_messages').findOne({ id: item.id })).toBeNull();
   });
 
+  it('claims one deterministic FIFO head under competing Mongo workers', async () => {
+    const room = randomUUID(); const mailbox = randomUUID(); const now = Date.now();
+    const first = { ...message(room, mailbox), timestamp: now };
+    const second = { ...message(room, mailbox), timestamp: now + 1 };
+    await storeOfflineMessage(second); await storeOfflineMessage(first);
+
+    const [left, right] = await Promise.all([
+      claimOfflineMessage<typeof first & { claimId: string }>(mailbox, room, new Date(Date.now() + 30_000), randomUUID()),
+      claimOfflineMessage<typeof second & { claimId: string }>(mailbox, room, new Date(Date.now() + 30_000), randomUUID()),
+    ]);
+    const owner = left ?? right;
+    expect(owner?.id).toBe(first.id);
+    expect(Number(!!left) + Number(!!right)).toBe(1);
+    expect(await claimOfflineMessage(mailbox, room, new Date(Date.now() + 30_000), randomUUID())).toBeUndefined();
+    expect(await ackOfflineMessage(first.id, mailbox, room, owner!.claimId)).toBe(true);
+    const next = await claimOfflineMessage<typeof second & { claimId: string }>(mailbox, room, new Date(Date.now() + 30_000), randomUUID());
+    expect(next?.id).toBe(second.id);
+    expect(await ackOfflineMessage(second.id, mailbox, room, next!.claimId)).toBe(true);
+
+    const tiedRoom = randomUUID(); const tiedMailbox = randomUUID(); const tiedAt = Date.now();
+    const tiedFirst = { ...message(tiedRoom, tiedMailbox), timestamp: tiedAt };
+    const tiedSecond = { ...message(tiedRoom, tiedMailbox), timestamp: tiedAt };
+    await storeOfflineMessage(tiedFirst); await storeOfflineMessage(tiedSecond);
+    const tiedHead = await claimOfflineMessage<typeof tiedFirst & { claimId: string }>(tiedMailbox, tiedRoom, new Date(Date.now() + 30_000), randomUUID());
+    expect(tiedHead?.id).toBe(tiedFirst.id);
+  });
+
   it('terminally rejects the first claimed poison row and continues to the other valid row', async () => {
     const room = randomUUID(); const mailbox = randomUUID();
     const first = message(room, mailbox); const second = message(room, mailbox);
