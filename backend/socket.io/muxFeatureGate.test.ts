@@ -50,6 +50,12 @@ const subscribe = (p: Awaited<ReturnType<typeof peer>>, r: Awaited<ReturnType<ty
   protocolFeatures: ['room-message-v1', 'room-call-signal-v2'],
   ...p.proof('relay:subscribe', { conversationId: r.roomId, routingAddress: r.routes[side], peerRoutingAddress: r.routes[1 - side], connectionGeneration: p.socket.id }),
 });
+const legacyJoin = (p: Awaited<ReturnType<typeof peer>>, r: Awaited<ReturnType<typeof room>>, side: number) => {
+  const carrier = p.proof('relay:message');
+  return ack(p.socket, 'chat-join', { userID: r.routes[side], channelID: r.roomId,
+    controlCapability: r.controlCapability, routingProof: r.proofs[side],
+    deviceAuthorizationProof: carrier.deviceAuthorizationProof, proofNonce: carrier.proofNonce });
+};
 
 beforeAll(async () => {
   jest.spyOn(durableTrust, 'durableDeviceTrustAuthority').mockReturnValue({ verify } as never);
@@ -137,4 +143,109 @@ it('enables two rooms, background delivery and call signaling only with an expli
   // Even previously registered handlers must stop before authorization or state writes.
   for (const event of events) expect(await ack(alice.socket, event, {})).toHaveProperty('error');
   expect(verify).not.toHaveBeenCalled(); expect(db.getDatabase).not.toHaveBeenCalled(); expect(db.storeOfflineMessage).not.toHaveBeenCalled();
+});
+
+it('keeps legacy as the exclusive room owner and delivers one live message with one recipient acceptance', async () => {
+  process.env.NODE_ENV = 'development'; process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY = 'true';
+  const r = await room(); const alice = await peer(); const bob = await peer(); const muxContender = await peer();
+  expect(await legacyJoin(alice, r, 0)).toMatchObject({ status: 'accepted' });
+  expect(await legacyJoin(bob, r, 1)).toMatchObject({ status: 'accepted' });
+  expect(await authenticate(muxContender)).toMatchObject({ status: 'authenticated' });
+  expect(await subscribe(muxContender, r, 0)).toHaveProperty('error');
+  expect(muxContender.server.muxSubscriptions?.has(r.roomId)).not.toBe(true);
+
+  let recipientAcceptances = 0; let deliveredEvents = 0;
+  const received = new Promise<RecordResponse>(resolve => bob.socket.once('chat-message', (message, accept) => {
+    deliveredEvents += 1; recipientAcceptances += 1; accept({ outcome: 'accepted' }); resolve(message);
+  }));
+  const result = await ack(alice.socket, 'chat-message', { envelope, ...alice.proof('relay:message', { conversationId: r.roomId }) });
+  expect(result).toHaveProperty('id');
+  expect(await received).toMatchObject({ envelope, sender: r.routes[0] });
+  await new Promise<void>(resolve => setImmediate(resolve));
+  expect(deliveredEvents).toBe(1);
+  expect(recipientAcceptances).toBe(1);
+  expect(alice.server.muxSubscriptions).toBeUndefined();
+});
+
+it('keeps Mux as the exclusive room owner and prevents legacy competing delivery acknowledgements', async () => {
+  process.env.NODE_ENV = 'development'; process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY = 'true';
+  const r = await room(); const alice = await peer(); const bob = await peer(); const legacyContender = await peer();
+  for (const p of [alice, bob]) expect(await authenticate(p)).toMatchObject({ status: 'authenticated' });
+  expect(await subscribe(alice, r, 0)).toMatchObject({ status: 'subscribed' });
+  expect(await subscribe(bob, r, 1)).toMatchObject({ status: 'subscribed' });
+  expect(await legacyJoin(legacyContender, r, 0)).toMatchObject({ error: expect.any(String), code: 'room-transport-conflict' });
+  expect(legacyContender.server.userID).toBeUndefined();
+
+  let muxDeliveries = 0; let muxAcceptances = 0; let senderStatuses = 0;
+  const status = new Promise<void>(resolve => bob.socket.on('mux-delivery-status', (value) => {
+    if (value.status === 'accepted' && value.roomId === r.roomId) { senderStatuses += 1; resolve(); }
+  }));
+  const received = new Promise<RecordResponse>(resolve => alice.socket.once('mux-envelope', (frame, accept) => {
+    muxDeliveries += 1; accept({ outcome: 'accepted', roomId: frame.roomId, id: frame.id, claimId: frame.claimId,
+      connectionGeneration: frame.connectionGeneration, subscriptionNonce: frame.subscriptionNonce });
+    muxAcceptances += 1; resolve(frame);
+  }));
+  expect(await ack(bob.socket, 'mux-send-message', { version: 1, roomId: r.roomId, envelope,
+    ...bob.proof('relay:message', { conversationId: r.roomId, routingAddress: r.routes[1], peerRoutingAddress: r.routes[0], connectionGeneration: bob.socket.id }) }))
+    .toMatchObject({ status: 'stored' });
+  expect(await received).toMatchObject({ roomId: r.roomId, envelope, senderRoutingAddress: r.routes[1] });
+  await status;
+  await new Promise<void>(resolve => setImmediate(resolve));
+  expect(muxDeliveries).toBe(1);
+  expect(muxAcceptances).toBe(1);
+  expect(senderStatuses).toBe(1);
+  expect(legacyContender.server.muxSubscriptions).toBeUndefined();
+});
+
+it('arbitrates concurrent legacy join and Mux subscribe with exactly one room owner', async () => {
+  process.env.NODE_ENV = 'development'; process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY = 'true';
+  const r = await room(); const legacy = await peer(); const mux = await peer();
+  expect(await authenticate(mux)).toMatchObject({ status: 'authenticated' });
+
+  const [legacyResult, muxResult] = await Promise.all([legacyJoin(legacy, r, 0), subscribe(mux, r, 0)]);
+  const legacyOwns = legacyResult.status === 'accepted';
+  const muxOwns = muxResult.status === 'subscribed';
+  expect(Number(legacyOwns) + Number(muxOwns)).toBe(1);
+  expect(getClients().getSIDByIDs(r.routes[0], r.roomId)?.sid === legacy.socket.id).toBe(legacyOwns);
+  expect(mux.server.muxSubscriptions?.has(r.roomId) === true).toBe(muxOwns);
+});
+
+it('replays a durably queued legacy message after the legacy room owner releases the room to Mux', async () => {
+  process.env.NODE_ENV = 'development'; process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY = 'true';
+  const r = await room(); const legacySender = await peer();
+  expect(await legacyJoin(legacySender, r, 1)).toMatchObject({ status: 'accepted' });
+  const queued = await ack(legacySender.socket, 'chat-message', { envelope,
+    ...legacySender.proof('relay:message', { conversationId: r.roomId }), recipientRoutingId: r.routes[0] });
+  expect(queued).toMatchObject({ stored: true });
+
+  legacySender.socket.disconnect();
+  await new Promise<void>(resolve => setImmediate(resolve));
+  const muxRecipient = await peer();
+  expect(await authenticate(muxRecipient)).toMatchObject({ status: 'authenticated' });
+  const subscribed = await subscribe(muxRecipient, r, 0);
+  expect(subscribed).toMatchObject({ status: 'subscribed' });
+
+  const originalAckOffline = db.ackOfflineMessage;
+  let resolveDurableAck!: (removed: boolean) => void;
+  const durableAck = new Promise<boolean>(resolve => { resolveDurableAck = resolve; });
+  const ackOffline = jest.spyOn(db, 'ackOfflineMessage').mockImplementation(async (...args) => {
+    const removed = await originalAckOffline(...args);
+    resolveDurableAck(removed);
+    return removed;
+  });
+  let deliveries = 0; let recipientAcceptances = 0;
+  const received = new Promise<RecordResponse>(resolve => muxRecipient.socket.once('mux-envelope', (frame, accept) => {
+    deliveries += 1;
+    accept({ outcome: 'accepted', roomId: frame.roomId, id: frame.id, claimId: frame.claimId,
+      connectionGeneration: frame.connectionGeneration, subscriptionNonce: frame.subscriptionNonce });
+    recipientAcceptances += 1; resolve(frame);
+  }));
+  expect(await ack(muxRecipient.socket, 'mux-mailbox-replay', { version: 1, roomId: r.roomId,
+    connectionGeneration: muxRecipient.socket.id, subscriptionNonce: subscribed.subscriptionNonce })).toMatchObject({ status: 'accepted' });
+  expect(await received).toMatchObject({ id: queued.id, roomId: r.roomId, senderRoutingAddress: r.routes[1], envelope });
+  expect(await durableAck).toBe(true);
+  expect(deliveries).toBe(1);
+  expect(recipientAcceptances).toBe(1);
+  expect(ackOffline).toHaveBeenCalledTimes(1);
+  expect(ackOffline).toHaveBeenCalledWith(queued.id, r.routes[0], r.roomId, expect.any(String));
 });

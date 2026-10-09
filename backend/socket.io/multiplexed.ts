@@ -193,6 +193,32 @@ export const muxWouldExceedChannelCapacity = (routingAddress: string, roomId: st
   return routes.size >= capacity && !routes.has(routingAddress);
 };
 
+/** Returns whether a room currently has a live legacy delivery owner. Stale
+ * routing entries are removed before the ownership decision is made. */
+export const hasActiveLegacyRoomOwner = (roomId: string, io: MuxServer): boolean => {
+  for (const [routingAddress, route] of Object.entries(clients.getClientsByChannel(roomId))) {
+    const socket = io.sockets.sockets.get(route.sid) as CustomSocket | undefined;
+    if (socket && socket.connected !== false && socket.userID === routingAddress && socket.channelID === roomId) return true;
+    clients.deleteClient(routingAddress, roomId, route.sid);
+  }
+  return false;
+};
+
+/** Returns whether any live Mux subscription currently owns delivery in a room. */
+export const hasActiveMuxRoomOwner = (roomId: string): boolean => {
+  const roomSockets = muxRoomSockets.get(roomId);
+  if (!roomSockets) return false;
+  for (const [routingAddress, socket] of roomSockets) {
+    const subscription = socket.muxSubscriptions?.get(roomId);
+    if (socket.connected !== false && subscription?.roomId === roomId && subscription.routingAddress === routingAddress &&
+        subscription.connectionGeneration === socket.id && isCurrentMuxSocket(socket)) return true;
+    if (subscription) removeSubscription(socket, subscription);
+    else roomSockets.delete(routingAddress);
+  }
+  if (roomSockets.size === 0) muxRoomSockets.delete(roomId);
+  return false;
+};
+
 const scheduleSubscriptionExpiry = (socket: CustomSocket, subscription: MuxRoomSubscription): void => {
   const timers = subscriptionTimers.get(socket) ?? new Map<string, ReturnType<typeof setTimeout>>();
   subscriptionTimers.set(socket, timers);
@@ -269,6 +295,10 @@ export const registerMultiplexedRelay = (socket: CustomSocket, io: MuxServer): v
       reject();
       return;
     }
+    // A room uses one delivery plane at a time. Do not let a Mux subscription
+    // coexist with a live legacy room listener; the durable mailbox remains
+    // the handoff path after the incumbent transport disconnects.
+    if (hasActiveLegacyRoomOwner(roomId, io)) { reject(); return; }
     if (muxWouldExceedChannelCapacity(routingAddress, roomId, 2)) { reject(); return; }
     const existingRouteSocket = muxRoomSockets.get(roomId)?.get(routingAddress);
     if (existingRouteSocket && existingRouteSocket !== socket && existingRouteSocket.connected !== false) { reject(); return; }

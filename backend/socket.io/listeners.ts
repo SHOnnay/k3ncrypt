@@ -8,7 +8,7 @@ import db, { type OfflineRejectionReason } from '../db';
 import { PREKEY_COLLECTION } from '../db/const';
 import { durableDeviceTrustAuthority, MongoDeviceTrustStore } from '../security/durableDeviceTrust';
 import type { DeviceAuthorizationProof, DeviceOperation } from '../security/deviceTrust';
-import { muxRelayEnabled, muxWouldExceedChannelCapacity, registerMultiplexedRelay } from './multiplexed';
+import { hasActiveMuxRoomOwner, muxRelayEnabled, muxWouldExceedChannelCapacity, registerMultiplexedRelay } from './multiplexed';
 
 const clients = getClientInstance();
 
@@ -241,6 +241,13 @@ const connectionListener = (socket: CustomSocket, io) => {
       return;
     }
     const previousConnection = clients.getSIDByIDs(userID, channelID)?.sid;
+    // Legacy and Mux may not both own receive delivery in one room. The
+    // check and legacy table update are synchronous so concurrent join/subscribe
+    // completions have a single winner; durable mailbox replay covers handoff.
+    if (hasActiveMuxRoomOwner(channelID)) {
+      rejectJoin('Room delivery is already owned by another transport.', 'room-transport-conflict');
+      return;
+    }
     if (muxWouldExceedChannelCapacity(userID, channelID, 2)) {
       socketEmit<SOCKET_TOPIC.LIMIT_REACHED>(SOCKET_TOPIC.LIMIT_REACHED, socket.id, null);
       rejectJoin('Channel is full.', 'channel-full');
