@@ -1,3 +1,5 @@
+import { maintenanceModeEnabled } from '../operations/maintenanceGate';
+
 const configuredOrigins = (): string[] => (process.env.K3NCRYPT_ALLOWED_ORIGINS ?? '')
   .split(',')
   .map((origin) => origin.trim())
@@ -23,6 +25,10 @@ export const corsOrigin = (origin: string | undefined, callback: (error: Error |
 /** Android/internal clients omit Origin. Browser origins must exactly match the configured list.
  * This is admission policy only: every device/room authorization check remains mandatory. */
 export const socketOriginAdmission = (request: import('http').IncomingMessage, callback: (error: string | null, allow: boolean) => void): void => {
+  if (maintenanceModeEnabled()) {
+    callback('maintenance', false);
+    return;
+  }
   const origin = request.headers.origin;
   callback(null, origin === undefined || allowedCorsOrigins().includes(origin));
 };

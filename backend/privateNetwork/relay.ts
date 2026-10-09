@@ -7,6 +7,7 @@ import { markRelayReady } from '../operations/status';
 import { type DeviceAuthorizationProof } from '../security/deviceTrust';
 import db from '../db';
 import { durableDeviceTrustAuthority } from '../security/durableDeviceTrust';
+import { installMaintenanceSocketGuards } from '../operations/maintenanceGate';
 
 export const PRIVATE_NETWORK_SOCKET_PATH = '/private-network/socket.io';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -16,6 +17,7 @@ const opaqueEnvelope = (value: unknown): boolean => !!value && typeof value === 
 /** User-hostable blind relay. Peer admission and payload authentication occur inside the encrypted SDK session. */
 export const initPrivateNetworkRelay = (http: HttpServer): Server => {
   const io = new Server(http, { path: PRIVATE_NETWORK_SOCKET_PATH, allowRequest: socketOriginAdmission, maxHttpBufferSize: 200 * 1024, allowEIO3: false, cors: { origin: allowedCorsOrigins(), credentials: false } });
+  installMaintenanceSocketGuards(io);
   const routes = new Map<string, Map<string, Socket>>();
   io.on('connection', (socket) => { void (async () => {
     const auth = socket.handshake.auth; if (!validAuth(auth)) { socket.disconnect(true); return; }
