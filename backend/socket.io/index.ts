@@ -3,6 +3,7 @@ import connectionListener from "./listeners";
 import { allowedCorsOrigins, socketOriginAdmission } from '../security/cors';
 import { markRelayReady } from '../operations/status';
 import { operationalLog } from '../operations/logger';
+import { installMaintenanceSocketGuards } from '../operations/maintenanceGate';
 
 export interface CustomSocket extends Socket {
   userID: string,
@@ -59,6 +60,7 @@ export const initSocket = (server) => {
       credentials: false,
     }
   });
+  installMaintenanceSocketGuards(io);
   markRelayReady('messaging');
   operationalLog('info', 'messaging_relay_ready');
 
