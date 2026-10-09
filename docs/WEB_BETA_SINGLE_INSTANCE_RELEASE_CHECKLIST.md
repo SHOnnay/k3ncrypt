@@ -2,6 +2,8 @@
 
 This runbook prepares a controlled Render Web Beta upgrade. It does not itself authorize a production deployment, environment change, or migration. The owner/operator performs the production steps and records each result in the release record.
 
+**Render Free cutover addendum:** For the existing Free service, follow [`RENDER_FREE_MAILBOX_CUTOVER.md`](./RENDER_FREE_MAILBOX_CUTOVER.md) for maintenance, process replacement, and migration execution. It supersedes the paid-service Pre-Deploy/upstream-gate procedure below where Free-plan behavior differs. Do not treat Free as having built-in maintenance mode, pre-deploy commands, or one-off jobs.
+
 ## Release invariants
 
 - Run exactly one backend instance. Disable autoscaling and prevent old/new backend overlap. Socket registries, room ownership, Mux delivery pumps, and immediate revoked-device eviction are process-local. Mongo leases do not provide cross-instance live routing or immediate remote-worker eviction.
