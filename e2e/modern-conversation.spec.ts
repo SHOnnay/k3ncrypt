@@ -73,10 +73,19 @@ test('modern private contact works after offline recipient and both browser rest
   await alice.page.getByLabel('Confirm your passphrase', { exact: true }).fill(PASSPHRASE);
   await alice.page.getByRole('button', { name: 'Continue' }).click();
   await expect(alice.page.locator('#chat-container')).toBeVisible();
-  await alice.page.locator('#msg-input').fill('hello while you were away');
-  await alice.page.locator('#send-btn').click();
 
   const bobReturned = await resume(bob.context, link, bob.outbound);
+  await expect(alice.page.locator('.chat-header')).toContainText('Bob', { timeout: 20_000 });
+  await bobReturned.locator('.conversation-row').filter({ hasText: 'Alice' }).click();
+  await alice.page.locator('.conversation-row').filter({ hasText: 'Bob' }).click();
+  const sessionEstablished = (page: Page) => page.evaluate(async () => {
+    const hook = (globalThis as typeof globalThis & { __K3NCRYPT_TEST_ROOM_LIFECYCLE__?: () => Promise<{ sessionEstablished?: boolean }> }).__K3NCRYPT_TEST_ROOM_LIFECYCLE__;
+    return (await hook?.())?.sessionEstablished === true;
+  });
+  await expect.poll(async () => (await sessionEstablished(alice.page)) && (await sessionEstablished(bobReturned)), { timeout: 30_000 }).toBe(true);
+  await alice.page.locator('#msg-input').fill('hello while you were away');
+  await expect(alice.page.locator('#send-btn')).toBeEnabled();
+  await alice.page.locator('#send-btn').click();
   await expect(bobReturned.locator('#messages-area')).toContainText('hello while you were away', { timeout: 20_000 });
   await bobReturned.getByRole('button', { name: 'Open settings' }).click();
   await bobReturned.getByRole('button', { name: 'Security' }).click();

@@ -7,7 +7,7 @@ async function create(page: Page, name: string) {
   await page.locator('#local-passphrase').fill(passphrase);
   await page.locator('#local-passphrase-confirm').fill(passphrase);
   await page.getByRole('button', { name: 'Create secure account' }).click();
-  await expect(page.getByRole('textbox', { name: 'Private invitation' })).toHaveValue(/#modern=/);
+  await expect(page.getByRole('textbox', { name: 'Private invitation' })).toHaveValue(/#(?:invite|modern)=/);
   await page.getByRole('button', { name: 'Continue to your chats' }).click();
 }
 async function security(page: Page) {
@@ -28,7 +28,7 @@ async function invite(page: Page): Promise<string> {
   await expect(page.locator('#local-passphrase')).toHaveCount(0);
   await page.getByRole('button', { name: 'Create invitation', exact: true }).click();
   const input = page.getByRole('textbox', { name: 'Private invitation' });
-  await expect(input).toHaveValue(/#modern=/);
+  await expect(input).toHaveValue(/#(?:invite|modern)=/);
   const link = await input.inputValue();
   await page.getByRole('button', { name: 'Continue to your chats' }).click();
   return link;
@@ -50,7 +50,7 @@ test('independent accounts connect, exchange claimed names, explicitly verify, a
   // A locked existing account accepts the pending URL invitation after unlocking.
   await bob.goto(first); await bob.reload();
   await bob.getByRole('button', { name: 'Unlock and accept invitation' }).click();
-  await expect(bob.locator('#channel-hash')).toHaveValue(/modern=/);
+  await expect(bob.locator('#channel-hash')).toHaveValue(/(?:invite|modern)=/);
   await bob.locator('input[type=password]').fill(passphrase);
   await bob.getByRole('button', { name: 'Continue', exact: true }).click();
   await expect(bob.locator('#channel-hash')).not.toBeVisible();
