@@ -26,7 +26,7 @@ Official Render references: [Free service limitations](https://render.com/docs/f
 ### A. Deploy and verify the compatibility bridge
 
 1. In Render, reconfirm the exact old deployed SHA is `33677df` (full SHA and deploy ID from Render, not `/api/health`), Auto-Deploy Off, one configured instance, and no other serving backend. Stop on mismatch.
-2. Set `K3NCRYPT_MAINTENANCE_MODE=true` in the existing Render service and manually deploy the reviewed bridge SHA. Do not alter Mux variables. The bridge must build/start successfully and `/api/health` plus `/api/ready` must return 200; these probes remain allowed during maintenance.
+2. Set `K3NCRYPT_MAINTENANCE_MODE=true` in the existing Render service and manually deploy the reviewed bridge SHA in the same deployment action. Do not trigger a separate restart/deploy of `33677df` after changing the variable; that old code does not contain the gate. Do not alter Mux variables. The bridge must build/start successfully and `/api/health` plus `/api/ready` must return 200; these probes remain allowed during maintenance.
 3. New requests are routed to the bridge after health succeeds. The old instance may still handle sockets already attached to it during Render's documented 60-second drain and shutdown delay. **Do not start the migration during this period.** Wait for Render to mark the old instance/process terminated and the bridge as the sole live process. If Render does not provide evidence of termination, NO-GO.
 4. Verify through both the custom hostname and direct `onrender.com` hostname:
    - `GET /api/health` and `/api/ready` return 200;
