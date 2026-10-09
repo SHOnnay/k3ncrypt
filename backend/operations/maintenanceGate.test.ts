@@ -38,6 +38,14 @@ describe('maintenance gate', () => {
     await request(app).options('/api/message').expect(503, { error: 'maintenance' });
   });
 
+  it('keeps HTTP operations available when the gate is disabled after a fresh process starts', async () => {
+    process.env.K3NCRYPT_MAINTENANCE_MODE = 'false';
+    const app = express();
+    app.use(maintenanceHttpGate);
+    app.post('/api/message', (_req, res) => res.sendStatus(202));
+    await request(app).post('/api/message').expect(202);
+  });
+
   test.each(SOCKET_PATHS)('rejects new Socket.IO handshakes on %s', async (path) => {
     process.env.K3NCRYPT_MAINTENANCE_MODE = 'true';
     const http = createServer();
@@ -87,7 +95,9 @@ describe('maintenance gate', () => {
   });
 
   it('is installed on all production Socket.IO surfaces and sits before HTTP routes', () => {
-    expect(readFileSync('app.ts', 'utf8').indexOf('app.use(maintenanceHttpGate)')).toBeLessThan(readFileSync('app.ts', 'utf8').indexOf('app.use("/api", apiController)'));
+    const app = readFileSync('app.ts', 'utf8');
+    expect(app.indexOf('app.use(maintenanceHttpGate)')).toBeLessThan(app.indexOf('app.use(cors('));
+    expect(app.indexOf('app.use(maintenanceHttpGate)')).toBeLessThan(app.indexOf('app.use("/api", apiController)'));
     for (const file of ['backend/socket.io/index.ts', 'backend/sync/relay.ts', 'backend/privateNetwork/relay.ts']) {
       const source = readFileSync(file, 'utf8');
       expect(source).toContain('allowRequest: socketOriginAdmission');
