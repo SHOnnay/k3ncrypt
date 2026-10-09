@@ -2,7 +2,7 @@ import { generateKeyPairSync, sign as ed25519Sign, webcrypto } from 'crypto';
 import type { SecureStorage, TransportManager, EncryptedEnvelope } from '../core/contracts';
 import type { VodozemacAccountHandle } from '../identity/vodozemacIdentity';
 import type { VodozemacSessionHandle } from '../core/vodozemacCryptoSession';
-import { ModernConversation } from './modernConversation';
+import { ModernConversation, type SignedModernInvitation } from './modernConversation';
 import { publishVodozemacBundle, fetchVodozemacBundle, claimVodozemacOneTimeKey, renewVodozemacBundle } from '../api/prekeys';
 import { AuthenticatedCallSignalTransport } from '../calls/authenticatedTransport';
 import { SecureStorageDeviceLifecyclePersistence } from '../devices/runtime';
@@ -36,11 +36,11 @@ const remoteSigningPair = generateKeyPairSync('ed25519');
 const bundle = { version: 1 as const, protocol: 'vodozemac-olm-v1' as const,
     identity: { curve25519: key(3), ed25519: rawEd25519Public(remoteSigningPair) }, oneTimeKeys: [{ id: 'otk-remote-test', key: key(5) }] };
 const remoteCommitment = async (): Promise<string> => fingerprintVodozemacIdentity(bundle.identity);
-const signedInvitation = async () => {
+const signedInvitation = async (overrides: { roomId?: string; capabilities?: readonly ('join-introduction-v1' | 'room-message-v1')[]; createdAt?: number; expiresAt?: number } = {}): Promise<SignedModernInvitation> => {
     const now = Date.now();
-    const unsigned = { version: 2 as const, type: 'k3ncrypt-first-contact-invitation' as const, invitationId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', roomId: room,
-        controlCapability: key(9), inviterAddress: remoteAddress, identityCommitment: await remoteCommitment(), capabilities: ['join-introduction-v1', 'room-message-v1'] as const,
-        createdAt: now, expiresAt: now + 24 * 60 * 60 * 1000 };
+    const unsigned = { version: 2 as const, type: 'k3ncrypt-first-contact-invitation' as const, invitationId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', roomId: overrides.roomId ?? room,
+        controlCapability: key(9), inviterAddress: remoteAddress, identityCommitment: await remoteCommitment(), capabilities: (overrides.capabilities ?? ['join-introduction-v1', 'room-message-v1']) as SignedModernInvitation['capabilities'],
+        createdAt: overrides.createdAt ?? now, expiresAt: overrides.expiresAt ?? now + 24 * 60 * 60 * 1000 };
     return { ...unsigned, signature: ed25519Sign(null, Buffer.from(`K3NCRYPT_FIRST_CONTACT_INVITATION_V2\0${JSON.stringify(unsigned)}`), remoteSigningPair.privateKey).toString('base64url') };
 };
 
@@ -746,6 +746,24 @@ it('rejects a forged or room-mismatched signed invitation before claiming an OTK
         { sendJoinIntroduction: true, invitation: mismatched })).rejects.toThrow(/signed invitation/i);
     expect(claimVodozemacOneTimeKey).not.toHaveBeenCalled();
     await second.close();
+});
+
+it('rejects signed capability downgrade and expired invitations before claiming an OTK', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    const downgraded = await signedInvitation({ capabilities: ['join-introduction-v1'] });
+    const downgradeConversation = new ModernConversation(new Storage(), loader, fakeTransport(false).transport);
+    await expect(downgradeConversation.connect(room, key(9), remoteAddress, await remoteCommitment(), undefined, undefined, undefined,
+        { sendJoinIntroduction: true, invitation: downgraded })).rejects.toThrow(/signed invitation|Saved join introduction is invalid/i);
+    expect(claimVodozemacOneTimeKey).not.toHaveBeenCalled();
+    await downgradeConversation.close();
+
+    const expired = await signedInvitation({ createdAt: Date.now() - 60_000, expiresAt: Date.now() - 1 });
+    const expiredConversation = new ModernConversation(new Storage(), loader, fakeTransport(false).transport);
+    await expect(expiredConversation.connect(room, key(9), remoteAddress, await remoteCommitment(), undefined, undefined, undefined,
+        { sendJoinIntroduction: true, invitation: expired })).rejects.toThrow(/signed invitation/i);
+    expect(claimVodozemacOneTimeKey).not.toHaveBeenCalled();
+    await expiredConversation.close();
 });
 
 it('keeps legacy peers on the existing first-message route when they do not advertise introductions', async () => {

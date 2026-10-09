@@ -1,4 +1,5 @@
 import { test, expect, type Browser, type BrowserContext, type Page } from '@playwright/test';
+import { resolve } from 'node:path';
 import { parseModernInviteInput } from '../client/src/utils/urlHash';
 import { invite } from './usabilityHelpers';
 
@@ -129,6 +130,176 @@ test('modern private contact works after offline recipient and both browser rest
   await alice.context.close();
 });
 
+test('inviter can stay offline during acceptance and resume the pending first contact', async ({ browser }) => {
+  test.setTimeout(150_000);
+  const alice = await open(browser);
+  await alice.page.getByRole('button', { name: 'Create your private account' }).click();
+  await alice.page.getByRole('textbox', { name: 'Display name', exact: true }).fill('Alice');
+  await alice.page.locator('#local-passphrase').fill(PASSPHRASE);
+  await alice.page.locator('#local-passphrase-confirm').fill(PASSPHRASE);
+  const creation = alice.page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/chat-link');
+  await alice.page.getByRole('button', { name: 'Create secure account' }).click();
+  expect((await creation).status()).toBe(200);
+  const invitation = await alice.page.getByRole('textbox', { name: 'Private invitation' }).inputValue();
+  expect(parseModernInviteInput(invitation)?.version).toBe(2);
+  await alice.page.getByRole('button', { name: 'Continue to your chats' }).click();
+
+  // Closing Alice's only page disconnects its authenticated room transport while
+  // retaining the browser context's encrypted IndexedDB vault for a later resume.
+  await alice.page.close({ runBeforeUnload: true });
+
+  const bob = await open(browser);
+  await bob.page.close();
+  const bobPage = await resume(bob.context, invitation, bob.outbound, 'Bob');
+  await expect(bobPage.locator('#chat-container')).toBeVisible();
+  await expect(bobPage.locator('.conversation-row')).toContainText('Waiting for contact to accept');
+
+  const aliceReturned = await resume(alice.context, invitation, alice.outbound, 'Alice');
+  await expect(aliceReturned.locator('#chat-container')).toBeVisible();
+  const bobRow = aliceReturned.locator('.conversation-row').filter({ hasText: 'Bob' });
+  await expect(bobRow).toHaveCount(1);
+  await bobRow.click();
+  await expect(aliceReturned.locator('.chat-header')).toBeVisible();
+  await expect(aliceReturned.locator('.chat-header')).toContainText(/Bob|Contact · [A-F0-9]{4}/, { timeout: 30_000 });
+
+  await aliceReturned.locator('#msg-input').fill('Alice resumed and accepted the pending introduction');
+  await aliceReturned.locator('#send-btn').click();
+  await expect(bobPage.locator('#messages-area')).toContainText('Alice resumed and accepted the pending introduction', { timeout: 30_000 });
+  await bobPage.locator('#msg-input').fill('Bob confirms the resumed session');
+  await bobPage.locator('#send-btn').click();
+  await expect(aliceReturned.locator('#messages-area')).toContainText('Bob confirms the resumed session', { timeout: 30_000 });
+
+  await bob.context.close();
+  await alice.context.close();
+});
+
+test('recipient IndexedDB abort preserves the first-prekey account and does not ACK before replay succeeds', async ({ browser }) => {
+  test.setTimeout(180_000);
+  const alice = await open(browser);
+  await alice.page.getByRole('button', { name: 'Create your private account' }).click();
+  await alice.page.getByRole('textbox', { name: 'Display name', exact: true }).fill('Alice');
+  await alice.page.locator('#local-passphrase').fill(PASSPHRASE);
+  await alice.page.locator('#local-passphrase-confirm').fill(PASSPHRASE);
+  const creation = alice.page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/chat-link');
+  await alice.page.getByRole('button', { name: 'Create secure account' }).click();
+  expect((await creation).status()).toBe(200);
+  const invitation = await alice.page.getByRole('textbox', { name: 'Private invitation' }).inputValue();
+  const aliceInvitation = parseModernInviteInput(invitation);
+  expect(aliceInvitation?.version).toBe(2);
+  await alice.page.getByRole('button', { name: 'Continue to your chats' }).click();
+  const bob = await open(browser);
+  await bob.page.close();
+  await expect.poll(() => alice.page.evaluate(async () => {
+    const hook = (globalThis as typeof globalThis & { __K3NCRYPT_TEST_ROOM_LIFECYCLE__?: () => Promise<{ selectedRoom?: string; selectedConversationRoom?: string; selectedTransportRoom?: string }> }).__K3NCRYPT_TEST_ROOM_LIFECYCLE__;
+    const state = await hook?.();
+    return [state?.selectedRoom, state?.selectedConversationRoom, state?.selectedTransportRoom];
+  })).toEqual([aliceInvitation?.roomId, aliceInvitation?.roomId, aliceInvitation?.roomId]);
+  await alice.page.waitForTimeout(1_000);
+  await alice.page.evaluate(async (modulePath) => {
+    const { IndexedDbVaultPersistence } = await import(/* @vite-ignore */ modulePath) as { IndexedDbVaultPersistence: new () => { compareAndSwapRecords(updates: Array<{ key: string; expected: string | undefined }>): Promise<boolean> } };
+    const testWindow = window as Window & { __bootstrapAbortArmed?: boolean; __bootstrapAbortTriggered?: boolean; __bootstrapTransactionAborted?: boolean; __bootstrapAccountAtCas?: unknown; __bootstrapDirectAccountWrites?: number; __bootstrapAccountCasAfterAbort?: number; __bootstrapAccountCasKeys?: string[]; __bootstrapRetryWaiting?: boolean; __bootstrapReleaseRetry?: () => void };
+    testWindow.__bootstrapAbortArmed = true;
+    testWindow.__bootstrapAbortTriggered = false;
+    testWindow.__bootstrapTransactionAborted = false;
+    testWindow.__bootstrapDirectAccountWrites = 0;
+    testWindow.__bootstrapAccountCasAfterAbort = 0;
+    const prototype = IndexedDbVaultPersistence.prototype;
+    const original = prototype.compareAndSwapRecords;
+    const originalWrite = (prototype as unknown as { writeRecord(key: string, value: string): Promise<void> }).writeRecord;
+    (prototype as unknown as { writeRecord(key: string, value: string): Promise<void> }).writeRecord = async function (key, value) {
+      if (testWindow.__bootstrapAbortTriggered && key === 'vodozemac-account:local') testWindow.__bootstrapDirectAccountWrites = (testWindow.__bootstrapDirectAccountWrites ?? 0) + 1;
+      return originalWrite.call(this, key, value);
+    };
+    prototype.compareAndSwapRecords = async function (updates) {
+      const accountUpdate = updates.find((item) => item.key === 'vodozemac-account:local');
+      if (testWindow.__bootstrapAbortTriggered && accountUpdate && !testWindow.__bootstrapAbortArmed) {
+        testWindow.__bootstrapAccountCasAfterAbort = (testWindow.__bootstrapAccountCasAfterAbort ?? 0) + 1;
+        testWindow.__bootstrapAccountCasKeys = updates.map((item) => item.key);
+        testWindow.__bootstrapRetryWaiting = true;
+        await new Promise<void>((resolve) => { testWindow.__bootstrapReleaseRetry = resolve; });
+        testWindow.__bootstrapRetryWaiting = false;
+      }
+      if (!testWindow.__bootstrapAbortArmed || !accountUpdate) return original.call(this, updates);
+      testWindow.__bootstrapAbortArmed = false;
+      testWindow.__bootstrapAbortTriggered = true;
+      testWindow.__bootstrapAccountAtCas = accountUpdate.expected;
+      const databasePrototype = IDBDatabase.prototype as unknown as { transaction: (...args: unknown[]) => IDBTransaction };
+      const originalTransaction = databasePrototype.transaction;
+      let didAbort = false;
+      Object.defineProperty(databasePrototype, 'transaction', {
+        configurable: true,
+        value: function (this: IDBDatabase, stores: string | string[], mode?: IDBTransactionMode, options?: IDBTransactionOptions) {
+          const transaction = originalTransaction.call(this, stores, mode, options);
+          if (!didAbort && mode === 'readwrite' && stores === 'secure_records') {
+            didAbort = true;
+            transaction.addEventListener('abort', () => { testWindow.__bootstrapTransactionAborted = true; }, { once: true });
+            queueMicrotask(() => transaction.abort());
+            Object.defineProperty(databasePrototype, 'transaction', { configurable: true, value: originalTransaction });
+          }
+          return transaction;
+        },
+      });
+      try { return await original.call(this, updates); }
+      finally {
+        Object.defineProperty(databasePrototype, 'transaction', { configurable: true, value: originalTransaction });
+      }
+    };
+  }, `/@fs${resolve('service/src/storage/persistence.ts')}`);
+
+  const bobPage = await resume(bob.context, invitation, bob.outbound, 'Bob');
+  await expect.poll(() => alice.page.evaluate(() => (window as Window & { __bootstrapAbortTriggered?: boolean }).__bootstrapAbortTriggered)).toBe(true);
+  await expect.poll(() => alice.page.evaluate(() => (window as Window & { __bootstrapRetryWaiting?: boolean }).__bootstrapRetryWaiting)).toBe(true);
+  const bobBootstrapState = await bobPage.evaluate(async () => {
+    const hook = (globalThis as typeof globalThis & { __K3NCRYPT_TEST_ROOM_LIFECYCLE__?: () => Promise<{ bootstrapState?: string; descriptors?: Array<{ bootstrapState?: string }> }> }).__K3NCRYPT_TEST_ROOM_LIFECYCLE__;
+    const state = await hook?.();
+    return state?.bootstrapState ?? state?.descriptors?.[0]?.bootstrapState;
+  });
+  expect(bobBootstrapState).toBe('PENDING_REMOTE');
+  const failedCasAccountDigest = await alice.page.evaluate(async () => {
+    const testWindow = window as Window & { __bootstrapAccountAtCas?: unknown; __bootstrapTransactionAborted?: boolean; __bootstrapDirectAccountWrites?: number; __bootstrapAccountCasAfterAbort?: number; __bootstrapAccountCasKeys?: string[] };
+    const expected = testWindow.__bootstrapAccountAtCas;
+    if (typeof expected !== 'string' || testWindow.__bootstrapTransactionAborted !== true) return undefined;
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(expected));
+    return { hash: Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join(''), directAccountWrites: testWindow.__bootstrapDirectAccountWrites, accountCasAfterAbort: testWindow.__bootstrapAccountCasAfterAbort, accountCasKeys: testWindow.__bootstrapAccountCasKeys };
+  });
+  expect(failedCasAccountDigest?.hash).toMatch(/^[0-9a-f]{64}$/);
+  expect(failedCasAccountDigest?.directAccountWrites).toBe(0);
+  expect(failedCasAccountDigest?.accountCasAfterAbort).toBe(1);
+  expect(failedCasAccountDigest?.accountCasKeys?.some(key => key.startsWith('vodozemac-session:'))).toBe(true);
+  expect(failedCasAccountDigest?.accountCasKeys?.some(key => key.startsWith('conversation-protocol:'))).toBe(true);
+  expect(failedCasAccountDigest?.accountCasKeys?.some(key => key.startsWith('modern-seen:'))).toBe(true);
+  const accountRecordUnchanged = await alice.page.evaluate(async () => {
+    const testWindow = window as Window & { __bootstrapTransactionAborted?: boolean };
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open('k3ncrypt-local-vault', 1);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const value = await new Promise<unknown>((resolve, reject) => {
+      const transaction = database.transaction('secure_records', 'readonly');
+      const request = transaction.objectStore('secure_records').get('vodozemac-account:local');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    database.close();
+    if (typeof value !== 'string' || testWindow.__bootstrapTransactionAborted !== true) return undefined;
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+    return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+  });
+  console.log('FIRST_PREKEY_ABORT_SAFE_STATE', JSON.stringify({ accountUnchanged: accountRecordUnchanged === failedCasAccountDigest?.hash, directAccountWrites: failedCasAccountDigest?.directAccountWrites, recipientAcceptanceRetryObserved: failedCasAccountDigest?.accountCasAfterAbort === 1, transactionAborted: true, senderBootstrapState: bobBootstrapState }));
+  expect(accountRecordUnchanged).toBe(failedCasAccountDigest?.hash);
+
+  await alice.page.evaluate(() => (window as Window & { __bootstrapReleaseRetry?: () => void }).__bootstrapReleaseRetry?.());
+  await alice.page.close({ runBeforeUnload: true });
+  const aliceReturned = await resume(alice.context, invitation, alice.outbound, 'Alice');
+  await expect(aliceReturned.locator('.chat-header')).toContainText(/Bob|Contact · [A-F0-9]{4}/, { timeout: 30_000 });
+  await aliceReturned.locator('#msg-input').fill('Accepted only after the failed transaction was retried');
+  await aliceReturned.locator('#send-btn').click();
+  await expect(bobPage.locator('#messages-area')).toContainText('Accepted only after the failed transaction was retried', { timeout: 30_000 });
+  await bob.context.close();
+  await alice.context.close();
+});
+
 test('Alice can stay in Carol while Bob accepts, then accept Bob from durable mailbox replay', async ({ browser }) => {
   test.setTimeout(240_000);
   const alice = await open(browser);
@@ -203,7 +374,7 @@ test('Alice can stay in Carol while Bob accepts, then accept Bob from durable ma
     await expect.poll(() => selectedRoomBinding(alice.page)).toEqual([bobInvite?.roomId, bobInvite?.roomId, bobInvite?.roomId]);
   }
   await roomLifecycle('alice-opened-bob-after-acceptance', [{ alias: 'Alice', page: alice.page }, { alias: 'Bob', page: bobPage }, { alias: 'Carol', page: carolPage }]);
-  if (!stayInBobDuringAcceptance) await expect(alice.page.locator('.chat-header')).toContainText(/Contact · [A-F0-9]{4}/);
+  if (!stayInBobDuringAcceptance) await expect(alice.page.locator('.chat-header')).toContainText(/Bob|Contact · [A-F0-9]{4}/);
 
   const firstMessage = 'Alice accepted Bob after switching rooms';
   const traceStartIndex = await alice.page.evaluate(() => {
