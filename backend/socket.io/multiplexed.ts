@@ -47,7 +47,7 @@ type ProofCarrier = {
 };
 
 type MuxServer = Pick<Server, 'sockets'>;
-type DeviceSocket = { socketId: string; generation: string };
+type DeviceSocket = { socketId: string; generation: string; socket: CustomSocket };
 const deviceSockets = new Map<string, DeviceSocket>();
 const operationQueues = new WeakMap<CustomSocket, Promise<void>>();
 const subscriptionTimers = new WeakMap<CustomSocket, Map<string, ReturnType<typeof setTimeout>>>();
@@ -76,7 +76,9 @@ const activeBoundDevice = async (socket: CustomSocket): Promise<boolean> => {
     const database = db.getDatabase();
     if (!database) return false;
     const record = await new MongoDeviceTrustStore(database).read(socket.accountIdentityReference, socket.deviceId);
-    return record?.state === 'active' && record.trustEpoch === socket.deviceTrustEpoch;
+    const active = record?.state === 'active' && record.trustEpoch === socket.deviceTrustEpoch;
+    if (!active) invalidateMuxDeviceSocket(socket);
+    return active;
   } catch { return false; }
 };
 
@@ -129,6 +131,11 @@ const deliverMuxMailbox = async (socket: CustomSocket, subscription: MuxRoomSubs
     const message = await db.claimOfflineMessage<{ id: string; timestamp: number; sender: string; envelope: WireEnvelope; mailbox: string; channel: string; claimId: string }>(
       current.routingAddress, current.roomId, new Date(Date.now() + MUX_MAILBOX_LEASE_MS), claimId);
     if (!message) return;
+    // Revocation can commit while the durable claim is in flight. Recheck at
+    // the emission boundary so a stale socket cannot receive newly claimed
+    // content; leaving the claim leased preserves safe retry after expiry.
+    const authorized = await currentSubscription(socket, current.roomId);
+    if (!authorized || authorized.nonce !== current.nonce) return;
     const response = await new Promise<Record<string, unknown> | undefined>((resolve) => {
       const timeout = setTimeout(() => resolve(undefined), MUX_DELIVERY_ACK_MS);
       socket.emit('mux-envelope', {
@@ -183,6 +190,25 @@ const removeSubscription = (socket: CustomSocket, subscription: MuxRoomSubscript
   const roomSockets = muxRoomSockets.get(subscription.roomId);
   if (roomSockets?.get(subscription.routingAddress) === socket) roomSockets.delete(subscription.routingAddress);
   if (roomSockets?.size === 0) muxRoomSockets.delete(subscription.roomId);
+};
+
+const invalidateMuxDeviceSocket = (socket: CustomSocket): void => {
+  const subscriptions = socket.muxSubscriptions;
+  if (subscriptions) for (const subscription of [...subscriptions.values()]) removeSubscription(socket, subscription);
+  if (socket.accountIdentityReference && socket.deviceId) {
+    const key = deviceKey(socket.accountIdentityReference, socket.deviceId);
+    if (deviceSockets.get(key)?.socketId === socket.id) deviceSockets.delete(key);
+  }
+  socket.disconnect(true);
+};
+
+/** Ejects the revoked device's live relay socket immediately after durable revocation. */
+export const revokeMuxDeviceSubscriptions = (accountIdentityReference: string, deviceId: string): void => {
+  const key = deviceKey(accountIdentityReference, deviceId);
+  const current = deviceSockets.get(key);
+  if (!current) return;
+  deviceSockets.delete(key);
+  invalidateMuxDeviceSocket(current.socket);
 };
 
 /** Counts legacy and mux routes together without putting mux sockets in the legacy delivery table. */
@@ -252,7 +278,7 @@ export const registerMultiplexedRelay = (socket: CustomSocket, io: MuxServer): v
     }
     const key = deviceKey(socket.accountIdentityReference, socket.deviceId);
     const previous = deviceSockets.get(key);
-    deviceSockets.set(key, { socketId: socket.id, generation });
+    deviceSockets.set(key, { socketId: socket.id, generation, socket });
     socket.muxConnectionGeneration = generation;
     socket.muxSubscriptions ??= new Map();
     if (previous && previous.socketId !== socket.id) io.sockets.sockets.get(previous.socketId)?.disconnect(true);
