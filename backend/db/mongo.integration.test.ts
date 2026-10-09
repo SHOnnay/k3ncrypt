@@ -71,6 +71,56 @@ suite('MongoDB mailbox terminal-rejection integration', () => {
     expect(legacyClaim).toMatchObject({ id: rowId, state: 'active' });
   });
 
+  it('rehearses migration failure and resume without dropping queued or terminal mailbox records', async () => {
+    const name = `${configuredDbName}_migration_${randomUUID().split('-').join('').slice(0, 8)}`;
+    auxiliaryDatabases.push(name);
+    const legacyDb = client.db(name);
+    const room = randomUUID(); const mailbox = randomUUID(); const expiresAt = new Date(Date.now() + 60_000);
+    const collection = legacyDb.collection('offline_messages');
+    await collection.createIndex({ channel: 1, mailbox: 1, slot: 1 }, { unique: true });
+    const queued = { id: randomUUID(), dedupeKey: `queued-${randomUUID()}`, channel: room, mailbox, sender: randomUUID(), slot: 5,
+      envelope: { version: 2, strategy: 'vodozemac-olm-v1', data: { opaque: 'preserve-this-ciphertext' } }, timestamp: Date.now(), expiresAt };
+    const terminal = { id: randomUUID(), dedupeKey: `terminal-${randomUUID()}`, channel: room, mailbox, sender: randomUUID(),
+      state: 'rejected', terminalReason: 'unsupported-message', terminalAt: new Date(), expiresAt };
+    await collection.insertOne(queued);
+    await collection.insertOne(terminal);
+
+    const originalCollection = legacyDb.collection.bind(legacyDb);
+    const failureDb = {
+      collection: (name: string) => {
+        const target = originalCollection(name);
+        if (name !== 'offline_messages') return target;
+        return new Proxy(target, {
+          get(collectionTarget, property, receiver) {
+            if (property === 'createIndex') return async (keys: Record<string, unknown>, options?: Record<string, unknown>) => {
+              if (keys.channel === 1 && keys.mailbox === 1 && keys.slot === 1 && options?.partialFilterExpression) {
+                throw new Error('injected partial-index creation failure');
+              }
+              return collectionTarget.createIndex(keys as never, options as never);
+            };
+            const value = Reflect.get(collectionTarget, property, receiver);
+            return typeof value === 'function' ? value.bind(collectionTarget) : value;
+          },
+        });
+      },
+    } as unknown as Db;
+
+    await expect(applyMigrations(failureDb)).rejects.toThrow('injected partial-index creation failure');
+    expect(await collection.findOne({ id: queued.id })).toMatchObject({ ...queued, state: 'active' });
+    expect(await collection.findOne({ id: terminal.id })).toMatchObject(terminal);
+
+    // A failed DDL step leaves records intact but requires migration completion
+    // before rollout. Re-running the supported idempotent migration recovers.
+    await applyMigrations(legacyDb);
+    await applyMigrations(legacyDb);
+    expect(await collection.findOne({ id: queued.id })).toMatchObject({ ...queued, state: 'active' });
+    expect(await collection.findOne({ id: terminal.id })).toMatchObject(terminal);
+    const slotIndex = (await collection.listIndexes().toArray()).find((index) => index.name === 'channel_1_mailbox_1_slot_1');
+    expect(slotIndex?.partialFilterExpression).toEqual({ state: 'active' });
+    await expect(collection.insertOne({ id: randomUUID(), dedupeKey: `terminal-slot-${randomUUID()}`, channel: room, mailbox,
+      sender: randomUUID(), state: 'rejected', terminalReason: 'unsupported-message', terminalAt: new Date(), slot: 5, expiresAt })).resolves.toBeDefined();
+  });
+
   it('conditionally removes an accepted message only for the matching claim', async () => {
     const item = message();
     await storeOfflineMessage(item);
@@ -149,9 +199,11 @@ suite('MongoDB mailbox terminal-rejection integration', () => {
   it('keeps a row active after transient failure and permits retry after lease expiry', async () => {
     const item = message();
     await storeOfflineMessage(item);
-    const firstClaim = await claimOfflineMessage<typeof item & { claimId: string }>(item.mailbox, item.channel, new Date(Date.now() - 1), randomUUID());
+    const firstClaim = await claimOfflineMessage<typeof item & { claimId: string }>(item.mailbox, item.channel, new Date(Date.now() + 50), randomUUID());
     expect(firstClaim?.id).toBe(item.id);
     expect(await countOfflineMessages({ mailbox: item.mailbox, channel: item.channel })).toBe(1);
+    expect(await claimOfflineMessage(item.mailbox, item.channel, new Date(Date.now() + 30_000), randomUUID())).toBeUndefined();
+    await new Promise((resolve) => setTimeout(resolve, 60));
     const retryClaim = await claimOfflineMessage<typeof item & { claimId: string; state: string }>(item.mailbox, item.channel, new Date(Date.now() + 30_000), randomUUID());
     expect(retryClaim?.id).toBe(item.id);
     expect(retryClaim?.state).toBe('active');
