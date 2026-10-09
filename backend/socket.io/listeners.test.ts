@@ -176,6 +176,8 @@ it('requires the joined recipient room and a live claim generation before termin
 });
 
 it('authenticates one device socket and independently authorizes two room subscriptions', async () => {
+  const priorMuxGate = process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY;
+  process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY = 'true';
   testOnlyResetMuxDeviceRegistry();
   const roomA = randomUUID(); const roomB = randomUUID(); const deviceId = randomUUID(); const accountIdentityReference = 'mux-stage1-account';
   const routeA = randomUUID(); const peerA = randomUUID(); const routeB = randomUUID(); const peerB = randomUUID();
@@ -227,8 +229,6 @@ it('authenticates one device socket and independently authorizes two room subscr
     expect(socket.muxSubscriptions?.size).toBe(2);
     expect(clients.getSIDByIDs(routeA, roomA)).toBeFalsy();
 
-    const priorMuxGate = process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY;
-    process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY = 'true';
     const storeOfflineSpy = jest.spyOn(db, 'storeOfflineMessage').mockImplementation(async (message) => message as never);
     const countOfflineSpy = jest.spyOn(db, 'countOfflineMessages').mockResolvedValue(1);
     const cleanupOfflineSpy = jest.spyOn(db, 'cleanupExpiredOfflineMessages').mockReturnValue(0);
@@ -245,8 +245,6 @@ it('authenticates one device socket and independently authorizes two room subscr
       proofNonce: wrongRoomNonce, proofOperation: 'relay:message' })).resolves.toEqual({ error: 'Multiplexed message rejected.' });
     expect(storeOfflineSpy).toHaveBeenCalledTimes(1);
     storeOfflineSpy.mockRestore(); countOfflineSpy.mockRestore(); cleanupOfflineSpy.mockRestore();
-    if (priorMuxGate === undefined) delete process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY;
-    else process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY = priorMuxGate;
 
     clients.setClientToChannel(legacyRoute, roomA, 'legacy-test-socket');
     expect(muxWouldExceedChannelCapacity(randomUUID(), roomA, 2)).toBe(true);
@@ -271,6 +269,8 @@ it('authenticates one device socket and independently authorizes two room subscr
     currentDevice = { state: 'revoked', trustEpoch: 5 };
     await expect(invoke('mux-unsubscribe', { roomId: roomB, connectionGeneration: generation, subscriptionNonce: socket.muxSubscriptions?.get(roomB)?.nonce })).resolves.toEqual({ error: 'Room unsubscribe rejected.' });
   } finally {
+    if (priorMuxGate === undefined) delete process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY;
+    else process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY = priorMuxGate;
     handlers.get('disconnect')?.();
     clients.deleteClient(legacyRoute, roomA, 'legacy-test-socket');
     testOnlyResetMuxDeviceRegistry();

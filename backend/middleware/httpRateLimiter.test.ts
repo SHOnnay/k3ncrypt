@@ -13,10 +13,17 @@ test('bounded bookkeeping denies churn without resetting existing limits, then r
 });
 test('varying concrete transfer paths share one aggregate API budget', async () => {
   const app = express(); app.set('trust proxy', 1); app.use(apiRateLimit); app.get('/attachments/:id/chunks/:index', (_req, res) => res.sendStatus(200));
+  // Keep one listener for this budget: repeated ephemeral servers can reuse
+  // ports while Node's shared HTTP agent still retains a previous connection.
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise<void>(resolve => server.once('listening', resolve));
   jest.spyOn(Date, 'now').mockReturnValue(1_000_000);
-  try { for (let i = 0; i < 120; i++) await request(app).get(`/attachments/id-${i}/chunks/${i}`).set('X-Forwarded-For', '192.0.2.17').expect(200);
-    await request(app).get('/attachments/another/chunks/0').set('X-Forwarded-For', '192.0.2.17').expect(429);
-  } finally { jest.restoreAllMocks(); }
+  try { for (let i = 0; i < 120; i++) await request(server).get(`/attachments/id-${i}/chunks/${i}`).set('X-Forwarded-For', '192.0.2.17').expect(200);
+    await request(server).get('/attachments/another/chunks/0').set('X-Forwarded-For', '192.0.2.17').expect(429);
+  } finally {
+    jest.restoreAllMocks();
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  }
 });
 test('control limits also aggregate across concrete room IDs', async () => {
   const app = express(); app.get('/:id', createControlRateLimit(2, 0), (_req, res) => res.sendStatus(200));

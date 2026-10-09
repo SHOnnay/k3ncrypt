@@ -1,4 +1,5 @@
 import type { Collection, Db } from 'mongodb';
+import { muxRelayEnabled } from './muxFeatureGate';
 import type { DeviceLifecycleRecord } from './deviceTrust';
 import { randomUUID, createHmac, timingSafeEqual } from 'crypto';
 import type { BootstrapRequest, EnrollmentEvent, DeviceProofRequest, DeviceResourceContext } from '../../service/src/devices/trustProtocol';
@@ -98,6 +99,7 @@ export class DurableDeviceTrustAuthority {
     return next;
   }
   async issue(request: DeviceProofRequest): Promise<import('./deviceTrust').DeviceAuthorizationProof> {
+    if ((request.operation === 'relay:connect' || request.operation === 'relay:subscribe') && !muxRelayEnabled()) throw new Error('Device proof request rejected.');
     const now = this.now();
     // Proof requests use client wall clocks. Permit a small positive skew while
     // still requiring that the request has not expired at server receipt.
@@ -116,6 +118,7 @@ export class DurableDeviceTrustAuthority {
     return { ...unsigned, signature: this.sign(unsigned) };
   }
   async verify(proof: import('./deviceTrust').DeviceAuthorizationProof, expectedOperation: import('./deviceTrust').DeviceOperation, expectedResource?: DeviceResourceContext): Promise<DeviceLifecycleRecord> {
+    if ((expectedOperation === 'relay:connect' || expectedOperation === 'relay:subscribe') && !muxRelayEnabled()) throw new Error('Device proof rejected.');
     const { signature, ...unsigned } = proof ?? {} as import('./deviceTrust').DeviceAuthorizationProof;
     const actual = Buffer.from(signature ?? ''); const expected = Buffer.from(this.sign(unsigned));
     if (!proof || proof.operation !== expectedOperation || proof.expiresAt <= this.now() || actual.length !== expected.length || !timingSafeEqual(actual, expected) || (expectedResource && JSON.stringify(proof.resource ?? {}) !== JSON.stringify(expectedResource))) throw new Error('Device proof rejected.');

@@ -4,6 +4,12 @@ import type { DeviceLifecycleRecord } from './deviceTrust';
 import { DurableDeviceTrustAuthority, MongoDeviceTrustStore } from './durableDeviceTrust';
 
 describe('device proof request clock skew', () => {
+  const priorEnv = { node: process.env.NODE_ENV, flag: process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY };
+  beforeEach(() => { process.env.NODE_ENV = 'test'; process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY = 'true'; });
+  afterEach(() => {
+    if (priorEnv.node === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = priorEnv.node;
+    if (priorEnv.flag === undefined) delete process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY; else process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY = priorEnv.flag;
+  });
   const now = 1_800_000_000_000;
   const accountIdentityReference = 'account-test';
   const deviceId = '11111111-1111-4111-8111-111111111111';
@@ -28,7 +34,7 @@ describe('device proof request clock skew', () => {
       readAnyDevice: jest.fn(async () => lifecycle),
       consume: jest.fn(async (id: string) => { if (consumed.has(id)) return false; consumed.add(id); return true; }),
     } as unknown as MongoDeviceTrustStore;
-    return { authority: new DurableDeviceTrustAuthority(store, 'p'.repeat(32), () => now), consumed };
+    return { authority: new DurableDeviceTrustAuthority(store, 'p'.repeat(32), () => now), consumed, store };
   };
 
   const signedRequest = (
@@ -112,4 +118,28 @@ describe('device proof request clock skew', () => {
       await expect(authority.issue(request)).rejects.toThrow('Device proof request rejected.');
     }
   });
+  it.each([
+    ['production', undefined], ['production', 'true'], ['development', undefined], ['development', 'false'],
+    ['test', undefined], ['test', 'false'],
+  ])('does not issue or consume Mux proofs when disabled in %s with flag %s', async (node, flag) => {
+    for (const operation of ['relay:connect', 'relay:subscribe'] as const) {
+      process.env.NODE_ENV = 'test'; process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY = 'true';
+      const resource = operation === 'relay:connect' ? { connectionGeneration: 'generation-a' } : {
+        conversationId: '22222222-2222-4222-8222-222222222222', routingAddress: '33333333-3333-4333-8333-333333333333',
+        peerRoutingAddress: '44444444-4444-4444-8444-444444444444', connectionGeneration: 'generation-a',
+      };
+      const { authority, store, consumed } = makeAuthority();
+      const request = signedRequest(now, now + 30_000, operation, resource);
+      const proof = await authority.issue(request);
+      const before = new Set(consumed);
+      jest.mocked(store.read).mockClear(); jest.mocked(store.consume).mockClear();
+      process.env.NODE_ENV = node;
+      if (flag === undefined) delete process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY; else process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY = flag;
+      await expect(authority.issue(request)).rejects.toThrow('Device proof request rejected.');
+      await expect(authority.verify(proof, operation, resource)).rejects.toThrow('Device proof rejected.');
+      expect(store.read).not.toHaveBeenCalled(); expect(store.consume).not.toHaveBeenCalled();
+      expect(consumed).toEqual(before);
+    }
+  });
+
 });

@@ -8,6 +8,9 @@ import type { DeviceAuthorizationProof, DeviceOperation, DeviceResourceContext }
 import getClientInstance from './clients';
 import type { CustomSocket, WireEnvelope } from './index';
 
+import { muxRelayEnabled } from '../security/muxFeatureGate';
+export { muxRelayEnabled } from '../security/muxFeatureGate';
+
 export const MUX_PROTOCOL_VERSION = 1;
 export const MUX_MAX_ROOM_SUBSCRIPTIONS = 128;
 const PRODUCTION_MUX_SUBSCRIPTION_LEASE_MS = 5 * 60_000;
@@ -57,7 +60,11 @@ const deviceKey = (account: string, device: string): string => `${account}\0${de
 const isCurrentMuxSocket = (socket: CustomSocket): boolean => !!socket.accountIdentityReference && !!socket.deviceId &&
   deviceSockets.get(deviceKey(socket.accountIdentityReference, socket.deviceId))?.socketId === socket.id;
 const enqueue = (socket: CustomSocket, operation: () => Promise<void>, ack: (response: Record<string, unknown>) => void, failure: string): void => {
-  const next = (operationQueues.get(socket) ?? Promise.resolve()).then(operation).catch(() => ack({ error: failure }));
+  if (!muxRelayEnabled()) { ack({ error: failure }); return; }
+  const next = (operationQueues.get(socket) ?? Promise.resolve()).then(() => {
+    if (!muxRelayEnabled()) { ack({ error: failure }); return; }
+    return operation();
+  }).catch(() => ack({ error: failure }));
   operationQueues.set(socket, next);
 };
 const validFeatures = (value: unknown): value is string[] => Array.isArray(value) && value.length <= FEATURES.size &&
@@ -96,6 +103,7 @@ const verifyMuxCarrier = async (
 };
 
 const currentSubscription = async (socket: CustomSocket, roomId: string): Promise<MuxRoomSubscription | undefined> => {
+  if (!muxRelayEnabled()) return undefined;
   const subscription = socket.muxSubscriptions?.get(roomId);
   if (!subscription || subscription.expiresAt <= Date.now() || subscription.connectionGeneration !== socket.muxConnectionGeneration ||
       subscription.connectionGeneration !== socket.id || !isCurrentMuxSocket(socket) || socket.connected === false ||
@@ -201,6 +209,7 @@ const scheduleSubscriptionExpiry = (socket: CustomSocket, subscription: MuxRoomS
 
 /** Adds device-scoped authentication and immutable, room-scoped subscriptions to a socket. */
 export const registerMultiplexedRelay = (socket: CustomSocket, io: MuxServer): void => {
+  if (!muxRelayEnabled()) return;
   socket.on('mux-authenticate', (payload: unknown, ack: (response: Record<string, unknown>) => void = () => undefined) => enqueue(socket, async () => {
     const body = payload as Record<string, unknown> | null;
     const generation = socket.id;
@@ -327,7 +336,7 @@ export const registerMultiplexedRelay = (socket: CustomSocket, io: MuxServer): v
     const roomId = body?.roomId;
     const subscription = typeof roomId === 'string' ? await currentSubscription(socket, roomId) : undefined;
     const reject = (): void => ack({ error: 'Multiplexed message rejected.' });
-    if (process.env.NODE_ENV === 'production' || process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY !== 'true' || !body || typeof body !== 'object' || Array.isArray(body) ||
+    if (!muxRelayEnabled() || !body || typeof body !== 'object' || Array.isArray(body) ||
         !exactKeys(body, ['deviceAuthorizationProof', 'envelope', 'proofNonce', 'proofOperation', 'roomId', 'version']) || body.version !== MUX_PROTOCOL_VERSION ||
         !subscription || !subscription.protocolFeatures.includes('room-message-v1') || !socket.muxConnectionGeneration ||
         !body.envelope || typeof body.envelope !== 'object' || Array.isArray(body.envelope) || !Number.isSafeInteger((body.envelope as WireEnvelope).version) ||
@@ -389,7 +398,7 @@ export const registerMultiplexedRelay = (socket: CustomSocket, io: MuxServer): v
     const subscription = typeof roomId === 'string' ? await currentSubscription(socket, roomId) : undefined;
     const reject = (): void => ack({ error: 'Multiplexed call signal rejected.' });
     const envelope = body?.envelope as WireEnvelope | undefined;
-    if (process.env.NODE_ENV === 'production' || process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY !== 'true' || !body || typeof body !== 'object' || Array.isArray(body) ||
+    if (!muxRelayEnabled() || !body || typeof body !== 'object' || Array.isArray(body) ||
         !exactKeys(body, ['deviceAuthorizationProof', 'envelope', 'proofNonce', 'proofOperation', 'roomId', 'version']) || body.version !== MUX_PROTOCOL_VERSION ||
         body.proofOperation !== 'relay:signal' || !subscription || !subscription.protocolFeatures.includes('room-call-signal-v2') ||
         !envelope || typeof envelope !== 'object' || Array.isArray(envelope) || !Number.isSafeInteger(envelope.version) || envelope.version < 1 || envelope.version > 16 ||
@@ -433,7 +442,7 @@ export const registerMultiplexedRelay = (socket: CustomSocket, io: MuxServer): v
     const body = payload as Record<string, unknown> | null;
     const roomId = body?.roomId;
     const subscription = typeof roomId === 'string' ? await currentSubscription(socket, roomId) : undefined;
-    if (process.env.NODE_ENV === 'production' || process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY !== 'true' || !body || typeof body !== 'object' || Array.isArray(body) ||
+    if (!muxRelayEnabled() || !body || typeof body !== 'object' || Array.isArray(body) ||
         !exactKeys(body, ['connectionGeneration', 'roomId', 'subscriptionNonce', 'version']) || body.version !== MUX_PROTOCOL_VERSION || !subscription ||
         body.connectionGeneration !== subscription.connectionGeneration || body.subscriptionNonce !== subscription.nonce || !subscription.protocolFeatures.includes('room-message-v1')) {
       ack({ error: 'Multiplexed mailbox replay rejected.' });
