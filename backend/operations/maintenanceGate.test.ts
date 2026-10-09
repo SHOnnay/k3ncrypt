@@ -94,6 +94,49 @@ describe('maintenance gate', () => {
     }
   });
 
+  it('leaves a pre-gate process active until termination while the bridge rejects new sockets', async () => {
+    process.env.K3NCRYPT_MAINTENANCE_MODE = 'true';
+    const oldHttp = createServer();
+    const oldIo = new Server(oldHttp, { path: '/socket.io', allowRequest: (_request, callback) => callback(null, true) });
+    const oldWrite = jest.fn();
+    oldIo.on('connection', (socket) => socket.on('test-write', oldWrite));
+    const bridgeHttp = createServer();
+    const bridgeIo = new Server(bridgeHttp, { path: '/socket.io', allowRequest: socketOriginAdmission });
+    installMaintenanceSocketGuards(bridgeIo);
+
+    await Promise.all([
+      new Promise<void>((resolve) => oldHttp.listen(0, '127.0.0.1', resolve)),
+      new Promise<void>((resolve) => bridgeHttp.listen(0, '127.0.0.1', resolve)),
+    ]);
+    const oldAddress = oldHttp.address();
+    const bridgeAddress = bridgeHttp.address();
+    if (!oldAddress || typeof oldAddress === 'string' || !bridgeAddress || typeof bridgeAddress === 'string') throw new Error('Test servers did not bind');
+    const oldClient = connect(`http://127.0.0.1:${oldAddress.port}`, { path: '/socket.io', transports: ['websocket'], reconnection: false, timeout: 2_000 });
+    const oldConnected = new Promise<void>((resolve, reject) => {
+      oldClient.once('connect', resolve);
+      oldClient.once('connect_error', reject);
+    });
+    const bridgeClient = connect(`http://127.0.0.1:${bridgeAddress.port}`, { path: '/socket.io', transports: ['websocket'], reconnection: false, timeout: 2_000 });
+    const bridgeRejected = new Promise<boolean>((resolve) => {
+      bridgeClient.once('connect', () => resolve(false));
+      bridgeClient.once('connect_error', () => resolve(true));
+    });
+    try {
+      const [, rejected] = await Promise.all([oldConnected, bridgeRejected]);
+      expect(rejected).toBe(true);
+      oldClient.emit('test-write');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(oldWrite).toHaveBeenCalledTimes(1);
+    } finally {
+      oldClient.disconnect();
+      bridgeClient.disconnect();
+      await Promise.all([
+        new Promise<void>((resolve) => oldIo.close(() => resolve())),
+        new Promise<void>((resolve) => bridgeIo.close(() => resolve())),
+      ]);
+    }
+  }, 10_000);
+
   it('is installed on all production Socket.IO surfaces and sits before HTTP routes', () => {
     const app = readFileSync('app.ts', 'utf8');
     expect(app.indexOf('app.use(maintenanceHttpGate)')).toBeLessThan(app.indexOf('app.use(cors('));
