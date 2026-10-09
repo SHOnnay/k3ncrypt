@@ -32,14 +32,14 @@ This runbook prepares a controlled Render Web Beta upgrade. It does not itself a
 
 ## 2. Prove the candidate before touching production data
 
-1. Run the exact candidate's full Jest suite, the 15 release-relevant isolated-Mongo tests listed under **Skipped Jest cases**, client production build, backend TypeScript build, service SDK build, ESLint, and `git diff --check`.
+1. Run the exact candidate's full Jest suite, all 17 release-relevant isolated-Mongo tests listed under **Mongo-gated release tests**, client production build, backend TypeScript build, service SDK build, ESLint, and `git diff --check`.
 2. Rehearse the migration and failure/resume path against disposable Mongo only. Run the file-ledger restart test against its dedicated disposable container. Do not point test variables at production.
 3. Build the client once with all four Mux variables absent or false and confirm Mux is off. If the proposed rollout includes Mux, separately build/test with the exact four production values and test both mismatch directions. The production browser bundle captures `VITE_` variables at build time; changing only server runtime variables does not change the bundle.
 4. Save build logs and test counts with the candidate record. A failing test, an unexplained shutdown warning, or an unaccounted skip blocks the release.
 
-### Skipped Jest cases
+### Mongo-gated release tests
 
-The last full run had 17 skipped tests in four Mongo-gated suites:
+The prior full run had 17 skipped tests in four Mongo-gated suites. The release-verification run for this candidate executed those same suites against a fresh disposable local MongoDB: **17 passed, 0 failed, 0 skipped**. The test server was loopback-only and was destroyed after validation. No production database or credentials were used.
 
 | Suite | Count | Gate | Release treatment |
 |---|---:|---|---|
@@ -48,7 +48,7 @@ The last full run had 17 skipped tests in four Mongo-gated suites:
 | `backend/attachments/fileLedger.mongo.test.ts` | 2 | Dedicated `K3NCRYPT_FILE_MONGO_PORT` container | Must pass before release. Covers concurrent quota/index behavior and persistence across a disposable database restart. |
 | `backend/privateNetwork/membershipSecurity.mongo.integration.test.ts` | 2 | `MONGO_URI` and `MONGO_DB_NAME` | Must pass before release: `index.ts` initializes this relay and the service SDK exports the private-network surface, even though this task does not expand that feature. |
 
-All 17 skipped tests are release gates for this currently shipped candidate. Use isolated disposable databases/containers and tear them down. The existing report that a Mongo migration rehearsal passed does not replace these exact suite results unless the release record identifies the same tests, commit, and environment.
+All 17 cases are release gates for this candidate. Keep using isolated disposable databases/containers and tear them down. The file-ledger test restarts its named disposable container, so use a stable loopback port for the other Mongo suites in the same serial run. Never point test variables at production.
 
 ## 3. Prove database recovery and compatibility
 
@@ -66,15 +66,19 @@ Do not assume an Atlas backup, PITR window, or restore capability exists.
 
 ## 4. Quiesce writes and preserve the single-instance boundary
 
-1. Schedule a maintenance window and announce the write pause to testers. Disable automatic deploys for the window; confirm one instance, no autoscaling, no background copy, and no overlapping deployment workers.
-2. Use a verified upstream maintenance mechanism that blocks new API writes **and** Socket.IO/WebSocket upgrades, then close/drain existing sockets and in-flight writes. A static page that leaves `/socket.io` open is not a write pause. This repository does not provide a complete maintenance/write-pause switch.
-3. Confirm the serving backend has stopped accepting writes and no old worker remains. If Render or the existing edge layer cannot prove a full API and WebSocket quiescence while retaining a safe way to run the migration command, stop here and do not migrate.
+The checked-in runtime is one Node process: `index.ts` connects Mongo, starts the Express app, and attaches the legacy Socket.IO server plus the sync and private-network Socket.IO relays to the same HTTP server. `app.ts` mounts `/api` on that server. The repository has no application maintenance switch and no checked-in Render Blueprint or edge-maintenance configuration. The actual Render service settings and any external proxy were not accessible during this preparation, so their existence and behavior are **owner-verification requirements**.
+
+1. In Render, confirm the existing backend Web Service ID, plan, linked branch, instance count, autoscaling state, health-check path, build/start/pre-deploy commands, and whether a pre-deploy command is available. The current process-local room, socket, Mux pump, and revocation registries require one configured serving instance. Disable autoscaling and automatic deploys for the window.
+2. Before the window, identify an already-operating upstream maintenance control that can cover both the custom domain and the direct Render service hostname. It must deny every application write/API path and all three Socket.IO paths (`/socket.io`, `/sync/socket.io`, `/private-network/socket.io`), reject new WebSocket upgrades, and actively terminate existing upgraded/polling sessions. Preserve only the Render health-check path if required. Test the control with disposable browser/API/WebSocket clients before relying on it. A maintenance HTML page or HTTP-only block is insufficient.
+3. At the window, enable the tested upstream block. Confirm writes return the maintenance response through every public hostname, new Socket.IO handshakes fail, existing test sockets observe disconnect, and in-flight requests have completed or been terminated. Keep this block in place through migration, deploy, and post-deploy checks.
+4. Render's normal zero-downtime deploy keeps the old instance serving while the candidate builds/starts, then sends `SIGTERM` to the old instance after the replacement receives traffic. The paid-service pre-deploy command runs separately while the old instance is still running. Therefore the upstream write/socket gate and verified socket drain are mandatory before a migration in that command; they must remain active until the old instance has stopped. If the service does not provide the required pre-deploy capability or the gate cannot cover the direct origin and terminate existing sockets, stop. Do not substitute a static page, HTTP-only middleware, or an overlapping migration worker.
+5. During the final deploy overlap, keep all client ingress closed and verify Render shows exactly one healthy candidate instance and the old instance has terminated before lifting maintenance. If the owner's single-instance policy forbids even a quiesced Render deploy overlap, the currently available repository/Render evidence does not establish a safe procedure; stop and obtain a stop-before-start method before the migration window.
 
 ## 5. Run and verify the migration
 
-1. Run one invocation of the already-built candidate's `npm run migrate` using the verified production database configuration and the approved isolated migration/maintenance execution method. `scripts/production.cjs` selects `dist/scripts/migrate.js` and sets `NODE_ENV=production`. Do not launch another serving backend alongside it. If it fails, keep traffic paused and retry only after correcting the cause.
-2. Wait for successful process completion. On failure, keep the write pause in place and do not start the upgraded server.
-3. Verify `offline_messages` contains a unique index named `channel_1_mailbox_1_slot_1` on `{ channel: 1, mailbox: 1, slot: 1 }` with the exact partial filter `{ state: "active" }`. Verify the required `file_ledgers_v2` index and all readiness-required indexes.
+1. For the existing paid Render Web Service, set the one-time **Pre-Deploy Command** to exactly `npm run migrate` for the reviewed candidate deployment. Render documents that this command runs on a separate instance before the new service instance starts, and that the old service instance continues to serve during that step; this is safe only while the maintenance gate above is proven active and every existing socket has been closed. This makes the migration use the candidate's compiled `dist/scripts/migrate.js` via `scripts/production.cjs` with `NODE_ENV=production`. Verify the command is supported by the actual service plan; if it is not, stop and obtain an approved exact-candidate migration execution method rather than using a stale one-off build. [Render deploy sequence and pre-deploy commands](https://render.com/docs/deploys) · [Render one-off jobs use the service's latest successful build](https://render.com/docs/one-off-jobs).
+2. Trigger one reviewed deployment of the exact candidate SHA. Require successful pre-deploy migration completion before the candidate starts. If it fails, keep traffic paused and do not start the upgraded server. Do not launch a second serving backend or an unverified migration process.
+3. Wait for successful process completion. Verify `offline_messages` contains a unique index named `channel_1_mailbox_1_slot_1` on `{ channel: 1, mailbox: 1, slot: 1 }` with the exact partial filter `{ state: "active" }`. Verify the required `file_ledgers_v2` index and all readiness-required indexes.
 4. Reconcile mailbox counts and safe identifiers/checksums with the preflight. Confirm there are no lost queued rows and no unexpected terminal-state changes. Do not log message contents.
 
 ### Migration reversibility
