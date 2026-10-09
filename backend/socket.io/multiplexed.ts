@@ -7,6 +7,7 @@ import { durableDeviceTrustAuthority, MongoDeviceTrustStore } from '../security/
 import type { DeviceAuthorizationProof, DeviceOperation, DeviceResourceContext } from '../security/deviceTrust';
 import getClientInstance from './clients';
 import type { CustomSocket, WireEnvelope } from './index';
+import { RateLimiter } from './rateLimiter';
 
 import { muxRelayEnabled } from '../security/muxFeatureGate';
 export { muxRelayEnabled } from '../security/muxFeatureGate';
@@ -19,11 +20,18 @@ const testMuxLeaseEnabled = process.env.NODE_ENV === 'test' ||
 const testMuxLeaseMs = testMuxLeaseEnabled ? Number(process.env.K3NCRYPT_TEST_MUX_SUBSCRIPTION_LEASE_MS) : NaN;
 export const MUX_SUBSCRIPTION_LEASE_MS = Number.isSafeInteger(testMuxLeaseMs) && testMuxLeaseMs >= 2_000 && testMuxLeaseMs <= PRODUCTION_MUX_SUBSCRIPTION_LEASE_MS
   ? testMuxLeaseMs : PRODUCTION_MUX_SUBSCRIPTION_LEASE_MS;
-const MUX_MAILBOX_LEASE_MS = 30_000;
+const PRODUCTION_MUX_MAILBOX_LEASE_MS = 30_000;
+const muxMailboxLeaseMs = (): number => {
+  const testLeaseMs = testMuxLeaseEnabled ? Number(process.env.K3NCRYPT_TEST_MUX_MAILBOX_LEASE_MS) : NaN;
+  return Number.isSafeInteger(testLeaseMs) && testLeaseMs >= 100 && testLeaseMs <= PRODUCTION_MUX_MAILBOX_LEASE_MS
+    ? testLeaseMs : PRODUCTION_MUX_MAILBOX_LEASE_MS;
+};
 const MUX_DELIVERY_ACK_MS = 10_000;
+const MUX_MAILBOX_RETRY_MARGIN_MS = 25;
 const MUX_OFFLINE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MUX_MAX_OFFLINE_PER_MAILBOX = 64;
 const MUX_MAX_ENVELOPE_BYTES = 32 * 1024;
+const MUX_MAX_PENDING_OPERATIONS = 64;
 const FEATURES = new Set(['join-introduction-v1', 'room-message-v1', 'room-call-signal-v2']);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -49,23 +57,36 @@ type ProofCarrier = {
 type MuxServer = Pick<Server, 'sockets'>;
 type DeviceSocket = { socketId: string; generation: string; socket: CustomSocket };
 const deviceSockets = new Map<string, DeviceSocket>();
-const operationQueues = new WeakMap<CustomSocket, Promise<void>>();
+type OperationQueue = { tail: Promise<void>; pending: number };
+const operationQueues = new WeakMap<CustomSocket, OperationQueue>();
 const subscriptionTimers = new WeakMap<CustomSocket, Map<string, ReturnType<typeof setTimeout>>>();
 const muxRoomSockets = new Map<string, Map<string, CustomSocket>>();
+type MailboxPump = { socket: CustomSocket; subscription: MuxRoomSubscription; running: boolean; requested: boolean; timer?: ReturnType<typeof setTimeout> };
+const mailboxPumps = new Map<string, MailboxPump>();
 const clients = getClientInstance();
+const muxOperationRateLimiter = new RateLimiter({ capacity: 160, refillPerSecond: 20 });
 
 const exactKeys = (value: Record<string, unknown>, keys: readonly string[]): boolean =>
   Object.keys(value).sort().join('\0') === [...keys].sort().join('\0');
 const deviceKey = (account: string, device: string): string => `${account}\0${device}`;
+const mailboxPumpKey = (roomId: string, mailbox: string): string => `${roomId}\0${mailbox}`;
 const isCurrentMuxSocket = (socket: CustomSocket): boolean => !!socket.accountIdentityReference && !!socket.deviceId &&
   deviceSockets.get(deviceKey(socket.accountIdentityReference, socket.deviceId))?.socketId === socket.id;
 const enqueue = (socket: CustomSocket, operation: () => Promise<void>, ack: (response: Record<string, unknown>) => void, failure: string): void => {
   if (!muxRelayEnabled()) { ack({ error: failure }); return; }
-  const next = (operationQueues.get(socket) ?? Promise.resolve()).then(() => {
-    if (!muxRelayEnabled()) { ack({ error: failure }); return; }
-    return operation();
-  }).catch(() => ack({ error: failure }));
-  operationQueues.set(socket, next);
+  if (!muxOperationRateLimiter.consume(socket.id)) { ack({ error: failure, code: 'rate-limited', retryable: true }); return; }
+  const queue = operationQueues.get(socket) ?? { tail: Promise.resolve(), pending: 0 };
+  if (queue.pending >= MUX_MAX_PENDING_OPERATIONS) { ack({ error: failure, code: 'backpressure', retryable: true }); return; }
+  queue.pending += 1;
+  const next = queue.tail.then(async () => {
+    try {
+      if (!muxRelayEnabled()) { ack({ error: failure }); return; }
+      await operation();
+    } catch { ack({ error: failure }); }
+    finally { queue.pending -= 1; }
+  });
+  queue.tail = next;
+  operationQueues.set(socket, queue);
 };
 const validFeatures = (value: unknown): value is string[] => Array.isArray(value) && value.length <= FEATURES.size &&
   value.every((feature) => typeof feature === 'string' && FEATURES.has(feature)) && new Set(value).size === value.length;
@@ -123,19 +144,40 @@ const notifyMuxSender = (roomId: string, routingAddress: string, id: string, sta
   if (sender?.connected !== false) sender?.emit('mux-delivery-status', { version: MUX_PROTOCOL_VERSION, roomId, id, status });
 };
 
-const deliverMuxMailbox = async (socket: CustomSocket, subscription: MuxRoomSubscription): Promise<void> => {
+type MailboxBatchResult = { status: 'drained' | 'inactive' | 'batch-limit' } | { status: 'retry'; retryAt: number };
+
+const locallyOwnsSubscription = (socket: CustomSocket, subscription: MuxRoomSubscription): boolean =>
+  socket.connected !== false && socket.muxSubscriptions?.get(subscription.roomId) === subscription &&
+  subscription.expiresAt > Date.now() && subscription.connectionGeneration === socket.id && isCurrentMuxSocket(socket);
+
+const deliverMuxMailboxBatch = async (socket: CustomSocket, subscription: MuxRoomSubscription): Promise<MailboxBatchResult> => {
   for (let count = 0; count < MUX_MAX_OFFLINE_PER_MAILBOX; count += 1) {
     const current = await currentSubscription(socket, subscription.roomId);
-    if (!current || current.nonce !== subscription.nonce) return;
+    if (!current || current.nonce !== subscription.nonce) return { status: 'inactive' };
     const claimId = randomUUID();
+    const leaseUntil = Date.now() + muxMailboxLeaseMs();
     const message = await db.claimOfflineMessage<{ id: string; timestamp: number; sender: string; envelope: WireEnvelope; mailbox: string; channel: string; claimId: string }>(
-      current.routingAddress, current.roomId, new Date(Date.now() + MUX_MAILBOX_LEASE_MS), claimId);
-    if (!message) return;
+      current.routingAddress, current.roomId, new Date(leaseUntil), claimId);
+    if (!message) {
+      const claimedUntil = await db.offlineMessageClaimUntil(current.routingAddress, current.roomId);
+      if (claimedUntil) return { status: 'retry', retryAt: claimedUntil.getTime() + MUX_MAILBOX_RETRY_MARGIN_MS };
+      // A competing worker may have ACKed the head between our FIFO lookup
+      // and claim CAS. If another row is now available, retry the new head
+      // instead of mistaking that lost race for an empty mailbox.
+      const pending = await db.countOfflineMessages({ mailbox: current.routingAddress, channel: current.roomId });
+      return pending > 0
+        ? { status: 'retry', retryAt: Date.now() + MUX_MAILBOX_RETRY_MARGIN_MS }
+        : { status: 'drained' };
+    }
     // Revocation can commit while the durable claim is in flight. Recheck at
     // the emission boundary so a stale socket cannot receive newly claimed
     // content; leaving the claim leased preserves safe retry after expiry.
     const authorized = await currentSubscription(socket, current.roomId);
-    if (!authorized || authorized.nonce !== current.nonce) return;
+    if (!authorized || authorized.nonce !== current.nonce) {
+      return locallyOwnsSubscription(socket, subscription)
+        ? { status: 'retry', retryAt: leaseUntil + MUX_MAILBOX_RETRY_MARGIN_MS }
+        : { status: 'inactive' };
+    }
     const response = await new Promise<Record<string, unknown> | undefined>((resolve) => {
       const timeout = setTimeout(() => resolve(undefined), MUX_DELIVERY_ACK_MS);
       socket.emit('mux-envelope', {
@@ -149,9 +191,15 @@ const deliverMuxMailbox = async (socket: CustomSocket, subscription: MuxRoomSubs
     if (response?.outcome === 'permanent-rejection' &&
         (response.reasonClass === 'authenticated-invalid' || response.reasonClass === 'unsupported-message' || response.reasonClass === 'identity-changed') &&
         response.roomId === current.roomId && response.id === message.id && response.claimId === message.claimId &&
-        response.connectionGeneration === current.connectionGeneration && response.subscriptionNonce === current.nonce && await currentSubscription(socket, current.roomId)) {
+        response.connectionGeneration === current.connectionGeneration && response.subscriptionNonce === current.nonce) {
+      if (!await currentSubscription(socket, current.roomId)) {
+        return locallyOwnsSubscription(socket, subscription)
+          ? { status: 'retry', retryAt: leaseUntil + MUX_MAILBOX_RETRY_MARGIN_MS }
+          : { status: 'inactive' };
+      }
       const result = await db.rejectOfflineMessage(message.id, current.routingAddress, current.roomId, message.claimId,
         response.reasonClass as 'authenticated-invalid' | 'unsupported-message' | 'identity-changed');
+      if (result === 'stale') return { status: 'retry', retryAt: leaseUntil + MUX_MAILBOX_RETRY_MARGIN_MS };
       if (result === 'rejected') {
         notifyMuxSender(current.roomId, message.sender, message.id, 'rejected');
         if (response.reasonClass === 'identity-changed') socket.emit('mux-room-suspended', {
@@ -160,10 +208,80 @@ const deliverMuxMailbox = async (socket: CustomSocket, subscription: MuxRoomSubs
       }
       continue;
     }
-    if (!accepted || !await currentSubscription(socket, current.roomId)) return;
-    if (!await db.ackOfflineMessage(message.id, current.routingAddress, current.roomId, message.claimId)) return;
+    if (!accepted) return { status: 'retry', retryAt: leaseUntil + MUX_MAILBOX_RETRY_MARGIN_MS };
+    if (!await currentSubscription(socket, current.roomId)) {
+      return locallyOwnsSubscription(socket, subscription)
+        ? { status: 'retry', retryAt: leaseUntil + MUX_MAILBOX_RETRY_MARGIN_MS }
+        : { status: 'inactive' };
+    }
+    if (!await db.ackOfflineMessage(message.id, current.routingAddress, current.roomId, message.claimId)) {
+      return { status: 'retry', retryAt: leaseUntil + MUX_MAILBOX_RETRY_MARGIN_MS };
+    }
     notifyMuxSender(current.roomId, message.sender, message.id, 'accepted');
   }
+  return { status: 'batch-limit' };
+};
+
+const scheduleMailboxPump = (key: string, pump: MailboxPump, delayMs: number): void => {
+  if (pump.timer) clearTimeout(pump.timer);
+  pump.timer = setTimeout(() => {
+    pump.timer = undefined;
+    pump.requested = true;
+    startMailboxPump(key, pump);
+  }, Math.max(1, delayMs));
+  pump.timer.unref?.();
+};
+
+const startMailboxPump = (key: string, pump: MailboxPump): void => {
+  if (pump.running) return;
+  pump.running = true;
+  void (async () => {
+    try {
+      while (pump.requested) {
+        pump.requested = false;
+        let result: MailboxBatchResult;
+        try { result = await deliverMuxMailboxBatch(pump.socket, pump.subscription); }
+        catch { result = { status: 'retry', retryAt: Date.now() + muxMailboxLeaseMs() + MUX_MAILBOX_RETRY_MARGIN_MS }; }
+        if (result.status === 'retry') {
+          if (pump.requested) continue;
+          if (locallyOwnsSubscription(pump.socket, pump.subscription)) scheduleMailboxPump(key, pump, result.retryAt - Date.now());
+          return;
+        }
+        if (result.status === 'batch-limit') {
+          if (pump.requested) continue;
+          scheduleMailboxPump(key, pump, 1);
+          return;
+        }
+        if (result.status === 'inactive' && !pump.requested) return;
+      }
+    } finally {
+      pump.running = false;
+      if (pump.requested) startMailboxPump(key, pump);
+      else if (!pump.timer && mailboxPumps.get(key) === pump) mailboxPumps.delete(key);
+    }
+  })();
+};
+
+const requestMuxMailboxDelivery = (socket: CustomSocket, subscription: MuxRoomSubscription): void => {
+  const key = mailboxPumpKey(subscription.roomId, subscription.routingAddress);
+  const pump = mailboxPumps.get(key) ?? { socket, subscription, running: false, requested: false };
+  if (pump.timer) { clearTimeout(pump.timer); pump.timer = undefined; }
+  pump.socket = socket;
+  pump.subscription = subscription;
+  pump.requested = true;
+  mailboxPumps.set(key, pump);
+  startMailboxPump(key, pump);
+};
+
+const cancelMailboxPump = (socket: CustomSocket, roomId: string): void => {
+  const subscription = socket.muxSubscriptions?.get(roomId);
+  const key = mailboxPumpKey(roomId, subscription?.routingAddress ?? '');
+  const pump = mailboxPumps.get(key);
+  if (!pump || pump.socket !== socket) return;
+  if (pump.timer) clearTimeout(pump.timer);
+  pump.timer = undefined;
+  pump.requested = false;
+  if (!pump.running) mailboxPumps.delete(key);
 };
 
 const currentRouteRecord = async (roomId: string, address: string): Promise<boolean> => {
@@ -182,6 +300,7 @@ const authorizeRoutingAddress = async (roomId: string, address: string, proof: u
 
 const removeSubscription = (socket: CustomSocket, subscription: MuxRoomSubscription): void => {
   if (socket.muxSubscriptions?.get(subscription.roomId) !== subscription) return;
+  cancelMailboxPump(socket, subscription.roomId);
   socket.muxSubscriptions.delete(subscription.roomId);
   const timers = subscriptionTimers.get(socket);
   const timer = timers?.get(subscription.roomId);
@@ -433,15 +552,11 @@ export const registerMultiplexedRelay = (socket: CustomSocket, io: MuxServer): v
         ack({ id: stored.id, timestamp: stored.timestamp, terminalRejection: true });
         return;
       }
-      if (await db.countOfflineMessages({ channel: subscription.roomId, mailbox: subscription.peerRoutingAddress }) > MUX_MAX_OFFLINE_PER_MAILBOX) {
-        await db.ackOfflineMessage(stored.id as string, subscription.peerRoutingAddress, subscription.roomId);
-        throw new Error('MAILBOX_QUOTA');
-      }
       ack({ version: MUX_PROTOCOL_VERSION, status: 'stored', id: stored.id, timestamp: stored.timestamp });
       const recipient = muxRoomSockets.get(subscription.roomId)?.get(subscription.peerRoutingAddress);
       const peerSubscription = recipient?.muxSubscriptions?.get(subscription.roomId);
       if (recipient && peerSubscription?.peerRoutingAddress === subscription.routingAddress && peerSubscription.protocolFeatures.includes('room-message-v1')) {
-        void deliverMuxMailbox(recipient, peerSubscription).catch(() => undefined);
+        requestMuxMailboxDelivery(recipient, peerSubscription);
       }
     } catch {
       reject();
@@ -505,10 +620,11 @@ export const registerMultiplexedRelay = (socket: CustomSocket, io: MuxServer): v
       return;
     }
     ack({ version: MUX_PROTOCOL_VERSION, status: 'accepted', roomId });
-    void deliverMuxMailbox(socket, subscription).catch(() => undefined);
+    requestMuxMailboxDelivery(socket, subscription);
   }, ack, 'Multiplexed mailbox replay rejected.'));
 
   socket.on('disconnect', () => {
+    muxOperationRateLimiter.reset(socket.id);
     const subscriptions = socket.muxSubscriptions;
     if (subscriptions) for (const subscription of subscriptions.values()) removeSubscription(socket, subscription);
     const timers = subscriptionTimers.get(socket);
@@ -529,5 +645,9 @@ const channelValid = async (roomId: string): Promise<{ valid: boolean }> => {
 };
 
 // Exposed for unit tests; IDs and capabilities are never logged.
-export const testOnlyResetMuxDeviceRegistry = (): void => { deviceSockets.clear(); muxRoomSockets.clear(); };
+export const testOnlyResetMuxDeviceRegistry = (): void => {
+  deviceSockets.clear(); muxRoomSockets.clear();
+  for (const pump of mailboxPumps.values()) if (pump.timer) clearTimeout(pump.timer);
+  mailboxPumps.clear();
+};
 export const testOnlyFreshSubscriptionNonce = (): string => randomUUID();

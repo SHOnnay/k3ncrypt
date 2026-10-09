@@ -150,6 +150,25 @@ it('enables two rooms, background delivery and call signaling only with an expli
   expect(verify).not.toHaveBeenCalled(); expect(db.getDatabase).not.toHaveBeenCalled(); expect(db.storeOfflineMessage).not.toHaveBeenCalled();
 });
 
+it('bounds queued Mux socket operations and returns retryable backpressure', async () => {
+  process.env.NODE_ENV = 'development'; process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY = 'true';
+  const device = await peer();
+  const originalVerify = verify.getMockImplementation()!;
+  let releaseVerification!: () => void;
+  const verificationGate = new Promise<void>(resolve => { releaseVerification = resolve; });
+  verify.mockImplementationOnce(async (...args) => { await verificationGate; return originalVerify(...args); });
+
+  const operations = Array.from({ length: 66 }, () => ack(device.socket, 'mux-authenticate', {
+    connectionGeneration: device.socket.id, ...device.proof('relay:connect', { connectionGeneration: device.socket.id }),
+  }));
+  const fullQueue = await Promise.race(operations.map(operation => operation.then(result => result.code === 'backpressure')));
+  expect(fullQueue).toBe(true);
+  releaseVerification();
+  const results = await Promise.all(operations);
+  expect(results.filter(result => result.code === 'backpressure')).toHaveLength(2);
+  expect(results.filter(result => result.status === 'authenticated')).toHaveLength(64);
+});
+
 it('keeps legacy as the exclusive room owner and delivers one live message with one recipient acceptance', async () => {
   process.env.NODE_ENV = 'development'; process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY = 'true';
   const r = await room(); const alice = await peer(); const bob = await peer(); const muxContender = await peer();
@@ -253,6 +272,93 @@ it('replays a durably queued legacy message after the legacy room owner releases
   expect(recipientAcceptances).toBe(1);
   expect(ackOffline).toHaveBeenCalledTimes(1);
   expect(ackOffline).toHaveBeenCalledWith(queued.id, r.routes[0], r.roomId, expect.any(String));
+});
+
+it('retries a recoverably stalled FIFO head before delivering later mailbox entries', async () => {
+  process.env.NODE_ENV = 'development'; process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY = 'true';
+  const r = await room(); const sender = await peer(); const recipient = await peer();
+  for (const p of [sender, recipient]) expect(await authenticate(p)).toMatchObject({ status: 'authenticated' });
+  expect(await subscribe(sender, r, 0)).toMatchObject({ status: 'subscribed' });
+  expect(await subscribe(recipient, r, 1)).toMatchObject({ status: 'subscribed' });
+
+  const delivered: string[] = [];
+  let finishDelivery!: () => void;
+  const deliveryComplete = new Promise<void>(resolve => { finishDelivery = resolve; });
+  let finishAcceptances!: () => void;
+  const acceptancesComplete = new Promise<void>(resolve => { finishAcceptances = resolve; });
+  let acceptedStatuses = 0;
+  sender.socket.on('mux-delivery-status', status => {
+    if (status.status === 'accepted' && status.roomId === r.roomId) {
+      acceptedStatuses += 1;
+      if (acceptedStatuses === 2) finishAcceptances();
+    }
+  });
+  recipient.socket.on('mux-envelope', (frame, accept) => {
+    delivered.push(frame.id);
+    if (delivered.length === 1) {
+      accept({ outcome: 'retryable', roomId: frame.roomId, id: frame.id, claimId: frame.claimId,
+        connectionGeneration: frame.connectionGeneration, subscriptionNonce: frame.subscriptionNonce });
+    } else {
+      accept({ outcome: 'accepted', roomId: frame.roomId, id: frame.id, claimId: frame.claimId,
+        connectionGeneration: frame.connectionGeneration, subscriptionNonce: frame.subscriptionNonce });
+    }
+    if (delivered.length === 3) finishDelivery();
+  });
+
+  const send = (opaque: string) => ack(sender.socket, 'mux-send-message', { version: 1, roomId: r.roomId,
+    envelope: { ...envelope, data: { opaque } },
+    ...sender.proof('relay:message', { conversationId: r.roomId, routingAddress: r.routes[0], peerRoutingAddress: r.routes[1], connectionGeneration: sender.socket.id }) });
+  const priorLease = process.env.K3NCRYPT_TEST_MUX_MAILBOX_LEASE_MS;
+  process.env.K3NCRYPT_TEST_MUX_MAILBOX_LEASE_MS = '100';
+  try {
+    const first = await send('fifo-first');
+    const second = await send('fifo-second');
+    expect(first).toMatchObject({ status: 'stored' });
+    expect(second).toMatchObject({ status: 'stored' });
+    let rejectDelivery!: (error: Error) => void;
+    const deliveryFailed = new Promise<never>((_, reject) => { rejectDelivery = reject; });
+    const timeout = setTimeout(() => rejectDelivery(new Error('Mailbox retry did not complete.')), 3_000);
+    timeout.unref?.();
+    await Promise.race([Promise.all([deliveryComplete, acceptancesComplete]), deliveryFailed]);
+    clearTimeout(timeout);
+    expect(delivered).toEqual([first.id, first.id, second.id]);
+    expect(await db.countOfflineMessages({ mailbox: r.routes[1], channel: r.roomId })).toBe(0);
+  } finally {
+    if (priorLease === undefined) delete process.env.K3NCRYPT_TEST_MUX_MAILBOX_LEASE_MS;
+    else process.env.K3NCRYPT_TEST_MUX_MAILBOX_LEASE_MS = priorLease;
+  }
+});
+
+it('retries after losing the FIFO-head claim race when another pending row remains', async () => {
+  process.env.NODE_ENV = 'development'; process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY = 'true';
+  const r = await room(); const sender = await peer(); const recipient = await peer();
+  for (const p of [sender, recipient]) expect(await authenticate(p)).toMatchObject({ status: 'authenticated' });
+  expect(await subscribe(sender, r, 0)).toMatchObject({ status: 'subscribed' });
+  expect(await subscribe(recipient, r, 1)).toMatchObject({ status: 'subscribed' });
+
+  const originalClaim = db.claimOfflineMessage;
+  let loseFirstClaim = true;
+  const claim = jest.spyOn(db, 'claimOfflineMessage').mockImplementation(async (...args) => {
+    if (loseFirstClaim) { loseFirstClaim = false; return undefined; }
+    return originalClaim(...args);
+  });
+  try {
+    const accepted = new Promise<void>(resolve => sender.socket.once('mux-delivery-status', status => {
+      if (status.status === 'accepted' && status.roomId === r.roomId) resolve();
+    }));
+    const received = new Promise<RecordResponse>(resolve => recipient.socket.once('mux-envelope', (frame, accept) => {
+      accept({ outcome: 'accepted', roomId: frame.roomId, id: frame.id, claimId: frame.claimId,
+        connectionGeneration: frame.connectionGeneration, subscriptionNonce: frame.subscriptionNonce });
+      resolve(frame);
+    }));
+    const sent = await ack(sender.socket, 'mux-send-message', { version: 1, roomId: r.roomId, envelope,
+      ...sender.proof('relay:message', { conversationId: r.roomId, routingAddress: r.routes[0], peerRoutingAddress: r.routes[1], connectionGeneration: sender.socket.id }) });
+    expect(sent).toMatchObject({ status: 'stored' });
+    expect(await received).toMatchObject({ id: sent.id, roomId: r.roomId });
+    await accepted;
+    expect(await db.countOfflineMessages({ mailbox: r.routes[1], channel: r.roomId })).toBe(0);
+    expect(claim).toHaveBeenCalledTimes(3); // race miss, successful claim, then empty-mailbox probe
+  } finally { claim.mockRestore(); }
 });
 
 it('ejects an actively revoked Mux device, rejects its reconnect, and preserves another device', async () => {
