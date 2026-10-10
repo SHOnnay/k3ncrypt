@@ -4,6 +4,12 @@
 .input-container .message-input:focus { border: 0; outline: 0; box-shadow: none; }
 .composer-tool { width: 34px; height: 34px; flex: none; display: grid; place-items: center; border: 0; border-radius: 10px; color: var(--muted); background: transparent; }.composer-tool:disabled { cursor: not-allowed; opacity: .56; }
 .media-transfer-status { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 10px; padding: 7px 4px 0; color: var(--muted-strong); font-size: .75rem; }.media-transfer-status progress { width: min(100%, 220px); height: 6px; accent-color: var(--brand); }.media-transfer-status button { min-height: 36px; border: 0; padding: 0 8px; color: var(--brand); background: transparent; font: inherit; font-weight: 650; cursor: pointer; }
+.attachment-draft { display: flex; align-items: center; gap: 10px; min-width: 0; margin-top: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-muted); }
+.attachment-draft-preview { width: 42px; height: 42px; flex: none; border-radius: 8px; object-fit: cover; }
+.attachment-draft-details { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 2px; color: var(--muted-strong); font-size: .72rem; }
+.attachment-draft-details strong { overflow: hidden; color: var(--ink); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-draft > button { flex: none; border: 0; padding: 6px 8px; border-radius: 8px; color: var(--danger); background: var(--danger-soft); font: inherit; font-size: .72rem; cursor: pointer; }
+.attachment-draft > button:disabled { cursor: not-allowed; opacity: .55; }
 .composer-feedback { padding: 7px 5px 0; color: var(--muted-strong); font-size: .75rem; line-height: 1.45; }
 .recording-indicator { display: inline-flex; align-items: center; gap: 6px; color: var(--danger); font-size: .68rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .recording-indicator span { width: 7px; height: 7px; border-radius: 50%; background: var(--danger); animation: recording-pulse 1.2s ease-in-out infinite; }

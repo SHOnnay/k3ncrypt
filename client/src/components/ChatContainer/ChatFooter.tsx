@@ -26,6 +26,9 @@ export const ChatFooter: React.FC<{ onVerifyContact: () => void }> = ({ onVerify
   const verified = contactIdentity?.verification === 'verified' && contactIdentity.changeStatus === 'unchanged';
   const [message, setMessage] = useState<string>('');
   const [isSending, setIsSending] = useState<boolean>(false);
+  const [attachmentDraft, setAttachmentDraft] = useState<{ file: File; roomId: string; image: boolean }>();
+  const [attachmentPreviewUrl, setAttachmentPreviewUrl] = useState<string>();
+  const attachmentSendLock = useRef(false);
   const [actionMessage, setActionMessage] = useState('');
   const [actionDiagnostic, setActionDiagnostic] = useState<SafeDiagnosticCode>();
   const loggedFileFailure = useRef<SafeDiagnosticCode>();
@@ -59,12 +62,26 @@ export const ChatFooter: React.FC<{ onVerifyContact: () => void }> = ({ onVerify
   }, [transfer.failure, transfer.phase, transfer.diagnosticCode]);
 
   useEffect(() => {
+    if (!attachmentDraft?.image) { setAttachmentPreviewUrl(undefined); return; }
+    const url = URL.createObjectURL(attachmentDraft.file);
+    setAttachmentPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [attachmentDraft]);
+
+  useEffect(() => {
+    setAttachmentDraft(undefined);
+    setActionMessage('');
+    setActionDiagnostic(undefined);
+    if (attachmentInputRef.current) attachmentInputRef.current.value = '';
+  }, [channelHash]);
+
+  useEffect(() => {
     if (!isRecording) { setRecordingSeconds(0); return; }
     const timer = window.setInterval(() => setRecordingSeconds(Math.floor((Date.now() - recordingStartedAt.current) / 1000)), 250);
     return () => window.clearInterval(timer);
   }, [isRecording]);
 
-  const handleSend = async () => {
+  const handleSendMessage = async () => {
     if (!message.trim()) return;
     if (new TextEncoder().encode(message).byteLength > MAX_USER_MESSAGE_UTF8_BYTES) {
       setActionMessage(`Messages can be up to ${MAX_USER_MESSAGE_UTF8_BYTES.toLocaleString()} UTF-8 bytes.`);
@@ -95,13 +112,39 @@ export const ChatFooter: React.FC<{ onVerifyContact: () => void }> = ({ onVerify
     setActionDiagnostic(undefined);
     if (file.size > 8 * 1024 * 1024) { setActionMessage(file.type.startsWith('image/') ? 'This photo is larger than the current 8 MiB limit.' : 'This file is larger than the current 8 MiB limit.'); return; }
     setActionMessage('');
-    try { await sendFile(file); }
+    setAttachmentDraft({ file, roomId: channelHash, image: file.type.startsWith('image/') });
+  };
+
+  const removeAttachment = () => {
+    setAttachmentDraft(undefined);
+    setActionMessage('');
+    setActionDiagnostic(undefined);
+    if (attachmentInputRef.current) attachmentInputRef.current.value = '';
+  };
+
+  const handleSendAttachment = async () => {
+    const draft = attachmentDraft;
+    if (!draft || attachmentSendLock.current || isSending || busy) return;
+    if (!channelHash || draft.roomId !== channelHash) {
+      removeAttachment();
+      setActionMessage('The conversation changed. Attach the file again in the intended chat.');
+      return;
+    }
+    attachmentSendLock.current = true;
+    setIsSending(true);
+    setActionMessage('');
+    setActionDiagnostic(undefined);
+    try { await sendFile(draft.file); }
     catch (error) {
       const code = classifySafeDiagnostic('file-send', error);
       if (loggedFileFailure.current !== code) logSafeFailure('file_send_failed', code);
       loggedFileFailure.current = code;
       setActionDiagnostic(code);
       setActionMessage(safeFailureCopy('file-send'));
+    } finally {
+      setAttachmentDraft(current => current === draft ? undefined : current);
+      attachmentSendLock.current = false;
+      setIsSending(false);
     }
   };
 
@@ -161,7 +204,7 @@ export const ChatFooter: React.FC<{ onVerifyContact: () => void }> = ({ onVerify
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
-      handleSend();
+      handleSendMessage();
     }
   };
 
@@ -189,13 +232,19 @@ export const ChatFooter: React.FC<{ onVerifyContact: () => void }> = ({ onVerify
           id="send-btn"
           variant="primary"
           circle
-          onClick={handleSend}
-          disabled={sessionHealth === 'unhealthy' || !message.trim() || isSending}
-          aria-label="Send message"
+          onClick={attachmentDraft ? handleSendAttachment : handleSendMessage}
+          disabled={sessionHealth === 'unhealthy' || (!message.trim() && !attachmentDraft) || isSending || busy}
+          aria-label={attachmentDraft ? 'Send file' : 'Send message'}
+          title={attachmentDraft ? 'Send file' : 'Send message'}
         >
           <SendIcon size={20} />
         </Button>
       </div>
+      {attachmentDraft && <div className="attachment-draft" role="group" aria-label="File attachment draft">
+        {attachmentPreviewUrl && <img className="attachment-draft-preview" src={attachmentPreviewUrl} alt={`Preview of ${attachmentDraft.file.name}`} />}
+        <div className="attachment-draft-details"><strong>{attachmentDraft.file.name}</strong><span>{(attachmentDraft.file.size / 1024).toLocaleString(undefined, { maximumFractionDigits: 1 })} KiB</span></div>
+        <button type="button" onClick={removeAttachment} disabled={isSending || busy} aria-label="Remove attachment">Remove</button>
+      </div>}
       {transfer.phase !== 'Idle' && <div className="media-transfer-status" role="status" aria-live="polite"><span>{transferStatus.label}</span>{transferStatus.progress !== undefined && <progress max={100} value={transferStatus.progress} aria-label="File transfer progress" />}{busy && <button type="button" onClick={cancelTransfer}>Cancel</button>}{transfer.phase === 'Failed' && transfer.retryable && <button type="button" onClick={retryAttachment}>Retry</button>}</div>}
       <div className="composer-feedback">Photos and files up to 8 MiB. You choose when to save a download.</div>
       {!verified && contactIdentity && <div className="composer-feedback"><strong>Invitation accepted</strong><p>Verify this contact before sharing files.</p><button type="button" className="btn btn--secondary" onClick={onVerifyContact}>Verify {contactLabel}</button></div>}
