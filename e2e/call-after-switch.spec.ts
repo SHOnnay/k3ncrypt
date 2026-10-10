@@ -34,6 +34,21 @@ const openContact = async (page: Page, name: string) => {
 const activeTransport = async (page: Page) => page.evaluate(() =>
   (globalThis as typeof globalThis & { __K3NCRYPT_ACTIVE_ROOM_TRANSPORT__?: () => string | undefined }).__K3NCRYPT_ACTIVE_ROOM_TRANSPORT__?.());
 
+const installMediaRequestProbe = () => {
+  const target = globalThis as typeof globalThis & { __K3NCRYPT_MEDIA_REQUEST_COUNT__?: number; __K3NCRYPT_MEDIA_PROBE_INSTALLED__?: boolean };
+  if (target.__K3NCRYPT_MEDIA_PROBE_INSTALLED__ || !navigator.mediaDevices?.getUserMedia) return;
+  const original = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+  Object.defineProperty(navigator.mediaDevices, 'getUserMedia', {
+    configurable: true,
+    value: (...args: Parameters<MediaDevices['getUserMedia']>) => {
+      target.__K3NCRYPT_MEDIA_REQUEST_COUNT__ = (target.__K3NCRYPT_MEDIA_REQUEST_COUNT__ ?? 0) + 1;
+      return original(...args);
+    },
+  });
+  target.__K3NCRYPT_MEDIA_REQUEST_COUNT__ = 0;
+  target.__K3NCRYPT_MEDIA_PROBE_INSTALLED__ = true;
+};
+
 const reloadUnlocked = async (page: Page) => {
   await page.reload();
   await page.getByRole('button', { name: 'Unlock this device', exact: true }).click();
@@ -71,6 +86,12 @@ test('audio call support follows the selected contact and decline permits a call
   test.setTimeout(240000);
   const muxEnabled = process.env.PLAYWRIGHT_MUX_STAGE1 === 'true';
   const { a, b, alice, bob } = await connectedPair(browser, muxEnabled);
+  if (muxEnabled) {
+    await alice.addInitScript(installMediaRequestProbe);
+    await bob.addInitScript(installMediaRequestProbe);
+    await alice.evaluate(installMediaRequestProbe);
+    await bob.evaluate(installMediaRequestProbe);
+  }
   const c = await browser.newContext({ permissions: ['microphone', 'camera'] });
   if (muxEnabled) await c.addInitScript(() => { (globalThis as typeof globalThis & { __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean }).__K3NCRYPT_TEST_ONLY_DIAGNOSTICS__ = true; });
   const cara = await c.newPage(); await create(cara, 'Cara');
@@ -93,8 +114,47 @@ test('audio call support follows the selected contact and decline permits a call
   if (muxEnabled) {
     await reloadUnlocked(alice); await reloadUnlocked(bob); await reloadUnlocked(cara);
     await openContact(alice, 'Bob');
+    await openContact(bob, 'Alice');
     await expect.poll(() => activeTransport(alice), { timeout: 30_000 }).toBe('multiplexed');
     await expect.poll(() => activeTransport(bob), { timeout: 30_000 }).toBe('multiplexed');
+    // Reconnect after unlock and before the invite to cover the restored
+    // selected-room receiver and authenticated signal listener reattachment.
+    await alice.evaluate(async () => {
+      const hook = (globalThis as typeof globalThis & { __K3NCRYPT_MUX_RECONNECT__?: () => Promise<void> }).__K3NCRYPT_MUX_RECONNECT__;
+      if (!hook) throw new Error('Mux reconnect diagnostic is unavailable.');
+      await hook();
+    });
+    await expect.poll(() => alice.evaluate(() => {
+      const hook = (globalThis as typeof globalThis & { __K3NCRYPT_MUX_SNAPSHOT__?: () => { connected: boolean; authenticated: boolean; roomSubscriptionCount: number } | undefined }).__K3NCRYPT_MUX_SNAPSHOT__;
+      const snapshot = hook?.();
+      return Boolean(snapshot?.connected && snapshot.authenticated && snapshot.roomSubscriptionCount >= 2);
+    }), { timeout: 30_000 }).toBe(true);
+    await bob.getByRole('button', { name: 'Calls', exact: true }).click();
+    await bob.getByRole('button', { name: 'Start audio call', exact: true }).click();
+    await expect(alice.getByRole('button', { name: 'Accept call', exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(alice.locator('.call-info')).toHaveCount(1);
+    await expect(alice.locator('.call-contact-name')).toHaveText('Bob');
+    await expect.poll(() => alice.evaluate(() => (globalThis as typeof globalThis & { __K3NCRYPT_MEDIA_REQUEST_COUNT__?: number }).__K3NCRYPT_MEDIA_REQUEST_COUNT__ ?? 0)).toBe(0);
+    await alice.getByRole('button', { name: 'Accept call', exact: true }).click();
+    await expect(alice.locator('#call-status')).toHaveText('Connected', { timeout: 20_000 });
+    await expect(bob.locator('#call-status')).toHaveText('Connected', { timeout: 20_000 });
+    await expect.poll(() => alice.evaluate(() => (globalThis as typeof globalThis & { __K3NCRYPT_MEDIA_REQUEST_COUNT__?: number }).__K3NCRYPT_MEDIA_REQUEST_COUNT__ ?? 0)).toBeGreaterThan(0);
+    await bob.getByRole('button', { name: 'End call', exact: true }).click();
+    await expect(alice.locator('.call-info')).not.toBeVisible();
+    await expect(bob.locator('.call-info')).not.toBeVisible();
+    // Switch Alice to Carol while Bob calls again. The global incoming UI must
+    // remain bound to Bob and decline must not start local media.
+    await openContact(alice, 'Cara');
+    await bob.getByRole('button', { name: 'Calls', exact: true }).click();
+    await bob.getByRole('button', { name: 'Start audio call', exact: true }).click();
+    await expect(alice.getByRole('button', { name: 'Decline call', exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(alice.locator('.call-contact-name')).toHaveText('Bob');
+    const mediaRequestsBeforeDecline = await alice.evaluate(() => (globalThis as typeof globalThis & { __K3NCRYPT_MEDIA_REQUEST_COUNT__?: number }).__K3NCRYPT_MEDIA_REQUEST_COUNT__ ?? 0);
+    await alice.getByRole('button', { name: 'Decline call', exact: true }).click({ timeout: 30_000 });
+    await expect(alice.locator('.call-info')).not.toBeVisible();
+    await expect(bob.locator('.call-info')).not.toBeVisible();
+    await expect.poll(() => alice.evaluate(() => (globalThis as typeof globalThis & { __K3NCRYPT_MEDIA_REQUEST_COUNT__?: number }).__K3NCRYPT_MEDIA_REQUEST_COUNT__ ?? 0)).toBe(mediaRequestsBeforeDecline);
+    await openContact(alice, 'Bob');
   }
   const callDiagnostics: string[] = [];
   await enableSafeCallDiagnostics(alice, callDiagnostics);

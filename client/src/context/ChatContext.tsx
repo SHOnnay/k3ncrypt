@@ -107,6 +107,13 @@ const displayMessage = (sender: string, text: string, type: Message['type']): Me
   }
 };
 
+type ModernCallReceiver = {
+  conversation: ModernConversation;
+  composition: AuthenticatedCallComposition;
+  stateUnsubscribe: () => void;
+  protocolUnsubscribe: () => void;
+};
+
 export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [chat, setChat] = useState<IChatE2EE | null>(null);
   const [modern, setModern] = useState<ModernConversation | null>(null);
@@ -121,6 +128,10 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [vault, setVault] = useState<BrowserSecureStorage>();
   const selectedConversation = useRef<ModernConversation>();
   const selectedConnection = useRef<{ roomId: string; capability: string; conversation: ModernConversation; details: ModernConnectionDetails }>();
+  const callConversationRooms = useRef(new WeakMap<ModernConversation, string>());
+  const callReceivers = useRef(new Map<ModernConversation, ModernCallReceiver>());
+  const callReceiverInstallations = useRef(new Map<ModernConversation, Promise<ModernCallReceiver>>());
+  const callReceiverEpochs = useRef(new WeakMap<ModernConversation, number>());
   const muxConnection = useRef<MultiplexedRelayConnection>();
   const muxRoomIds = useRef(new Set<string>());
   const muxDetails = useRef(new Map<string, ModernConnectionDetails>());
@@ -149,11 +160,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const verificationTerminationRef = useRef<() => Promise<void>>(async () => undefined);
   const verificationTerminationPending = useRef<Promise<void>>();
   const callSupportConversation = useRef<ModernConversation | null>(null);
-  const callSupportInstallation = useRef<Promise<void> | null>(null);
   const callMediaUnsubscribe = useRef<(() => void) | null>(null);
   const callMediaFailureRef = useRef<'microphone-unavailable' | 'camera-unavailable' | undefined>();
-  const callStateUnsubscribe = useRef<(() => void) | null>(null);
-  const callProtocolUnsubscribe = useRef<(() => void) | null>(null);
   const locallyAcceptedCalls = useRef(new Set<string>());
   const [userId, setUserId] = useState<string>('');
   const [channelHash, setChannelHash] = useState<string>('');
@@ -163,6 +171,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [conversationOpenError, setConversationOpenError] = useState<{ roomId: string; operationId: number; code: SafeDiagnosticCode }>();
   const conversationOpenGeneration = useRef(0);
   const [activeCallRoomId, setActiveCallRoomId] = useState<string>();
+  const activeCallRoomIdRef = useRef<string>();
   const activeRoom = channelHash ? roomStates[channelHash] : undefined;
   const messages = activeRoom?.messages ?? [];
   const setRoomState = useCallback((roomId: string, update: Partial<Omit<RoomState<ModernConversation>, 'roomId'>>) => {
@@ -233,11 +242,18 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const createNewChannel = useCallback(async (): Promise<InviteInfo> => {
     if (!chat) throw new Error('Chat not initialized');
     try {
-      if (modern) await modern.close(false);
+      if (modern) {
+        await releaseModernCallReceiver(modern);
+        await modern.close(false);
+      }
       selectedConversation.current = undefined; selectedConnection.current = undefined;
       setModern(null);
+      modernCallCompositionRef.current = null;
+      modernCallIdRef.current = undefined;
+      activeCallRoomIdRef.current = undefined;
       setModernCallComposition(null);
       setModernCallId(undefined);
+      setActiveCallRoomId(undefined);
       const linkObj = await chat.getLink();
       return { roomId: linkObj.hash, secret: linkObj.secret, controlCapability: linkObj.controlCapability, link: linkObj.link, absoluteLink: linkObj.absoluteLink };
     } catch (err) {
@@ -258,38 +274,118 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return vault;
   };
 
-  const installModernCallSupport = async (conversation: ModernConversation, refreshSessionBinding = false): Promise<void> => {
-    // Call signaling uses the conversation's established encrypted session.
-    // Preparing call UI must not create an outbound messaging session before
-    // the first peer message establishes the matching inbound session.
-    if (!conversation.hasEstablishedSession()) return;
-    if (!refreshSessionBinding && callSupportConversation.current === conversation && callNegotiator.current) return;
-    if (callSupportInstallation.current) {
-      await callSupportInstallation.current;
-      if (!refreshSessionBinding && callSupportConversation.current === conversation && callNegotiator.current) return;
-    }
-    const installation = (async () => {
+  const ensureModernCallReceiver = async (conversation: ModernConversation, refreshSessionBinding = false): Promise<ModernCallReceiver | undefined> => {
+    if (!conversation.hasEstablishedSession()) return undefined;
+    const receiverRoomId = callConversationRooms.current.get(conversation);
+    if (!receiverRoomId) return undefined;
+    const contact = await conversation.getContact();
+    if (!contact || contact.verification !== 'verified' || contact.changeStatus !== 'unchanged') return undefined;
+    const existing = callReceivers.current.get(conversation);
+    if (existing && !refreshSessionBinding) return existing;
+    const pending = callReceiverInstallations.current.get(conversation);
+    if (pending) return pending;
+    const epoch = callReceiverEpochs.current.get(conversation) ?? 0;
+    const installation = (async (): Promise<ModernCallReceiver> => {
       const composition = await conversation.createAuthenticatedCallComposition(refreshSessionBinding);
-      if (!refreshSessionBinding && callSupportConversation.current === conversation && callNegotiator.current) return;
+      if ((callReceiverEpochs.current.get(conversation) ?? 0) !== epoch || callConversationRooms.current.get(conversation) !== receiverRoomId) {
+        throw new Error('Call receiver installation was superseded.');
+      }
+      const receiver: ModernCallReceiver = { conversation, composition, stateUnsubscribe: () => undefined, protocolUnsubscribe: () => undefined };
+      existing?.stateUnsubscribe();
+      existing?.protocolUnsubscribe();
+      callReceivers.current.set(conversation, receiver);
+      receiver.stateUnsubscribe = composition.onCallUpdate((session) => {
+        if ((callReceiverEpochs.current.get(conversation) ?? 0) !== epoch || callReceivers.current.get(conversation) !== receiver) return;
+        const terminal = ['rejected', 'cancelled', 'ended', 'expired', 'failed'].includes(session.state);
+        const ownsActiveCall = activeCallRoomIdRef.current === session.conversationId && modernCallIdRef.current === session.callId;
+        if (terminal && !ownsActiveCall) return;
+        if (session.state === 'ringing' && callActiveRef.current && !ownsActiveCall) {
+          void composition.reject(session.callId).catch(() => undefined);
+          return;
+        }
+        const event = localCallHistory.current.observe(session);
+        if (event && historyVault.current) {
+          void writeMessages(historyVault.current, session.conversationId, [event]).then(() => {
+            setRoomMessages(session.conversationId, current => current.some(item => item.id === event.id) ? current : [...current, event]);
+          }).catch(() => undefined);
+        }
+        callActiveRef.current = !terminal;
+        const peerIdentityReference = roomStatesRef.current[session.conversationId]?.contactIdentity?.identityId;
+        if (terminal) {
+          setRoomState(session.conversationId, { call: undefined });
+          activeCallRoomIdRef.current = undefined;
+          setActiveCallRoomId(current => current === session.conversationId ? undefined : current);
+        } else {
+          activeCallRoomIdRef.current = session.conversationId;
+          setActiveCallRoomId(session.conversationId);
+          setRoomState(session.conversationId, { call: { roomId: session.conversationId, callId: session.callId, peerIdentityReference, sessionBinding: session.identityBinding } });
+          modernCallCompositionRef.current = composition;
+          setModernCallComposition(composition);
+          setModernCallId(session.callId);
+          modernCallIdRef.current = session.callId;
+        }
+        setCallMediaMode(session.mediaMode);
+        const failedMedia = session.state === 'failed' ? callMediaFailureRef.current : undefined;
+        setCallLifecycleState(failedMedia === 'microphone-unavailable' ? 'media-failed' : session.state === 'inviting' || session.state === 'ringing' ? 'ringing' : session.state === 'accepted' || session.state === 'connecting' || session.state === 'reconnecting' ? 'connecting' : session.state === 'connected' ? 'connected' : session.state === 'rejected' ? 'rejected' : session.state === 'cancelled' ? 'cancelled' : session.state === 'expired' ? 'timeout' : session.state === 'ended' ? 'ended' : 'ice-failed');
+        setIsIncomingCall(session.state === 'ringing');
+        setCallActive(!terminal);
+        setCallStatus(failedMedia === 'microphone-unavailable' ? 'Call ended: microphone unavailable' : session.state === 'ringing' ? 'Incoming Call...' : session.state === 'inviting' ? 'Ringing...' : ['accepted', 'connecting'].includes(session.state) ? 'Connecting...' : session.state === 'reconnecting' ? 'Reconnecting...' : session.state === 'connected' ? 'Connected' : terminal ? `Call ${session.state}` : 'Calling...');
+        if (terminal) {
+          callMediaFailureRef.current = undefined;
+          if (callSupportConversation.current === conversation) void callNegotiator.current?.end(session.callId).catch(() => undefined);
+          clearCallMedia();
+        }
+        if (session.state === 'accepted' && !locallyAcceptedCalls.current.delete(session.callId)) {
+          const negotiator = callSupportConversation.current === conversation ? callNegotiator.current : undefined;
+          if (negotiator) void negotiator.prepareOutgoing(session).then(() => negotiator.beginOffer(session.callId).catch(async (error: unknown) => {
+            const failure = callSetupFailure(error);
+            setCallError(failure.message);
+            localCallHistory.current.failed(session.callId);
+            await negotiator.end(session.callId).catch(() => undefined);
+            setCallLifecycleState(failure.kind);
+            setCallStatus(failure.kind === 'verification-required' ? 'Verification required' : failure.kind === 'signaling-failed' ? 'Call negotiation failed' : 'Call media could not start');
+          })).catch(async (error: unknown) => {
+            const failure = callSetupFailure(error);
+            setCallError(failure.message);
+            localCallHistory.current.failed(session.callId);
+            await negotiator.end(session.callId).catch(() => undefined);
+            setCallLifecycleState(failure.kind);
+            setCallStatus(failure.kind === 'verification-required' ? 'Verification required' : failure.kind === 'signaling-failed' ? 'Call negotiation failed' : 'Call media could not start');
+          });
+        }
+      });
+      receiver.protocolUnsubscribe = composition.onProtocolIssue((issue) => {
+        if ((callReceiverEpochs.current.get(conversation) ?? 0) !== epoch || callReceivers.current.get(conversation) !== receiver) return;
+        if (activeCallRoomIdRef.current && activeCallRoomIdRef.current !== receiverRoomId) return;
+        setCallError(issue.receivedVersion < issue.requiredVersion
+          ? 'This contact needs a newer K3NCRYPT version to call.'
+          : 'This call needs a newer K3NCRYPT version.');
+      });
+      return receiver;
+    })();
+    callReceiverInstallations.current.set(conversation, installation);
+    try { return await installation; }
+    finally { if (callReceiverInstallations.current.get(conversation) === installation) callReceiverInstallations.current.delete(conversation); }
+  };
 
-      // Replacing call support is only valid when the conversation changes. Tear
-      // down the old subscriptions before disposal so its empty cleanup update
-      // cannot erase state owned by the new negotiator.
-      callMediaUnsubscribe.current?.();
-      callMediaUnsubscribe.current = null;
-      callStateUnsubscribe.current?.();
-      callStateUnsubscribe.current = null;
-      callProtocolUnsubscribe.current?.();
-      callProtocolUnsubscribe.current = null;
-      callNegotiator.current?.dispose();
-      callNegotiator.current = new ProductionCallNegotiator(composition, new BrowserCallTransport(), async () => getRuntimeConfig().webrtc);
-      setModernCallComposition(composition);
-      callSupportConversation.current = conversation;
-      callMediaUnsubscribe.current = callNegotiator.current.onMediaUpdate((update) => {
+  const installModernCallSupport = async (conversation: ModernConversation, refreshSessionBinding = false): Promise<void> => {
+    // Composition setup is authenticated but does not request media; capture
+    // begins only after the user explicitly accepts or starts a call.
+    const receiver = await ensureModernCallReceiver(conversation, refreshSessionBinding);
+    if (!receiver) return;
+    const receiverRoomId = callConversationRooms.current.get(conversation);
+    if (callActiveRef.current && activeCallRoomIdRef.current && activeCallRoomIdRef.current !== receiverRoomId) throw new Error('Another call is already active.');
+    if (callSupportConversation.current === conversation && callNegotiator.current && modernCallCompositionRef.current === receiver.composition) return;
+    callMediaUnsubscribe.current?.();
+    callMediaUnsubscribe.current = null;
+    callNegotiator.current?.dispose();
+    callNegotiator.current = new ProductionCallNegotiator(receiver.composition, new BrowserCallTransport(), async () => getRuntimeConfig().webrtc);
+    modernCallCompositionRef.current = receiver.composition;
+    setModernCallComposition(receiver.composition);
+    callSupportConversation.current = conversation;
+    callMediaUnsubscribe.current = callNegotiator.current.onMediaUpdate((update) => {
       if (update.callId !== modernCallIdRef.current) return;
       setLocalCallStream(update.local);
-      // Empty updates are emitted by negotiator cleanup/disposal as well as
-      // terminal paths. Preserve the active renderer until a real call end.
       if (update.remote) setRemoteCallStream(update.remote);
       if (update.local) setCameraEnabledState(update.local.getVideoTracks().some((track) => track.enabled && track.readyState === 'live'));
       if (update.mediaFailure === 'camera-unavailable') {
@@ -298,75 +394,36 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         setCallError('Camera became unavailable. The call continues with video turned off.');
       } else if (update.mediaFailure === 'microphone-unavailable') {
         callMediaFailureRef.current = update.mediaFailure;
-        setCallError('Microphone became unavailable. The call ended to stop media safely.');
+        setCallError('The microphone became unavailable. The call ended to stop media safely.');
       }
       if (update.state === 'connected') { localCallHistory.current.connected(update.callId); setCallLifecycleState('connected'); setCallStatus('Connected'); }
       if (update.state === 'reconnecting') { setCallLifecycleState('connecting'); setCallStatus('Reconnecting...'); }
       if (update.state === 'failed') { setCallLifecycleState('ice-failed'); setCallStatus('Connection Failed'); }
-      });
-      callStateUnsubscribe.current = composition.onCallUpdate((session) => {
-      const event = localCallHistory.current.observe(session);
-      if (event && historyVault.current) {
-        void writeMessages(historyVault.current, session.conversationId, [event]).then(() => {
-          setRoomMessages(session.conversationId, current => current.some(item => item.id === event.id) ? current : [...current, event]);
-        }).catch(() => undefined);
-      }
-      const terminal = ['rejected', 'cancelled', 'ended', 'expired', 'failed'].includes(session.state);
-      if (terminal && modernCallIdRef.current && modernCallIdRef.current !== session.callId) return;
-      callActiveRef.current = !terminal;
-      const peerIdentityReference = roomStatesRef.current[session.conversationId]?.contactIdentity?.identityId;
-      if (terminal) {
-        setRoomState(session.conversationId, { call: undefined });
-        setActiveCallRoomId(current => current === session.conversationId ? undefined : current);
-      } else {
-        setActiveCallRoomId(session.conversationId);
-        setRoomState(session.conversationId, { call: { roomId: session.conversationId, callId: session.callId, peerIdentityReference, sessionBinding: session.identityBinding } });
-      }
-      modernCallIdRef.current = terminal ? undefined : session.callId;
-      setModernCallId(terminal ? undefined : session.callId);
-      setCallMediaMode(session.mediaMode);
-      const failedMedia = session.state === 'failed' ? callMediaFailureRef.current : undefined;
-      setCallLifecycleState(failedMedia === 'microphone-unavailable' ? 'media-failed' : session.state === 'inviting' || session.state === 'ringing' ? 'ringing' : session.state === 'accepted' || session.state === 'connecting' || session.state === 'reconnecting' ? 'connecting' : session.state === 'connected' ? 'connected' : session.state === 'rejected' ? 'rejected' : session.state === 'cancelled' ? 'cancelled' : session.state === 'expired' ? 'timeout' : session.state === 'ended' ? 'ended' : 'ice-failed');
-      setIsIncomingCall(session.state === 'ringing');
-      setCallActive(!terminal);
-      setCallStatus(failedMedia === 'microphone-unavailable' ? 'Call ended: microphone unavailable' : session.state === 'ringing' ? 'Incoming Call...' : session.state === 'inviting' ? 'Ringing...' : ['accepted', 'connecting'].includes(session.state) ? 'Connecting...' : session.state === 'reconnecting' ? 'Reconnecting...' : session.state === 'connected' ? 'Connected' : terminal ? `Call ${session.state}` : 'Calling...');
-      if (terminal) {
-        callMediaFailureRef.current = undefined;
-        void callNegotiator.current?.end(session.callId).catch(() => undefined);
-        clearCallMedia();
-      }
-      if (session.state === 'accepted' && !locallyAcceptedCalls.current.delete(session.callId)) {
-        const negotiator = callNegotiator.current;
-        if (negotiator) void negotiator.prepareOutgoing(session).then(() => negotiator.beginOffer(session.callId).catch(async (error: unknown) => {
-          const failure = callSetupFailure(error);
-          setCallError(failure.message);
-          localCallHistory.current.failed(session.callId);
-          await negotiator.end(session.callId).catch(() => undefined);
-          setCallLifecycleState(failure.kind);
-          setCallStatus(failure.kind === 'verification-required' ? 'Verification required' : failure.kind === 'signaling-failed' ? 'Call negotiation failed' : 'Call media could not start');
-        })).catch(async (error: unknown) => {
-          const failure = callSetupFailure(error);
-          setCallError(failure.message);
-          localCallHistory.current.failed(session.callId);
-          await negotiator.end(session.callId).catch(() => undefined);
-          setCallLifecycleState(failure.kind);
-          setCallStatus(failure.kind === 'verification-required' ? 'Verification required' : failure.kind === 'signaling-failed' ? 'Call negotiation failed' : 'Call media could not start');
-        });
-      }
-      });
-      callProtocolUnsubscribe.current = composition.onProtocolIssue((issue) => {
-        setCallError(issue.receivedVersion < issue.requiredVersion
-          ? 'This contact needs a newer K3NCRYPT version to call.'
-          : 'This call needs a newer K3NCRYPT version.');
-      });
-    })();
-    callSupportInstallation.current = installation;
-    try {
-      await installation;
-    } finally {
-      if (callSupportInstallation.current === installation) callSupportInstallation.current = null;
-    }
+    });
   };
+
+  const releaseModernCallReceiver = async (conversation: ModernConversation): Promise<void> => {
+    callReceiverEpochs.current.set(conversation, (callReceiverEpochs.current.get(conversation) ?? 0) + 1);
+    const receiver = callReceivers.current.get(conversation);
+    receiver?.stateUnsubscribe();
+    receiver?.protocolUnsubscribe();
+    callReceivers.current.delete(conversation);
+    if (callSupportConversation.current !== conversation) return;
+    callMediaUnsubscribe.current?.();
+    callMediaUnsubscribe.current = null;
+    await callNegotiator.current?.dispose();
+    callNegotiator.current = undefined;
+    callSupportConversation.current = null;
+    modernCallCompositionRef.current = null;
+    setModernCallComposition(null);
+  };
+
+  const activeModernCall = useCallback(() => {
+    const roomId = activeCallRoomIdRef.current;
+    if (!roomId) return undefined;
+    const conversation = roomStatesRef.current[roomId]?.conversation;
+    return conversation ? { roomId, conversation, receiver: callReceivers.current.get(conversation), callId: modernCallIdRef.current } : undefined;
+  }, []);
 
   const shareProfile = async (conversation: ModernConversation, storage: BrowserSecureStorage, fingerprint?: string): Promise<void> => {
     if (!fingerprint || !conversation.hasEstablishedSession() || conversation.getSessionHealth() !== 'healthy') return;
@@ -442,6 +499,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const existing = selected ?? roomStatesRef.current[descriptor.roomId]?.conversation;
       const details = muxDetails.current.get(descriptor.roomId);
       if (existing && details && await muxEligible(secureVault, descriptor, sendJoinIntroduction)) {
+        callConversationRooms.current.set(existing, descriptor.roomId);
         selectedConversation.current = existing;
         setRoomState(descriptor.roomId, { conversation: existing, connection: 'connected', contactIdentity: await existing.getContact() });
         setRoomMessages(descriptor.roomId, await readMessages(secureVault, descriptor.roomId));
@@ -449,7 +507,15 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         modernProjection.setContactIdentity(await existing.getContact()); modernProjection.setDeviceLifecycleState(await existing.getDeviceLifecycleState());
         const health = existing.getSessionHealth(); const trust = await existing.getDeviceTrust();
         modernProjection.setSessionHealth(health); modernProjection.setSyncStatus(health !== 'healthy' ? 'blocked' : trust === 'trusted' ? 'ready' : 'blocked'); modernProjection.setIsConnected(true);
-        modernProjection.setModernCallComposition(null); modernProjection.setModernCallId(undefined);
+        if (!callActiveRef.current) {
+          modernCallCompositionRef.current = null;
+          modernCallIdRef.current = undefined;
+          activeCallRoomIdRef.current = undefined;
+          modernProjection.setModernCallComposition(null); modernProjection.setModernCallId(undefined);
+          setActiveCallRoomId(undefined);
+        }
+        const restored = await existing.getContact();
+        if (existing.hasEstablishedSession() && restored?.verification === 'verified' && restored.changeStatus === 'unchanged') await ensureModernCallReceiver(existing);
         return details;
       }
       if (existing) await existing.close(false).catch(() => undefined);
@@ -467,6 +533,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const useMux = await muxEligible(secureVault, descriptor, sendJoinIntroduction);
     const manager = useMux ? (muxConnection.current ??= new MultiplexedRelayConnection()).forRoom(descriptor.roomId, descriptor.remoteAddress!) : undefined;
     const conversation = new ModernConversation(secureVault, loadVodozemacBindings, manager);
+    callConversationRooms.current.set(conversation, descriptor.roomId);
     if (useMux) { muxRoomIds.current.add(descriptor.roomId); muxConversations.current.add(conversation); }
     setRoomState(descriptor.roomId, { conversation, connection: 'connecting' });
     const setCallError: typeof modernProjection.setCallError = value => { if (selectedConversation.current === conversation) modernProjection.setCallError(value); };
@@ -560,21 +627,19 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         setRoomState(descriptor.roomId, { contactIdentity: contact });
         setContactIdentity(contact);
         scheduleProfile();
-        if (selectedConversation.current === conversation && (contact.verification !== 'verified' || contact.changeStatus !== 'unchanged')) {
-          if (callActiveRef.current) {
+        if (contact.verification !== 'verified' || contact.changeStatus !== 'unchanged') {
+          if (callActiveRef.current && activeCallRoomIdRef.current === descriptor.roomId) {
             await verificationTerminationRef.current();
           } else {
-            callMediaUnsubscribe.current?.();
-            callMediaUnsubscribe.current = null;
-            callStateUnsubscribe.current?.();
-            callStateUnsubscribe.current = null;
-            callProtocolUnsubscribe.current?.();
-            callProtocolUnsubscribe.current = null;
-            await callNegotiator.current?.dispose();
-            callNegotiator.current = undefined;
-            callSupportConversation.current = null;
-            setModernCallComposition(null);
-            setModernCallId(undefined);
+            await releaseModernCallReceiver(conversation);
+            if (selectedConversation.current === conversation) {
+              modernCallIdRef.current = undefined;
+              activeCallRoomIdRef.current = undefined;
+              modernCallCompositionRef.current = null;
+              setModernCallComposition(null);
+              setActiveCallRoomId(undefined);
+              setModernCallId(undefined);
+            }
           }
         }
         if (contact.contactId && (!descriptor.remoteAddress || descriptor.remoteAddress !== contact.contactId || descriptor.remoteIdentityCommitment !== contact.identityId)) {
@@ -629,8 +694,14 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         setCallError(undefined);
         setModern(conversation);
         setSessionHealth(restoredSessionHealth);
-        setModernCallComposition(null);
-        setModernCallId(undefined);
+        if (!callActiveRef.current) {
+          modernCallCompositionRef.current = null;
+          modernCallIdRef.current = undefined;
+          activeCallRoomIdRef.current = undefined;
+          setModernCallComposition(null);
+          setModernCallId(undefined);
+          setActiveCallRoomId(undefined);
+        }
         setProtocolMode('modern');
         setChannelHash(descriptor.roomId);
         // Read the final durable contact after mailbox replay so this projection
@@ -650,6 +721,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (!background && previous && previous !== conversation) {
         const previousRoomId = Object.values(roomStatesRef.current).find(item => item.conversation === previous)?.roomId;
         if (!muxConversations.current.has(previous)) {
+          await releaseModernCallReceiver(previous);
           if (previousRoomId) setRoomState(previousRoomId, { conversation: undefined, connection: 'saved' });
           void previous.close(false).catch(() => undefined);
         }
@@ -657,10 +729,13 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       scheduleProfile();
       if (!background && !useMux && restoredContact?.verification === 'verified' && restoredContact.changeStatus === 'unchanged' && conversation.hasEstablishedSession()) {
         await installModernCallSupport(conversation).catch(() => setCallError('Call signaling is unavailable for this saved contact.'));
+      } else if (useMux && established && restoredContact?.verification === 'verified' && restoredContact.changeStatus === 'unchanged') {
+        await ensureModernCallReceiver(conversation).catch(() => undefined);
       }
       return details;
     } catch (error) {
       if (useMux) { muxRoomIds.current.delete(descriptor.roomId); muxDetails.current.delete(descriptor.roomId); muxConversations.current.delete(conversation); }
+      await releaseModernCallReceiver(conversation);
       await conversation.close(false).catch(() => undefined);
       const code = classifySafeDiagnostic('conversation-open', error);
       setRoomState(descriptor.roomId, { conversation: undefined, connection: authoritativeTerminal(code) ? 'failed' : 'disconnected' });
@@ -930,16 +1005,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setContactIdentity(await modern.getContact());
     if (callActiveRef.current) await verificationTerminationRef.current();
     else {
-      callMediaUnsubscribe.current?.();
-      callMediaUnsubscribe.current = null;
-      callStateUnsubscribe.current?.();
-      callStateUnsubscribe.current = null;
-      callProtocolUnsubscribe.current?.();
-      callProtocolUnsubscribe.current = null;
-      await callNegotiator.current?.dispose();
-      callNegotiator.current = undefined;
-      callSupportConversation.current = null;
-      setModernCallComposition(null);
+      await releaseModernCallReceiver(modern);
     }
   }, [modern]);
 
@@ -948,7 +1014,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (callActiveRef.current) await verificationTerminationRef.current();
     await modern.acceptChangedIdentity();
     setContactIdentity(await modern.getContact());
-    setModernCallComposition(null);
+    await releaseModernCallReceiver(modern);
   }, [modern]);
 
   const prepareVerifiedSessionRenewal = useCallback(async (): Promise<void> => {
@@ -1203,10 +1269,15 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   useEffect(() => () => {
     callMediaUnsubscribe.current?.();
     callMediaUnsubscribe.current = null;
-    callStateUnsubscribe.current?.();
-    callStateUnsubscribe.current = null;
-    callProtocolUnsubscribe.current?.();
-    callProtocolUnsubscribe.current = null;
+    const installing = new Set([...callReceivers.current.keys(), ...callReceiverInstallations.current.keys()]);
+    for (const conversation of installing) {
+      callReceiverEpochs.current.set(conversation, (callReceiverEpochs.current.get(conversation) ?? 0) + 1);
+    }
+    for (const receiver of callReceivers.current.values()) {
+      receiver.stateUnsubscribe();
+      receiver.protocolUnsubscribe();
+    }
+    callReceivers.current.clear();
     callNegotiator.current?.dispose();
     callNegotiator.current = undefined;
     callSupportConversation.current = null;
@@ -1258,25 +1329,33 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, [modern, protocolMode]);
 
   const acceptCall = useCallback(async () => {
-    if (protocolMode === 'modern') {
-      if (!modernCallComposition || !modernCallId) throw new Error('No authenticated incoming call is available.');
-      const incoming = await modernCallComposition.service.get(modernCallId);
+    const modernIncoming = activeModernCall();
+    if (modernIncoming?.conversation) {
+      const { conversation, receiver, callId } = modernIncoming;
+      if (!receiver || !callId) throw new Error('No authenticated incoming call is available.');
+      await installModernCallSupport(conversation);
+      const composition = receiver.composition;
+      if (!composition || callSupportConversation.current !== conversation || !callNegotiator.current) throw new Error('Authenticated call media is not ready.');
+      modernCallCompositionRef.current = composition;
+      setModernCallComposition(composition);
+      const incoming = await composition.service.get(callId);
       if (!incoming) throw new Error('Incoming call is unavailable.');
       try {
-        await callNegotiator.current?.acceptIncoming(incoming);
-        locallyAcceptedCalls.current.add(modernCallId);
-        await modernCallComposition.accept(modernCallId);
+        await callNegotiator.current.acceptIncoming(incoming);
+        locallyAcceptedCalls.current.add(callId);
+        await composition.accept(callId);
       } catch (error) {
-        locallyAcceptedCalls.current.delete(modernCallId);
+        locallyAcceptedCalls.current.delete(callId);
         const failure = callSetupFailure(error);
         setCallError(failure.message);
-        localCallHistory.current.failed(modernCallId);
-        await callNegotiator.current?.end(modernCallId).catch(() => undefined);
+        localCallHistory.current.failed(callId);
+        await callNegotiator.current.end(callId).catch(() => undefined);
         setCallLifecycleState(failure.kind);
         setCallStatus(failure.kind === 'verification-required' ? 'Verification required' : failure.kind === 'signaling-failed' ? 'Call negotiation failed' : 'Call media could not start');
       }
       return;
     }
+    if (protocolMode === 'modern') throw new Error('No authenticated incoming call is available.');
     if (!chat) throw new Error('Chat not initialized');
     try {
       await chat.acceptCall();
@@ -1288,16 +1367,18 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       debugError('Call acceptance failed', err);
       throw err;
     }
-  }, [chat, modernCallComposition, modernCallId, protocolMode]);
+  }, [activeModernCall, chat, protocolMode]);
 
   const rejectCall = useCallback(async () => {
-    if (protocolMode === 'modern') {
-      if (!modernCallComposition || !modernCallId) throw new Error('No authenticated incoming call is available.');
-      await modernCallComposition.reject(modernCallId);
+    const modernIncoming = activeModernCall();
+    if (modernIncoming?.conversation) {
+      if (!modernIncoming.receiver || !modernIncoming.callId) throw new Error('No authenticated incoming call is available.');
+      await modernIncoming.receiver.composition.reject(modernIncoming.callId);
       setCallActive(false);
       setIsIncomingCall(false);
       return;
     }
+    if (protocolMode === 'modern') throw new Error('No authenticated incoming call is available.');
     if (!chat) throw new Error('Chat not initialized');
     try {
       await chat.rejectCall();
@@ -1309,16 +1390,18 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       debugError('Call rejection failed', err);
       throw err;
     }
-  }, [chat, modernCallComposition, modernCallId, protocolMode]);
+  }, [activeModernCall, chat, protocolMode]);
 
   const cancelCall = useCallback(async () => {
-    if (protocolMode === 'modern') {
-      if (!modernCallComposition || !modernCallId) throw new Error('No authenticated outgoing call is available.');
-      await modernCallComposition.cancel(modernCallId);
+    const modernCall = activeModernCall();
+    if (modernCall?.conversation) {
+      if (!modernCall.receiver || !modernCall.callId) throw new Error('No authenticated outgoing call is available.');
+      await modernCall.receiver.composition.cancel(modernCall.callId);
       setCallActive(false);
       setIsIncomingCall(false);
       return;
     }
+    if (protocolMode === 'modern') throw new Error('No authenticated outgoing call is available.');
     if (!chat) throw new Error('Chat not initialized');
     try {
       await chat.cancelCall();
@@ -1329,14 +1412,15 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       debugError('Call cancellation failed', err);
       throw err;
     }
-  }, [chat, modernCallComposition, modernCallId, protocolMode]);
+  }, [activeModernCall, chat, protocolMode]);
 
   // End call
   const endCall = useCallback(async () => {
-    const activeCallId = modernCallId;
+    const activeModern = activeModernCall();
+    const activeCallId = activeModern?.callId ?? modernCallId;
     const negotiator = callNegotiator.current;
-    const composition = modernCallComposition;
-    const termination = protocolMode === 'modern' && composition && activeCallId
+    const composition = activeModern?.receiver?.composition ?? modernCallComposition;
+    const termination = activeModern?.conversation && composition && activeCallId
       ? (negotiator ? negotiator.end(activeCallId) : composition.end(activeCallId))
       : chat && protocolMode === 'legacy'
         ? chat.endCall()
@@ -1355,7 +1439,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     } catch (err) {
       debugError('Call end failed', err);
     }
-  }, [chat, clearCallMedia, modernCallComposition, modernCallId, protocolMode]);
+  }, [activeModernCall, chat, clearCallMedia, modernCallComposition, modernCallId, protocolMode]);
   endCallRef.current = endCall;
   verificationTerminationRef.current = async (): Promise<void> => {
     if (verificationTerminationPending.current) return verificationTerminationPending.current;
@@ -1373,15 +1457,13 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }
       callMediaUnsubscribe.current?.();
       callMediaUnsubscribe.current = null;
-      callStateUnsubscribe.current?.();
-      callStateUnsubscribe.current = null;
-      callProtocolUnsubscribe.current?.();
-      callProtocolUnsubscribe.current = null;
       await callNegotiator.current?.dispose();
       callNegotiator.current = undefined;
       callSupportConversation.current = null;
       modernCallCompositionRef.current = null;
       setModernCallComposition(null);
+      activeCallRoomIdRef.current = undefined;
+      setActiveCallRoomId(undefined);
       setModernCallId(undefined);
       modernCallIdRef.current = undefined;
       setCallLifecycleState('verification-required');
@@ -1490,11 +1572,13 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setCallLifecycleState(update.state);
       setCallStatus(formatCallStatus(update.state));
       if (update.state === 'incoming') {
+        activeCallRoomIdRef.current = roomId;
         setActiveCallRoomId(roomId);
         setCallActive(true);
       }
       if (['ended', 'verification-required', 'rejected', 'timeout', 'cancelled', 'no-peer', 'media-denied', 'media-failed', 'signaling-failed', 'ice-failed'].includes(update.state)) {
         if (update.state === 'timeout') deliverNotification({ kind: 'missed-call', conversationId: roomId || 'legacy' }, privacyPreferencesRef.current);
+        if (activeCallRoomIdRef.current === roomId) activeCallRoomIdRef.current = undefined;
         setActiveCallRoomId(current => current === roomId ? undefined : current);
         setCallActive(false);
         setIsIncomingCall(false);
@@ -1505,8 +1589,11 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     chatInstance.on('call-removed', () => {
       setActiveCallRoomId(current => current === roomId ? undefined : current);
       setCallActive(false);
+      callActiveRef.current = false;
       setIsIncomingCall(false);
       setCallDuration(0);
+      activeCallRoomIdRef.current = undefined;
+      setActiveCallRoomId(undefined);
       clearCallMedia();
     });
   };
