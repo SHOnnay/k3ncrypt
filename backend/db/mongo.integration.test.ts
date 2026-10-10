@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import { MongoClient, type Db } from 'mongodb';
 import db, { ackOfflineMessage, claimOfflineMessage, countOfflineMessages, rejectOfflineMessage, storeOfflineMessage } from './index';
 import { applyMigrations } from './migrations';
+import { storeRoomEnvelope } from '../socket.io/roomEnvelopeStore';
 
 const configuredDbName = process.env.MONGO_DB_NAME ?? '';
 // These integration tests may drop only explicitly disposable Playwright databases.
@@ -244,4 +245,21 @@ suite('MongoDB mailbox terminal-rejection integration', () => {
     expect(tombstone?.expiresAt).toEqual(items[0].expiresAt);
     expect(tombstone?.claimedUntil).toEqual(items[0].expiresAt);
   });
+  it('deduplicates concurrent exact-envelope transport retries through the real unique index', async () => {
+    const row = message();
+    const results = await Promise.all(Array.from({ length: 20 }, () => storeRoomEnvelope({ ...row, id: randomUUID() })));
+    expect(new Set(results.map(result => result.id)).size).toBe(1);
+    expect(await database.collection('offline_messages').countDocuments({ channel: row.channel, mailbox: row.mailbox })).toBe(1);
+  });
+  it('reuses old Mux mailbox rows and preserves their existing claim lease', async () => {
+    const row = message(); const { createHash } = await import('crypto');
+    const dedupeKey = createHash('sha256').update(JSON.stringify({ roomId: row.channel, mailbox: row.mailbox, sender: row.sender, envelope: row.envelope })).digest('hex');
+    await storeOfflineMessage({ ...row, dedupeKey });
+    const claimId = randomUUID();
+    await claimOfflineMessage(row.mailbox, row.channel, new Date(Date.now() + 30_000), claimId);
+    const retry = await storeRoomEnvelope({ ...row, id: randomUUID() });
+    expect(retry).toMatchObject({ id: row.id, claimId, dedupeKey });
+    expect(await database.collection('offline_messages').countDocuments({ channel: row.channel, mailbox: row.mailbox })).toBe(1);
+  });
+
 });

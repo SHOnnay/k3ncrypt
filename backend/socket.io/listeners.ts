@@ -8,7 +8,9 @@ import db, { type OfflineRejectionReason } from '../db';
 import { PREKEY_COLLECTION } from '../db/const';
 import { durableDeviceTrustAuthority, MongoDeviceTrustStore } from '../security/durableDeviceTrust';
 import type { DeviceAuthorizationProof, DeviceOperation } from '../security/deviceTrust';
-import { hasActiveMuxRoomOwner, muxRelayEnabled, muxWouldExceedChannelCapacity, registerMultiplexedRelay } from './multiplexed';
+import { routeRoomSignal, notifyRoomPeerFeatures, registerLegacyMailboxWakeup, wakeRoomMailbox, notifyRoomSender, muxPeerForLegacy, legacyRoomOwner, muxRoomOwner, releaseMuxRoomOwner, sameDeviceOwner, muxRelayEnabled, muxWouldExceedChannelCapacity, registerMultiplexedRelay } from './multiplexed';
+
+import { roomEnvelopeDedupeKey, storeRoomEnvelope } from './roomEnvelopeStore';
 
 const clients = getClientInstance();
 
@@ -102,6 +104,9 @@ const verifyCarrier = async (socket: CustomSocket, carrier: ProofCarrier, operat
   } catch { return false; }
 };
 
+const currentLegacyOwner = (socket: CustomSocket): boolean => socket.connected !== false && !!socket.userID && !!socket.channelID &&
+  clients.getSIDByIDs(socket.userID, socket.channelID)?.sid === socket.id;
+
 const activeBoundDevice = async (socket: CustomSocket): Promise<boolean> => {
   if (!socket.deviceId || !socket.accountIdentityReference || !Number.isInteger(socket.deviceTrustEpoch)) return false;
   try {
@@ -111,9 +116,6 @@ const activeBoundDevice = async (socket: CustomSocket): Promise<boolean> => {
     return record?.state === 'active' && record.trustEpoch === socket.deviceTrustEpoch;
   } catch { return false; }
 };
-
-const envelopeDedupeKey = (channel: string, mailbox: string, sender: string, envelope: WireEnvelope): string =>
-  createHash('sha256').update(JSON.stringify({ channel, mailbox, sender, envelope })).digest('hex');
 
 const retainUndeliveredEnvelope = async (
   channel: string,
@@ -125,9 +127,9 @@ const retainUndeliveredEnvelope = async (
 ): Promise<{ id: string; timestamp: number; terminalRejection?: true }> => {
   if (process.env.NODE_ENV === 'production' && !db.persistentStorageReady()) throw new Error('OFFLINE_DELIVERY_UNAVAILABLE');
   db.cleanupExpiredOfflineMessages();
-  const stored = await db.storeOfflineMessage({
+  const stored = await storeRoomEnvelope({
     id,
-    dedupeKey: envelopeDedupeKey(channel, mailbox, sender, envelope),
+    dedupeKey: roomEnvelopeDedupeKey(channel, mailbox, sender, envelope),
     channel,
     mailbox,
     sender,
@@ -144,15 +146,16 @@ const retainUndeliveredEnvelope = async (
   return { id: stored.id, timestamp: stored.timestamp };
 };
 
-const deliverOffline = async (socket: CustomSocket): Promise<void> => {
+const deliverOffline = async (socket: CustomSocket, io): Promise<void> => {
   if (!socket.userID || !socket.channelID) return;
   db.cleanupExpiredOfflineMessages();
   for (let count = 0; count < MAX_OFFLINE_PER_MAILBOX; count += 1) {
-    if (!await activeBoundDevice(socket)) return;
+    if (!currentLegacyOwner(socket) || !await activeBoundDevice(socket) || !currentLegacyOwner(socket)) return;
     const claimId = randomUUID();
     const message = await db.claimOfflineMessage<{ id: string; timestamp: number; sender: string; envelope: WireEnvelope; mailbox: string; channel: string; claimId: string }>(
       socket.userID, socket.channelID, new Date(Date.now() + OFFLINE_LEASE_MS), claimId);
     if (!message) return;
+    if (!currentLegacyOwner(socket) || !await activeBoundDevice(socket) || !currentLegacyOwner(socket)) return;
     traceMessageRelay('mailbox-replay-claimed', socket.channelID, message.id, 'claimed', { userId: socket.userID });
     const outcome = await new Promise<RecipientOutcome | undefined>((resolve) => {
       const timeout = setTimeout(() => resolve({ outcome: 'retryable' }), OFFLINE_REPLAY_ACK_MS);
@@ -165,22 +168,20 @@ const deliverOffline = async (socket: CustomSocket): Promise<void> => {
     traceMessageRelay('recipient-acceptance-result', socket.channelID, message.id, accepted ? 'accepted' : 'pending', { userId: socket.userID, deviceId: socket.deviceId });
     traceDelivery('mailbox-replay-accepted', accepted);
     if (outcome?.outcome === 'permanent-rejection' && permanentReason(outcome.reasonClass)) {
-      if (!await activeBoundDevice(socket)) return;
+      if (!currentLegacyOwner(socket) || !await activeBoundDevice(socket) || !currentLegacyOwner(socket)) return;
       const terminal = await db.rejectOfflineMessage(message.id, socket.userID, socket.channelID, message.claimId, outcome.reasonClass);
       if (terminal === 'stale') return;
       if (terminal === 'rejected') {
-        const senderSid = clients.getSIDByIDs(message.sender, socket.channelID)?.sid;
-        if (senderSid) socketEmit<SOCKET_TOPIC.NOT_ACCEPTED>(SOCKET_TOPIC.NOT_ACCEPTED, senderSid, message.id);
+        await notifyRoomSender(socket.channelID, message.sender, message.id, 'rejected', io);
       }
       // A valid terminal transition frees this slot so the next row proceeds.
       continue;
     }
-    if (!accepted || !await activeBoundDevice(socket)) return;
+    if (!accepted || !currentLegacyOwner(socket) || !await activeBoundDevice(socket) || !currentLegacyOwner(socket)) return;
     const removed = await db.ackOfflineMessage(message.id, socket.userID, socket.channelID, message.claimId);
     if (!removed) return;
     traceMessageRelay('mailbox-removed-after-recipient-acceptance', socket.channelID, message.id, 'durably-acked', { userId: socket.userID, deviceId: socket.deviceId });
-    const senderSid = clients.getSIDByIDs(message.sender, socket.channelID)?.sid;
-    if (senderSid) socketEmit<SOCKET_TOPIC.DELIVERED>(SOCKET_TOPIC.DELIVERED, senderSid, message.id);
+    await notifyRoomSender(socket.channelID, message.sender, message.id, 'accepted', io);
     traceDelivery('mailbox-deleted-after-ack', true);
   }
 };
@@ -202,6 +203,29 @@ const findPeerSid = (socket: CustomSocket): string | undefined => {
 
 const connectionListener = (socket: CustomSocket, io) => {
   if (muxRelayEnabled()) registerMultiplexedRelay(socket, io);
+  let replayRunning = false;
+  let replayRequested = false;
+  let replayTimer: ReturnType<typeof setTimeout> | undefined;
+  const requestReplay = (): void => {
+    replayRequested = true;
+    if (replayTimer) { clearTimeout(replayTimer); replayTimer = undefined; }
+    if (replayRunning || !currentLegacyOwner(socket)) return;
+    replayRunning = true;
+    void (async () => {
+      try {
+        while (replayRequested && currentLegacyOwner(socket)) { replayRequested = false; await deliverOffline(socket, io); }
+        if (!currentLegacyOwner(socket)) return;
+        const lease = await db.offlineMessageClaimUntil(socket.userID, socket.channelID);
+        const pending = await db.countOfflineMessages({ mailbox: socket.userID, channel: socket.channelID });
+        if (pending && currentLegacyOwner(socket)) {
+          replayTimer = setTimeout(requestReplay, lease ? Math.max(25, lease.getTime() - Date.now() + 25) : 25);
+          replayTimer.unref?.();
+        }
+      } catch { /* Durable rows remain retryable; replay can be explicitly requested again. */ }
+      finally { replayRunning = false; if (replayRequested && currentLegacyOwner(socket)) requestReplay(); }
+    })();
+  };
+  registerLegacyMailboxWakeup(socket, requestReplay);
   socket.on("chat-join", async (data, ack: Ack = noop) => {
     if (socket.muxConnectionGeneration) { ack({ error: 'Legacy room join is unavailable on a multiplexed connection.' }); return; }
     const rejectJoin = (error: string, code: string) => ack(process.env.NODE_ENV === 'production' ? { error } : { error, code });
@@ -240,12 +264,9 @@ const connectionListener = (socket: CustomSocket, io) => {
       rejectJoin('Channel join rejected.', 'invalid-channel');
       return;
     }
-    const previousConnection = clients.getSIDByIDs(userID, channelID)?.sid;
-    // Legacy and Mux may not both own receive delivery in one room. The
-    // check and legacy table update are synchronous so concurrent join/subscribe
-    // completions have a single winner; durable mailbox replay covers handoff.
-    if (hasActiveMuxRoomOwner(channelID)) {
-      rejectJoin('Room delivery is already owned by another transport.', 'room-transport-conflict');
+    const muxOwner = muxRoomOwner(channelID, userID);
+    if (muxOwner && !sameDeviceOwner(muxOwner, socket)) {
+      rejectJoin('Room delivery is already owned by another device.', 'room-transport-conflict');
       return;
     }
     if (muxWouldExceedChannelCapacity(userID, channelID, 2)) {
@@ -255,6 +276,15 @@ const connectionListener = (socket: CustomSocket, io) => {
       return;
     }
 
+    if (socket.connected === false || !await activeBoundDevice(socket)) { rejectJoin('Device authorization rejected.', 'device-proof'); return; }
+    // Recheck after the durable trust read; another admission can win during it.
+    const currentMuxOwner = muxRoomOwner(channelID, userID);
+    if (currentMuxOwner && !sameDeviceOwner(currentMuxOwner, socket)) { rejectJoin('Room delivery is already owned by another device.', 'room-transport-conflict'); return; }
+    const currentLegacy = legacyRoomOwner(channelID, userID, io);
+    if (currentLegacy && currentLegacy !== socket && !sameDeviceOwner(currentLegacy, socket)) { rejectJoin('Room delivery is already owned by another device.', 'room-transport-conflict'); return; }
+    if (muxWouldExceedChannelCapacity(userID, channelID, 2)) { rejectJoin('Channel is full.', 'channel-full'); return; }
+    const previousConnection = currentLegacy?.id;
+    if (currentMuxOwner) releaseMuxRoomOwner(currentMuxOwner, channelID);
     clients.setClientToChannel(userID, channelID, socket.id);
     socket.channelID = channelID;
     socket.userID = userID;
@@ -267,24 +297,17 @@ const connectionListener = (socket: CustomSocket, io) => {
     }
     traceDelivery('relay-join-ready', true);
 
-    // Notify the other participant. The independent room-control capability
-    // was consumed for authorization above; message-encryption keys never
-    // reach this relay.
-    const receiverId = clients.getReceiverIDBySenderID(userID, channelID);
-    const receiver = receiverId && clients.getSIDByIDs(receiverId, channelID);
-    const receiverSocket = receiver && io.sockets.sockets.get(receiver.sid) as CustomSocket | undefined;
-    if (receiver) {
-      socketEmit<SOCKET_TOPIC.ON_ALICE_JOIN>(SOCKET_TOPIC.ON_ALICE_JOIN, receiver.sid, { protocolFeatures: socket.protocolFeatures ?? [] });
-    }
-    ack({ status: 'accepted', peerFeatures: receiverSocket?.protocolFeatures ?? [] });
+    const peerFeatures = await notifyRoomPeerFeatures(socket, channelID, userID, io);
+    if (!currentLegacyOwner(socket)) { rejectJoin('Room owner changed; retry the connection.', 'room-transport-conflict'); return; }
+    ack({ status: 'accepted', peerFeatures });
   });
 
   socket.on('mailbox-replay', async (_payload: unknown, ack: Ack = noop) => {
-    if (!socket.userID || !socket.channelID || !await activeBoundDevice(socket)) {
+    if (!currentLegacyOwner(socket) || !await activeBoundDevice(socket) || !currentLegacyOwner(socket)) {
       ack({ error: 'Mailbox replay rejected.' });
       return;
     }
-    await deliverOffline(socket as CustomSocket);
+    await deliverOffline(socket as CustomSocket, io);
     ack({ status: 'accepted' });
   });
 
@@ -301,7 +324,7 @@ const connectionListener = (socket: CustomSocket, io) => {
       ack({ error: "Invalid or oversized encrypted envelope." });
       return;
     }
-    if (payload.proofOperation !== 'relay:message' || payload.deviceAuthorizationProof.resource?.conversationId !== socket.channelID || !await verifyCarrier(socket, payload, 'relay:message')) { ack({ error: 'Device authorization rejected.' }); return; }
+    if (!currentLegacyOwner(socket) || payload.proofOperation !== 'relay:message' || payload.deviceAuthorizationProof.resource?.conversationId !== socket.channelID || !await verifyCarrier(socket, payload, 'relay:message') || !currentLegacyOwner(socket)) { ack({ error: 'Device authorization rejected.' }); return; }
     const receiverSid = findPeerSid(socket);
     traceDelivery('target-route-found', !!receiverSid);
     if (!receiverSid) {
@@ -314,6 +337,7 @@ const connectionListener = (socket: CustomSocket, io) => {
         traceMessageRelay('mailbox-durable', socket.channelID, existing.id, existing.terminalRejection ? 'terminal-rejection' : 'stored', { userId: socket.userID, recipientRoutingId: mailbox });
         traceDelivery('envelope-stored', true);
         ack({ id: existing.id, timestamp: existing.timestamp, stored: !existing.terminalRejection, ...(existing.terminalRejection ? { terminalRejection: true } : {}) });
+        if (!existing.terminalRejection) await wakeRoomMailbox(socket.channelID, mailbox, io);
       } catch (error) { ack({ error: error instanceof Error && error.message === 'MAILBOX_QUOTA' ? "Mailbox quota exceeded." : "Message could not be queued." }); }
       return;
     }
@@ -328,7 +352,7 @@ const connectionListener = (socket: CustomSocket, io) => {
       ack({ error: 'Receiver is unavailable.' });
       return;
     }
-    if (!await activeBoundDevice(receiverSocket as CustomSocket)) { ack({ error: 'Receiver is unavailable.' }); return; }
+    if (!await activeBoundDevice(receiverSocket as CustomSocket) || !currentLegacyOwner(receiverSocket as CustomSocket) || !currentLegacyOwner(socket)) { ack({ error: 'Receiver is unavailable.' }); return; }
     const receiverId = clients.getReceiverIDBySenderID(socket.userID, socket.channelID);
     if (!receiverId) { ack({ error: 'Receiver is unavailable.' }); return; }
     const delivered = await new Promise<RecipientOutcome | undefined>((resolve) => {
@@ -343,13 +367,14 @@ const connectionListener = (socket: CustomSocket, io) => {
         resolve(response);
       });
     });
-    const accepted = acceptedOutcome(delivered);
+    const recipientStillOwns = currentLegacyOwner(receiverSocket as CustomSocket) && await activeBoundDevice(receiverSocket as CustomSocket) && currentLegacyOwner(receiverSocket as CustomSocket);
+    const accepted = recipientStillOwns && acceptedOutcome(delivered);
     traceMessageRelay('live-recipient-acceptance-result', socket.channelID, id, accepted ? 'accepted' : 'pending', { userId: socket.userID, recipientRoutingId: receiverId, deviceId: receiverSocket.deviceId });
     traceDelivery('socket-dispatch-success', accepted);
-    if (delivered?.outcome === 'permanent-rejection' && permanentReason(delivered.reasonClass) && await activeBoundDevice(receiverSocket as CustomSocket)) {
+    if (delivered?.outcome === 'permanent-rejection' && permanentReason(delivered.reasonClass) && recipientStillOwns) {
       try {
         const recorded = await db.recordOfflineRejection({
-          id, dedupeKey: envelopeDedupeKey(socket.channelID, receiverId, socket.userID, payload.envelope),
+          id, dedupeKey: roomEnvelopeDedupeKey(socket.channelID, receiverId, socket.userID, payload.envelope),
           channel: socket.channelID, mailbox: receiverId, sender: socket.userID, timestamp,
           expiresAt: new Date(timestamp + OFFLINE_TTL_MS), terminalReason: delivered.reasonClass,
         });
@@ -372,6 +397,7 @@ const connectionListener = (socket: CustomSocket, io) => {
       traceMessageRelay('mailbox-durable-after-live-failure', socket.channelID, stored.id, stored.terminalRejection ? 'terminal-rejection' : 'stored', { userId: socket.userID, recipientRoutingId: receiverId });
       traceDelivery('envelope-stored', true);
       ack({ ...stored, stored: !stored.terminalRejection, ...(stored.terminalRejection ? { terminalRejection: true } : {}) });
+      if (!stored.terminalRejection) await wakeRoomMailbox(socket.channelID, receiverId, io);
     } catch (error) {
       ack({ error: error instanceof Error && error.message === 'MAILBOX_QUOTA' ? 'Mailbox quota exceeded.' : 'Message could not be queued.' });
     }
@@ -393,12 +419,15 @@ const connectionListener = (socket: CustomSocket, io) => {
     }
     if (payload.proofOperation !== 'relay:signal' && payload.proofOperation !== 'device-control') { ack({ error: 'Device authorization rejected.' }); return; }
     if (payload.deviceAuthorizationProof.resource?.conversationId !== socket.channelID) { ack({ error: 'Device authorization rejected.' }); return; }
-    if (!await verifyCarrier(socket, payload, payload.proofOperation)) { ack({ error: 'Device authorization rejected.' }); return; }
+    if (!currentLegacyOwner(socket) || !await verifyCarrier(socket, payload, payload.proofOperation) || !currentLegacyOwner(socket)) { ack({ error: 'Device authorization rejected.' }); return; }
     traceCallRelay('signal-authorized', true);
     const receiverSid = findPeerSid(socket);
     traceCallRelay('recipient-found', !!receiverSid);
     if (!receiverSid) {
-      ack({ error: "No receiver is in the channel." });
+      const peer = muxPeerForLegacy(socket.channelID, socket.userID);
+      const recipient = peer?.muxSubscriptions?.get(socket.channelID)?.routingAddress;
+      if (recipient && await routeRoomSignal(socket, socket.channelID, socket.userID, recipient, payload.envelope, io)) { ack({ status: 'ok' }); return; }
+      ack({ error: 'No receiver is in the channel.' });
       return;
     }
 
@@ -406,7 +435,7 @@ const connectionListener = (socket: CustomSocket, io) => {
     const receiverSocket = io.sockets.sockets.get(receiverSid) as CustomSocket | undefined;
     const receiverSocketPresent = !!receiverSocket && await activeBoundDevice(receiverSocket);
     traceCallRelay('forward-socket-present', receiverSocketPresent);
-    if (!receiverSocketPresent) { ack({ error: 'Receiver is unavailable.' }); return; }
+    if (!receiverSocketPresent || !currentLegacyOwner(socket) || !currentLegacyOwner(receiverSocket)) { ack({ error: 'Receiver is unavailable.' }); return; }
     socketEmit<SOCKET_TOPIC.WEBRTC_SESSION_DESCRIPTION>(SOCKET_TOPIC.WEBRTC_SESSION_DESCRIPTION, receiverSid, {
       envelope: payload?.envelope,
     });
@@ -421,7 +450,7 @@ const connectionListener = (socket: CustomSocket, io) => {
       ack({ error: 'Terminal mailbox result rejected.' });
       return;
     }
-    if (!socket.userID || !socket.channelID || payload.roomId !== socket.channelID || !await activeBoundDevice(socket)) {
+    if (!currentLegacyOwner(socket) || payload.roomId !== socket.channelID || !await activeBoundDevice(socket) || !currentLegacyOwner(socket)) {
       ack({ error: 'Terminal mailbox result rejected.' });
       return;
     }
@@ -431,8 +460,8 @@ const connectionListener = (socket: CustomSocket, io) => {
         ack({ error: 'Terminal mailbox result rejected.' });
         return;
       }
-      const senderSid = findPeerSid(socket);
-      if (senderSid) socketEmit<SOCKET_TOPIC.NOT_ACCEPTED>(SOCKET_TOPIC.NOT_ACCEPTED, senderSid, payload.id);
+      const peerAddress = clients.getReceiverIDBySenderID(socket.userID, socket.channelID) ?? muxPeerForLegacy(socket.channelID, socket.userID)?.muxSubscriptions?.get(socket.channelID)?.routingAddress;
+      if (peerAddress) await notifyRoomSender(socket.channelID, peerAddress, payload.id, 'rejected', io);
       ack({ status: result });
     } catch {
       // A failed terminal write is not an acceptance or a permanent decision.
@@ -447,18 +476,18 @@ const connectionListener = (socket: CustomSocket, io) => {
       return;
     }
     const { id, claimId } = payload as { id: string; claimId?: string };
-    if (!socket.userID || !socket.channelID || !await activeBoundDevice(socket)) return;
+    if (!currentLegacyOwner(socket) || !await activeBoundDevice(socket) || !currentLegacyOwner(socket)) return;
     traceMessageRelay('recipient-received-callback', socket.channelID, id, 'application-accepted', { userId: socket.userID, deviceId: socket.deviceId });
     const removed = await db.ackOfflineMessage(id, socket.userID, socket.channelID, claimId);
     if (claimId && !removed) return;
-    const receiverSid = findPeerSid(socket);
-    if (receiverSid) {
-      socketEmit<SOCKET_TOPIC.DELIVERED>(SOCKET_TOPIC.DELIVERED, receiverSid, id);
-    }
+    const peerAddress = clients.getReceiverIDBySenderID(socket.userID, socket.channelID) ?? muxPeerForLegacy(socket.channelID, socket.userID)?.muxSubscriptions?.get(socket.channelID)?.routingAddress;
+    if (peerAddress) await notifyRoomSender(socket.channelID, peerAddress, id, 'accepted', io);
   });
 
   socket.on("disconnect", () => {
     const { channelID, userID } = socket;
+    if (replayTimer) clearTimeout(replayTimer);
+    replayRequested = false;
     rateLimiter.reset(socket.id);
     if (!(channelID && userID)) {
       return;

@@ -18,22 +18,27 @@ const transport = (page: Page) => page.evaluate(() => {
   return hook?.();
 });
 
-test('Mux subscription rejection retains contact and explicit retry succeeds after legacy owner disconnects', async ({ browser }) => {
+test('authenticated handoff succeeds while the peer remains legacy, including encrypted call signaling', async ({ browser }) => {
   test.setTimeout(120000);
   const { a, b, alice, bob } = await connectedPair(browser, true);
   try {
     await send(bob, alice, 'Established before transport handoff');
-    // The server intentionally rejects Mux while Alice still owns legacy delivery.
+    expect(await transport(alice)).toBe('legacy');
     await bob.reload(); await unlock(bob);
     const aliceRow = bob.locator('.conversation-row').filter({ hasText: 'Alice' });
-    await expect(aliceRow).toContainText('Disconnected', { timeout: 30000 });
-    await expect(bob.locator('.conversation-recovery small').filter({ hasText: 'CONVERSATION_MUX_SUBSCRIPTION_REJECTED' })).toHaveCount(1);
-    // Both verified peers now leave the legacy surface, without changing any trust or gate.
+    await expect.poll(() => transport(bob), { timeout: 30000 }).toBe('multiplexed');
+    expect(await transport(alice)).toBe('legacy');
+    await send(bob, alice, 'Independent handoff Mux to legacy');
+    await send(alice, bob, 'Independent handoff legacy to Mux');
+    for (const mode of ['audio', 'video']) for (const [caller, receiver] of [[bob, alice], [alice, bob]]) {
+      await expect(caller.getByRole('button', { name: `Start ${mode} call`, exact: true })).toBeEnabled();
+      await caller.getByRole('button', { name: `Start ${mode} call`, exact: true }).click();
+      await receiver.getByRole('button', { name: 'Decline call', exact: true }).click({ timeout: 30000 });
+      await expect(caller.getByRole('button', { name: 'Cancel call', exact: true })).toHaveCount(0);
+    }
     await alice.reload(); await unlock(alice);
     await expect.poll(() => transport(alice), { timeout: 30000 }).toBe('multiplexed');
     await aliceRow.click();
-    await expect(aliceRow).toHaveClass(/active/, { timeout: 30000 });
-    await expect.poll(() => transport(bob), { timeout: 30000 }).toBe('multiplexed');
     await send(alice, bob, 'Mux retry acceptance Alice');
     await send(bob, alice, 'Mux retry acceptance Bob');
     await alice.reload(); await unlock(alice);

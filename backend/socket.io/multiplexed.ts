@@ -8,6 +8,7 @@ import type { DeviceAuthorizationProof, DeviceOperation, DeviceResourceContext }
 import getClientInstance from './clients';
 import type { CustomSocket, WireEnvelope } from './index';
 import { RateLimiter } from './rateLimiter';
+import { storeRoomEnvelope } from './roomEnvelopeStore';
 
 import { muxRelayEnabled } from '../security/muxFeatureGate';
 export { muxRelayEnabled } from '../security/muxFeatureGate';
@@ -64,6 +65,9 @@ const muxRoomSockets = new Map<string, Map<string, CustomSocket>>();
 type MailboxPump = { socket: CustomSocket; subscription: MuxRoomSubscription; running: boolean; requested: boolean; timer?: ReturnType<typeof setTimeout> };
 const mailboxPumps = new Map<string, MailboxPump>();
 const clients = getClientInstance();
+const relayServers = new WeakMap<CustomSocket, MuxServer>();
+const legacyMailboxWakeups = new WeakMap<CustomSocket, () => void>();
+export const registerLegacyMailboxWakeup = (socket: CustomSocket, wake: () => void): void => { legacyMailboxWakeups.set(socket, wake); };
 const muxOperationRateLimiter = new RateLimiter({ capacity: 160, refillPerSecond: 20 });
 
 const exactKeys = (value: Record<string, unknown>, keys: readonly string[]): boolean =>
@@ -133,15 +137,91 @@ const currentSubscription = async (socket: CustomSocket, roomId: string): Promis
       !await activeBoundDevice(socket) || !await authorizeRoomControl(roomId, subscription.controlCapability) ||
       !await authorizeRoutingAddress(roomId, subscription.routingAddress, subscription.routingProof) ||
       !await currentRouteRecord(roomId, subscription.peerRoutingAddress) || !(await channelValid(roomId)).valid) return undefined;
-  return subscription;
+  return locallyOwnsSubscription(socket, subscription) ? subscription : undefined;
 };
 
-const messageDedupeKey = (roomId: string, mailbox: string, sender: string, envelope: WireEnvelope): string =>
-  createHash('sha256').update(JSON.stringify({ roomId, mailbox, sender, envelope })).digest('hex');
+export const muxPeerForLegacy = (roomId: string, address: string): CustomSocket | undefined => {
+  for (const [peerAddress, socket] of muxRoomSockets.get(roomId) ?? []) {
+    const subscription = socket.muxSubscriptions?.get(roomId);
+    if (peerAddress !== address && subscription?.peerRoutingAddress === address && locallyOwnsSubscription(socket, subscription)) return socket;
+  }
+  return undefined;
+};
 
-const notifyMuxSender = (roomId: string, routingAddress: string, id: string, status: 'accepted' | 'rejected'): void => {
-  const sender = muxRoomSockets.get(roomId)?.get(routingAddress);
-  if (sender?.connected !== false) sender?.emit('mux-delivery-status', { version: MUX_PROTOCOL_VERSION, roomId, id, status });
+/** Feature hints do not confer trust. They follow authenticated current owners
+ * and reuse existing events; encrypted call admission remains client-authoritative. */
+export const notifyRoomPeerFeatures = async (source: CustomSocket, roomId: string, address: string, io: MuxServer): Promise<readonly string[]> => {
+  const sourceMux = source.muxSubscriptions?.get(roomId);
+  const sourceCurrent = (): boolean => sourceMux ? sourceMux.routingAddress === address && locallyOwnsSubscription(source, sourceMux) : legacyRoomOwner(roomId, address, io) === source;
+  if (!sourceCurrent() || !await activeBoundDevice(source)) return [];
+  const peerAddress = sourceMux?.peerRoutingAddress ?? clients.getReceiverIDBySenderID(address, roomId) ?? muxPeerForLegacy(roomId, address)?.muxSubscriptions?.get(roomId)?.routingAddress;
+  if (!peerAddress) return [];
+  const peerMux = muxRoomOwner(roomId, peerAddress);
+  const peer = peerMux ?? legacyRoomOwner(roomId, peerAddress, io);
+  if (!peer) return [];
+  const subscription = peerMux ? await currentSubscription(peerMux, roomId) : undefined;
+  if (peerMux ? !subscription || subscription.peerRoutingAddress !== address : !await activeBoundDevice(peer)) return [];
+  if (!sourceCurrent()) return [];
+  const features = sourceMux?.protocolFeatures ?? source.protocolFeatures ?? [];
+  if (subscription) {
+    if (!locallyOwnsSubscription(peer, subscription)) return [];
+    peer.emit('mux-peer-subscription', { version: MUX_PROTOCOL_VERSION, roomId, connectionGeneration: subscription.connectionGeneration,
+      subscriptionNonce: subscription.nonce, peerRoutingAddress: address, peerFeatures: features });
+  } else {
+    if (legacyRoomOwner(roomId, peerAddress, io) !== peer) return [];
+    peer.emit('on-alice-join', { protocolFeatures: features });
+  }
+  return subscription?.protocolFeatures ?? peer.protocolFeatures ?? [];
+};
+
+export const notifyRoomSender = async (roomId: string, address: string, id: string, status: 'accepted' | 'rejected', io?: MuxServer): Promise<void> => {
+  const mux = muxRoomOwner(roomId, address);
+  if (mux) {
+    const subscription = await currentSubscription(mux, roomId);
+    if (subscription && locallyOwnsSubscription(mux, subscription)) mux.emit('mux-delivery-status', { version: MUX_PROTOCOL_VERSION, roomId, id, status });
+    return;
+  }
+  const legacy = io && legacyRoomOwner(roomId, address, io);
+  if (legacy && await activeBoundDevice(legacy) && legacyRoomOwner(roomId, address, io!) === legacy) legacy.emit(status === 'accepted' ? 'delivered' : 'not-accepted', id);
+};
+
+/** Existing encrypted signaling: wrappers change, opaque envelopes do not. */
+export const routeRoomSignal = async (source: CustomSocket, roomId: string, sender: string, recipient: string, envelope: WireEnvelope, io: MuxServer): Promise<boolean> => {
+  const targetMux = muxRoomOwner(roomId, recipient);
+  const target = targetMux ?? legacyRoomOwner(roomId, recipient, io);
+  if (!target) return false;
+  const sourceSubscription = source.muxSubscriptions?.get(roomId);
+  if (sourceSubscription) {
+    if (sourceSubscription.routingAddress !== sender || sourceSubscription.peerRoutingAddress !== recipient ||
+        !sourceSubscription.protocolFeatures.includes('room-call-signal-v2') || await currentSubscription(source, roomId) !== sourceSubscription) return false;
+  } else if (legacyRoomOwner(roomId, sender, io) !== source || !source.protocolFeatures?.includes('room-call-signal-v2') || !await activeBoundDevice(source)) return false;
+  const targetSubscription = targetMux ? await currentSubscription(targetMux, roomId) : undefined;
+  if (targetMux) {
+    if (!targetSubscription || targetSubscription.peerRoutingAddress !== sender || !targetSubscription.protocolFeatures.includes('room-call-signal-v2')) return false;
+  } else if (!target.protocolFeatures?.includes('room-call-signal-v2') || !await activeBoundDevice(target)) return false;
+  // Final fencing is synchronous with emission.
+  if (sourceSubscription ? !locallyOwnsSubscription(source, sourceSubscription) : legacyRoomOwner(roomId, sender, io) !== source) return false;
+  if (targetSubscription) {
+    if (!locallyOwnsSubscription(target, targetSubscription)) return false;
+    target.emit('mux-call-signal', { version: MUX_PROTOCOL_VERSION, roomId, senderRoutingAddress: sender,
+      recipientRoutingAddress: recipient, connectionGeneration: targetSubscription.connectionGeneration,
+      subscriptionNonce: targetSubscription.nonce, envelope });
+  } else {
+    if (legacyRoomOwner(roomId, recipient, io) !== target) return false;
+    target.emit('webrtc-session-description', { envelope });
+  }
+  return true;
+};
+
+export const wakeRoomMailbox = async (roomId: string, address: string, io: MuxServer): Promise<void> => {
+  const mux = muxRoomOwner(roomId, address);
+  if (mux) {
+    const subscription = await currentSubscription(mux, roomId);
+    if (subscription && locallyOwnsSubscription(mux, subscription)) requestMuxMailboxDelivery(mux, subscription);
+    return;
+  }
+  const legacy = legacyRoomOwner(roomId, address, io);
+  if (legacy) legacyMailboxWakeups.get(legacy)?.();
 };
 
 type MailboxBatchResult = { status: 'drained' | 'inactive' | 'batch-limit' } | { status: 'retry'; retryAt: number };
@@ -201,7 +281,7 @@ const deliverMuxMailboxBatch = async (socket: CustomSocket, subscription: MuxRoo
         response.reasonClass as 'authenticated-invalid' | 'unsupported-message' | 'identity-changed');
       if (result === 'stale') return { status: 'retry', retryAt: leaseUntil + MUX_MAILBOX_RETRY_MARGIN_MS };
       if (result === 'rejected') {
-        notifyMuxSender(current.roomId, message.sender, message.id, 'rejected');
+        await notifyRoomSender(current.roomId, message.sender, message.id, 'rejected', relayServers.get(socket));
         if (response.reasonClass === 'identity-changed') socket.emit('mux-room-suspended', {
           version: MUX_PROTOCOL_VERSION, roomId: current.roomId, connectionGeneration: current.connectionGeneration, subscriptionNonce: current.nonce,
         });
@@ -217,7 +297,7 @@ const deliverMuxMailboxBatch = async (socket: CustomSocket, subscription: MuxRoo
     if (!await db.ackOfflineMessage(message.id, current.routingAddress, current.roomId, message.claimId)) {
       return { status: 'retry', retryAt: leaseUntil + MUX_MAILBOX_RETRY_MARGIN_MS };
     }
-    notifyMuxSender(current.roomId, message.sender, message.id, 'accepted');
+    await notifyRoomSender(current.roomId, message.sender, message.id, 'accepted', relayServers.get(socket));
   }
   return { status: 'batch-limit' };
 };
@@ -338,30 +418,31 @@ export const muxWouldExceedChannelCapacity = (routingAddress: string, roomId: st
   return routes.size >= capacity && !routes.has(routingAddress);
 };
 
-/** Returns whether a room currently has a live legacy delivery owner. Stale
- * routing entries are removed before the ownership decision is made. */
-export const hasActiveLegacyRoomOwner = (roomId: string, io: MuxServer): boolean => {
-  for (const [routingAddress, route] of Object.entries(clients.getClientsByChannel(roomId))) {
-    const socket = io.sockets.sockets.get(route.sid) as CustomSocket | undefined;
-    if (socket && socket.connected !== false && socket.userID === routingAddress && socket.channelID === roomId) return true;
-    clients.deleteClient(routingAddress, roomId, route.sid);
-  }
-  return false;
+/** Ownership is exclusive per recipient, never merely per connected socket. */
+export const legacyRoomOwner = (roomId: string, address: string, io: MuxServer): CustomSocket | undefined => {
+  const sid = clients.getSIDByIDs(address, roomId)?.sid;
+  const owner = sid ? io.sockets.sockets.get(sid) as CustomSocket | undefined : undefined;
+  if (owner && owner.connected !== false && owner.userID === address && owner.channelID === roomId) return owner;
+  if (sid) clients.deleteClient(address, roomId, sid);
+  return undefined;
 };
 
-/** Returns whether any live Mux subscription currently owns delivery in a room. */
-export const hasActiveMuxRoomOwner = (roomId: string): boolean => {
-  const roomSockets = muxRoomSockets.get(roomId);
-  if (!roomSockets) return false;
-  for (const [routingAddress, socket] of roomSockets) {
-    const subscription = socket.muxSubscriptions?.get(roomId);
-    if (socket.connected !== false && subscription?.roomId === roomId && subscription.routingAddress === routingAddress &&
-        subscription.connectionGeneration === socket.id && isCurrentMuxSocket(socket)) return true;
-    if (subscription) removeSubscription(socket, subscription);
-    else roomSockets.delete(routingAddress);
-  }
-  if (roomSockets.size === 0) muxRoomSockets.delete(roomId);
-  return false;
+export const muxRoomOwner = (roomId: string, address: string): CustomSocket | undefined => {
+  const owner = muxRoomSockets.get(roomId)?.get(address);
+  const subscription = owner?.muxSubscriptions?.get(roomId);
+  if (owner && subscription?.routingAddress === address && locallyOwnsSubscription(owner, subscription)) return owner;
+  if (owner && subscription) removeSubscription(owner, subscription);
+  return undefined;
+};
+
+export const sameDeviceOwner = (owner: CustomSocket, contender: CustomSocket): boolean =>
+  !!contender.deviceId && !!contender.accountIdentityReference && owner.deviceId === contender.deviceId &&
+  owner.accountIdentityReference === contender.accountIdentityReference && owner.deviceTrustEpoch === contender.deviceTrustEpoch;
+
+/** Synchronous fencing; no awaited operation may separate this from installing the replacement. */
+export const releaseMuxRoomOwner = (owner: CustomSocket, roomId: string): void => {
+  const subscription = owner.muxSubscriptions?.get(roomId);
+  if (subscription) removeSubscription(owner, subscription);
 };
 
 const scheduleSubscriptionExpiry = (socket: CustomSocket, subscription: MuxRoomSubscription): void => {
@@ -380,6 +461,7 @@ const scheduleSubscriptionExpiry = (socket: CustomSocket, subscription: MuxRoomS
 
 /** Adds device-scoped authentication and immutable, room-scoped subscriptions to a socket. */
 export const registerMultiplexedRelay = (socket: CustomSocket, io: MuxServer): void => {
+  relayServers.set(socket, io);
   if (!muxRelayEnabled()) return;
   socket.on('mux-authenticate', (payload: unknown, ack: (response: Record<string, unknown>) => void = () => undefined) => enqueue(socket, async () => {
     const body = payload as Record<string, unknown> | null;
@@ -440,13 +522,13 @@ export const registerMultiplexedRelay = (socket: CustomSocket, io: MuxServer): v
       reject();
       return;
     }
-    // A room uses one delivery plane at a time. Do not let a Mux subscription
-    // coexist with a live legacy room listener; the durable mailbox remains
-    // the handoff path after the incumbent transport disconnects.
-    if (hasActiveLegacyRoomOwner(roomId, io)) { reject(); return; }
+    const legacyOwner = legacyRoomOwner(roomId, routingAddress, io);
+    if (legacyOwner && !sameDeviceOwner(legacyOwner, socket)) { reject(); return; }
     if (muxWouldExceedChannelCapacity(routingAddress, roomId, 2)) { reject(); return; }
-    const existingRouteSocket = muxRoomSockets.get(roomId)?.get(routingAddress);
-    if (existingRouteSocket && existingRouteSocket !== socket && existingRouteSocket.connected !== false) { reject(); return; }
+    const existingRouteSocket = muxRoomOwner(roomId, routingAddress);
+    if (existingRouteSocket && existingRouteSocket !== socket) { reject(); return; }
+    // Fence only this recipient's incumbent after all authorization checks.
+    if (legacyOwner) clients.deleteClient(routingAddress, roomId, legacyOwner.id);
     const proof = body.deviceAuthorizationProof as DeviceAuthorizationProof;
     const next: MuxRoomSubscription = Object.freeze({
       version: MUX_PROTOCOL_VERSION,
@@ -467,27 +549,9 @@ export const registerMultiplexedRelay = (socket: CustomSocket, io: MuxServer): v
     muxRoomSockets.set(roomId, roomSockets);
     roomSockets.set(routingAddress, socket);
     scheduleSubscriptionExpiry(socket, next);
-    const peer = roomSockets.get(peerRoutingAddress) ?? (() => {
-      const peerSid = clients.getSIDByIDs(peerRoutingAddress, roomId)?.sid;
-      return peerSid ? io.sockets.sockets.get(peerSid) as CustomSocket | undefined : undefined;
-    })();
-    const peerMux = peer?.muxSubscriptions?.get(roomId);
-    const peerFeatures = peerMux?.routingAddress === peerRoutingAddress && peerMux.peerRoutingAddress === routingAddress
-      ? peerMux.protocolFeatures
-      : peer && peer.userID === peerRoutingAddress && peer.channelID === roomId ? peer.protocolFeatures ?? [] : [];
-    // A subscription may arrive after the other endpoint subscribed. Notify
-    // that already-subscribed endpoint so its room capability view converges;
-    // otherwise feature negotiation depends on which device subscribed first.
-    if (peerMux?.routingAddress === peerRoutingAddress && peerMux.peerRoutingAddress === routingAddress && peer) {
-      peer.emit('mux-peer-subscription', {
-        version: MUX_PROTOCOL_VERSION,
-        roomId,
-        connectionGeneration: peerMux.connectionGeneration,
-        subscriptionNonce: peerMux.nonce,
-        peerRoutingAddress: routingAddress,
-        peerFeatures: next.protocolFeatures,
-      });
-    }
+    if (legacyOwner) legacyOwner.disconnect(true);
+    const peerFeatures = await notifyRoomPeerFeatures(socket, roomId, routingAddress, io);
+    if (!locallyOwnsSubscription(socket, next)) { reject(); return; }
     ack({ version: MUX_PROTOCOL_VERSION, status: 'subscribed', roomId, connectionGeneration: generation,
       subscriptionNonce: next.nonce, expiresAt: next.expiresAt, peerFeatures });
   }, ack, 'Room subscription rejected.'));
@@ -536,9 +600,8 @@ export const registerMultiplexedRelay = (socket: CustomSocket, io: MuxServer): v
     try {
       db.cleanupExpiredOfflineMessages();
       if (process.env.NODE_ENV === 'production' && !db.persistentStorageReady()) throw new Error('OFFLINE_DELIVERY_UNAVAILABLE');
-      const stored = await db.storeOfflineMessage({
+      const stored = await storeRoomEnvelope({
         id,
-        dedupeKey: messageDedupeKey(subscription.roomId, subscription.peerRoutingAddress, subscription.routingAddress, body.envelope as WireEnvelope),
         channel: subscription.roomId,
         mailbox: subscription.peerRoutingAddress,
         sender: subscription.routingAddress,
@@ -548,16 +611,12 @@ export const registerMultiplexedRelay = (socket: CustomSocket, io: MuxServer): v
         expiresAt: new Date(timestamp + MUX_OFFLINE_TTL_MS),
       });
       if (stored.state === 'rejected') {
-        notifyMuxSender(subscription.roomId, subscription.routingAddress, stored.id as string, 'rejected');
+        await notifyRoomSender(subscription.roomId, subscription.routingAddress, stored.id as string, 'rejected', io);
         ack({ id: stored.id, timestamp: stored.timestamp, terminalRejection: true });
         return;
       }
       ack({ version: MUX_PROTOCOL_VERSION, status: 'stored', id: stored.id, timestamp: stored.timestamp });
-      const recipient = muxRoomSockets.get(subscription.roomId)?.get(subscription.peerRoutingAddress);
-      const peerSubscription = recipient?.muxSubscriptions?.get(subscription.roomId);
-      if (recipient && peerSubscription?.peerRoutingAddress === subscription.routingAddress && peerSubscription.protocolFeatures.includes('room-message-v1')) {
-        requestMuxMailboxDelivery(recipient, peerSubscription);
-      }
+      await wakeRoomMailbox(subscription.roomId, subscription.peerRoutingAddress, io);
     } catch {
       reject();
     }
@@ -589,23 +648,7 @@ export const registerMultiplexedRelay = (socket: CustomSocket, io: MuxServer): v
       reject();
       return;
     }
-    const recipient = muxRoomSockets.get(subscription.roomId)?.get(subscription.peerRoutingAddress);
-    const peerSubscription = recipient?.muxSubscriptions?.get(subscription.roomId);
-    if (!recipient || !peerSubscription || peerSubscription.peerRoutingAddress !== subscription.routingAddress ||
-        !peerSubscription.protocolFeatures.includes('room-call-signal-v2') ||
-        (await currentSubscription(recipient, subscription.roomId))?.nonce !== peerSubscription.nonce) {
-      reject();
-      return;
-    }
-    recipient.emit('mux-call-signal', {
-      version: MUX_PROTOCOL_VERSION,
-      roomId: subscription.roomId,
-      senderRoutingAddress: subscription.routingAddress,
-      recipientRoutingAddress: peerSubscription.routingAddress,
-      connectionGeneration: peerSubscription.connectionGeneration,
-      subscriptionNonce: peerSubscription.nonce,
-      envelope,
-    });
+    if (!await routeRoomSignal(socket, subscription.roomId, subscription.routingAddress, subscription.peerRoutingAddress, envelope, io)) { reject(); return; }
     ack({ version: MUX_PROTOCOL_VERSION, status: 'routed', roomId: subscription.roomId });
   }, ack, 'Multiplexed call signal rejected.'));
 

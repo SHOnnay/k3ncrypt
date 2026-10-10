@@ -11,7 +11,7 @@ jest.mock('../security/controlCapability', () => ({ ...jest.requireActual('../se
 jest.mock('../api/chatHash/utils/validateChannel', () => ({ __esModule: true, default: async () => ({ valid: true }) }));
 const routingProof = 'b'.repeat(43);
 const routingProofHash = createHash('sha256').update(`k3ncrypt-prekey-renewal-v1\0${routingProof}`).digest('hex');
-jest.mock('../db', () => ({ __esModule: true, default: { getDatabase: () => ({}), cleanupExpiredOfflineMessages: jest.fn(), claimOfflineMessage: async () => undefined, storeOfflineMessage: jest.fn(async (record) => record), countOfflineMessages: jest.fn(async () => 0), ackOfflineMessage: jest.fn(async () => true), persistentStorageReady: () => true, findOneFromDB: async () => ({ renewalProofHash: routingProofHash, expiresAt: new Date(Date.now() + 60_000) }) } }));
+jest.mock('../db', () => ({ __esModule: true, default: { getDatabase: () => ({}), cleanupExpiredOfflineMessages: jest.fn(), claimOfflineMessage: async () => undefined, storeOfflineMessage: jest.fn(async (record) => record), countOfflineMessages: jest.fn(async () => 0), ackOfflineMessage: jest.fn(async () => true), persistentStorageReady: () => true, findOneFromDB: async (_query: unknown, collection: string) => collection === 'prekey_bundles' ? { renewalProofHash: routingProofHash, expiresAt: new Date(Date.now() + 60_000) } : undefined } }));
 jest.mock('../security/durableDeviceTrust', () => ({
     durableDeviceTrustAuthority: jest.fn(() => ({ verify: jest.fn(async () => ({ deviceId: 'test-device', accountIdentityReference: 'test-account', trustEpoch: 1, state: 'active' })) })),
     MongoDeviceTrustStore: class { async read() { return { deviceId: 'test-device', accountIdentityReference: 'test-account', trustEpoch: 1, state: 'active' }; } },
@@ -40,6 +40,7 @@ describe('isolated sync relay', () => {
         await new Promise<void>((resolve) => modern.close(() => resolve()));
         await new Promise<void>((resolve) => original.close(() => resolve()));
         if (http.listening) await new Promise<void>((resolve) => http.close(() => resolve()));
+        expect(http.listening).toBe(false);
     });
     const connect = async (routingId: string, sync: boolean): Promise<Socket> => {
         const socket = client(url, { path: sync ? '/sync/socket.io' : '/socket.io', transports: ['websocket'], reconnection: false,
@@ -108,6 +109,7 @@ describe('isolated sync relay', () => {
         const retained = await declinedSend;
         expect(retained.stored).toBe(true);
         expect(db.storeOfflineMessage).toHaveBeenCalledTimes(1);
+        expect(db.storeOfflineMessage).toHaveBeenCalledWith(expect.objectContaining({ channel: isolatedRoom, mailbox: isolatedRecipient, sender: isolatedSender, envelope: envelope(2), id: retained.id }));
     }, 15_000);
     it('rejects malformed, legacy and oversized envelopes without interpreting ciphertext', () => {
         const overhead = Buffer.byteLength(JSON.stringify(envelope(0)));

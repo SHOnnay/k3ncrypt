@@ -142,6 +142,7 @@ it('terminally rejects a claimed poison entry and continues replay to later acce
   const rejectSpy = jest.spyOn(db, 'rejectOfflineMessage').mockResolvedValueOnce('rejected').mockResolvedValueOnce('duplicate');
   const ackSpy = jest.spyOn(db, 'ackOfflineMessage').mockResolvedValue(true);
   const authoritySpy = jest.spyOn(durableTrust, 'durableDeviceTrustAuthority').mockReturnValue({ verify: async () => ({ deviceId, accountIdentityReference, trustEpoch: 1, state: 'active' }) } as never);
+  getClientInstance().setClientToChannel(recipient, channel, socket.id);
   try {
     connectionListener(socket, { sockets: { sockets: new Map() } });
     const replayAck = jest.fn();
@@ -151,7 +152,7 @@ it('terminally rejects a claimed poison entry and continues replay to later acce
     expect(rejectSpy).toHaveBeenNthCalledWith(1, poison.id, recipient, channel, expect.any(String), 'authenticated-invalid');
     expect(ackSpy).toHaveBeenCalledWith(valid.id, recipient, channel, claimsById.get(valid.id));
     expect(claimSpy).toHaveBeenCalledTimes(3);
-  } finally { dbSpy.mockRestore(); claimSpy.mockRestore(); rejectSpy.mockRestore(); ackSpy.mockRestore(); authoritySpy.mockRestore(); }
+  } finally { getClientInstance().deleteClient(recipient, channel, socket.id); dbSpy.mockRestore(); claimSpy.mockRestore(); rejectSpy.mockRestore(); ackSpy.mockRestore(); authoritySpy.mockRestore(); }
 });
 
 it('requires the joined recipient room and a live claim generation before terminal rejection', async () => {
@@ -163,6 +164,7 @@ it('requires the joined recipient room and a live claim generation before termin
   const dbSpy = jest.spyOn(db, 'getDatabase').mockReturnValue(database as never);
   const rejectSpy = jest.spyOn(db, 'rejectOfflineMessage').mockResolvedValue('stale');
   const authoritySpy = jest.spyOn(durableTrust, 'durableDeviceTrustAuthority').mockReturnValue({ verify: async () => ({ deviceId, accountIdentityReference, trustEpoch: 1, state: 'active' }) } as never);
+  getClientInstance().setClientToChannel(recipient, channel, socket.id);
   try {
     connectionListener(socket, { sockets: { sockets: new Map() } });
     const ack = jest.fn();
@@ -172,7 +174,7 @@ it('requires the joined recipient room and a live claim generation before termin
     expect(rejectSpy).toHaveBeenCalledWith(expect.any(String), recipient, channel, expect.any(String), 'authenticated-invalid');
     expect(socket.emit).not.toHaveBeenCalledWith('not-accepted', expect.anything());
     expect(ack).toHaveBeenLastCalledWith({ error: 'Terminal mailbox result rejected.' });
-  } finally { dbSpy.mockRestore(); rejectSpy.mockRestore(); authoritySpy.mockRestore(); }
+  } finally { getClientInstance().deleteClient(recipient, channel, socket.id); dbSpy.mockRestore(); rejectSpy.mockRestore(); authoritySpy.mockRestore(); }
 });
 
 it('authenticates one device socket and independently authorizes two room subscriptions', async () => {
