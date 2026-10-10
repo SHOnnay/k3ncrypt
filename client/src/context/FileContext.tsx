@@ -11,6 +11,8 @@ export const FileProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const { fileTransferBindingForRoom, attachmentRequestHeadersForRoom, sendMessageForRoom, channelHash } = useChat();
     const [diskReady, setDiskReady] = useState(false);
     const saved = useRef<SavedFile>();
+    const currentRoom = useRef(channelHash);
+    currentRoom.current = channelHash;
     const [transfer, changed] = useState<FileProgress>({ phase: 'Idle', bytes: 0, total: 0 });
     const activeDownload = useRef<string>();
     const [download, setDownload] = useState<FileContextValue['download']>();
@@ -28,8 +30,13 @@ export const FileProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             if (!channelHash || !sameBinding(await fileTransferBindingForRoom(channelHash, true), binding)) throw new Error('File contact identity changed.');
             await sendMessageForRoom(channelHash, reference);
         },
-        progress => { if (progress.phase === 'Failed') logSafeFailure(activeDownload.current ? 'file_download_failed' : 'file_send_failed', classifySafeDiagnostic('file-send', { safeDiagnosticCode: progress.diagnosticCode })); if (activeDownload.current) setDownload({ reference: activeDownload.current, transfer: progress }); else changed(progress); },
+        progress => { if (currentRoom.current !== channelHash) return; if (progress.phase === 'Failed') logSafeFailure(activeDownload.current ? 'file_download_failed' : 'file_send_failed', classifySafeDiagnostic('file-send', { safeDiagnosticCode: progress.diagnosticCode })); if (activeDownload.current) setDownload({ reference: activeDownload.current, transfer: progress }); else changed(progress); },
     ), [attachmentRequestHeadersForRoom, channelHash, fileTransferBindingForRoom, sendMessageForRoom]);
+    useEffect(() => {
+        activeDownload.current = undefined;
+        changed({ phase: 'Idle', bytes: 0, total: 0 });
+        setDownload(undefined);
+    }, [channelHash]);
     useEffect(() => {
         const abort = new AbortController(); let release: (() => void) | undefined; let disposed = false;
         if (navigator.locks) void navigator.locks.request('k3ncrypt-file-workspace-v2', { signal: abort.signal }, async lock => {
