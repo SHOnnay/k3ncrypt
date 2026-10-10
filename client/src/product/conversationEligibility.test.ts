@@ -1,4 +1,4 @@
-import { authoritativeTerminal, conversationDiagnostic, conversationEligibility, diagnoseOrphanedConversationRecords, readConversationIndex } from './conversationEligibility';
+import { authoritativeTerminal, classifySidebarConversations, conversationDiagnostic, conversationEligibility, diagnoseOrphanedConversationRecords, readConversationIndex } from './conversationEligibility';
 import { readConversationDescriptors, saveConversationDescriptor } from './sessionStore';
 import { TestProductStorage as Store } from './testStorage';
 const room = '11111111-1111-4111-8111-111111111111';
@@ -15,6 +15,17 @@ it('fresh index is empty and a valid old relationship remains eligible without c
   expect((await readConversationIndex(store, await readConversationDescriptors(store))).conversations).toHaveLength(1);
   expect([...store.records]).toEqual(before);
   expect(await readConversationIndex(new Store(), [])).toEqual({ conversations: [], unavailable: [] });
+});
+
+it('classifies established chats, pending invitations and unavailable historical records separately', () => {
+  const established = { ...descriptor, relationship: 'accepted' as const, bootstrapState: 'ESTABLISHED' as const };
+  const pending = { ...descriptor, roomId: '00000000-0000-4000-8000-000000000042', relationship: 'invitation' as const, remoteAddress: undefined, remoteIdentityCommitment: undefined, signedInvitation: undefined };
+  const acceptedButUnfinished = { ...descriptor, roomId: '00000000-0000-4000-8000-000000000043', relationship: 'accepted' as const, bootstrapState: 'PENDING_REMOTE' as const };
+  const historic = conversationDiagnostic({ roomId: '00000000-0000-4000-8000-000000000044', label: 'Old friend' }, 'CONVERSATION_ROOM_MISSING');
+  const groups = classifySidebarConversations([established, pending, acceptedButUnfinished], [historic]);
+  expect(groups.chats.map(item => item.roomId)).toEqual([established.roomId]);
+  expect(groups.pendingInvitations.map(item => item.roomId)).toEqual([pending.roomId]);
+  expect(groups.unavailable.map(item => item.roomId)).toEqual([historic.roomId, acceptedButUnfinished.roomId]);
 });
 it('quarantines old unaccepted, expired, missing session, malformed and mismatched states read-only', async () => {
   const store = await valid();

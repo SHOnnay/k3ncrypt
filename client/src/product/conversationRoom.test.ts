@@ -1,7 +1,18 @@
-import { probeConversationRoom } from './conversationRoom';
+import { probeConversationRoom, probeInvitationExpiry } from './conversationRoom';
 jest.mock('../config/runtimeConfig', () => ({ getRuntimeConfig: () => ({ baseUrl: '' }) }));
 const descriptor = { version: 1 as const, roomId: '11111111-1111-4111-8111-111111111111', controlCapability: 'a'.repeat(43), label: 'Private contact', updatedAt: 1 };
 afterEach(() => jest.restoreAllMocks());
+it('reads only a validated invitation expiry from the authorized status response', async () => {
+  const fetch = jest.spyOn(globalThis, 'fetch');
+  fetch.mockResolvedValueOnce(new Response(JSON.stringify({ status: 'ok', invitation: { expiresAt: 1_900_000_000_000, revocable: true } }), { status: 200 }));
+  await expect(probeInvitationExpiry(descriptor)).resolves.toBe(1_900_000_000_000);
+  expect(fetch.mock.calls[0][1]?.headers).toEqual({ 'X-K3ncrypt-Control-Capability': descriptor.controlCapability });
+  fetch.mockResolvedValueOnce(new Response(JSON.stringify({ status: 'ok', invitation: { expiresAt: 'tomorrow' } }), { status: 200 }));
+  await expect(probeInvitationExpiry(descriptor)).resolves.toBeUndefined();
+  fetch.mockResolvedValueOnce(new Response('{"status":"ok"}', { status: 200 }));
+  await expect(probeInvitationExpiry(descriptor)).resolves.toBeUndefined();
+});
+
 it('uses authoritative expiry/deletion responses and treats offline failure as availability, not corruption', async () => {
   const fetch = jest.spyOn(globalThis, 'fetch');
   fetch.mockResolvedValueOnce(new Response('{"state":"EXPIRED"}', { status: 404 }));

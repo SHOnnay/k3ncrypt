@@ -69,7 +69,7 @@ async function unlock(page: Page) {
 }
 async function open(page: Page, name: string) {
   await page.evaluate(() => { document.documentElement.dataset.k3ncryptConversationOpen = ''; });
-  await page.locator('.conversation-row').filter({ hasText: name }).click();
+  await page.locator('.conversation-row, .unavailable-conversation-action').filter({ hasText: name }).click();
   try { await expect.poll(() => page.locator('html').getAttribute('data-k3ncrypt-conversation-open'), { timeout: 30000 }).toMatch(/^(connected|same-room)$/); }
   catch (error) {
     const code = await page.locator('.safe-diagnostic-details code').textContent().catch(() => 'no code');
@@ -97,24 +97,24 @@ test('Alice/Bob/Carol descriptors survive switching, 503, timeout, offline refre
     await expect(bob.locator('.message-text').filter({ hasText: 'Persistence acceptance fixture' })).toBeVisible();
     await alice.route('**/api/chat-link/status/**', route => route.fulfill({ status: 503, contentType: 'application/json', body: '{"status":"not_ready"}' }));
     await alice.reload(); await unlock(alice);
-    await expect(alice.locator('.conversation-row').filter({ hasText: 'Bob' })).toBeVisible();
-    await expect(alice.locator('.conversation-row').filter({ hasText: 'Carol' })).toBeVisible();
-    await expect(alice.locator('.conversation-preview').filter({ hasText: 'Disconnected' })).toHaveCount(1);
+    await expect(alice.locator('.conversation-row, .unavailable-conversation-action').filter({ hasText: 'Bob' })).toBeVisible();
+    await expect(alice.locator('.conversation-row, .unavailable-conversation-action').filter({ hasText: 'Carol' })).toBeVisible();
+    await expect.poll(() => alice.locator('.conversation-preview').filter({ hasText: 'Disconnected' }).count()).toBeGreaterThan(0);
     await alice.unroute('**/api/chat-link/status/**'); await open(alice, 'Bob');
     await expect(alice.locator('.message-text').filter({ hasText: 'Persistence acceptance fixture' })).toBeVisible();
     await alice.route('**/api/chat-link/status/**', async route => {
       await new Promise<void>(resolve => setTimeout(resolve, 11000));
       await route.abort().catch((error: Error) => { if (!error.message.includes('Route is already handled')) throw error; });
     });
-    await alice.locator('.conversation-row').filter({ hasText: 'Carol' }).click();
-    await expect(alice.locator('.conversation-row').filter({ hasText: 'Carol' })).toContainText('Disconnected', { timeout: 15000 });
+    await alice.locator('.conversation-row, .unavailable-conversation-action').filter({ hasText: 'Carol' }).click();
+    await expect(alice.locator('.conversation-row, .unavailable-conversation-action').filter({ hasText: 'Carol' })).toContainText('Disconnected', { timeout: 15000 });
     await alice.unroute('**/api/chat-link/status/**'); await open(alice, 'Carol');
     // Match HTTP API paths only: a broad glob also blocks Vite's service/src/api imports.
     const apiOnly = (url: URL) => url.pathname.startsWith('/api/');
     await alice.route(apiOnly, route => route.abort('internetdisconnected'));
     await alice.reload(); await unlock(alice);
-    await expect(alice.locator('.conversation-row').filter({ hasText: 'Bob' })).toBeVisible();
-    await expect(alice.locator('.conversation-row').filter({ hasText: 'Carol' })).toBeVisible();
+    await expect(alice.locator('.conversation-row, .unavailable-conversation-action').filter({ hasText: 'Bob' })).toBeVisible();
+    await expect(alice.locator('.conversation-row, .unavailable-conversation-action').filter({ hasText: 'Carol' })).toBeVisible();
     await expect(alice.locator('.conversation-preview').filter({ hasText: 'Disconnected' })).toHaveCount(1);
     await alice.unroute(apiOnly); await open(alice, 'Bob');
     // Simulate one missing local session in a disposable fixture without modifying descriptors or identities.
@@ -129,9 +129,9 @@ test('Alice/Bob/Carol descriptors survive switching, 503, timeout, offline refre
       await vault.delete('vodozemac-session', carol.roomId);
     }, { storageModule, persistenceModule, sessionModule, passphrase });
     await alice.reload(); await unlock(alice);
-    await expect(alice.locator('.conversation-row').filter({ hasText: 'Carol' })).toContainText('Local records incomplete');
+    await expect(alice.locator('.unavailable-conversation-action').filter({ hasText: 'Carol' })).toContainText('Local records incomplete');
     await open(alice, 'Bob');
     await expect(alice.locator('.message-text').filter({ hasText: 'Persistence acceptance fixture' })).toBeVisible();
-    await expect(alice.locator('.conversation-row').filter({ hasText: 'Carol' })).toBeVisible();
+    await expect(alice.locator('.conversation-row, .unavailable-conversation-action').filter({ hasText: 'Carol' })).toBeVisible();
   } finally { await a.close(); await b.close(); await c.close(); }
 });

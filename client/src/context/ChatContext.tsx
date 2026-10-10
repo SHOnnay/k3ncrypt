@@ -1,4 +1,4 @@
-import { probeConversationRoom } from '../product/conversationRoom';
+import { probeConversationRoom, probeInvitationExpiry } from '../product/conversationRoom';
 import { ConversationSelection } from '../product/conversationSelection';
 import { authoritativeTerminal, conversationDiagnostic, conversationEligibility, conversationFailure, diagnoseOrphanedConversationRecords, readConversationIndex, type ConversationDiagnostic } from '../product/conversationEligibility';
 import { classifySafeDiagnostic, type SafeDiagnosticCode } from '../product/safeDiagnostics';
@@ -129,6 +129,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [unavailableConversations, setUnavailableConversations] = useState<ConversationDiagnostic[]>([]);
   const [orphanedConversationRecords, setOrphanedConversationRecords] = useState<{ roomIds: string[]; truncated: boolean; available: boolean }>();
   const [conversations, setConversations] = useState<ConversationDescriptor[]>([]);
+  const invitationExpiryLookups = useRef(new Map<string, number | null>());
   const conversationsRef = useRef(conversations); conversationsRef.current = conversations;
   const conversationIndexGeneration = useRef(0);
   const sentProfiles = useRef(new WeakMap<ModernConversation, number>());
@@ -386,6 +387,18 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     try { descriptors = await readConversationDescriptors(storage); }
     catch { descriptors = conversationsRef.current; }
     const index = await readConversationIndex(storage, descriptors, checkRoom ? probeConversationRoom : undefined);
+    const legacyInvitations = index.conversations.filter(item => item.relationship === 'invitation' && !item.remoteAddress && !Number.isSafeInteger(item.signedInvitation?.expiresAt) && !Number.isSafeInteger(item.pendingInvitationExpiresAt)).slice(0, 12);
+    for (const invitation of legacyInvitations) {
+      if (invitationExpiryLookups.current.has(invitation.roomId)) continue;
+      invitationExpiryLookups.current.set(invitation.roomId, null);
+      const expiresAt = await probeInvitationExpiry(invitation);
+      if (expiresAt === undefined) invitationExpiryLookups.current.delete(invitation.roomId);
+      else invitationExpiryLookups.current.set(invitation.roomId, expiresAt);
+    }
+    for (const item of index.conversations) {
+      const expiresAt = Number.isSafeInteger(item.signedInvitation?.expiresAt) ? item.signedInvitation!.expiresAt : item.pendingInvitationExpiresAt ?? invitationExpiryLookups.current.get(item.roomId) ?? undefined;
+      if (item.relationship === 'invitation' && expiresAt !== undefined) item.pendingInvitationExpiresAt = expiresAt;
+    }
     if (generation === conversationIndexGeneration.current) {
       setConversations(index.conversations); setUnavailableConversations(index.unavailable);
     }
@@ -498,7 +511,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           const latest = (await readConversationDescriptors(secureVault)).find(item => item.roomId === descriptor.roomId);
           if (!latest || latest.bootstrapState === 'ESTABLISHED') return;
           const nextState = state === 'accepted' ? 'ESTABLISHED' as const : 'FAILED_OR_UNSUPPORTED' as const;
-          await updateConversationDescriptor(secureVault, descriptor.roomId, { bootstrapState: nextState });
+          await updateConversationDescriptor(secureVault, descriptor.roomId, { bootstrapState: nextState, ...(state === 'accepted' ? { relationship: 'accepted' as const } : {}) });
           setRoomState(descriptor.roomId, { connection: state === 'accepted' ? 'connected' : 'pending' });
           await refreshConversations(secureVault);
           if (selectedConversation.current === conversation && state === 'accepted') setIsConnected(true);
@@ -590,8 +603,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         const state = bootstrapState;
         if (!state) throw conversationFailure('CONVERSATION_SESSION_MISSING');
         await updateConversationDescriptor(secureVault, descriptor.roomId, { bootstrapState: state });
-      } else if (established && descriptor.remoteAddress && descriptor.bootstrapState !== 'ESTABLISHED') {
-        await updateConversationDescriptor(secureVault, descriptor.roomId, { bootstrapState: 'ESTABLISHED' });
+      } else if (established && descriptor.remoteAddress && (descriptor.bootstrapState !== 'ESTABLISHED' || descriptor.relationship !== 'accepted')) {
+        await updateConversationDescriptor(secureVault, descriptor.roomId, { bootstrapState: 'ESTABLISHED', relationship: 'accepted' });
       }
       const heldClientIds = new Set(await conversation.heldNotSentSecurelyClientIds());
       const finalHistory = (await readMessages(secureVault, descriptor.roomId)).map(message =>
@@ -777,8 +790,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const descriptor: ConversationDescriptor = { version: 1, relationship: 'invitation', roomId: invite.hash, controlCapability: invite.controlCapability, label: 'Private contact', updatedAt: Date.now() };
     await saveConversationDescriptor(secureVault, descriptor);
     const details = await connectModern(secureVault, descriptor, false, undefined, false, true);
-    await saveConversationDescriptor(secureVault, (await readConversationDescriptors(secureVault)).find(item => item.roomId === descriptor.roomId) ?? descriptor); await refreshConversations(secureVault);
     if (!details.signedInvitation) throw new Error('A signed first-contact invitation could not be created.');
+    await saveConversationDescriptor(secureVault, { ...(await readConversationDescriptors(secureVault)).find(item => item.roomId === descriptor.roomId) ?? descriptor, pendingInvitationExpiresAt: details.signedInvitation.expiresAt }); await refreshConversations(secureVault);
     const fragment = encodeSignedModernInvitation(details.signedInvitation);
     return `${window.location.origin}${window.location.pathname}#${fragment}`;
   }, [chat, modern, vault]);
@@ -833,6 +846,14 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const label = trimmed.replace(/\s+/g, ' ') || 'Private contact';
     await updateConversationDescriptor(vault, roomId, { label, localNickname: trimmed || undefined }); await refreshConversations(vault);
   }, [conversations, vault]);
+
+  const setPendingInvitationDismissed = useCallback(async (roomId: string, dismissed: boolean): Promise<void> => {
+    if (!vault) throw new Error('Unlock this device to update pending invitations.');
+    const invitation = (await readConversationDescriptors(vault, false)).find(item => item.roomId === roomId);
+    if (!invitation || invitation.relationship !== 'invitation' || invitation.remoteAddress) throw new Error('Only an unaccepted invitation can be dismissed locally.');
+    await updateConversationDescriptor(vault, roomId, { locallyDismissed: dismissed });
+    await refreshConversations(vault);
+  }, [vault]);
 
   const restoreSession = useCallback(async (passphrase: string): Promise<void> => {
     const secureVault = await openModernVault(passphrase);
@@ -1637,6 +1658,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     deleteChannel,
     updateProfileDisplayName,
     setContactNickname,
+    setPendingInvitationDismissed,
     updatePrivacyPreferences,
     refreshPermissionStatus,
     attachmentRequestHeaders,

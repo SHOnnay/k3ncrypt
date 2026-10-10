@@ -93,3 +93,25 @@ describe('encrypted product session records', () => {
     expect(remaining.map((item) => item.roomId)).toEqual(['00000000-0000-4000-8000-000000000001']);
   });
 });
+
+it('dismisses and restores a pending invitation locally without losing its signed data or capability', async () => {
+  const store = new MemoryStore();
+  const roomId = '00000000-0000-4000-8000-000000000041';
+  const invitation = {
+    ...descriptor(roomId, 41),
+    relationship: 'invitation' as const,
+    remoteAddress: undefined,
+    remoteIdentityCommitment: undefined,
+    signedInvitation: { version: 2 as const, type: 'k3ncrypt-first-contact-invitation' as const, invitationId: '00000000-0000-4000-8000-000000000045', roomId, controlCapability: 'a'.repeat(43), inviterAddress: '00000000-0000-4000-8000-000000000046', identityCommitment: 'K3 ' + 'A'.repeat(43), capabilities: ['join-introduction-v1', 'room-message-v1'] as const, createdAt: 41, expiresAt: 1_900_000_000_000, signature: 'A'.repeat(86) },
+    pendingInvitationExpiresAt: 1_900_000_000_000,
+  };
+  await saveConversationDescriptor(store, invitation);
+  await updateConversationDescriptor(store, roomId, { locallyDismissed: true });
+  const afterDismiss = (await readConversationDescriptors(store, false))[0];
+  expect(afterDismiss).toMatchObject({ locallyDismissed: true, controlCapability: invitation.controlCapability, signedInvitation: invitation.signedInvitation, pendingInvitationExpiresAt: invitation.pendingInvitationExpiresAt });
+  const afterRefreshAndUnlock = (await readConversationDescriptors(store, false))[0];
+  expect(afterRefreshAndUnlock.locallyDismissed).toBe(true);
+  await updateConversationDescriptor(store, roomId, { locallyDismissed: false });
+  expect((await readConversationDescriptors(store, false))[0]).toMatchObject({ locallyDismissed: false, controlCapability: invitation.controlCapability, signedInvitation: invitation.signedInvitation });
+  expect(JSON.parse(new TextDecoder().decode(await store.read('product-session', 'conversations')))).toHaveLength(1);
+});

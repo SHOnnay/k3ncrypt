@@ -19,11 +19,15 @@ export interface ConversationDescriptor {
   /** Fingerprint carried by the out-of-band modern invitation. */
   remoteIdentityCommitment?: string;
   signedInvitation?: SignedModernInvitation;
+  /** Local display cache; populated from the signed invitation or authorized room-status response. */
+  pendingInvitationExpiresAt?: number;
   bootstrapState?: 'PENDING_LOCAL' | 'PENDING_REMOTE' | 'ESTABLISHED' | 'FAILED_OR_UNSUPPORTED';
   label: string;
   /** Projection only: read from an encrypted, identity-bound profile record. */
   remoteDisplayName?: string;
   localNickname?: string;
+  /** Device-local presentation state only; does not revoke or alter an invitation. */
+  locallyDismissed?: boolean;
   updatedAt: number;
 }
 
@@ -46,7 +50,9 @@ export const validateConversationDescriptor = (value: unknown): ConversationDesc
     || (item.remoteIdentityCommitment !== undefined && (typeof item.remoteIdentityCommitment !== 'string' || !/^K3 [A-Z0-9_ -]{20,128}$/.test(item.remoteIdentityCommitment)))
     || (item.bootstrapState !== undefined && !['PENDING_LOCAL', 'PENDING_REMOTE', 'ESTABLISHED', 'FAILED_OR_UNSUPPORTED'].includes(String(item.bootstrapState)))
     || (item.signedInvitation !== undefined && (!item.signedInvitation || typeof item.signedInvitation !== 'object' || (item.signedInvitation as Record<string, unknown>).version !== 2))
+    || (item.pendingInvitationExpiresAt !== undefined && (!Number.isSafeInteger(item.pendingInvitationExpiresAt) || (item.pendingInvitationExpiresAt as number) < 0))
     || (item.localNickname !== undefined && (typeof item.localNickname !== 'string' || !item.localNickname.trim() || item.localNickname.length > 80 || /[\u0000-\u001f\u007f]/.test(item.localNickname)))
+    || (item.locallyDismissed !== undefined && typeof item.locallyDismissed !== 'boolean')
     || typeof item.label !== 'string' || !item.label.trim() || item.label.length > 80
     || typeof item.updatedAt !== 'number' || !Number.isSafeInteger(item.updatedAt) || item.updatedAt < 0) {
     throw new Error('Saved conversation is invalid.');
@@ -59,9 +65,11 @@ export const validateConversationDescriptor = (value: unknown): ConversationDesc
     ...(item.remoteAddress ? { remoteAddress: item.remoteAddress as string } : {}),
     ...(item.remoteIdentityCommitment ? { remoteIdentityCommitment: item.remoteIdentityCommitment as string } : {}),
     ...(item.signedInvitation ? { signedInvitation: item.signedInvitation as SignedModernInvitation } : {}),
+    ...(Number.isSafeInteger(item.pendingInvitationExpiresAt) && (item.pendingInvitationExpiresAt as number) >= 0 ? { pendingInvitationExpiresAt: item.pendingInvitationExpiresAt as number } : {}),
     ...(item.bootstrapState ? { bootstrapState: item.bootstrapState as ConversationDescriptor['bootstrapState'] } : {}),
     label: item.label.trim(),
     ...(typeof item.localNickname === 'string' && item.localNickname.trim() && item.localNickname.length <= 80 && !/[\u0000-\u001f\u007f]/.test(item.localNickname) ? { localNickname: item.localNickname.trim() } : {}),
+    ...(typeof item.locallyDismissed === 'boolean' ? { locallyDismissed: item.locallyDismissed } : {}),
     updatedAt: item.updatedAt,
   });
 };
@@ -149,7 +157,7 @@ export const saveConversationDescriptor = async (storage: ProductSecureStorage, 
   });
 };
 
-export type ConversationPatch = Partial<Pick<ConversationDescriptor, 'label' | 'localNickname' | 'bootstrapState' | 'relationship' | 'remoteAddress' | 'remoteIdentityCommitment'>>;
+export type ConversationPatch = Partial<Pick<ConversationDescriptor, 'label' | 'localNickname' | 'bootstrapState' | 'relationship' | 'remoteAddress' | 'remoteIdentityCommitment' | 'locallyDismissed' | 'pendingInvitationExpiresAt'>>;
 export const updateConversationDescriptor = async (storage: ProductSecureStorage, roomId: string, patch: ConversationPatch): Promise<ConversationDescriptor[]> =>
   mutate(storage, roomId, async current => {
     if (!current) throw storageFailure('CONVERSATION_REMOVED');

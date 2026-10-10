@@ -115,6 +115,7 @@ export interface ChatContextType {
   deleteChannel: () => Promise<void>;
   updateProfileDisplayName: (name: string) => Promise<void>;
   setContactNickname: (roomId: string, nickname: string) => Promise<void>;
+  setPendingInvitationDismissed: (roomId: string, dismissed: boolean) => Promise<void>;
   updatePrivacyPreferences: (next: Partial<PrivacyPreferences>) => void;
   refreshPermissionStatus: () => Promise<void>;
   fileTransferBinding: (verified: boolean) => Promise<import('@chat-e2ee/service').FileBinding>;

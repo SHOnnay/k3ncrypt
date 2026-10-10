@@ -37,12 +37,12 @@ export async function conversationEligibility(storage: ProductSecureStorage, val
 export type ConversationAvailabilityState = 'saved' | 'pending' | 'retryable' | 'terminal' | 'local-incomplete' | 'review-required' | 'deferred';
 export interface ConversationDiagnostic { roomId?: string; label: string; state: ConversationAvailabilityState; code?: SafeDiagnosticCode; }
 export const authoritativeTerminal = (code: SafeDiagnosticCode): boolean => code === 'CONVERSATION_INVITATION_EXPIRED' || code === 'CONVERSATION_ROOM_MISSING' || code === 'CONVERSATION_REMOVED';
-export function conversationDiagnostic(descriptor: Pick<ConversationDescriptor, 'roomId' | 'label' | 'localNickname'>, code: SafeDiagnosticCode): ConversationDiagnostic {
+export function conversationDiagnostic(descriptor: Pick<ConversationDescriptor, 'roomId' | 'label' | 'localNickname' | 'remoteDisplayName'>, code: SafeDiagnosticCode): ConversationDiagnostic {
   const state: ConversationAvailabilityState = authoritativeTerminal(code) ? 'terminal'
     : code === 'CONVERSATION_INVITATION_UNACCEPTED' ? 'pending'
     : ['ROOM_MEMBERSHIP_MISMATCH', 'PINNED_IDENTITY_CHANGED', 'VERIFICATION_REQUIRED', 'CONVERSATION_MUX_AUTHENTICATION_REJECTED'].includes(code) ? 'review-required'
     : ['CONVERSATION_STATE_INCOMPLETE', 'CONVERSATION_SESSION_MISSING', 'CONTACT_REGISTRY_MISSING', 'CONVERSATION_LOCAL_RECORD_INVALID', 'CONVERSATION_RECORD_INVALID'].includes(code) ? 'local-incomplete' : 'retryable';
-  const label = descriptor.localNickname ?? descriptor.label;
+  const label = descriptor.localNickname ?? descriptor.remoteDisplayName ?? descriptor.label;
   return { roomId: descriptor.roomId, label: label === 'Private contact' ? `${label} · ${descriptor.roomId.slice(-8)}` : label, state, code };
 }
 export const conversationStateCopy = (diagnostic: ConversationDiagnostic): string => diagnostic.code === 'CONVERSATION_IN_USE' ? 'Open in another tab — close it and retry' : ({
@@ -51,6 +51,32 @@ export const conversationStateCopy = (diagnostic: ConversationDiagnostic): strin
   'review-required': 'Identity or room binding needs review', deferred: 'More saved entries retained on this device',
 })[diagnostic.state];
 export interface ConversationIndex { conversations: ConversationDescriptor[]; unavailable: ConversationDiagnostic[]; }
+export interface SidebarConversationGroups { chats: ConversationDescriptor[]; pendingInvitations: ConversationDescriptor[]; unavailable: ConversationDiagnostic[]; }
+
+/** Separate presentation from persisted access records; this never mutates or deletes them. */
+export function classifySidebarConversations(descriptors: readonly ConversationDescriptor[], diagnostics: readonly ConversationDiagnostic[]): SidebarConversationGroups {
+  const chats: ConversationDescriptor[] = [];
+  const pendingInvitations: ConversationDescriptor[] = [];
+  const unavailable = diagnostics.filter(item => !descriptors.some(descriptor => descriptor.roomId === item.roomId && descriptor.relationship === 'invitation' && !descriptor.remoteAddress));
+  const unavailableRooms = new Set(unavailable.flatMap(item => item.roomId ? [item.roomId] : []));
+  for (const descriptor of descriptors) {
+    if (descriptor.relationship === 'invitation' && !descriptor.remoteAddress) {
+      pendingInvitations.push(descriptor);
+      continue;
+    }
+    if (descriptor.bootstrapState === 'PENDING_LOCAL' || descriptor.bootstrapState === 'PENDING_REMOTE' || descriptor.bootstrapState === 'FAILED_OR_UNSUPPORTED') {
+      if (!unavailableRooms.has(descriptor.roomId)) {
+        const code: SafeDiagnosticCode = descriptor.bootstrapState === 'FAILED_OR_UNSUPPORTED' ? 'CONVERSATION_INVITATION_UNACCEPTED' : 'CONVERSATION_STATE_INCOMPLETE';
+        unavailable.push(conversationDiagnostic(descriptor, code));
+        unavailableRooms.add(descriptor.roomId);
+      }
+      continue;
+    }
+    if (!unavailableRooms.has(descriptor.roomId)) chats.push(descriptor);
+  }
+  return { chats, pendingInvitations, unavailable };
+}
+
 export async function readConversationIndex(storage: ProductSecureStorage, descriptors: readonly ConversationDescriptor[], roomProbe?: RoomProbe): Promise<ConversationIndex> {
   let raw: unknown;
   try { const bytes = await storage.read('product-session', 'conversations'); raw = bytes ? JSON.parse(decoder.decode(bytes)) : []; }
@@ -68,9 +94,10 @@ export async function readConversationIndex(storage: ProductSecureStorage, descr
     if (seen.has(descriptor.roomId)) { if (result.unavailable.length < CONVERSATION_WINDOW) result.unavailable.push(conversationDiagnostic(descriptor, 'CONVERSATION_RECORD_INVALID')); continue; }
     seen.add(descriptor.roomId);
     if (!visible.has(descriptor.roomId)) { omitted++; continue; }
-    const failure = await conversationEligibility(storage, value, roomProbe);
-    if (failure) { result.unavailable.push(conversationDiagnostic(descriptor, failure)); if (authoritativeTerminal(failure)) continue; }
     const projected = descriptors.find(item => item.roomId === descriptor.roomId);
+    const namedDescriptor = projected?.remoteIdentityCommitment === descriptor.remoteIdentityCommitment ? { ...descriptor, remoteDisplayName: projected?.remoteDisplayName } : descriptor;
+    const failure = await conversationEligibility(storage, value, roomProbe);
+    if (failure) { result.unavailable.push(conversationDiagnostic(namedDescriptor, failure)); if (authoritativeTerminal(failure)) continue; }
     result.conversations.push({ ...descriptor, remoteDisplayName: projected?.remoteIdentityCommitment === descriptor.remoteIdentityCommitment ? projected?.remoteDisplayName : undefined });
   }
   if (omitted) result.unavailable.push({ label: `${omitted} additional saved entries`, state: 'deferred', code: 'CONVERSATION_INDEX_LIMIT' });
