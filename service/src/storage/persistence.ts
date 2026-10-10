@@ -1,4 +1,5 @@
 export interface VaultPersistence {
+    listRecordKeys?(prefix: string, limit: number): Promise<{ keys: string[]; truncated: boolean }>;
     compareAndSwapRecords?(updates: readonly { key: string; expected: string | undefined; next: string }[]): Promise<boolean>;
     loadMetadata(): Promise<string | undefined>;
     saveMetadata(value: string): Promise<void>;
@@ -9,6 +10,10 @@ export interface VaultPersistence {
 
 /** Deterministic adapter for unit tests; it performs the same copy boundaries as IndexedDB. */
 export class MemoryVaultPersistence implements VaultPersistence {
+    public async listRecordKeys(prefix: string, limit: number): Promise<{ keys: string[]; truncated: boolean }> {
+        const keys = [...this.records.keys()].filter(key => key.startsWith(prefix)).sort();
+        return { keys: keys.slice(0, limit), truncated: keys.length > limit };
+    }
     public async compareAndSwapRecords(updates: readonly { key: string; expected: string | undefined; next: string }[]): Promise<boolean> {
         if (new Set(updates.map((item) => item.key)).size !== updates.length) throw new Error('Duplicate transaction key.');
         if (updates.some((item) => this.records.get(item.key) !== item.expected)) return false;
@@ -75,6 +80,21 @@ const transactionComplete = (transaction: IDBTransaction): Promise<void> => new 
  * IndexedDB ever receives plaintext secret values.
  */
 export class IndexedDbVaultPersistence implements VaultPersistence {
+    public async listRecordKeys(prefix: string, limit: number): Promise<{ keys: string[]; truncated: boolean }> {
+        const database = await this.open();
+        return new Promise((resolve, reject) => {
+            const transaction = database.transaction(RECORD_STORE, 'readonly');
+            const keys: string[] = [];
+            const request = transaction.objectStore(RECORD_STORE).openKeyCursor(IDBKeyRange.bound(prefix, `${prefix}\uffff`));
+            request.onerror = () => reject(request.error ?? new Error('Record metadata unavailable.'));
+            request.onsuccess = () => {
+                const cursor = request.result;
+                if (!cursor || keys.length === limit) { resolve({ keys, truncated: Boolean(cursor) }); return; }
+                if (typeof cursor.key !== 'string') { reject(new Error('Invalid record address.')); return; }
+                keys.push(cursor.key); cursor.continue();
+            };
+        });
+    }
     public async compareAndSwapRecords(updates: readonly { key: string; expected: string | undefined; next: string }[]): Promise<boolean> {
         if (updates.length === 0 || new Set(updates.map((item) => item.key)).size !== updates.length) throw new Error('Invalid transaction.');
         const database = await this.open();

@@ -4,10 +4,14 @@ import type { ConversationDescriptor } from './sessionStore';
 import type { SafeDiagnosticCode } from './safeDiagnostics';
 /** Only authoritative room states quarantine. Offline availability is not corruption. */
 export async function probeConversationRoom(descriptor: ConversationDescriptor): Promise<SafeDiagnosticCode | undefined> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
   try {
-    const response = await rateLimitedRequest(() => fetch(`${getRuntimeConfig().baseUrl ?? ''}/api/chat-link/status/${encodeURIComponent(descriptor.roomId)}`, { headers: { 'X-K3ncrypt-Control-Capability': descriptor.controlCapability } }));
+    const response = await rateLimitedRequest(() => fetch(`${getRuntimeConfig().baseUrl ?? ''}/api/chat-link/status/${encodeURIComponent(descriptor.roomId)}`, { signal: controller.signal, headers: { 'X-K3ncrypt-Control-Capability': descriptor.controlCapability } }), controller.signal);
     if (response.ok) return undefined;
-    if (response.status !== 404 && response.status !== 410) return undefined;
+    if (response.status === 503) return 'SERVICE_NOT_READY';
+    if (response.status === 401 || response.status === 403) return 'VERIFICATION_REQUIRED';
+    if (response.status !== 404 && response.status !== 410) return 'NETWORK_FAILURE';
     const reader = response.body?.getReader(); if (!reader) return undefined;
     let text = ''; let length = 0; const decoder = new TextDecoder();
     try {
@@ -17,5 +21,6 @@ export async function probeConversationRoom(descriptor: ConversationDescriptor):
     const body: unknown = JSON.parse(text);
     if (!body || typeof body !== 'object' || !('state' in body)) return undefined;
     return body.state === 'EXPIRED' ? 'CONVERSATION_INVITATION_EXPIRED' : body.state === 'DELETED' || body.state === 'NOT_FOUND' ? 'CONVERSATION_ROOM_MISSING' : undefined;
-  } catch { return undefined; }
+  } catch { return 'NETWORK_FAILURE'; }
+  finally { clearTimeout(timeout); }
 }

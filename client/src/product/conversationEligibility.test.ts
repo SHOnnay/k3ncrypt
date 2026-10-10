@@ -1,11 +1,6 @@
-import { conversationEligibility, readConversationIndex } from './conversationEligibility';
+import { authoritativeTerminal, conversationDiagnostic, conversationEligibility, diagnoseOrphanedConversationRecords, readConversationIndex } from './conversationEligibility';
 import { readConversationDescriptors, saveConversationDescriptor } from './sessionStore';
-class Store {
-  records = new Map<string, ArrayBuffer>();
-  read = async (type: string, id: string) => this.records.get(type + ':' + id)?.slice(0);
-  write = async (type: string, id: string, value: ArrayBuffer) => { this.records.set(type + ':' + id, value.slice(0)); };
-  put = (type: string, id: string, value: unknown) => this.write(type, id, new TextEncoder().encode(JSON.stringify(value)).buffer as ArrayBuffer);
-}
+import { TestProductStorage as Store } from './testStorage';
 const room = '11111111-1111-4111-8111-111111111111';
 const descriptor = { version: 1 as const, roomId: room, controlCapability: 'a'.repeat(43), label: 'Private contact', updatedAt: 1, remoteAddress: 'peer-address', remoteIdentityCommitment: 'K3 ' + 'A'.repeat(43) };
 async function valid() {
@@ -37,10 +32,88 @@ it('one malformed entry cannot hide a valid contact; classification and subseque
   const store = await valid(); const malformed = { incomplete: true };
   await store.put('product-session', 'conversations', [malformed, descriptor]); const before = await store.read('product-session', 'conversations');
   const index = await readConversationIndex(store, await readConversationDescriptors(store));
-  expect(index.conversations).toHaveLength(1); expect(index.unavailable).toEqual(['CONVERSATION_RECORD_INVALID']);
+  expect(index.conversations).toHaveLength(1); expect(index.unavailable).toEqual([expect.objectContaining({ code: 'CONVERSATION_RECORD_INVALID', state: 'local-incomplete' })]);
   expect(await store.read('product-session', 'conversations')).toEqual(before);
   await saveConversationDescriptor(store, { ...descriptor, label: 'Friend' });
   expect(JSON.parse(new TextDecoder().decode(await store.read('product-session', 'conversations')))).toContainEqual(malformed);
+});
+
+it('retains 150 healthy contacts and pending invitations above the old threshold, preserving malformed entries', async () => {
+  const store = await valid();
+  const entries = Array.from({ length: 150 }, (_, i) => ({ ...descriptor, roomId: `00000000-0000-4000-8000-${String(i + 1).padStart(12, '0')}`, label: `Contact ${i}` }));
+  for (const item of entries) {
+    await store.write('conversation-protocol', item.roomId, (await store.read('conversation-protocol', room))!);
+    await store.write('vodozemac-session', item.roomId, new Uint8Array([1]).buffer);
+  }
+  await store.put('product-session', 'conversations', [null, { broken: true }, ...entries]);
+  const index = await readConversationIndex(store, await readConversationDescriptors(store));
+  expect(index.conversations).toHaveLength(150);
+  expect(index.unavailable).toHaveLength(2);
+  await saveConversationDescriptor(store, { ...entries[0], label: 'Updated contact' });
+  expect(await readConversationDescriptors(store)).toHaveLength(150);
+  expect(JSON.parse(new TextDecoder().decode(await store.read('product-session', 'conversations')))).toContainEqual({ broken: true });
+});
+
+it('bounds visible work without deleting oversized indexes or refusing updates/removals', async () => {
+  const store = await valid();
+  const entries = Array.from({ length: 1002 }, (_, i) => ({ ...descriptor, roomId: `00000000-0000-4000-8000-${String(i + 1).padStart(12, '0')}`, updatedAt: i }));
+  await store.put('product-session', 'conversations', entries);
+  const before = await store.read('product-session', 'conversations');
+  const visible = await readConversationDescriptors(store);
+  expect(visible).toHaveLength(1000);
+  const index = await readConversationIndex(store, visible);
+  expect(index.conversations).toHaveLength(1000);
+  expect(index.unavailable).toContainEqual({ label: '2 additional saved entries', state: 'deferred', code: 'CONVERSATION_INDEX_LIMIT' });
+  expect(await store.read('product-session', 'conversations')).toEqual(before);
+  await saveConversationDescriptor(store, { ...entries[0], label: 'Preserved beyond the window' });
+  expect(JSON.parse(new TextDecoder().decode(await store.read('product-session', 'conversations')))).toHaveLength(1002);
+  await expect(saveConversationDescriptor(store, descriptor)).rejects.toMatchObject({ safeDiagnosticCode: 'CONVERSATION_INDEX_LIMIT' });
+});
+
+it('one incomplete room and a failed profile read cannot hide a healthy room', async () => {
+  const store = await valid(); const broken = { ...descriptor, roomId: '00000000-0000-4000-8000-000000000001', label: 'Bob' };
+  await saveConversationDescriptor(store, broken);
+  const original = store.read;
+  store.read = async (type, id) => { if (type === 'product-remote-profile' && id === broken.roomId) throw new Error('storage temporarily unavailable'); return original(type, id); };
+  const descriptors = await readConversationDescriptors(store);
+  const index = await readConversationIndex(store, descriptors);
+  expect(index.conversations).toHaveLength(2);
+  expect(index.unavailable).toContainEqual({ roomId: broken.roomId, label: 'Bob', code: 'CONVERSATION_STATE_INCOMPLETE', state: 'local-incomplete' });
+});
+
+it.each(['NETWORK_FAILURE', 'CONVERSATION_RESTORE_FAILED', 'SERVICE_NOT_READY', 'CONVERSATION_STORAGE_UNAVAILABLE', 'CONVERSATION_MUX_SUBSCRIPTION_REJECTED'] as const)('keeps a failed %s room visible for retry, unlike authoritative deletion', async code => {
+  const store = await valid();
+  const index = await readConversationIndex(store, await readConversationDescriptors(store), async () => code);
+  expect(index.conversations).toHaveLength(1);
+  expect(index.unavailable).toEqual([conversationDiagnostic(descriptor, code)]);
+  expect(authoritativeTerminal(code)).toBe(false);
+  expect((await readConversationIndex(store, await readConversationDescriptors(store), async () => 'CONVERSATION_ROOM_MISSING')).conversations).toEqual([]);
+});
+
+it('distinguishes invalid local records and storage failures without altering verification', async () => {
+  const store = await valid(); const before = await store.read('contact-identity', descriptor.remoteAddress);
+  await store.put('conversation-protocol', room, { unexpected: true });
+  expect(await conversationEligibility(store, descriptor)).toBe('CONVERSATION_LOCAL_RECORD_INVALID');
+  const original = store.read; store.read = async (type, id) => { if (type === 'conversation-protocol') throw new Error('temporary storage failure'); return original(type, id); };
+  expect(await conversationEligibility(store, descriptor)).toBe('CONVERSATION_STORAGE_UNAVAILABLE');
+  expect(await store.read('contact-identity', descriptor.remoteAddress)).toEqual(before);
+});
+
+it('diagnoses orphans without reading message/session contents, excludes intentional removals and does no writes', async () => {
+  const store = await valid(); const orphan = '00000000-0000-4000-8000-000000000001'; const removed = '00000000-0000-4000-8000-000000000002';
+  await store.put('product-session', 'conversation-removals', [removed]);
+  const before = [...store.records];
+  const adapter = { read: store.read, write: jest.fn(store.write), listRecordIds: jest.fn(async () => ({ recordIds: [room, orphan, removed, 'invalid'], truncated: false })) };
+  const read = jest.spyOn(adapter, 'read');
+  expect(await diagnoseOrphanedConversationRecords(adapter)).toEqual({ roomIds: [orphan], truncated: false, available: true });
+  expect(read.mock.calls.every(([type]) => type === 'product-session')).toBe(true);
+  expect(adapter.write).not.toHaveBeenCalled(); expect([...store.records]).toEqual(before);
+});
+it('reports truncation when the union of orphan namespaces exceeds the display bound', async () => {
+  const store = await valid();
+  const listRecordIds = async (type: string) => ({ recordIds: Array.from({ length: 600 }, (_, index) => `00000000-0000-4000-8000-${String(index + (type === 'conversation-protocol' ? 1 : 601)).padStart(12, '0')}`), truncated: false });
+  const result = await diagnoseOrphanedConversationRecords({ read: store.read, write: store.write, listRecordIds });
+  expect(result.roomIds).toHaveLength(1000); expect(result.truncated).toBe(true);
 });
 it('missing canonical contact is quarantined; changed identity remains available for review without verification', async () => {
   const store = await valid(); store.records.delete('contact-identity:' + descriptor.remoteAddress);

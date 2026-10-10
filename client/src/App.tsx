@@ -36,6 +36,7 @@ const AppContent: React.FC = () => {
   const openVerification = () => { setShowVerification(true); setShowSettings(true); };
   const reportConversationOpenFailure = (cause: unknown) => {
     const code = classifySafeDiagnostic('conversation-open', cause);
+    if (code === 'CONVERSATION_OPEN_SUPERSEDED') return;
     logSafeFailure('conversation_open_failed', code);
     setErrorDiagnostic(code);
     setError(safeFailureCopy('conversation-open'));

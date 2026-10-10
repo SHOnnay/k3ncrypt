@@ -16,6 +16,20 @@ const bytes = (value: string): ArrayBuffer => new TextEncoder().encode(value).bu
 const text = (value: ArrayBuffer): string => new TextDecoder().decode(value);
 
 describe('BrowserSecureStorage', () => {
+    it('enumerates bounded record addresses read-only without exposing contents, and requires unlock', async () => {
+        const persistence = new MemoryVaultPersistence(); const vault = new BrowserSecureStorage(persistence);
+        await vault.initializeWithPassphrase(passphrase);
+        await vault.write('conversation-protocol', 'room-one', bytes('private capability'));
+        await vault.write('conversation-protocol', 'room-two', bytes('private messages'));
+        await vault.write('other-record', 'room-three', bytes('other private value'));
+        const before = persistence.inspectRecord('conversation-protocol:room-one');
+        const diagnostic = await vault.listRecordIds('conversation-protocol', 1);
+        expect(diagnostic).toEqual({ recordIds: ['room-one'], truncated: true });
+        expect(JSON.stringify(diagnostic)).not.toContain('private');
+        expect(persistence.inspectRecord('conversation-protocol:room-one')).toBe(before);
+        await expect(vault.listRecordIds('conversation-protocol', 1001)).rejects.toThrow();
+        vault.lock(); await expect(vault.listRecordIds('conversation-protocol', 1)).rejects.toThrow('locked');
+    });
     it('uses the OWASP-minimum production Argon2id profile and persists only authenticated ciphertext', async () => {
         expect(PRODUCTION_ARGON2ID_PARAMETERS).toEqual({
             memoryKiB: 19_456,

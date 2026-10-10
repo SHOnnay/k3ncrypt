@@ -256,6 +256,15 @@ export class BrowserSecureStorage implements SecureStorage {
         await this.persistence.writeRecord(persistenceKey(recordType, recordId), await this.encryptRecord(recordType, recordId, plaintext));
     }
 
+    public async listRecordIds(recordType: string, limit: number): Promise<{ recordIds: string[]; truncated: boolean }> {
+        this.requireStorageKey();
+        this.validateRecordAddress(recordType, 'diagnostic');
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000 || !this.persistence.listRecordKeys) throw new Error('Record metadata unavailable.');
+        const prefix = `${recordType}:`;
+        const result = await this.persistence.listRecordKeys(prefix, limit);
+        return { recordIds: result.keys.map(key => key.slice(prefix.length)), truncated: result.truncated };
+    }
+
     public async compareAndSwapRecords(updates: readonly SecureRecordUpdate[]): Promise<boolean> {
         if (!this.persistence.compareAndSwapRecords) throw new Error('Atomic secure storage is unavailable.');
         const prepared = [];

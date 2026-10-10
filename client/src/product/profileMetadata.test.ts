@@ -1,12 +1,8 @@
 import { encodeProfileMessage, decodeProfileMessage, normalizeDisplayName, prepareProfileAcceptance, readRemoteProfile, PROFILE_PREFIX } from './profileMetadata';
-import { readConversationDescriptors, saveConversationDescriptor, type ProductSecureStorage } from './sessionStore';
+import { readConversationDescriptors, saveConversationDescriptor, updateConversationDescriptor } from './sessionStore';
 import { contactDisplayName } from '../content/copy';
 
-class Store implements ProductSecureStorage {
-  readonly records = new Map<string, ArrayBuffer>();
-  async read(type: string, id: string) { return this.records.get(type + id)?.slice(0); }
-  async write(type: string, id: string, value: ArrayBuffer) { this.records.set(type + id, value.slice(0)); }
-}
+import { TestProductStorage as Store } from './testStorage';
 const peer = 'K3 ' + 'A'.repeat(43);
 const other = 'K3 ' + 'B'.repeat(43);
 const room = '11111111-1111-4111-8111-111111111111';
@@ -49,7 +45,9 @@ describe('encrypted relationship profile metadata', () => {
     expect(contactDisplayName(contact.label, room, contact.remoteDisplayName)).toBe('My brother');
     expect(await store.read('contact-identity', 'peer')).toEqual(trust);
     expect(contactDisplayName('Private contact', room, 'Same name')).toBe(contactDisplayName('Private contact', 'other-room', 'Same name'));
-    await saveConversationDescriptor(store, { ...contact, label: 'Private contact', remoteIdentityCommitment: other });
+    await expect(saveConversationDescriptor(store, { ...contact, remoteIdentityCommitment: other })).rejects.toMatchObject({ safeDiagnosticCode: 'ROOM_MEMBERSHIP_MISMATCH' });
+    await store.put('contact-identity', 'peer-address', { contactId: 'peer-address', identityId: other, verification: 'unverified' });
+    await updateConversationDescriptor(store, room, { label: 'Private contact', remoteAddress: 'peer-address', remoteIdentityCommitment: other });
     expect((await readConversationDescriptors(store))[0].remoteDisplayName).toBeUndefined();
   });
 });

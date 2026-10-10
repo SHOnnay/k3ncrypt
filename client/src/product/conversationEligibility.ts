@@ -1,7 +1,7 @@
 import { ContactIdentityRegistry, ConversationModeStore } from '@chat-e2ee/service';
 import type { SecureStorage } from '../../../service/src/core/contracts';
-import { validateConversationDescriptor, type ConversationDescriptor, type ProductSecureStorage } from './sessionStore';
-import type { SafeDiagnosticCode } from './safeDiagnostics';
+import { CONVERSATION_WINDOW, validateConversationDescriptor, type ConversationDescriptor, type ProductSecureStorage } from './sessionStore';
+import { classifySafeDiagnostic, type SafeDiagnosticCode } from './safeDiagnostics';
 const decoder = new TextDecoder();
 export const conversationFailure = (code: SafeDiagnosticCode): Error => Object.assign(new Error('Saved conversation unavailable.'), { safeDiagnosticCode: code });
 /** Read-only classification. No identity/trust migration or record deletion. */
@@ -29,21 +29,66 @@ export async function conversationEligibility(storage: ProductSecureStorage, val
     if (contact.contactId !== mode.remoteAddress || !descriptor.remoteIdentityCommitment || contact.identityId !== descriptor.remoteIdentityCommitment) return 'ROOM_MEMBERSHIP_MISMATCH';
     if (!mode.sessionId || !(await storage.read('vodozemac-session', descriptor.roomId))?.byteLength) return 'CONVERSATION_SESSION_MISSING';
     return undefined;
-  } catch { return 'CONVERSATION_STATE_INCOMPLETE'; }
-}
-export interface ConversationIndex { conversations: ConversationDescriptor[]; unavailable: SafeDiagnosticCode[]; }
-export async function readConversationIndex(storage: ProductSecureStorage, descriptors: readonly ConversationDescriptor[], roomProbe?: RoomProbe): Promise<ConversationIndex> {
-  const bytes = await storage.read('product-session', 'conversations');
-  let raw: unknown;
-  try { raw = bytes ? JSON.parse(decoder.decode(bytes)) : []; } catch { return { conversations: [], unavailable: ['CONVERSATION_RECORD_INVALID'] }; }
-  if (!Array.isArray(raw) || raw.length > 100) return { conversations: [], unavailable: ['CONVERSATION_RECORD_INVALID'] };
-  const result: ConversationIndex = { conversations: [], unavailable: [] }; const seen = new Set<string>();
-  for (const value of raw) {
-    const failure = await conversationEligibility(storage, value, roomProbe);
-    if (failure) { result.unavailable.push(failure); continue; }
-    const descriptor = validateConversationDescriptor(value);
-    if (seen.has(descriptor.roomId)) { result.unavailable.push('CONVERSATION_RECORD_INVALID'); continue; }
-    seen.add(descriptor.roomId); result.conversations.push(descriptors.find(item => item.roomId === descriptor.roomId) ?? descriptor);
+  } catch (error) {
+    const code = classifySafeDiagnostic('conversation-open', error);
+    return code === 'UNKNOWN_SAFE_FAILURE' ? 'CONVERSATION_STORAGE_UNAVAILABLE' : code;
   }
+}
+export type ConversationAvailabilityState = 'saved' | 'pending' | 'retryable' | 'terminal' | 'local-incomplete' | 'review-required' | 'deferred';
+export interface ConversationDiagnostic { roomId?: string; label: string; state: ConversationAvailabilityState; code?: SafeDiagnosticCode; }
+export const authoritativeTerminal = (code: SafeDiagnosticCode): boolean => code === 'CONVERSATION_INVITATION_EXPIRED' || code === 'CONVERSATION_ROOM_MISSING' || code === 'CONVERSATION_REMOVED';
+export function conversationDiagnostic(descriptor: Pick<ConversationDescriptor, 'roomId' | 'label' | 'localNickname'>, code: SafeDiagnosticCode): ConversationDiagnostic {
+  const state: ConversationAvailabilityState = authoritativeTerminal(code) ? 'terminal'
+    : code === 'CONVERSATION_INVITATION_UNACCEPTED' ? 'pending'
+    : ['ROOM_MEMBERSHIP_MISMATCH', 'PINNED_IDENTITY_CHANGED', 'VERIFICATION_REQUIRED', 'CONVERSATION_MUX_AUTHENTICATION_REJECTED'].includes(code) ? 'review-required'
+    : ['CONVERSATION_STATE_INCOMPLETE', 'CONVERSATION_SESSION_MISSING', 'CONTACT_REGISTRY_MISSING', 'CONVERSATION_LOCAL_RECORD_INVALID', 'CONVERSATION_RECORD_INVALID'].includes(code) ? 'local-incomplete' : 'retryable';
+  const label = descriptor.localNickname ?? descriptor.label;
+  return { roomId: descriptor.roomId, label: label === 'Private contact' ? `${label} · ${descriptor.roomId.slice(-8)}` : label, state, code };
+}
+export const conversationStateCopy = (diagnostic: ConversationDiagnostic): string => diagnostic.code === 'CONVERSATION_IN_USE' ? 'Open in another tab — close it and retry' : ({
+  saved: 'Saved on this device', pending: 'Waiting for contact to accept', retryable: 'Disconnected — retry opening',
+  terminal: 'Room expired or removed', 'local-incomplete': 'Local records incomplete — access paused',
+  'review-required': 'Identity or room binding needs review', deferred: 'More saved entries retained on this device',
+})[diagnostic.state];
+export interface ConversationIndex { conversations: ConversationDescriptor[]; unavailable: ConversationDiagnostic[]; }
+export async function readConversationIndex(storage: ProductSecureStorage, descriptors: readonly ConversationDescriptor[], roomProbe?: RoomProbe): Promise<ConversationIndex> {
+  let raw: unknown;
+  try { const bytes = await storage.read('product-session', 'conversations'); raw = bytes ? JSON.parse(decoder.decode(bytes)) : []; }
+  catch (error) { return { conversations: [...descriptors], unavailable: [{ label: 'Saved conversation index', state: 'local-incomplete', code: error instanceof SyntaxError ? 'CONVERSATION_RECORD_INVALID' : 'CONVERSATION_STORAGE_UNAVAILABLE' }] }; }
+  if (!Array.isArray(raw)) return { conversations: [...descriptors], unavailable: [{ label: 'Saved conversation index', state: 'local-incomplete', code: 'CONVERSATION_RECORD_INVALID' }] };
+  const result: ConversationIndex = { conversations: [], unavailable: [] }; const seen = new Set<string>();
+  const candidates = new Map<string, ConversationDescriptor>();
+  for (const value of raw) { try { const item = validateConversationDescriptor(value); if (!candidates.has(item.roomId)) candidates.set(item.roomId, item); } catch { /* Classified individually below. */ } }
+  const visible = new Set([...candidates.values()].sort((left, right) => right.updatedAt - left.updatedAt).slice(0, CONVERSATION_WINDOW).map(item => item.roomId));
+  let omitted = 0;
+  for (const value of raw) {
+    let descriptor: ConversationDescriptor;
+    try { descriptor = validateConversationDescriptor(value); }
+    catch { if (result.unavailable.length < CONVERSATION_WINDOW) result.unavailable.push({ label: 'Invalid saved entry', state: 'local-incomplete', code: 'CONVERSATION_RECORD_INVALID' }); continue; }
+    if (seen.has(descriptor.roomId)) { if (result.unavailable.length < CONVERSATION_WINDOW) result.unavailable.push(conversationDiagnostic(descriptor, 'CONVERSATION_RECORD_INVALID')); continue; }
+    seen.add(descriptor.roomId);
+    if (!visible.has(descriptor.roomId)) { omitted++; continue; }
+    const failure = await conversationEligibility(storage, value, roomProbe);
+    if (failure) { result.unavailable.push(conversationDiagnostic(descriptor, failure)); if (authoritativeTerminal(failure)) continue; }
+    const projected = descriptors.find(item => item.roomId === descriptor.roomId);
+    result.conversations.push({ ...descriptor, remoteDisplayName: projected?.remoteIdentityCommitment === descriptor.remoteIdentityCommitment ? projected?.remoteDisplayName : undefined });
+  }
+  if (omitted) result.unavailable.push({ label: `${omitted} additional saved entries`, state: 'deferred', code: 'CONVERSATION_INDEX_LIMIT' });
+  result.conversations.sort((left, right) => right.updatedAt - left.updatedAt);
   return result;
+}
+
+/** Read-only: record addresses reveal orphan evidence, never keys, trust, ciphertext or plaintext. */
+export async function diagnoseOrphanedConversationRecords(storage: ProductSecureStorage): Promise<{ roomIds: string[]; truncated: boolean; available: boolean }> {
+  if (!storage.listRecordIds) return { roomIds: [], truncated: false, available: false };
+  const bytes = await storage.read('product-session', 'conversations');
+  const raw: unknown = bytes ? JSON.parse(decoder.decode(bytes)) : [];
+  if (!Array.isArray(raw)) return { roomIds: [], truncated: false, available: false };
+  const known = new Set(raw.flatMap(value => { try { return [validateConversationDescriptor(value).roomId]; } catch { return []; } }));
+  const removalsBytes = await storage.read('product-session', 'conversation-removals');
+  const removals: unknown = removalsBytes ? JSON.parse(decoder.decode(removalsBytes)) : [];
+  if (!Array.isArray(removals)) return { roomIds: [], truncated: false, available: false };
+  const records = await Promise.all(['conversation-protocol', 'vodozemac-session'].map(type => storage.listRecordIds!(type, CONVERSATION_WINDOW)));
+  const candidates = [...new Set(records.flatMap(item => item.recordIds))].filter(roomId => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(roomId) && !known.has(roomId) && !removals.includes(roomId));
+  return { roomIds: candidates.slice(0, CONVERSATION_WINDOW), truncated: candidates.length > CONVERSATION_WINDOW || records.some(item => item.truncated), available: true };
 }

@@ -1,6 +1,6 @@
 import { probeConversationRoom } from '../product/conversationRoom';
 import { ConversationSelection } from '../product/conversationSelection';
-import { conversationEligibility, conversationFailure, readConversationIndex } from '../product/conversationEligibility';
+import { authoritativeTerminal, conversationDiagnostic, conversationEligibility, conversationFailure, diagnoseOrphanedConversationRecords, readConversationIndex, type ConversationDiagnostic } from '../product/conversationEligibility';
 import { classifySafeDiagnostic, type SafeDiagnosticCode } from '../product/safeDiagnostics';
 import { LocalCallHistory } from '../product/callHistory';
 import { parseFileReference } from '@chat-e2ee/service';
@@ -18,7 +18,7 @@ import { getRuntimeConfig } from '../config/runtimeConfig';
 import { debugError } from '../utils/debug';
 import { bindPageHideCallTermination } from '../calls/pagehideTermination';
 import { loadVodozemacBindings } from '../crypto/vodozemacModule';
-import { readConversationDescriptors, removeConversationDescriptor, saveConversationDescriptor, type ConversationDescriptor } from '../product/sessionStore';
+import { readConversationDescriptors, removeConversationDescriptor, saveConversationDescriptor, updateConversationDescriptor, type ConversationDescriptor } from '../product/sessionStore';
 import { readProfileName, readLocalProfile, writeProfileName } from '../product/profileStore';
 import { readPrivacyPreferences, writePrivacyPreferences, type PrivacyPreferences } from '../product/preferences';
 import { deliverNotification } from '../product/notifications';
@@ -120,13 +120,17 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [pendingDeviceApproval, setPendingDeviceApproval] = useState<EnrollmentApprovalPacket>();
   const [vault, setVault] = useState<BrowserSecureStorage>();
   const selectedConversation = useRef<ModernConversation>();
+  const selectedConnection = useRef<{ roomId: string; capability: string; conversation: ModernConversation; details: ModernConnectionDetails }>();
   const muxConnection = useRef<MultiplexedRelayConnection>();
   const muxRoomIds = useRef(new Set<string>());
   const muxDetails = useRef(new Map<string, ModernConnectionDetails>());
   const muxConversations = useRef(new WeakSet<ModernConversation>());
   const selections = useRef(new ConversationSelection());
-  const [unavailableConversations, setUnavailableConversations] = useState<SafeDiagnosticCode[]>([]);
+  const [unavailableConversations, setUnavailableConversations] = useState<ConversationDiagnostic[]>([]);
+  const [orphanedConversationRecords, setOrphanedConversationRecords] = useState<{ roomIds: string[]; truncated: boolean; available: boolean }>();
   const [conversations, setConversations] = useState<ConversationDescriptor[]>([]);
+  const conversationsRef = useRef(conversations); conversationsRef.current = conversations;
+  const conversationIndexGeneration = useRef(0);
   const sentProfiles = useRef(new WeakMap<ModernConversation, number>());
   const [profileDisplayName, setProfileDisplayNameState] = useState('You');
   const [accountState, setAccountState] = useState<'checking' | 'new' | 'locked' | 'ready'>('checking');
@@ -229,6 +233,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (!chat) throw new Error('Chat not initialized');
     try {
       if (modern) await modern.close(false);
+      selectedConversation.current = undefined; selectedConnection.current = undefined;
       setModern(null);
       setModernCallComposition(null);
       setModernCallId(undefined);
@@ -376,8 +381,15 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const refreshConversations = async (storage: BrowserSecureStorage, checkRoom = false) => {
-    const index = await readConversationIndex(storage, await readConversationDescriptors(storage), checkRoom ? probeConversationRoom : undefined);
-    setConversations(index.conversations); setUnavailableConversations(index.unavailable);
+    const generation = ++conversationIndexGeneration.current;
+    let descriptors: ConversationDescriptor[];
+    try { descriptors = await readConversationDescriptors(storage); }
+    catch { descriptors = conversationsRef.current; }
+    const index = await readConversationIndex(storage, descriptors, checkRoom ? probeConversationRoom : undefined);
+    if (generation === conversationIndexGeneration.current) {
+      setConversations(index.conversations); setUnavailableConversations(index.unavailable);
+    }
+    if (checkRoom) setOrphanedConversationRecords(await diagnoseOrphanedConversationRecords(storage).catch(() => ({ roomIds: [], truncated: false, available: false })));
     return index;
   };
 
@@ -394,8 +406,27 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const resolveModern = async (secureVault: BrowserSecureStorage, descriptor: ConversationDescriptor, sendJoinIntroduction = false, operationId?: number, background = false, createInvitation = false): Promise<ModernConnectionDetails> => {
+    // A click can queue behind unlock restoration before React projects channelHash.
+    // Recheck inside the serialized operation; a second actor would compete for
+    // the already selected room's crypto lock. No trust or room binding is inferred.
+    const current = selectedConnection.current;
+    if (!background && !sendJoinIntroduction && !createInvitation && current?.roomId === descriptor.roomId && current.capability === descriptor.controlCapability && current.conversation === selectedConversation.current && !muxConversations.current.has(current.conversation)) {
+      if (operationId !== undefined && conversationOpenGeneration.current !== operationId) throw new Error('Conversation open was superseded.');
+      const contact = await current.conversation.getContact();
+      if ((!descriptor.remoteAddress || contact?.contactId === descriptor.remoteAddress) && (!descriptor.remoteIdentityCommitment || contact?.identityId === descriptor.remoteIdentityCommitment) && !await muxEligible(secureVault, descriptor)) {
+        const failure = await conversationEligibility(secureVault, descriptor);
+        if (failure) throw conversationFailure(failure);
+        if (operationId !== undefined && conversationOpenGeneration.current !== operationId) throw new Error('Conversation open was superseded.');
+        setRoomState(descriptor.roomId, { conversation: current.conversation, connection: current.conversation.hasEstablishedSession() ? 'connected' : 'pending', contactIdentity: contact });
+        modernProjection.setChannelHash(descriptor.roomId); modernProjection.setModern(current.conversation); modernProjection.setProtocolMode('modern');
+        return current.details;
+      }
+    }
     if (!background && muxRoomIds.current.has(descriptor.roomId)) {
-      const existing = roomStatesRef.current[descriptor.roomId]?.conversation;
+      // The completed connection is synchronous; React's room projection may
+      // still be from the render preceding an unlock/click queued operation.
+      const selected = current?.roomId === descriptor.roomId && current.capability === descriptor.controlCapability && current.conversation === selectedConversation.current && muxConversations.current.has(current.conversation) ? current.conversation : undefined;
+      const existing = selected ?? roomStatesRef.current[descriptor.roomId]?.conversation;
       const details = muxDetails.current.get(descriptor.roomId);
       if (existing && details && await muxEligible(secureVault, descriptor, sendJoinIntroduction)) {
         selectedConversation.current = existing;
@@ -409,12 +440,16 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         return details;
       }
       if (existing) await existing.close(false).catch(() => undefined);
+      if (existing === selectedConnection.current?.conversation) selectedConnection.current = undefined;
       muxRoomIds.current.delete(descriptor.roomId); muxDetails.current.delete(descriptor.roomId);
       if (existing) muxConversations.current.delete(existing);
       setRoomState(descriptor.roomId, { conversation: undefined, connection: 'saved' });
     }
     conversationOpenStage('candidate-started');
-    await readMessages(secureVault, descriptor.roomId).catch(() => { throw conversationFailure('CONVERSATION_STATE_INCOMPLETE'); });
+    await readMessages(secureVault, descriptor.roomId).catch(error => {
+      const code = classifySafeDiagnostic('conversation-open', error);
+      throw conversationFailure(code === 'UNKNOWN_SAFE_FAILURE' ? 'CONVERSATION_STORAGE_UNAVAILABLE' : code);
+    });
     conversationOpenStage('history-loaded');
     const useMux = await muxEligible(secureVault, descriptor, sendJoinIntroduction);
     const manager = useMux ? (muxConnection.current ??= new MultiplexedRelayConnection()).forRoom(descriptor.roomId, descriptor.remoteAddress!) : undefined;
@@ -463,11 +498,15 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           const latest = (await readConversationDescriptors(secureVault)).find(item => item.roomId === descriptor.roomId);
           if (!latest || latest.bootstrapState === 'ESTABLISHED') return;
           const nextState = state === 'accepted' ? 'ESTABLISHED' as const : 'FAILED_OR_UNSUPPORTED' as const;
-          await saveConversationDescriptor(secureVault, { ...latest, bootstrapState: nextState, updatedAt: Date.now() });
+          await updateConversationDescriptor(secureVault, descriptor.roomId, { bootstrapState: nextState });
           setRoomState(descriptor.roomId, { connection: state === 'accepted' ? 'connected' : 'pending' });
           await refreshConversations(secureVault);
           if (selectedConversation.current === conversation && state === 'accepted') setIsConnected(true);
-        })().catch(() => undefined);
+        })().catch(error => {
+          const code = classifySafeDiagnostic('conversation-open', error);
+          setUnavailableConversations(current => [...current.filter(item => item.roomId !== descriptor.roomId), conversationDiagnostic(descriptor, code)]);
+          setSessionError('Conversation metadata could not be saved safely. Reopen the conversation to retry; existing encrypted records are preserved.');
+        });
       }
     });
     try {
@@ -526,14 +565,10 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           }
         }
         if (contact.contactId && (!descriptor.remoteAddress || descriptor.remoteAddress !== contact.contactId || descriptor.remoteIdentityCommitment !== contact.identityId)) {
-          const latestDescriptor = (await readConversationDescriptors(secureVault))
-            .find((item) => item.roomId === descriptor.roomId) ?? descriptor;
-          await saveConversationDescriptor(secureVault, {
-            ...latestDescriptor,
+          await updateConversationDescriptor(secureVault, descriptor.roomId, {
             relationship: conversation.hasEstablishedSession() ? 'accepted' : 'invitation',
             remoteAddress: contact.contactId,
             remoteIdentityCommitment: contact.identityId,
-            updatedAt: Date.now(),
           });
           await refreshConversations(secureVault);
         }
@@ -554,9 +589,9 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (descriptor.remoteAddress && !established) {
         const state = bootstrapState;
         if (!state) throw conversationFailure('CONVERSATION_SESSION_MISSING');
-        await saveConversationDescriptor(secureVault, { ...descriptor, bootstrapState: state, updatedAt: Date.now() });
+        await updateConversationDescriptor(secureVault, descriptor.roomId, { bootstrapState: state });
       } else if (established && descriptor.remoteAddress && descriptor.bootstrapState !== 'ESTABLISHED') {
-        await saveConversationDescriptor(secureVault, { ...descriptor, bootstrapState: 'ESTABLISHED', updatedAt: Date.now() });
+        await updateConversationDescriptor(secureVault, descriptor.roomId, { bootstrapState: 'ESTABLISHED' });
       }
       const heldClientIds = new Set(await conversation.heldNotSentSecurelyClientIds());
       const finalHistory = (await readMessages(secureVault, descriptor.roomId)).map(message =>
@@ -600,9 +635,9 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           : restoredSessionHealth === 'renewal-pending' ? 'Verified renewal awaits accepted encrypted delivery.' : undefined);
       }
       if (!background && previous && previous !== conversation) {
-        const previousRoomId = [...Object.values(roomStates)].find(item => item.conversation === previous)?.roomId;
-        if (previousRoomId && !muxConversations.current.has(previous)) {
-          setRoomState(previousRoomId, { conversation: undefined, connection: 'saved' });
+        const previousRoomId = Object.values(roomStatesRef.current).find(item => item.conversation === previous)?.roomId;
+        if (!muxConversations.current.has(previous)) {
+          if (previousRoomId) setRoomState(previousRoomId, { conversation: undefined, connection: 'saved' });
           void previous.close(false).catch(() => undefined);
         }
       }
@@ -613,15 +648,16 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       return details;
     } catch (error) {
       if (useMux) { muxRoomIds.current.delete(descriptor.roomId); muxDetails.current.delete(descriptor.roomId); muxConversations.current.delete(conversation); }
-      setRoomState(descriptor.roomId, { conversation: undefined, connection: 'failed' });
       await conversation.close(false).catch(() => undefined);
       const code = classifySafeDiagnostic('conversation-open', error);
+      setRoomState(descriptor.roomId, { conversation: undefined, connection: authoritativeTerminal(code) ? 'failed' : 'disconnected' });
       throw conversationFailure(code === 'UNKNOWN_SAFE_FAILURE' ? 'CONVERSATION_RESTORE_FAILED' : code);
     }
   };
   const connectModern = (storage: BrowserSecureStorage, descriptor: ConversationDescriptor, introduce = false, operationId?: number, background = false, createInvitation = false) =>
     selections.current.run(async () => {
       const details = await resolveModern(storage, descriptor, introduce, operationId, background, createInvitation);
+      if (!background && selectedConversation.current) selectedConnection.current = { roomId: descriptor.roomId, capability: descriptor.controlCapability, conversation: selectedConversation.current, details };
       if (!background && muxRoomIds.current.has(descriptor.roomId)) {
         const saved = await readConversationDescriptors(storage);
         for (const candidate of saved) {
@@ -739,6 +775,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const secureVault = vault ?? await openModernVault(passphrase);
     if (displayName !== undefined) setProfileDisplayNameState(await writeProfileName(secureVault, displayName));
     const descriptor: ConversationDescriptor = { version: 1, relationship: 'invitation', roomId: invite.hash, controlCapability: invite.controlCapability, label: 'Private contact', updatedAt: Date.now() };
+    await saveConversationDescriptor(secureVault, descriptor);
     const details = await connectModern(secureVault, descriptor, false, undefined, false, true);
     await saveConversationDescriptor(secureVault, (await readConversationDescriptors(secureVault)).find(item => item.roomId === descriptor.roomId) ?? descriptor); await refreshConversations(secureVault);
     if (!details.signedInvitation) throw new Error('A signed first-contact invitation could not be created.');
@@ -794,23 +831,27 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const trimmed = nickname.trim();
     if (trimmed.length > 80 || /[\u0000-\u001f\u007f]/.test(trimmed)) throw new Error('Contact name must be 1–80 characters.');
     const label = trimmed.replace(/\s+/g, ' ') || 'Private contact';
-    await saveConversationDescriptor(vault, { ...existing, label, localNickname: trimmed || undefined, updatedAt: Date.now() }); await refreshConversations(vault);
+    await updateConversationDescriptor(vault, roomId, { label, localNickname: trimmed || undefined }); await refreshConversations(vault);
   }, [conversations, vault]);
 
   const restoreSession = useCallback(async (passphrase: string): Promise<void> => {
     const secureVault = await openModernVault(passphrase);
-    const index = await refreshConversations(secureVault, true);
+    // Local eligibility first. Probe only rooms actually opened, avoiding hundreds of cold-start requests.
+    const index = await refreshConversations(secureVault);
+    setOrphanedConversationRecords(await diagnoseOrphanedConversationRecords(secureVault).catch(() => ({ roomIds: [], truncated: false, available: false })));
     for (const descriptor of index.conversations) {
-      try { await connectModern(secureVault, descriptor); return; }
+      try {
+        const failure = await conversationEligibility(secureVault, descriptor, probeConversationRoom);
+        if (failure) throw conversationFailure(failure);
+        await connectModern(secureVault, descriptor); setAccountState('ready'); return;
+      }
       catch (error) {
         const code = classifySafeDiagnostic('conversation-open', error);
-        setUnavailableConversations(current => [...current, code]);
-        setConversations(current => current.filter(item => item.roomId !== descriptor.roomId));
+        setUnavailableConversations(current => [...current.filter(item => item.roomId !== descriptor.roomId), conversationDiagnostic(descriptor, code)]);
+        setRoomState(descriptor.roomId, { connection: authoritativeTerminal(code) ? 'failed' : 'disconnected' });
+        if (authoritativeTerminal(code)) setConversations(current => current.filter(item => item.roomId !== descriptor.roomId));
+        if (code === 'NETWORK_FAILURE' || code === 'SERVICE_NOT_READY') break;
       }
-    }
-    for (const descriptor of await readConversationDescriptors(secureVault)) {
-      if (await conversationEligibility(secureVault, descriptor, probeConversationRoom) !== 'CONVERSATION_INVITATION_UNACCEPTED') continue;
-      try { await connectModern(secureVault, descriptor); break; } catch { /* Preserve unavailable pending invitation. */ }
     }
     setAccountState('ready');
 
@@ -835,19 +876,20 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       await connectModern(vault, descriptor, false, operationId);
       conversationOpenStage('connected');
       if (conversationOpenGeneration.current === operationId) {
+        setUnavailableConversations(current => current.filter(item => item.roomId !== roomId));
         setPendingConversation(undefined);
         setConversationOpenError(current => current?.roomId === roomId ? undefined : current);
       }
     } catch (error) {
-      conversationOpenStage('failed');
       const code = classifySafeDiagnostic('conversation-open', error);
       if (conversationOpenGeneration.current === operationId) {
+        conversationOpenStage('failed');
         setPendingConversation(undefined);
         setConversationOpenError({ roomId, operationId, code });
-        if (['CONVERSATION_RECORD_INVALID', 'CONVERSATION_INVITATION_UNACCEPTED', 'CONVERSATION_INVITATION_EXPIRED', 'CONVERSATION_SESSION_MISSING', 'CONVERSATION_ROOM_MISSING', 'CONTACT_REGISTRY_MISSING', 'ROOM_MEMBERSHIP_MISMATCH', 'CONVERSATION_STATE_INCOMPLETE', 'CONVERSATION_RESTORE_FAILED'].includes(code)) {
-          setConversations(current => current.filter(item => item.roomId !== roomId));
-          setUnavailableConversations(current => [...current, code]);
-        }
+        const descriptor = conversations.find(item => item.roomId === roomId);
+        setUnavailableConversations(current => [...current.filter(item => item.roomId !== roomId), conversationDiagnostic(descriptor ?? { roomId, label: 'Saved conversation' }, code)]);
+        setRoomState(roomId, { connection: authoritativeTerminal(code) ? 'failed' : 'disconnected' });
+        if (authoritativeTerminal(code)) setConversations(current => current.filter(item => item.roomId !== roomId));
       }
       throw error;
     }
@@ -931,6 +973,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (!chat) throw new Error('Chat not initialized');
       try {
         if (modern) await modern.close(false);
+        selectedConversation.current = undefined; selectedConnection.current = undefined;
         setModern(null);
         setModernCallComposition(null);
         // Check for channel status before joining
@@ -1507,6 +1550,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       await modern?.delete();
       if (vault && channelHash) { await removeConversationDescriptor(vault, channelHash); await refreshConversations(vault); }
       setModern(null);
+      selectedConversation.current = undefined; selectedConnection.current = undefined;
       setModernCallComposition(null);
       setModernCallId(undefined);
       setProtocolMode('legacy');
@@ -1554,6 +1598,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     pendingDeviceApproval,
     conversations,
     unavailableConversations,
+    orphanedConversationRecords,
     profileDisplayName,
     accountState,
     sessionError,

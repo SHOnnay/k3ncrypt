@@ -142,6 +142,8 @@ export interface SecureRecordUpdate { recordType: string; recordId: string; expe
 
 export interface SecureStorage {
     compareAndSwapRecords?(updates: readonly SecureRecordUpdate[]): Promise<boolean>;
+    /** Read-only, bounded metadata enumeration; no record contents are returned. */
+    listRecordIds?(recordType: string, limit: number): Promise<{ recordIds: string[]; truncated: boolean }>;
     initializeWithPassphrase(secret: string, type?: UnlockSecretType): Promise<void>;
     unlock(secret: string): Promise<void>;
     lock(): void;

@@ -4,6 +4,7 @@ import { PlusIcon } from '../common/icons';
 import { ApprovedIcon } from '../common/ApprovedIcon';
 import { Avatar } from '../common/Avatar';
 import { contactDisplayName, copy } from '../../content/copy';
+import { conversationStateCopy } from '../../product/conversationEligibility';
 import './AppShell.css';
 
 interface SidebarProps {
@@ -22,7 +23,7 @@ const formatSidebarTime = (date?: Date): string => {
 };
 
 export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection, onNavigate, onNewConversation, onOpenConversation, onOpenSettings, settingsOpen = false }) => {
-  const { channelHash, messages, conversations, syncStatus, sessionHealth, profileDisplayName, protocolMode, unavailableConversations = [] } = useChat();
+  const { channelHash, messages, conversations, syncStatus, sessionHealth, profileDisplayName, protocolMode, unavailableConversations = [], orphanedConversationRecords } = useChat();
   const latest = messages.at(-1);
 
   return (
@@ -49,21 +50,24 @@ export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection
 
       <div className="conversation-section">
         <p className="section-label">Conversations</p>
-        {conversations.map((conversation) => (
+        {conversations.map((conversation) => {
+          const diagnostic = unavailableConversations.find(item => item.roomId === conversation.roomId);
+          return (
           <button key={conversation.roomId} className={`conversation-row ${!isWelcomeActive && channelHash === conversation.roomId ? 'active' : ''}`} type="button" onClick={() => onOpenConversation(conversation.roomId)}>
             <Avatar label={contactDisplayName(conversation.label, conversation.roomId, conversation.remoteDisplayName, conversation.localNickname)} size="medium" />
             <span className="conversation-copy">
               <span className="conversation-name-row"><span className="conversation-name">{contactDisplayName(conversation.label, conversation.roomId, conversation.remoteDisplayName, conversation.localNickname)}</span><time>{channelHash === conversation.roomId ? formatSidebarTime(latest?.timestamp) : ''}</time></span>
-              <span className="conversation-preview">{conversation.bootstrapState === 'PENDING_REMOTE' || conversation.bootstrapState === 'PENDING_LOCAL' ? 'Waiting for contact to accept' : conversation.bootstrapState === 'FAILED_OR_UNSUPPORTED' ? 'Invitation needs a compatible link' : channelHash === conversation.roomId && protocolMode === 'modern' && sessionHealth !== 'healthy' ? 'Review connection' : channelHash === conversation.roomId && latest?.text ? latest.text : syncStatus === 'blocked' ? 'Review connection' : channelHash === conversation.roomId ? 'Conversation open' : 'Saved on this device'}</span>
+              <span className="conversation-preview">{diagnostic ? conversationStateCopy(diagnostic) : conversation.bootstrapState === 'PENDING_REMOTE' || conversation.bootstrapState === 'PENDING_LOCAL' || conversation.relationship === 'invitation' && !conversation.remoteAddress ? 'Waiting for contact to accept' : conversation.bootstrapState === 'FAILED_OR_UNSUPPORTED' ? 'Invitation needs a compatible link' : channelHash === conversation.roomId && protocolMode === 'modern' && sessionHealth !== 'healthy' ? 'Review connection' : channelHash === conversation.roomId && latest?.text ? latest.text : syncStatus === 'blocked' ? 'Review connection' : channelHash === conversation.roomId ? 'Conversation open' : 'Saved on this device'}</span>
             </span>
           </button>
-        ))}
+        ); })}
         {conversations.length === 0 && (
           <div className="conversation-placeholder"><strong>{copy.contactsEmpty.title}</strong><span>{copy.contactsEmpty.description}</span></div>
         )}
       </div>
 
-      {unavailableConversations.length > 0 && <details className="conversation-recovery"><summary>Unavailable conversations</summary><p>Some saved entries are not ready to open. Their encrypted data remains on this device.</p><p>Pending invitations appear in Chats only after someone accepts.</p></details>}
+      {unavailableConversations.length > 0 && <details className="conversation-recovery"><summary>Conversation status</summary><p>Encrypted local records remain on this device. Retry disconnected rooms after the service recovers.</p><ul>{unavailableConversations.map((item, index) => <li key={`${item.roomId ?? 'entry'}-${index}`}><strong>{item.label}</strong>: {conversationStateCopy(item)}{item.code && <small> · {item.code}</small>}</li>)}</ul></details>}
+      {orphanedConversationRecords && <details className="conversation-recovery"><summary>Local record diagnostic</summary>{!orphanedConversationRecords.available ? <p>Record inspection is unavailable; no recovery claim can be made.</p> : <><p>{orphanedConversationRecords.roomIds.length} rooms have local records without a usable access descriptor. A lost access capability cannot be recovered automatically.</p><ul>{orphanedConversationRecords.roomIds.map(roomId => <li key={roomId}>Saved room · {roomId.slice(-8)}</li>)}</ul>{orphanedConversationRecords.truncated && <p>Inspection reached its safe limit; additional records may exist.</p>}</>}</details>}
       <div className="sidebar-profile">
         <Avatar label={profileDisplayName} size="small" />
         <span><strong>{profileDisplayName}</strong><small>Your profile · this device</small></span>
