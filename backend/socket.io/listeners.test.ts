@@ -7,7 +7,7 @@ import type { CustomSocket } from './index';
 import db from '../db';
 import { PREKEY_COLLECTION } from '../db/const';
 import { hashControlCapability } from '../security/controlCapability';
-import { muxWouldExceedChannelCapacity, testOnlyResetMuxDeviceRegistry } from './multiplexed';
+import { muxWouldExceedChannelCapacity, testOnlyResetMuxDeviceRegistry, wakeRoomMailbox } from './multiplexed';
 
 describe('relay wire-envelope schema', () => {
   it('accepts bounded opaque versioned envelopes', () => {
@@ -181,11 +181,11 @@ it('authenticates one device socket and independently authorizes two room subscr
   const priorMuxGate = process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY;
   process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY = 'true';
   testOnlyResetMuxDeviceRegistry();
-  const roomA = randomUUID(); const roomB = randomUUID(); const deviceId = randomUUID(); const accountIdentityReference = 'mux-stage1-account';
-  const routeA = randomUUID(); const peerA = randomUUID(); const routeB = randomUUID(); const peerB = randomUUID();
-  const capA = randomBytes(32).toString('base64url'); const capB = randomBytes(32).toString('base64url');
-  const routeProofs = new Map([[`${roomA}:${routeA}`, randomBytes(32).toString('base64url')], [`${roomA}:${peerA}`, randomBytes(32).toString('base64url')], [`${roomB}:${routeB}`, randomBytes(32).toString('base64url')], [`${roomB}:${peerB}`, randomBytes(32).toString('base64url')]]);
-  const roomCaps = new Map([[roomA, capA], [roomB, capB]]);
+  const roomA = randomUUID(); const roomB = randomUUID(); const roomC = randomUUID(); const deviceId = randomUUID(); const accountIdentityReference = 'mux-stage1-account';
+  const routeA = randomUUID(); const peerA = randomUUID(); const routeB = randomUUID(); const peerB = randomUUID(); const routeC = randomUUID(); const peerC = randomUUID();
+  const capA = randomBytes(32).toString('base64url'); const capB = randomBytes(32).toString('base64url'); const capC = randomBytes(32).toString('base64url');
+  const routeProofs = new Map([[`${roomA}:${routeA}`, randomBytes(32).toString('base64url')], [`${roomA}:${peerA}`, randomBytes(32).toString('base64url')], [`${roomB}:${routeB}`, randomBytes(32).toString('base64url')], [`${roomB}:${peerB}`, randomBytes(32).toString('base64url')], [`${roomC}:${routeC}`, randomBytes(32).toString('base64url')], [`${roomC}:${peerC}`, randomBytes(32).toString('base64url')]]);
+  const roomCaps = new Map([[roomA, capA], [roomB, capB], [roomC, capC]]);
   const clients = getClientInstance();
   const legacyRoute = randomUUID();
   let currentDevice = { state: 'active', trustEpoch: 4 };
@@ -193,6 +193,8 @@ it('authenticates one device socket and independently authorizes two room subscr
   const socket = { id: randomUUID(), deviceId: undefined as string | undefined, accountIdentityReference: undefined as string | undefined,
     deviceTrustEpoch: undefined as number | undefined, muxConnectionGeneration: undefined as string | undefined, muxSubscriptions: new Map(),
     on: jest.fn((event: string, handler: (...args: any[]) => unknown) => { handlers.set(event, handler); }), emit: jest.fn(), disconnect: jest.fn() } as unknown as CustomSocket;
+  const socketRegistry = new Map<string, CustomSocket>([[socket.id, socket]]);
+  const io = { sockets: { sockets: socketRegistry } } as never;
   const database = { collection: (name: string) => ({ findOne: async () => name === 'device_lifecycle' ? { deviceId, accountIdentityReference, ...currentDevice } : undefined }) };
   const dbSpy = jest.spyOn(db, 'getDatabase').mockReturnValue(database as never);
   const lookupSpy = jest.spyOn(db, 'findOneFromDB').mockImplementation(async (query: any, collection: string) => {
@@ -216,7 +218,7 @@ it('authenticates one device socket and independently authorizes two room subscr
     deviceIdentityReference: 'mux-identity', operation, trustEpoch: 4, nonce, resource, issuedAt: Date.now(), expiresAt: Date.now() + 300_000, signature: 'sig' });
   const invoke = (event: string, payload: unknown): Promise<any> => new Promise(resolve => { void handlers.get(event)?.(payload, resolve); });
   try {
-    connectionListener(socket, { sockets: { sockets: new Map() } });
+    connectionListener(socket, io);
     const generation = socket.id;
     const authNonce = randomUUID();
     await expect(invoke('mux-authenticate', { connectionGeneration: generation, deviceAuthorizationProof: proof('relay:connect', { connectionGeneration: generation }, authNonce), proofNonce: authNonce, proofOperation: 'relay:connect' })).resolves.toMatchObject({ status: 'authenticated', connectionGeneration: generation });
@@ -268,6 +270,28 @@ it('authenticates one device socket and independently authorizes two room subscr
       expect.objectContaining({ status: 'subscribed', roomId: roomA }),
     ]);
     expect(socket.muxSubscriptions?.get(roomA)?.nonce).toBe(raceNonce);
+
+    // Simultaneous cross-transport admission uses the shared (room, recipient) fence.
+    const legacyHandlers = new Map<string, (...args: any[]) => unknown>(); const legacySid = randomUUID();
+    const legacy = { id: legacySid, connected: true, on: jest.fn((event: string, handler: (...args: any[]) => unknown) => legacyHandlers.set(event, handler)),
+      emit: jest.fn(), disconnect: jest.fn() } as unknown as CustomSocket;
+    socketRegistry.set(legacySid, legacy);
+    connectionListener(legacy, io);
+    const legacyJoin = new Promise<any>((resolve) => {
+      const nonce = randomUUID();
+      void legacyHandlers.get('chat-join')?.({ userID: routeC, channelID: roomC, controlCapability: capC,
+        routingProof: routeProofs.get(`${roomC}:${routeC}`), protocolFeatures: ['room-message-v1'],
+        deviceAuthorizationProof: { proofId: randomUUID(), deviceId, accountIdentityReference, deviceIdentityReference: 'mux-identity',
+          trustEpoch: 4, operation: 'relay:message', nonce }, proofNonce: nonce }, resolve);
+    });
+    const [muxJoinResult, legacyJoinResult] = await Promise.all([subscribe(roomC, routeC, peerC, capC, routeProofs.get(`${roomC}:${routeC}`)!), legacyJoin]);
+    const muxOwns = socket.muxSubscriptions?.has(roomC) === true;
+    const legacyOwns = clients.getSIDByIDs(routeC, roomC)?.sid === legacySid;
+    expect(Number(muxOwns) + Number(legacyOwns)).toBe(1);
+    expect([muxJoinResult, legacyJoinResult].some((result) => result?.status === 'subscribed' || result?.status === 'accepted')).toBe(true);
+    legacyHandlers.get('disconnect')?.();
+    clients.deleteClient(routeC, roomC, legacySid);
+    socketRegistry.delete(legacySid);
     currentDevice = { state: 'revoked', trustEpoch: 5 };
     await expect(invoke('mux-unsubscribe', { roomId: roomB, connectionGeneration: generation, subscriptionNonce: socket.muxSubscriptions?.get(roomB)?.nonce })).resolves.toEqual({ error: 'Room unsubscribe rejected.' });
   } finally {
@@ -277,5 +301,223 @@ it('authenticates one device socket and independently authorizes two room subscr
     clients.deleteClient(legacyRoute, roomA, 'legacy-test-socket');
     testOnlyResetMuxDeviceRegistry();
     lookupSpy.mockRestore(); dbSpy.mockRestore(); authoritySpy.mockRestore();
+  }
+});
+
+it('stops legacy replay for a durably revoked owner without claiming queued messages', async () => {
+  jest.useFakeTimers();
+  const room = randomUUID(); const mailbox = randomUUID(); const deviceId = randomUUID(); const accountIdentityReference = 'revoked-replay-account';
+  const sid = randomUUID(); const handlers = new Map<string, (...args: any[]) => unknown>();
+  const socket = { id: sid, connected: true, userID: mailbox, channelID: room, deviceId, accountIdentityReference, deviceTrustEpoch: 3,
+    on: jest.fn((event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler)), emit: jest.fn(), disconnect: jest.fn() } as unknown as CustomSocket;
+  const database = { collection: () => ({ findOne: async () => ({ deviceId, accountIdentityReference, trustEpoch: 4, state: 'revoked' }) }) };
+  const dbSpy = jest.spyOn(db, 'getDatabase').mockReturnValue(database as never);
+  const claimSpy = jest.spyOn(db, 'claimOfflineMessage').mockResolvedValue(undefined);
+  const countSpy = jest.spyOn(db, 'countOfflineMessages').mockResolvedValue(1);
+  const leaseSpy = jest.spyOn(db, 'offlineMessageClaimUntil').mockResolvedValue(undefined);
+  const cleanupSpy = jest.spyOn(db, 'cleanupExpiredOfflineMessages').mockReturnValue(0);
+  const clients = getClientInstance();
+  const io = { sockets: { sockets: new Map([[sid, socket]]) } } as never;
+  clients.setClientToChannel(mailbox, room, sid);
+  try {
+    connectionListener(socket, io);
+    await wakeRoomMailbox(room, mailbox, io as never);
+    await jest.advanceTimersByTimeAsync(0);
+    expect(socket.disconnect).toHaveBeenCalledWith(true);
+    expect(claimSpy).not.toHaveBeenCalled();
+    expect(countSpy).not.toHaveBeenCalled();
+    expect(leaseSpy).not.toHaveBeenCalled();
+    expect(jest.getTimerCount()).toBe(0);
+  } finally {
+    handlers.get('disconnect')?.();
+    clients.deleteClient(mailbox, room, sid);
+    dbSpy.mockRestore(); claimSpy.mockRestore(); countSpy.mockRestore(); leaseSpy.mockRestore(); cleanupSpy.mockRestore();
+    jest.useRealTimers();
+  }
+});
+
+it('backs off transient authorization reads and retries without claiming or acknowledging', async () => {
+  jest.useFakeTimers();
+  const room = randomUUID(); const mailbox = randomUUID(); const deviceId = randomUUID(); const accountIdentityReference = 'transient-replay-account';
+  const sid = randomUUID(); const handlers = new Map<string, (...args: any[]) => unknown>(); let reads = 0;
+  const socket = { id: sid, connected: true, userID: mailbox, channelID: room, deviceId, accountIdentityReference, deviceTrustEpoch: 3,
+    on: jest.fn((event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler)), emit: jest.fn(), disconnect: jest.fn() } as unknown as CustomSocket;
+  const database = { collection: () => ({ findOne: async () => { reads += 1; throw new Error('temporary store outage'); } }) };
+  const dbSpy = jest.spyOn(db, 'getDatabase').mockReturnValue(database as never);
+  const claimSpy = jest.spyOn(db, 'claimOfflineMessage').mockResolvedValue(undefined);
+  const countSpy = jest.spyOn(db, 'countOfflineMessages').mockResolvedValue(1);
+  const leaseSpy = jest.spyOn(db, 'offlineMessageClaimUntil').mockResolvedValue(undefined);
+  const cleanupSpy = jest.spyOn(db, 'cleanupExpiredOfflineMessages').mockReturnValue(0);
+  const clients = getClientInstance(); const io = { sockets: { sockets: new Map([[sid, socket]]) } } as never;
+  clients.setClientToChannel(mailbox, room, sid);
+  try {
+    connectionListener(socket, io);
+    await wakeRoomMailbox(room, mailbox, io as never);
+    await jest.advanceTimersByTimeAsync(0);
+    expect(jest.getTimerCount()).toBe(1);
+    const before = reads;
+    await jest.advanceTimersByTimeAsync(249);
+    expect(reads).toBe(before);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(reads).toBeGreaterThan(before);
+    expect(jest.getTimerCount()).toBe(1);
+    expect(claimSpy).not.toHaveBeenCalled();
+    expect(countSpy).not.toHaveBeenCalled();
+    expect(socket.disconnect).not.toHaveBeenCalled();
+  } finally {
+    handlers.get('disconnect')?.();
+    clients.deleteClient(mailbox, room, sid);
+    dbSpy.mockRestore(); claimSpy.mockRestore(); countSpy.mockRestore(); leaseSpy.mockRestore(); cleanupSpy.mockRestore();
+    jest.useRealTimers();
+  }
+});
+
+it('resumes a queued encrypted message on a replacement legacy socket after a transient outage', async () => {
+  jest.useFakeTimers();
+  const room = randomUUID(); const mailbox = randomUUID(); const sender = randomUUID(); const deviceId = randomUUID(); const accountIdentityReference = 'reconnect-replay-account';
+  let trustReadUnavailable = true;
+  const database = { collection: () => ({ findOne: async () => {
+    if (trustReadUnavailable) throw new Error('temporary trust-store outage');
+    return { deviceId, accountIdentityReference, trustEpoch: 2, state: 'active' };
+  } }) };
+  const dbSpy = jest.spyOn(db, 'getDatabase').mockReturnValue(database as never);
+  const cleanupSpy = jest.spyOn(db, 'cleanupExpiredOfflineMessages').mockReturnValue(0);
+  const leaseSpy = jest.spyOn(db, 'offlineMessageClaimUntil').mockResolvedValue(undefined);
+  const countSpy = jest.spyOn(db, 'countOfflineMessages').mockResolvedValue(0);
+  const queued = { id: randomUUID(), claimId: randomUUID(), sender, timestamp: Date.now(), envelope: { version: 2, strategy: 'opaque', data: { ciphertext: 'opaque' } } };
+  const claimSpy = jest.spyOn(db, 'claimOfflineMessage').mockResolvedValueOnce(queued as never).mockResolvedValue(undefined);
+  const ackSpy = jest.spyOn(db, 'ackOfflineMessage').mockResolvedValue(true);
+  const clients = getClientInstance(); const oldSid = randomUUID(); const oldHandlers = new Map<string, (...args: any[]) => unknown>();
+  const oldSocket = { id: oldSid, connected: true, userID: mailbox, channelID: room, deviceId, accountIdentityReference, deviceTrustEpoch: 2,
+    on: jest.fn((event: string, handler: (...args: any[]) => unknown) => oldHandlers.set(event, handler)), emit: jest.fn(), disconnect: jest.fn() } as unknown as CustomSocket;
+  clients.setClientToChannel(mailbox, room, oldSid);
+  try {
+    connectionListener(oldSocket, { sockets: { sockets: new Map([[oldSid, oldSocket]]) } } as never);
+    await wakeRoomMailbox(room, mailbox, { sockets: { sockets: new Map([[oldSid, oldSocket]]) } } as never);
+    await jest.advanceTimersByTimeAsync(0);
+    expect(jest.getTimerCount()).toBe(1);
+    clients.deleteClient(mailbox, room, oldSid);
+    oldHandlers.get('disconnect')?.();
+
+    trustReadUnavailable = false;
+    const newSid = randomUUID(); const newHandlers = new Map<string, (...args: any[]) => unknown>();
+    const newSocket = { id: newSid, connected: true, userID: mailbox, channelID: room, deviceId, accountIdentityReference, deviceTrustEpoch: 2,
+      on: jest.fn((event: string, handler: (...args: any[]) => unknown) => newHandlers.set(event, handler)),
+      emit: jest.fn((event: string, _payload: unknown, ack?: (result: unknown) => void) => { if (event === 'chat-message') ack?.({ accepted: true, outcome: 'accepted' }); }),
+      disconnect: jest.fn() } as unknown as CustomSocket;
+    const io = { sockets: { sockets: new Map([[newSid, newSocket]]) } } as never;
+    clients.setClientToChannel(mailbox, room, newSid);
+    connectionListener(newSocket, io);
+    await wakeRoomMailbox(room, mailbox, io);
+    await jest.advanceTimersByTimeAsync(0);
+    expect(newSocket.emit).toHaveBeenCalledWith('chat-message', expect.objectContaining({ id: queued.id, claimId: queued.claimId, envelope: queued.envelope }), expect.any(Function));
+    expect(claimSpy).toHaveBeenCalledTimes(2);
+    expect(ackSpy).toHaveBeenCalledWith(queued.id, mailbox, room, queued.claimId);
+    expect(countSpy).toHaveBeenCalled();
+    expect(jest.getTimerCount()).toBe(0);
+    newHandlers.get('disconnect')?.();
+    clients.deleteClient(mailbox, room, newSid);
+  } finally {
+    clients.deleteClient(mailbox, room, oldSid);
+    dbSpy.mockRestore(); cleanupSpy.mockRestore(); leaseSpy.mockRestore(); countSpy.mockRestore(); claimSpy.mockRestore(); ackSpy.mockRestore();
+    jest.useRealTimers();
+  }
+});
+
+it.each([
+  ['stale trust epoch', 'active', 2],
+  ['revoked device', 'revoked', 2],
+])('allows an authorized legacy takeover after fencing an incumbent with %s', async (_case, oldState, oldEpoch) => {
+  const room = randomUUID(); const route = randomUUID(); const peer = randomUUID(); const oldDevice = randomUUID(); const newDevice = randomUUID();
+  const accountIdentityReference = 'takeover-account'; const cap = randomBytes(32).toString('base64url'); const routingProof = randomBytes(32).toString('base64url');
+  const oldSid = randomUUID(); const newSid = randomUUID(); const handlers = new Map<string, (...args: any[]) => unknown>();
+  const oldHandlers = new Map<string, (...args: any[]) => unknown>();
+  const oldOwner = { id: oldSid, connected: true, userID: route, channelID: room, deviceId: oldDevice, accountIdentityReference, deviceTrustEpoch: 1,
+    on: jest.fn((event: string, handler: (...args: any[]) => unknown) => oldHandlers.set(event, handler)), emit: jest.fn(), disconnect: jest.fn() } as unknown as CustomSocket;
+  const contender = { id: newSid, connected: true, on: jest.fn((event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler)),
+    emit: jest.fn(), disconnect: jest.fn() } as unknown as CustomSocket;
+  const trust = new Map<string, { deviceId: string; accountIdentityReference: string; trustEpoch: number; state: string }>([[oldDevice, { deviceId: oldDevice, accountIdentityReference, trustEpoch: oldEpoch, state: oldState }],
+    [newDevice, { deviceId: newDevice, accountIdentityReference, trustEpoch: 1, state: 'active' }]]);
+  const database = { collection: () => ({ findOne: async (query: { deviceId: string }) => trust.get(query.deviceId) }) };
+  const roomRecord = { hash: room, deleted: false, expired: false, controlCapabilityHash: hashControlCapability(cap) };
+  const dbSpy = jest.spyOn(db, 'getDatabase').mockReturnValue(database as never);
+  const findSpy = jest.spyOn(db, 'findOneFromDB').mockImplementation(async (query: any, collection: string) => {
+    if (collection === 'links') return roomRecord as never;
+    if (collection === PREKEY_COLLECTION && query.channel === room && query.address === route) return { channel: room, address: route,
+      renewalProofHash: createHash('sha256').update(`k3ncrypt-prekey-renewal-v1\0${routingProof}`).digest('hex'), expiresAt: new Date(Date.now() + 60_000) } as never;
+    return undefined;
+  });
+  const authoritySpy = jest.spyOn(durableTrust, 'durableDeviceTrustAuthority').mockReturnValue({ verify: async (proof: any) => ({
+    deviceId: proof.deviceId, accountIdentityReference: proof.accountIdentityReference, trustEpoch: proof.trustEpoch ?? 1, state: 'active',
+  }) } as never);
+  const clients = getClientInstance(); const sockets = new Map([[oldSid, oldOwner], [newSid, contender]]);
+  const io = { sockets: { sockets } } as never;
+  clients.setClientToChannel(route, room, oldSid);
+  try {
+    connectionListener(oldOwner, io);
+    connectionListener(contender, io);
+    const nonce = randomUUID(); const ack = jest.fn();
+    await handlers.get('chat-join')?.({ userID: route, channelID: room, controlCapability: cap, routingProof,
+      deviceAuthorizationProof: { deviceId: newDevice, accountIdentityReference, trustEpoch: 1, nonce }, proofNonce: nonce }, ack);
+    expect(ack).toHaveBeenCalledWith(expect.objectContaining({ status: 'accepted' }));
+    expect(oldOwner.disconnect).toHaveBeenCalledWith(true);
+    expect(clients.getSIDByIDs(route, room)?.sid).toBe(newSid);
+    const lateAckSpy = jest.spyOn(db, 'ackOfflineMessage').mockResolvedValue(true);
+    await oldHandlers.get('received')?.({ id: randomUUID(), claimId: randomUUID() });
+    expect(lateAckSpy).not.toHaveBeenCalled();
+    lateAckSpy.mockRestore();
+    const lateSignalAck = jest.fn(); const signalNonce = randomUUID();
+    await oldHandlers.get('webrtc-signal')?.({ envelope: { version: 2, strategy: 'opaque', data: { ciphertext: 'opaque' } },
+      deviceAuthorizationProof: { deviceId: oldDevice, accountIdentityReference, trustEpoch: 1, nonce: signalNonce,
+        resource: { conversationId: room } }, proofNonce: signalNonce, proofOperation: 'relay:signal' }, lateSignalAck);
+    expect(lateSignalAck).toHaveBeenCalledWith({ error: 'Device authorization rejected.' });
+  } finally {
+    oldHandlers.get('disconnect')?.();
+    handlers.get('disconnect')?.();
+    clients.deleteClient(route, room, oldSid); clients.deleteClient(route, room, newSid);
+    dbSpy.mockRestore(); findSpy.mockRestore(); authoritySpy.mockRestore();
+  }
+});
+
+it('serializes simultaneous legacy joins so only one active device becomes room owner', async () => {
+  const room = randomUUID(); const route = randomUUID(); const cap = randomBytes(32).toString('base64url');
+  const routingProof = randomBytes(32).toString('base64url'); const accountIdentityReference = 'simultaneous-join-account';
+  const devices = [randomUUID(), randomUUID()]; const sids = [randomUUID(), randomUUID()];
+  const handlers = devices.map(() => new Map<string, (...args: any[]) => unknown>());
+  const sockets = devices.map((deviceId, index) => ({ id: sids[index], connected: true, deviceId: undefined as string | undefined,
+    accountIdentityReference: undefined as string | undefined, deviceTrustEpoch: undefined as number | undefined,
+    on: jest.fn((event: string, handler: (...args: any[]) => unknown) => handlers[index].set(event, handler)), emit: jest.fn(), disconnect: jest.fn() } as unknown as CustomSocket));
+  const trust = new Map<string, { deviceId: string; accountIdentityReference: string; trustEpoch: number; state: string }>(devices.map((deviceId) => [deviceId, { deviceId, accountIdentityReference, trustEpoch: 1, state: 'active' }]));
+  const database = { collection: () => ({ findOne: async (query: { deviceId: string }) => trust.get(query.deviceId) }) };
+  const link = { hash: room, deleted: false, expired: false, controlCapabilityHash: hashControlCapability(cap) };
+  const dbSpy = jest.spyOn(db, 'getDatabase').mockReturnValue(database as never);
+  const findSpy = jest.spyOn(db, 'findOneFromDB').mockImplementation(async (query: any, collection: string) => {
+    if (collection === 'links') return link as never;
+    if (collection === PREKEY_COLLECTION && query.channel === room && query.address === route) return { channel: room, address: route,
+      renewalProofHash: createHash('sha256').update(`k3ncrypt-prekey-renewal-v1\0${routingProof}`).digest('hex'), expiresAt: new Date(Date.now() + 60_000) } as never;
+    return undefined;
+  });
+  const authoritySpy = jest.spyOn(durableTrust, 'durableDeviceTrustAuthority').mockReturnValue({ verify: async (proof: any) => ({
+    deviceId: proof.deviceId, accountIdentityReference: proof.accountIdentityReference, trustEpoch: 1, state: 'active',
+  }) } as never);
+  const clients = getClientInstance(); const io = { sockets: { sockets: new Map(sockets.map((socket) => [socket.id, socket])) } } as never;
+  try {
+    sockets.forEach((socket) => connectionListener(socket, io));
+    const invokeJoin = (index: number): Promise<Record<string, unknown>> => new Promise((resolve) => {
+      const nonce = randomUUID();
+      void handlers[index].get('chat-join')?.({ userID: route, channelID: room, controlCapability: cap, routingProof,
+        deviceAuthorizationProof: { deviceId: devices[index], accountIdentityReference, trustEpoch: 1, nonce }, proofNonce: nonce }, resolve);
+    });
+    const outcomes = await Promise.all([invokeJoin(0), invokeJoin(1)]);
+    expect(outcomes.filter((result) => result.status === 'accepted')).toHaveLength(1);
+    expect(outcomes.filter((result) => result.code === 'room-transport-conflict')).toHaveLength(1);
+    const owner = clients.getSIDByIDs(route, room)?.sid;
+    expect(sids).toContain(owner);
+    const winners = sockets.filter((socket) => clients.getSIDByIDs(route, room)?.sid === socket.id);
+    expect(winners).toHaveLength(1);
+  } finally {
+    handlers.forEach((map) => map.get('disconnect')?.());
+    sockets.forEach((socket) => clients.deleteClient(route, room, socket.id));
+    dbSpy.mockRestore(); findSpy.mockRestore(); authoritySpy.mockRestore();
   }
 });

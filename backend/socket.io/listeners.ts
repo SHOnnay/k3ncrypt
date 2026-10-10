@@ -6,13 +6,14 @@ import { RateLimiter } from "./rateLimiter";
 import { authorizeRoomControl, isValidControlCapability, isValidRoomId } from '../security/controlCapability';
 import db, { type OfflineRejectionReason } from '../db';
 import { PREKEY_COLLECTION } from '../db/const';
-import { durableDeviceTrustAuthority, MongoDeviceTrustStore } from '../security/durableDeviceTrust';
+import { durableDeviceTrustAuthority } from '../security/durableDeviceTrust';
 import type { DeviceAuthorizationProof, DeviceOperation } from '../security/deviceTrust';
-import { routeRoomSignal, notifyRoomPeerFeatures, registerLegacyMailboxWakeup, wakeRoomMailbox, notifyRoomSender, muxPeerForLegacy, legacyRoomOwner, muxRoomOwner, releaseMuxRoomOwner, sameDeviceOwner, muxRelayEnabled, muxWouldExceedChannelCapacity, registerMultiplexedRelay } from './multiplexed';
+import { routeRoomSignal, notifyRoomPeerFeatures, registerLegacyMailboxWakeup, wakeRoomMailbox, notifyRoomSender, muxPeerForLegacy, legacyRoomOwner, muxRoomOwner, releaseMuxRoomOwner, sameDeviceOwner, muxRelayEnabled, muxWouldExceedChannelCapacity, registerMultiplexedRelay, boundDeviceAuthorization, withRoomOwnershipLock, invalidateMuxDeviceSocket } from './multiplexed';
 
 import { roomEnvelopeDedupeKey, storeRoomEnvelope } from './roomEnvelopeStore';
 
 const clients = getClientInstance();
+const socketIsDisconnected = (socket: CustomSocket): boolean => socket.connected === false;
 
 /** Generous enough for SDP/ICE candidates and chat text, but bounds abusive payloads. */
 export const MAX_ENVELOPE_BYTES = 32 * 1024;
@@ -108,13 +109,23 @@ const currentLegacyOwner = (socket: CustomSocket): boolean => socket.connected !
   clients.getSIDByIDs(socket.userID, socket.channelID)?.sid === socket.id;
 
 const activeBoundDevice = async (socket: CustomSocket): Promise<boolean> => {
-  if (!socket.deviceId || !socket.accountIdentityReference || !Number.isInteger(socket.deviceTrustEpoch)) return false;
-  try {
-    const database = db.getDatabase();
-    if (!database) return false;
-    const record = await new MongoDeviceTrustStore(database).read(socket.accountIdentityReference, socket.deviceId);
-    return record?.state === 'active' && record.trustEpoch === socket.deviceTrustEpoch;
-  } catch { return false; }
+  const authorization = await boundDeviceAuthorization(socket);
+  if (authorization === 'inactive') {
+    if (socket.userID && socket.channelID) clients.deleteClient(socket.userID, socket.channelID, socket.id);
+    socket.disconnect(true);
+  }
+  return authorization === 'active';
+};
+
+const assertReplayOwnerAuthorized = async (socket: CustomSocket): Promise<boolean> => {
+  const authorization = await boundDeviceAuthorization(socket);
+  if (authorization === 'inactive') {
+    if (socket.userID && socket.channelID) clients.deleteClient(socket.userID, socket.channelID, socket.id);
+    socket.disconnect(true);
+    return false;
+  }
+  if (authorization === 'unavailable') throw new Error('Replay authorization is temporarily unavailable.');
+  return true;
 };
 
 const retainUndeliveredEnvelope = async (
@@ -150,12 +161,12 @@ const deliverOffline = async (socket: CustomSocket, io): Promise<void> => {
   if (!socket.userID || !socket.channelID) return;
   db.cleanupExpiredOfflineMessages();
   for (let count = 0; count < MAX_OFFLINE_PER_MAILBOX; count += 1) {
-    if (!currentLegacyOwner(socket) || !await activeBoundDevice(socket) || !currentLegacyOwner(socket)) return;
+    if (!currentLegacyOwner(socket) || !await assertReplayOwnerAuthorized(socket) || !currentLegacyOwner(socket)) return;
     const claimId = randomUUID();
     const message = await db.claimOfflineMessage<{ id: string; timestamp: number; sender: string; envelope: WireEnvelope; mailbox: string; channel: string; claimId: string }>(
       socket.userID, socket.channelID, new Date(Date.now() + OFFLINE_LEASE_MS), claimId);
     if (!message) return;
-    if (!currentLegacyOwner(socket) || !await activeBoundDevice(socket) || !currentLegacyOwner(socket)) return;
+    if (!currentLegacyOwner(socket) || !await assertReplayOwnerAuthorized(socket) || !currentLegacyOwner(socket)) return;
     traceMessageRelay('mailbox-replay-claimed', socket.channelID, message.id, 'claimed', { userId: socket.userID });
     const outcome = await new Promise<RecipientOutcome | undefined>((resolve) => {
       const timeout = setTimeout(() => resolve({ outcome: 'retryable' }), OFFLINE_REPLAY_ACK_MS);
@@ -168,7 +179,7 @@ const deliverOffline = async (socket: CustomSocket, io): Promise<void> => {
     traceMessageRelay('recipient-acceptance-result', socket.channelID, message.id, accepted ? 'accepted' : 'pending', { userId: socket.userID, deviceId: socket.deviceId });
     traceDelivery('mailbox-replay-accepted', accepted);
     if (outcome?.outcome === 'permanent-rejection' && permanentReason(outcome.reasonClass)) {
-      if (!currentLegacyOwner(socket) || !await activeBoundDevice(socket) || !currentLegacyOwner(socket)) return;
+      if (!currentLegacyOwner(socket) || !await assertReplayOwnerAuthorized(socket) || !currentLegacyOwner(socket)) return;
       const terminal = await db.rejectOfflineMessage(message.id, socket.userID, socket.channelID, message.claimId, outcome.reasonClass);
       if (terminal === 'stale') return;
       if (terminal === 'rejected') {
@@ -177,7 +188,7 @@ const deliverOffline = async (socket: CustomSocket, io): Promise<void> => {
       // A valid terminal transition frees this slot so the next row proceeds.
       continue;
     }
-    if (!accepted || !currentLegacyOwner(socket) || !await activeBoundDevice(socket) || !currentLegacyOwner(socket)) return;
+    if (!accepted || !currentLegacyOwner(socket) || !await assertReplayOwnerAuthorized(socket) || !currentLegacyOwner(socket)) return;
     const removed = await db.ackOfflineMessage(message.id, socket.userID, socket.channelID, message.claimId);
     if (!removed) return;
     traceMessageRelay('mailbox-removed-after-recipient-acceptance', socket.channelID, message.id, 'durably-acked', { userId: socket.userID, deviceId: socket.deviceId });
@@ -206,6 +217,17 @@ const connectionListener = (socket: CustomSocket, io) => {
   let replayRunning = false;
   let replayRequested = false;
   let replayTimer: ReturnType<typeof setTimeout> | undefined;
+  let replayFailureCount = 0;
+  const scheduleReplay = (delayMs: number): void => {
+    if (replayTimer || socket.connected === false || !currentLegacyOwner(socket)) return;
+    replayTimer = setTimeout(() => { replayTimer = undefined; requestReplay(); }, delayMs);
+    replayTimer.unref?.();
+  };
+  const scheduleBackoff = (): void => {
+    const delay = Math.min(30_000, 250 * (2 ** Math.min(replayFailureCount, 7)));
+    replayFailureCount += 1;
+    scheduleReplay(delay);
+  };
   const requestReplay = (): void => {
     replayRequested = true;
     if (replayTimer) { clearTimeout(replayTimer); replayTimer = undefined; }
@@ -217,12 +239,20 @@ const connectionListener = (socket: CustomSocket, io) => {
         if (!currentLegacyOwner(socket)) return;
         const lease = await db.offlineMessageClaimUntil(socket.userID, socket.channelID);
         const pending = await db.countOfflineMessages({ mailbox: socket.userID, channel: socket.channelID });
-        if (pending && currentLegacyOwner(socket)) {
-          replayTimer = setTimeout(requestReplay, lease ? Math.max(25, lease.getTime() - Date.now() + 25) : 25);
-          replayTimer.unref?.();
-        }
-      } catch { /* Durable rows remain retryable; replay can be explicitly requested again. */ }
-      finally { replayRunning = false; if (replayRequested && currentLegacyOwner(socket)) requestReplay(); }
+        if (!pending) replayFailureCount = 0;
+        else if (lease) { replayFailureCount = 0; scheduleReplay(Math.max(250, lease.getTime() - Date.now() + 25)); }
+        else if (pending) scheduleBackoff();
+      } catch {
+        // Transient storage/authorization failures do not imply acceptance. Retry with bounded backoff.
+        const authorization = await boundDeviceAuthorization(socket).catch(() => 'unavailable' as const);
+        if (authorization === 'inactive') {
+          clients.deleteClient(socket.userID, socket.channelID, socket.id);
+          socket.disconnect(true);
+        } else scheduleBackoff();
+      } finally {
+        replayRunning = false;
+        if (replayRequested && currentLegacyOwner(socket)) requestReplay();
+      }
     })();
   };
   registerLegacyMailboxWakeup(socket, requestReplay);
@@ -264,30 +294,57 @@ const connectionListener = (socket: CustomSocket, io) => {
       rejectJoin('Channel join rejected.', 'invalid-channel');
       return;
     }
-    const muxOwner = muxRoomOwner(channelID, userID);
-    if (muxOwner && !sameDeviceOwner(muxOwner, socket)) {
-      rejectJoin('Room delivery is already owned by another device.', 'room-transport-conflict');
+    const admission = await withRoomOwnershipLock(channelID, userID, async () => {
+      try {
+        if (!await authorizeRoomControl(channelID, controlCapability) ||
+            !await authorizeRoutingAddress(channelID, userID, routingProof) || !(await channelValid(channelID)).valid) {
+          return { error: 'room-authorization' as const };
+        }
+      } catch { return { error: 'room-authorization' as const }; }
+      if (socket.connected === false || !await activeBoundDevice(socket)) return { error: 'device-proof' as const };
+      const owners = new Set<CustomSocket>();
+      const muxOwner = muxRoomOwner(channelID, userID);
+      const legacyOwner = legacyRoomOwner(channelID, userID, io);
+      if (muxOwner) owners.add(muxOwner);
+      if (legacyOwner) owners.add(legacyOwner);
+      for (const owner of owners) {
+        if (owner === socket) continue;
+        const authorization = await boundDeviceAuthorization(owner);
+        if (authorization === 'unavailable') return { error: 'room-transport-conflict' as const };
+        if (authorization === 'inactive') {
+          const wasMuxOwner = !!owner.muxSubscriptions?.size;
+          if (muxRoomOwner(channelID, userID) === owner) invalidateMuxDeviceSocket(owner);
+          if (clients.getSIDByIDs(userID, channelID)?.sid === owner.id) clients.deleteClient(userID, channelID, owner.id);
+          if (!wasMuxOwner) owner.disconnect(true);
+          continue;
+        }
+        if (!sameDeviceOwner(owner, socket)) return { error: 'room-transport-conflict' as const };
+      }
+      if (muxWouldExceedChannelCapacity(userID, channelID, 2)) return { error: 'channel-full' as const };
+      // Final durable check is immediately before the synchronous fencing/install sequence.
+      if (socketIsDisconnected(socket) || await boundDeviceAuthorization(socket) !== 'active') return { error: 'device-proof' as const };
+      const previousLegacy = legacyRoomOwner(channelID, userID, io);
+      const previousMux = muxRoomOwner(channelID, userID);
+      if (previousMux) releaseMuxRoomOwner(previousMux, channelID);
+      clients.setClientToChannel(userID, channelID, socket.id);
+      socket.channelID = channelID;
+      socket.userID = userID;
+      socket.protocolFeatures = parsedFeatures;
+      return { previousLegacy };
+    });
+    if ('error' in admission) {
+      if (admission.error === 'channel-full') {
+        socketEmit<SOCKET_TOPIC.LIMIT_REACHED>(SOCKET_TOPIC.LIMIT_REACHED, socket.id, null);
+        socket.disconnect(true);
+        rejectJoin('Channel is full.', 'channel-full');
+      } else if (admission.error === 'device-proof') {
+        rejectJoin('Device authorization rejected.', 'device-proof');
+        socket.disconnect(true);
+      } else if (admission.error === 'room-authorization') rejectJoin('Channel join rejected.', 'room-control');
+      else rejectJoin('Room delivery is already owned by another device.', 'room-transport-conflict');
       return;
     }
-    if (muxWouldExceedChannelCapacity(userID, channelID, 2)) {
-      socketEmit<SOCKET_TOPIC.LIMIT_REACHED>(SOCKET_TOPIC.LIMIT_REACHED, socket.id, null);
-      rejectJoin('Channel is full.', 'channel-full');
-      socket.disconnect();
-      return;
-    }
-
-    if (socket.connected === false || !await activeBoundDevice(socket)) { rejectJoin('Device authorization rejected.', 'device-proof'); return; }
-    // Recheck after the durable trust read; another admission can win during it.
-    const currentMuxOwner = muxRoomOwner(channelID, userID);
-    if (currentMuxOwner && !sameDeviceOwner(currentMuxOwner, socket)) { rejectJoin('Room delivery is already owned by another device.', 'room-transport-conflict'); return; }
-    const currentLegacy = legacyRoomOwner(channelID, userID, io);
-    if (currentLegacy && currentLegacy !== socket && !sameDeviceOwner(currentLegacy, socket)) { rejectJoin('Room delivery is already owned by another device.', 'room-transport-conflict'); return; }
-    if (muxWouldExceedChannelCapacity(userID, channelID, 2)) { rejectJoin('Channel is full.', 'channel-full'); return; }
-    const previousConnection = currentLegacy?.id;
-    if (currentMuxOwner) releaseMuxRoomOwner(currentMuxOwner, channelID);
-    clients.setClientToChannel(userID, channelID, socket.id);
-    socket.channelID = channelID;
-    socket.userID = userID;
+    const previousConnection = admission.previousLegacy?.id;
     socket.protocolFeatures = parsedFeatures;
     // Reconnection by the same device replaces its previous live registration.
     // Install the new SID first so the old socket's delayed disconnect cannot
@@ -295,6 +352,8 @@ const connectionListener = (socket: CustomSocket, io) => {
     if (previousConnection && previousConnection !== socket.id) {
       io.sockets.sockets.get(previousConnection)?.disconnect(true);
     }
+    // A same-device Mux socket may own other rooms. Its displaced subscription
+    // is synchronously removed above; keep the connection and unrelated rooms alive.
     traceDelivery('relay-join-ready', true);
 
     const peerFeatures = await notifyRoomPeerFeatures(socket, channelID, userID, io);

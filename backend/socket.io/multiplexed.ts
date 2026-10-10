@@ -62,6 +62,7 @@ type OperationQueue = { tail: Promise<void>; pending: number };
 const operationQueues = new WeakMap<CustomSocket, OperationQueue>();
 const subscriptionTimers = new WeakMap<CustomSocket, Map<string, ReturnType<typeof setTimeout>>>();
 const muxRoomSockets = new Map<string, Map<string, CustomSocket>>();
+const roomOwnershipLocks = new Map<string, Promise<void>>();
 type MailboxPump = { socket: CustomSocket; subscription: MuxRoomSubscription; running: boolean; requested: boolean; timer?: ReturnType<typeof setTimeout> };
 const mailboxPumps = new Map<string, MailboxPump>();
 const clients = getClientInstance();
@@ -73,6 +74,7 @@ const muxOperationRateLimiter = new RateLimiter({ capacity: 160, refillPerSecond
 const exactKeys = (value: Record<string, unknown>, keys: readonly string[]): boolean =>
   Object.keys(value).sort().join('\0') === [...keys].sort().join('\0');
 const deviceKey = (account: string, device: string): string => `${account}\0${device}`;
+const roomOwnerKey = (roomId: string, address: string): string => `${roomId}\0${address}`;
 const mailboxPumpKey = (roomId: string, mailbox: string): string => `${roomId}\0${mailbox}`;
 const isCurrentMuxSocket = (socket: CustomSocket): boolean => !!socket.accountIdentityReference && !!socket.deviceId &&
   deviceSockets.get(deviceKey(socket.accountIdentityReference, socket.deviceId))?.socketId === socket.id;
@@ -95,16 +97,39 @@ const enqueue = (socket: CustomSocket, operation: () => Promise<void>, ack: (res
 const validFeatures = (value: unknown): value is string[] => Array.isArray(value) && value.length <= FEATURES.size &&
   value.every((feature) => typeof feature === 'string' && FEATURES.has(feature)) && new Set(value).size === value.length;
 
-const activeBoundDevice = async (socket: CustomSocket): Promise<boolean> => {
-  if (!socket.deviceId || !socket.accountIdentityReference || !Number.isInteger(socket.deviceTrustEpoch)) return false;
+export type BoundDeviceAuthorization = 'active' | 'inactive' | 'unavailable';
+
+/** Distinguishes a durable denial from an unavailable authority read. */
+export const boundDeviceAuthorization = async (socket: CustomSocket): Promise<BoundDeviceAuthorization> => {
+  if (!socket.deviceId || !socket.accountIdentityReference || !Number.isInteger(socket.deviceTrustEpoch)) return 'inactive';
   try {
     const database = db.getDatabase();
-    if (!database) return false;
+    if (!database) return 'unavailable';
     const record = await new MongoDeviceTrustStore(database).read(socket.accountIdentityReference, socket.deviceId);
-    const active = record?.state === 'active' && record.trustEpoch === socket.deviceTrustEpoch;
-    if (!active) invalidateMuxDeviceSocket(socket);
-    return active;
-  } catch { return false; }
+    return record?.state === 'active' && record.trustEpoch === socket.deviceTrustEpoch ? 'active' : 'inactive';
+  } catch { return 'unavailable'; }
+};
+
+const activeBoundDevice = async (socket: CustomSocket): Promise<boolean> => {
+  const authorization = await boundDeviceAuthorization(socket);
+  if (authorization === 'inactive') invalidateMuxDeviceSocket(socket);
+  return authorization === 'active';
+};
+
+/** Serializes ownership admission for one (room, recipient) across legacy and Mux. */
+export const withRoomOwnershipLock = async <T>(roomId: string, address: string, operation: () => Promise<T>): Promise<T> => {
+  const key = roomOwnerKey(roomId, address);
+  const previous = roomOwnershipLocks.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const tail = previous.then(() => gate);
+  roomOwnershipLocks.set(key, tail);
+  await previous;
+  try { return await operation(); }
+  finally {
+    release();
+    if (roomOwnershipLocks.get(key) === tail) roomOwnershipLocks.delete(key);
+  }
 };
 
 const verifyMuxCarrier = async (
@@ -391,7 +416,7 @@ const removeSubscription = (socket: CustomSocket, subscription: MuxRoomSubscript
   if (roomSockets?.size === 0) muxRoomSockets.delete(subscription.roomId);
 };
 
-const invalidateMuxDeviceSocket = (socket: CustomSocket): void => {
+export const invalidateMuxDeviceSocket = (socket: CustomSocket): void => {
   const subscriptions = socket.muxSubscriptions;
   if (subscriptions) for (const subscription of [...subscriptions.values()]) removeSubscription(socket, subscription);
   if (socket.accountIdentityReference && socket.deviceId) {
@@ -522,38 +547,66 @@ export const registerMultiplexedRelay = (socket: CustomSocket, io: MuxServer): v
       reject();
       return;
     }
-    const legacyOwner = legacyRoomOwner(roomId, routingAddress, io);
-    if (legacyOwner && !sameDeviceOwner(legacyOwner, socket)) { reject(); return; }
-    if (muxWouldExceedChannelCapacity(routingAddress, roomId, 2)) { reject(); return; }
-    const existingRouteSocket = muxRoomOwner(roomId, routingAddress);
-    if (existingRouteSocket && existingRouteSocket !== socket) { reject(); return; }
-    // Fence only this recipient's incumbent after all authorization checks.
-    if (legacyOwner) clients.deleteClient(routingAddress, roomId, legacyOwner.id);
-    const proof = body.deviceAuthorizationProof as DeviceAuthorizationProof;
-    const next: MuxRoomSubscription = Object.freeze({
-      version: MUX_PROTOCOL_VERSION,
-      roomId,
-      routingAddress,
-      peerRoutingAddress,
-      connectionGeneration: generation,
-      nonce: proof.nonce,
-      expiresAt: Math.min(proof.expiresAt, Date.now() + MUX_SUBSCRIPTION_LEASE_MS),
-      controlCapability: body.controlCapability,
-      routingProof: body.routingProof,
-      protocolFeatures: Object.freeze([...body.protocolFeatures as string[]]),
+    const admission = await withRoomOwnershipLock(roomId, routingAddress, async () => {
+      if (!await authorizeRoomControl(roomId, body.controlCapability as string) ||
+          !await authorizeRoutingAddress(roomId, routingAddress, body.routingProof as string) ||
+          !await currentRouteRecord(roomId, peerRoutingAddress) || !(await channelValid(roomId)).valid) return { error: true as const };
+      const owners = new Set<CustomSocket>();
+      const currentLegacy = legacyRoomOwner(roomId, routingAddress, io);
+      const currentMux = muxRoomOwner(roomId, routingAddress);
+      if (currentLegacy) owners.add(currentLegacy);
+      if (currentMux) owners.add(currentMux);
+      for (const owner of owners) {
+        if (owner === socket) continue;
+        const authorization = await boundDeviceAuthorization(owner);
+        if (authorization === 'unavailable') return { error: true as const };
+        if (authorization === 'inactive') {
+          const wasMuxOwner = !!owner.muxSubscriptions?.size;
+          if (muxRoomOwner(roomId, routingAddress) === owner) invalidateMuxDeviceSocket(owner);
+          if (clients.getSIDByIDs(routingAddress, roomId)?.sid === owner.id) clients.deleteClient(routingAddress, roomId, owner.id);
+          if (!wasMuxOwner) owner.disconnect(true);
+          continue;
+        }
+        if (!sameDeviceOwner(owner, socket)) return { error: true as const };
+      }
+      if (!isCurrentMuxSocket(socket) || socket.connected === false || socket.muxConnectionGeneration !== generation ||
+          !await activeBoundDevice(socket) || muxWouldExceedChannelCapacity(routingAddress, roomId, 2)) return { error: true as const };
+      const currentSubscriptions = socket.muxSubscriptions ??= new Map();
+      if (!currentSubscriptions.has(roomId) && currentSubscriptions.size >= MUX_MAX_ROOM_SUBSCRIPTIONS) return { error: true as const };
+      const proof = body.deviceAuthorizationProof as DeviceAuthorizationProof;
+      const next: MuxRoomSubscription = Object.freeze({
+        version: MUX_PROTOCOL_VERSION,
+        roomId,
+        routingAddress,
+        peerRoutingAddress,
+        connectionGeneration: generation,
+        nonce: proof.nonce,
+        expiresAt: Math.min(proof.expiresAt, Date.now() + MUX_SUBSCRIPTION_LEASE_MS),
+        controlCapability: body.controlCapability as string,
+        routingProof: body.routingProof as string,
+        protocolFeatures: Object.freeze([...(body.protocolFeatures as string[])]),
+      });
+      // No await separates incumbent fencing from installing the new owner.
+      const oldLegacy = legacyRoomOwner(roomId, routingAddress, io);
+      const oldMux = muxRoomOwner(roomId, routingAddress);
+      if (oldLegacy) clients.deleteClient(routingAddress, roomId, oldLegacy.id);
+      if (oldMux && oldMux !== socket) releaseMuxRoomOwner(oldMux, roomId);
+      const previous = currentSubscriptions.get(roomId);
+      if (previous) removeSubscription(socket, previous);
+      currentSubscriptions.set(roomId, next);
+      const roomSockets = muxRoomSockets.get(roomId) ?? new Map<string, CustomSocket>();
+      muxRoomSockets.set(roomId, roomSockets);
+      roomSockets.set(routingAddress, socket);
+      scheduleSubscriptionExpiry(socket, next);
+      return { next, oldLegacy, oldMux };
     });
-    const previous = subscriptions.get(roomId);
-    if (previous) removeSubscription(socket, previous);
-    subscriptions.set(roomId, next);
-    const roomSockets = muxRoomSockets.get(roomId) ?? new Map<string, CustomSocket>();
-    muxRoomSockets.set(roomId, roomSockets);
-    roomSockets.set(routingAddress, socket);
-    scheduleSubscriptionExpiry(socket, next);
-    if (legacyOwner) legacyOwner.disconnect(true);
+    if ('error' in admission) { reject(); return; }
+    if (admission.oldLegacy) admission.oldLegacy.disconnect(true);
+    if (admission.oldMux && admission.oldMux !== socket) admission.oldMux.disconnect(true);
     const peerFeatures = await notifyRoomPeerFeatures(socket, roomId, routingAddress, io);
-    if (!locallyOwnsSubscription(socket, next)) { reject(); return; }
+    if (!locallyOwnsSubscription(socket, admission.next)) { reject(); return; }
     ack({ version: MUX_PROTOCOL_VERSION, status: 'subscribed', roomId, connectionGeneration: generation,
-      subscriptionNonce: next.nonce, expiresAt: next.expiresAt, peerFeatures });
+      subscriptionNonce: admission.next.nonce, expiresAt: admission.next.expiresAt, peerFeatures });
   }, ack, 'Room subscription rejected.'));
 
   socket.on('mux-unsubscribe', (payload: unknown, ack: (response: Record<string, unknown>) => void = () => undefined) => enqueue(socket, async () => {
