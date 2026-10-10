@@ -111,6 +111,22 @@ export const reserveInvitationPublication = async (channel: string, now = Date.n
   const legacy = await db.collection(LINK_COLLECTION).findOne({ hash: channel, deleted: false, expired: false, invitationExpiresAt: { $exists: false } });
   return !!legacy;
 };
+/** Conservative cancellation: the creator's publication may exist, but no
+ * joining peer may have reserved publication. Shares the admission CAS fields;
+ * a concurrent join or revoke has exactly one winner. Historical rooms without
+ * this metadata cannot be revoked through the pending-only operation. */
+export const revokePendingInvitation = async (channel: string): Promise<boolean> => {
+  if (inMem) {
+    const room = _findOneFromDB({ hash: channel }, LINK_COLLECTION) as { deleted?: boolean; expired?: boolean; invitationExpiresAt?: Date; invitationPublications?: number } | undefined;
+    if (!room || room.deleted || room.expired || !(room.invitationExpiresAt instanceof Date) ||
+        !Number.isSafeInteger(room.invitationPublications) || room.invitationPublications! < 0 || room.invitationPublications! >= 2) return false;
+    room.deleted = true;
+    return true;
+  }
+  const result = await db.collection(LINK_COLLECTION).updateOne({ hash: channel, deleted: false, expired: false,
+    invitationExpiresAt: { $type: 'date' }, invitationPublications: { $in: [0, 1] } }, { $set: { deleted: true } });
+  return result.modifiedCount === 1;
+};
 export const persistentStorageReady = (): boolean => !inMem;
 export const getDatabase = (): Db | undefined => inMem || !db ? undefined : db;
 export const ping = async (): Promise<void> => {
@@ -251,6 +267,7 @@ export default {
   claimOneTimeKey,
   prekeyStorageReady,
   reserveInvitationPublication,
+  revokePendingInvitation,
   cleanupExpiredPrekeyBundles,
   storeOfflineMessage,
   claimOfflineMessage,

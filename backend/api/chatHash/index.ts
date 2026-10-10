@@ -4,7 +4,7 @@ import db from '../../db';
 import { LINK_COLLECTION } from '../../db/const';
 import asyncHandler from '../../middleware/asyncHandler';
 import channelValid, { CHANNEL_STATE } from './utils/validateChannel';
-import generateHash from './utils/link';
+import generateHash, { type LinkType } from './utils/link';
 import { controlRateLimit } from '../../middleware/controlRateLimit';
 import {
   authorizeRoomControl,
@@ -55,7 +55,12 @@ router.get(
       return res.status(404).send({ error: "Invalid channel", state });
     }
 
-    return res.send({ status: "ok", state });
+    const record = await db.findOneFromDB<LinkType>({ hash: channel }, LINK_COLLECTION);
+    const invitation = record?.invitationExpiresAt instanceof Date ? {
+      expiresAt: record.invitationExpiresAt.getTime(),
+      revocable: Number.isSafeInteger(record.invitationPublications) && record.invitationPublications! >= 0 && record.invitationPublications! < 2,
+    } : undefined;
+    return res.send({ status: "ok", state, ...(invitation ? { invitation } : {}) });
   })
 );
 router.delete(
@@ -77,7 +82,10 @@ router.delete(
       return res.status(404).send({ error: 'Invalid channel' });
     }
 
-    await db.updateOneFromDb({ hash: channel }, { deleted: true }, LINK_COLLECTION);
+    if (req.query.pendingInvitation !== undefined) {
+      if (req.query.pendingInvitation !== 'true') return res.status(400).send({ error: 'Invalid pending invitation operation' });
+      if (!await db.revokePendingInvitation(channel)) return res.status(409).send({ error: 'Invitation is joined or its pending state cannot be established safely.' });
+    } else await db.updateOneFromDb({ hash: channel }, { deleted: true }, LINK_COLLECTION);
     return res.send({ status: "ok" });
   })
 );
