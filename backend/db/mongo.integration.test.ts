@@ -200,14 +200,13 @@ suite('MongoDB mailbox terminal-rejection integration', () => {
   it('keeps a row active after transient failure and permits retry after lease expiry', async () => {
     const item = message();
     await storeOfflineMessage(item);
-    const firstClaim = await claimOfflineMessage<typeof item & { claimId: string }>(item.mailbox, item.channel, new Date(Date.now() + 50), randomUUID());
-    expect(firstClaim?.id).toBe(item.id);
+    const firstClaim = await claimOfflineMessage<typeof item & { claimId: string; deliveryAttempts: number }>(item.mailbox, item.channel, new Date(Date.now() + 50), randomUUID());
+    expect(firstClaim).toMatchObject({ id: item.id, deliveryAttempts: 1 });
     expect(await countOfflineMessages({ mailbox: item.mailbox, channel: item.channel })).toBe(1);
     expect(await claimOfflineMessage(item.mailbox, item.channel, new Date(Date.now() + 30_000), randomUUID())).toBeUndefined();
     await new Promise((resolve) => setTimeout(resolve, 60));
-    const retryClaim = await claimOfflineMessage<typeof item & { claimId: string; state: string }>(item.mailbox, item.channel, new Date(Date.now() + 30_000), randomUUID());
-    expect(retryClaim?.id).toBe(item.id);
-    expect(retryClaim?.state).toBe('active');
+    const retryClaim = await claimOfflineMessage<typeof item & { claimId: string; state: string; deliveryAttempts: number }>(item.mailbox, item.channel, new Date(Date.now() + 30_000), randomUUID());
+    expect(retryClaim).toMatchObject({ id: item.id, state: 'active', deliveryAttempts: 2 });
     expect(await ackOfflineMessage(item.id, item.mailbox, item.channel, retryClaim!.claimId)).toBe(true);
   });
 

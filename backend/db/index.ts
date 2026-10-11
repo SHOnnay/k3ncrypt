@@ -193,7 +193,7 @@ export const claimOfflineMessage = async <T>(mailbox: string, channel: string, l
   // worker; a failed CAS is retryable and leaves mailbox state intact.
   const result = await collection.findOneAndUpdate(
     { _id: head._id, mailbox, channel, state: 'active', expiresAt: { $gt: now }, $or: [{ claimedUntil: { $exists: false } }, { claimedUntil: { $lte: now } }] },
-    { $set: { claimedUntil: leaseUntil, claimId } }, { returnDocument: 'after' },
+    { $set: { claimedUntil: leaseUntil, claimId }, $inc: { deliveryAttempts: 1 } }, { returnDocument: 'after' },
   );
   return ((result && typeof result === 'object' && 'value' in result) ? (result as { value?: unknown }).value : result) as T | undefined;
 };

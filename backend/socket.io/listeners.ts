@@ -11,6 +11,7 @@ import type { DeviceAuthorizationProof, DeviceOperation } from '../security/devi
 import { routeRoomSignal, notifyRoomPeerFeatures, registerLegacyMailboxWakeup, wakeRoomMailbox, notifyRoomSender, muxPeerForLegacy, legacyRoomOwner, muxRoomOwner, releaseMuxRoomOwner, sameDeviceOwner, muxRelayEnabled, muxWouldExceedChannelCapacity, registerMultiplexedRelay, boundDeviceAuthorization, withRoomOwnershipLock, invalidateMuxDeviceSocket } from './multiplexed';
 
 import { roomEnvelopeDedupeKey, storeRoomEnvelope } from './roomEnvelopeStore';
+import { observeMailboxHead } from './mailboxHeadDiagnostics';
 
 const clients = getClientInstance();
 const socketIsDisconnected = (socket: CustomSocket): boolean => socket.connected === false;
@@ -163,9 +164,10 @@ const deliverOffline = async (socket: CustomSocket, io): Promise<void> => {
   for (let count = 0; count < MAX_OFFLINE_PER_MAILBOX; count += 1) {
     if (!currentLegacyOwner(socket) || !await assertReplayOwnerAuthorized(socket) || !currentLegacyOwner(socket)) return;
     const claimId = randomUUID();
-    const message = await db.claimOfflineMessage<{ id: string; timestamp: number; sender: string; envelope: WireEnvelope; mailbox: string; channel: string; claimId: string }>(
+    const message = await db.claimOfflineMessage<{ id: string; timestamp: number; sender: string; envelope: WireEnvelope; mailbox: string; channel: string; claimId: string; deliveryAttempts?: number }>(
       socket.userID, socket.channelID, new Date(Date.now() + OFFLINE_LEASE_MS), claimId);
     if (!message) return;
+    observeMailboxHead('legacy', message);
     if (!currentLegacyOwner(socket) || !await assertReplayOwnerAuthorized(socket) || !currentLegacyOwner(socket)) return;
     traceMessageRelay('mailbox-replay-claimed', socket.channelID, message.id, 'claimed', { userId: socket.userID });
     const outcome = await new Promise<RecipientOutcome | undefined>((resolve) => {

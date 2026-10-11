@@ -105,6 +105,7 @@ export const claimOfflineMessage = (condition: Record<string, unknown>, leaseUnt
   if (message.claimedUntil instanceof Date && message.claimedUntil.getTime() > Date.now()) return null;
   message.claimedUntil = leaseUntil;
   message.claimId = claimId;
+  message.deliveryAttempts = Number.isSafeInteger(message.deliveryAttempts) && message.deliveryAttempts >= 0 ? message.deliveryAttempts + 1 : 1;
   return message;
 };
 

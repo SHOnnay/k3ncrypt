@@ -9,6 +9,7 @@ import getClientInstance from './clients';
 import type { CustomSocket, WireEnvelope } from './index';
 import { RateLimiter } from './rateLimiter';
 import { storeRoomEnvelope } from './roomEnvelopeStore';
+import { observeMailboxHead } from './mailboxHeadDiagnostics';
 
 import { muxRelayEnabled } from '../security/muxFeatureGate';
 export { muxRelayEnabled } from '../security/muxFeatureGate';
@@ -261,7 +262,7 @@ const deliverMuxMailboxBatch = async (socket: CustomSocket, subscription: MuxRoo
     if (!current || current.nonce !== subscription.nonce) return { status: 'inactive' };
     const claimId = randomUUID();
     const leaseUntil = Date.now() + muxMailboxLeaseMs();
-    const message = await db.claimOfflineMessage<{ id: string; timestamp: number; sender: string; envelope: WireEnvelope; mailbox: string; channel: string; claimId: string }>(
+    const message = await db.claimOfflineMessage<{ id: string; timestamp: number; sender: string; envelope: WireEnvelope; mailbox: string; channel: string; claimId: string; deliveryAttempts?: number }>(
       current.routingAddress, current.roomId, new Date(leaseUntil), claimId);
     if (!message) {
       const claimedUntil = await db.offlineMessageClaimUntil(current.routingAddress, current.roomId);
@@ -274,6 +275,7 @@ const deliverMuxMailboxBatch = async (socket: CustomSocket, subscription: MuxRoo
         ? { status: 'retry', retryAt: Date.now() + MUX_MAILBOX_RETRY_MARGIN_MS }
         : { status: 'drained' };
     }
+    observeMailboxHead('mux', message);
     // Revocation can commit while the durable claim is in flight. Recheck at
     // the emission boundary so a stale socket cannot receive newly claimed
     // content; leaving the claim leased preserves safe retry after expiry.

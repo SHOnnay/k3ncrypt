@@ -11,7 +11,8 @@ describe('opaque offline message mailbox', () => {
     expect(duplicate.id).toBe(first.id);
     expect(await countOfflineMessages({ mailbox: message.mailbox, channel: message.channel })).toBe(1);
     const claimId = randomUUID();
-    expect(await claimOfflineMessage(message.mailbox, message.channel, new Date(Date.now() + 30_000), claimId)).toEqual(expect.objectContaining({ id: message.id }));
+    expect(await claimOfflineMessage<{ id: string; deliveryAttempts: number }>(message.mailbox, message.channel, new Date(Date.now() + 30_000), claimId))
+      .toEqual(expect.objectContaining({ id: message.id, deliveryAttempts: 1 }));
     expect(await claimOfflineMessage(message.mailbox, message.channel, new Date(Date.now() + 30_000), randomUUID())).toBeFalsy();
     expect(await ackOfflineMessage(message.id, message.mailbox, message.channel, claimId)).toBe(true);
     expect(await countOfflineMessages({ mailbox: message.mailbox, channel: message.channel })).toBe(0);
@@ -62,8 +63,8 @@ describe('opaque offline message mailbox', () => {
     expect(await offlineMessageClaimUntil(mailbox, room)).toEqual(new Date(now + 1_000));
 
     now += 1_001;
-    const recovered = await claimOfflineMessage<typeof first & { claimId: string }>(mailbox, room, new Date(now + 30_000), randomUUID());
-    expect(recovered?.id).toBe(first.id);
+    const recovered = await claimOfflineMessage<typeof first & { claimId: string; deliveryAttempts: number }>(mailbox, room, new Date(now + 30_000), randomUUID());
+    expect(recovered).toMatchObject({ id: first.id, deliveryAttempts: 2 });
     expect(await ackOfflineMessage(first.id, mailbox, room, recovered!.claimId)).toBe(true);
     const next = await claimOfflineMessage<typeof second & { claimId: string }>(mailbox, room, new Date(now + 30_000), randomUUID());
     expect(next?.id).toBe(second.id);
