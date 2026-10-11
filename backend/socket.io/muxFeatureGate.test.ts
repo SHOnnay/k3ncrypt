@@ -8,7 +8,7 @@ import * as durableTrust from '../security/durableDeviceTrust';
 import { hashControlCapability } from '../security/controlCapability';
 import { initSocket, type CustomSocket } from './index';
 import getClients from './clients';
-import { notifyRoomPeerFeatures, registerMultiplexedRelay, revokeMuxDeviceSubscriptions, testOnlyResetMuxDeviceRegistry } from './multiplexed';
+import { muxRoomOwner, notifyRoomPeerFeatures, registerMultiplexedRelay, revokeMuxDeviceSubscriptions, testOnlyResetMuxDeviceRegistry, withRoomOwnershipLock } from './multiplexed';
 
 const events = ['mux-authenticate', 'mux-subscribe', 'mux-unsubscribe', 'mux-send-message', 'mux-send-signal', 'mux-mailbox-replay'] as const;
 const envelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { opaque: 'test-ciphertext' } };
@@ -16,6 +16,7 @@ type RecordResponse = Record<string, unknown>;
 const ack = (socket: Socket, event: string, payload: unknown): Promise<RecordResponse> => socket.timeout(2_000).emitWithAck(event, payload);
 const savedEnv = { node: process.env.NODE_ENV, flag: process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY, productionOptIn: process.env.K3NCRYPT_MUX_PRODUCTION_OPT_IN };
 const records = new Map<string, { deviceId: string; accountIdentityReference: string; trustEpoch: number; state: string }>();
+let authorizationReadUnavailableFor: string | undefined;
 const verify = jest.fn(async (proof: { deviceId: string; trustEpoch?: number }) => {
   const record = records.get(proof.deviceId);
   if (!record || record.state !== 'active' || record.trustEpoch !== proof.trustEpoch) throw new Error('Device proof rejected.');
@@ -65,7 +66,10 @@ const legacyJoin = (p: Awaited<ReturnType<typeof peer>>, r: Awaited<ReturnType<t
 
 beforeAll(async () => {
   jest.spyOn(durableTrust, 'durableDeviceTrustAuthority').mockReturnValue({ verify } as never);
-  jest.spyOn(db, 'getDatabase').mockReturnValue({ collection: () => ({ findOne: async (filter: { deviceId: string }) => records.get(filter.deviceId) }) } as never);
+  jest.spyOn(db, 'getDatabase').mockReturnValue({ collection: () => ({ findOne: async (filter: { deviceId: string }) => {
+    if (filter.deviceId === authorizationReadUnavailableFor) throw new Error('injected authorization-store outage');
+    return records.get(filter.deviceId);
+  } }) } as never);
   jest.spyOn(db, 'storeOfflineMessage');
   http = createServer(); relay = initSocket(http);
   await new Promise<void>(resolve => http.listen(0, '127.0.0.1', resolve));
@@ -79,6 +83,7 @@ afterEach(async () => {
   await new Promise<void>(resolve => setImmediate(resolve));
   relay.disconnectSockets(true);
   testOnlyResetMuxDeviceRegistry();
+  authorizationReadUnavailableFor = undefined;
   persistentReadySpy?.mockRestore();
   persistentReadySpy = undefined;
   jest.clearAllMocks();
@@ -454,6 +459,63 @@ it('rechecks revocation after a mailbox claim, withholding delivery and preservi
     r.routes[0], r.roomId, new Date(Date.now() + 30_000), randomUUID());
   expect(retry).toMatchObject({ id: sent.id, envelope, mailbox: r.routes[0], channel: r.roomId });
   await db.ackOfflineMessage(retry!.id, r.routes[0], r.roomId, retry!.claimId);
+});
+
+it.each([
+  ['inactive', 'revoked'],
+  ['stale epoch', 'active-stale-epoch'],
+])('allows Mux takeover from an authoritatively %s incumbent', async (_label, condition) => {
+  process.env.NODE_ENV = 'development'; process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY = 'true';
+  const r = await room(); const incumbent = await peer();
+  expect(await authenticate(incumbent)).toMatchObject({ status: 'authenticated' });
+  expect(await subscribe(incumbent, r, 0)).toMatchObject({ status: 'subscribed' });
+  const oldRecord = records.get(incumbent.deviceId)!;
+  records.set(incumbent.deviceId, condition === 'revoked'
+    ? { ...oldRecord, state: 'revoked', trustEpoch: oldRecord.trustEpoch + 1 }
+    : { ...oldRecord, trustEpoch: oldRecord.trustEpoch + 1 });
+
+  const replacement = await peer();
+  expect(await authenticate(replacement)).toMatchObject({ status: 'authenticated' });
+  expect(await subscribe(replacement, r, 0)).toMatchObject({ status: 'subscribed' });
+  expect(muxRoomOwner(r.roomId, r.routes[0])).toBe(replacement.server);
+  expect(incumbent.server.muxSubscriptions?.has(r.roomId)).toBe(false);
+});
+
+it('fails closed when incumbent authorization is unavailable during Mux takeover', async () => {
+  process.env.NODE_ENV = 'development'; process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY = 'true';
+  const r = await room(); const incumbent = await peer(); const replacement = await peer();
+  expect(await authenticate(incumbent)).toMatchObject({ status: 'authenticated' });
+  expect(await subscribe(incumbent, r, 0)).toMatchObject({ status: 'subscribed' });
+  expect(await authenticate(replacement)).toMatchObject({ status: 'authenticated' });
+  authorizationReadUnavailableFor = incumbent.deviceId;
+
+  expect(await subscribe(replacement, r, 0)).toHaveProperty('error');
+  expect(muxRoomOwner(r.roomId, r.routes[0])).toBe(incumbent.server);
+  expect(replacement.server.muxSubscriptions?.has(r.roomId)).toBe(false);
+});
+
+it('releases the per-room ownership lock after an operation throws', async () => {
+  const roomId = randomUUID(); const address = randomUUID();
+  await expect(withRoomOwnershipLock(roomId, address, async () => { throw new Error('injected owner-operation failure'); }))
+    .rejects.toThrow('injected owner-operation failure');
+  await expect(withRoomOwnershipLock(roomId, address, async () => 'acquired')).resolves.toBe('acquired');
+});
+
+it('preserves an unrelated valid Mux subscription while taking over a stale room owner', async () => {
+  process.env.NODE_ENV = 'development'; process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY = 'true';
+  const contested = await room(); const background = await room(); const incumbent = await peer(); const replacement = await peer();
+  expect(await authenticate(incumbent)).toMatchObject({ status: 'authenticated' });
+  expect(await subscribe(incumbent, contested, 0)).toMatchObject({ status: 'subscribed' });
+  expect(await authenticate(replacement)).toMatchObject({ status: 'authenticated' });
+  expect(await subscribe(replacement, background, 0)).toMatchObject({ status: 'subscribed' });
+  const oldRecord = records.get(incumbent.deviceId)!;
+  records.set(incumbent.deviceId, { ...oldRecord, state: 'revoked', trustEpoch: oldRecord.trustEpoch + 1 });
+
+  expect(await subscribe(replacement, contested, 0)).toMatchObject({ status: 'subscribed' });
+  expect(replacement.server.muxSubscriptions?.has(background.roomId)).toBe(true);
+  expect(replacement.server.muxSubscriptions?.has(contested.roomId)).toBe(true);
+  expect(muxRoomOwner(background.roomId, background.routes[0])).toBe(replacement.server);
+  expect(muxRoomOwner(contested.roomId, contested.routes[0])).toBe(replacement.server);
 });
 
 it('rejects takeover of an active legacy mailbox by a different device even with room credentials', async () => {
