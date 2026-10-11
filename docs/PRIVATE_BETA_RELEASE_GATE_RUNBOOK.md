@@ -1,0 +1,35 @@
+# Private beta release gate: single-instance and Mux
+
+This is an ordered operator checklist, not authorization to deploy. The server holds room ownership, live socket/device registries, Mux subscriptions, pumps, locks, and immediate revocation eviction in process memory. Mongo mailbox leases do not make live routing multi-process safe.
+
+## Before scheduling a release
+
+1. In Render, inspect the actual service, deploy identity, region, instance count, autoscaling bounds, overlapping-deploy policy, Auto-Deploy, health path and startup command. Confirm exactly one configured backend instance and no additional worker/replica/service routes. No Render service configuration or Blueprint is checked into this repository; Git cannot prove the live dashboard values.
+2. The repository starts one Node backend process (`index.ts`) and attaches the legacy, sync and private-network Socket.IO surfaces. There is no checked-in PM2/cluster/worker launcher. The Render dashboard must confirm it runs only one instance.
+3. Select the four Mux settings as one matched set. For the initial private beta, keep Mux off: server `K3NCRYPT_MUX_MESSAGE_DELIVERY=false`, `K3NCRYPT_MUX_PRODUCTION_OPT_IN=false`; Web build `VITE_K3NCRYPT_MUX_STAGE1=false`, `VITE_K3NCRYPT_MUX_PRODUCTION_OPT_IN=false` (or unset all four). Vite values are compiled into the browser bundle; changing only server runtime variables does not change an already-built client. Any missing, malformed, contradictory, or mismatched pair is NO-GO. Enabling Mux requires separate release approval and a rebuild with all four exact `true` values.
+4. If a later separately approved canary selects production Mux, set all four values exactly to `true` together: `K3NCRYPT_MUX_MESSAGE_DELIVERY=true`, `K3NCRYPT_MUX_PRODUCTION_OPT_IN=true`, `VITE_K3NCRYPT_MUX_STAGE1=true`, and `VITE_K3NCRYPT_MUX_PRODUCTION_OPT_IN=true`. Rebuild the Web bundle after setting both `VITE_` values; they are compile-time inputs. Verify the server runtime pair and the values embedded in the deployed client. Any mismatch is NO-GO; do not attempt a legacy fallback to mask it. The initial beta procedure below keeps all four false/unset.
+5. Confirm the candidate commit and tests/builds, migration compatibility, backup/isolated-restore proof, index preflight, and recovery owner. Do not start a migration or release without those owner-controlled proofs.
+
+## Deploy with safe per-process gating
+
+Render's documented zero-downtime replacement starts the new instance while the old continues serving, then shifts new traffic and sends `SIGTERM` to the old process after its drain interval. Existing WebSockets remain attached to their original process until disconnect/termination. A one-instance configured service therefore still has a temporary two-process deploy overlap. The per-process maintenance gate is essential because local ownership locks and registries are not shared.
+
+1. Announce a brief maintenance window and ask users to stop sending and close the app. Verify the deployed source revision. Ensure Mux remains disabled in runtime and in the built Web bundle.
+2. If the current revision lacks `K3NCRYPT_MAINTENANCE_MODE`, first deploy a reviewed gate-capable compatibility revision with the gate exact `true`; do not migrate during this deployment. Render may overlap the ungated process and gated process, but only the old process is write-capable; the new process rejects HTTP operations and all Socket.IO packets. Wait until Render confirms the old process has terminated and the gated process is the only live process. If this exclusive-active-process condition cannot be confirmed, stop.
+3. On the gate-capable sole instance, verify `GET`/`HEAD /api/health` and `/api/ready` remain available; other HTTP requests return 503 with `Retry-After`; and all three socket paths (`/socket.io`, `/sync/socket.io`, `/private-network/socket.io`) reject handshakes. On a socket connected before gate activation, send a harmless test packet and verify it is rejected/disconnected. Check the custom domain and direct `onrender.com` origin. Do not accept writes during migration.
+4. Take/verify the approved fresh encrypted backup and isolated restore. Perform read-only database compatibility checks. Run the approved migration from the exact candidate in the controlled operator environment. Verify the required partial unique mailbox index and retained-record counts before deployment. A code rollback does not undo mailbox backfills/index replacement; use only the documented forward repair or verified restore path.
+5. Manually deploy the exact candidate SHA with `K3NCRYPT_MAINTENANCE_MODE=true` and Mux disabled. During overlap, the gated old instance and gated candidate both reject mutating/socket events. Verify health/readiness, expected relay-ready logs, migration/index state, and old-process termination. Confirm exactly one gated process remains.
+6. Release maintenance by redeploying the same exact candidate with `K3NCRYPT_MAINTENANCE_MODE=false` (or unset). During overlap the old process remains gate-on and rejects socket packets/writes; only the new process is gate-off/write-capable. Verify the old gated process terminates and only the candidate remains. If per-process environment states cannot be established, stop and keep maintenance enabled.
+7. Verify deployed SHA/deploy ID, one configured and one live backend process, `/api/health` and `/api/ready` HTTP 200, server/client four-flag agreement, legacy messages and encrypted attachment transfer. If Mux is later separately authorized, rebuild with the four matched flags and re-run Mux background delivery/reconnect tests. Observe FIFO warnings using [`M3_FIFO_HEAD_OBSERVABILITY.md`](./M3_FIFO_HEAD_OBSERVABILITY.md).
+8. Rollback: if the candidate is unhealthy, keep the gated instance(s) on and restore the last schema-compatible revision only while maintenance remains enabled. Do not route live conversations to two write-capable revisions. After migration, rollback to pre-migration code is not automatically safe; keep maintenance active until a compatible forward fix or verified backup restore is selected.
+
+## Hard stop conditions
+
+- Render shows multiple configured/autoscaled backend instances or a separate serving worker.
+- Old-process termination cannot be proven before migration.
+- A deploy overlap includes two processes that can accept Socket.IO mutations concurrently.
+- Direct-origin traffic bypasses maintenance or existing sockets still process application events.
+- Running and candidate maintenance states cannot be maintained as listed.
+- Any backup, restore, database preflight, migration, index, readiness, gate, or Alice/Bob/Carol acceptance check fails.
+
+The repository and Render do not provide a stop-before-start guarantee. This runbook depends on the process-local gate keeping all but one overlapping process non-write-capable. If the owner requires no two processes to exist at all, Render's documented default zero-downtime deploy does not meet that requirement; obtain approval for a stop-before-start method before deployment.
