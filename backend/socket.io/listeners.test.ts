@@ -117,6 +117,45 @@ it('rejects mailbox replay on an existing socket after durable revocation', asyn
   } finally { dbSpy.mockRestore(); deleteSpy.mockRestore(); }
 });
 
+it('schedules a lease-expiry retry when a mailbox replay is safely rejected before first-contact verification', async () => {
+  jest.useFakeTimers();
+  const handlers = new Map<string, (...args: any[]) => unknown>();
+  const channel = randomUUID(); const recipient = randomUUID(); const sender = randomUUID(); const deviceId = randomUUID();
+  const accountIdentityReference = 'mailbox-first-contact-test-account'; const socketId = randomUUID();
+  const message = { id: randomUUID(), timestamp: Date.now(), sender, envelope: { version: 2, strategy: 'opaque-test', data: { ciphertext: 'opaque' } }, mailbox: recipient, channel };
+  const emit = jest.fn((event: string, ...args: any[]) => {
+    if (event === 'chat-message') args.at(-1)?.({ accepted: false, outcome: 'retryable' });
+  });
+  const socket = { id: socketId, userID: recipient, channelID: channel, deviceId, accountIdentityReference, deviceTrustEpoch: 1,
+    connected: true, on: jest.fn((event: string, handler: (...args: any[]) => unknown) => { handlers.set(event, handler); }), emit, disconnect: jest.fn() } as unknown as CustomSocket;
+  const database = { collection: () => ({ findOne: async () => ({ deviceId, accountIdentityReference, trustEpoch: 1, state: 'active' }) }) };
+  const dbSpy = jest.spyOn(db, 'getDatabase').mockReturnValue(database as never);
+  const cleanupSpy = jest.spyOn(db, 'cleanupExpiredOfflineMessages').mockResolvedValue(undefined as never);
+  const claimSpy = jest.spyOn(db, 'claimOfflineMessage').mockResolvedValueOnce({ ...message, claimId: randomUUID() } as never).mockResolvedValueOnce(undefined);
+  const leaseSpy = jest.spyOn(db, 'offlineMessageClaimUntil').mockResolvedValue(new Date(Date.now() + 30_000));
+  const pendingSpy = jest.spyOn(db, 'countOfflineMessages').mockResolvedValue(1);
+  const authoritySpy = jest.spyOn(durableTrust, 'durableDeviceTrustAuthority').mockReturnValue({
+    verify: async () => ({ deviceId, accountIdentityReference, trustEpoch: 1, state: 'active' }),
+  } as never);
+  const clients = getClientInstance();
+  clients.setClientToChannel(recipient, channel, socketId);
+  try {
+    connectionListener(socket, { sockets: { sockets: new Map([[socketId, socket]]) } });
+    const replayAck = jest.fn();
+    await handlers.get('mailbox-replay')?.({}, replayAck);
+    expect(emit).toHaveBeenCalledWith('chat-message', expect.objectContaining({ id: message.id }), expect.any(Function));
+    expect(replayAck).toHaveBeenCalledWith({ status: 'accepted' });
+    expect(claimSpy).toHaveBeenCalledTimes(1);
+    expect(leaseSpy).toHaveBeenCalledWith(recipient, channel);
+    expect(pendingSpy).toHaveBeenCalledWith({ mailbox: recipient, channel });
+    expect(jest.getTimerCount()).toBeGreaterThan(0);
+  } finally {
+    clients.deleteClient(recipient, channel, socketId);
+    jest.useRealTimers();
+    dbSpy.mockRestore(); cleanupSpy.mockRestore(); claimSpy.mockRestore(); leaseSpy.mockRestore(); pendingSpy.mockRestore(); authoritySpy.mockRestore();
+  }
+});
+
 it('terminally rejects a claimed poison entry and continues replay to later accepted events', async () => {
   const channel = randomUUID(); const recipient = randomUUID(); const deviceId = randomUUID();
   const accountIdentityReference = 'mailbox-test-account';

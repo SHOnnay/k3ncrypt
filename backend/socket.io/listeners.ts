@@ -230,6 +230,23 @@ const connectionListener = (socket: CustomSocket, io) => {
     replayFailureCount += 1;
     scheduleReplay(delay);
   };
+  const schedulePendingReplay = async (): Promise<void> => {
+    if (!currentLegacyOwner(socket)) return;
+    const lease = await db.offlineMessageClaimUntil(socket.userID, socket.channelID);
+    const pending = await db.countOfflineMessages({ mailbox: socket.userID, channel: socket.channelID });
+    if (!pending) replayFailureCount = 0;
+    else if (lease) {
+      replayFailureCount = 0;
+      scheduleReplay(Math.max(250, lease.getTime() - Date.now() + 25));
+    } else scheduleBackoff();
+  };
+  const backoffAfterReplayFailure = async (): Promise<void> => {
+    const authorization = await boundDeviceAuthorization(socket).catch(() => 'unavailable' as const);
+    if (authorization === 'inactive') {
+      clients.deleteClient(socket.userID, socket.channelID, socket.id);
+      socket.disconnect(true);
+    } else scheduleBackoff();
+  };
   const requestReplay = (): void => {
     replayRequested = true;
     if (replayTimer) { clearTimeout(replayTimer); replayTimer = undefined; }
@@ -238,19 +255,10 @@ const connectionListener = (socket: CustomSocket, io) => {
     void (async () => {
       try {
         while (replayRequested && currentLegacyOwner(socket)) { replayRequested = false; await deliverOffline(socket, io); }
-        if (!currentLegacyOwner(socket)) return;
-        const lease = await db.offlineMessageClaimUntil(socket.userID, socket.channelID);
-        const pending = await db.countOfflineMessages({ mailbox: socket.userID, channel: socket.channelID });
-        if (!pending) replayFailureCount = 0;
-        else if (lease) { replayFailureCount = 0; scheduleReplay(Math.max(250, lease.getTime() - Date.now() + 25)); }
-        else if (pending) scheduleBackoff();
+        await schedulePendingReplay();
       } catch {
         // Transient storage/authorization failures do not imply acceptance. Retry with bounded backoff.
-        const authorization = await boundDeviceAuthorization(socket).catch(() => 'unavailable' as const);
-        if (authorization === 'inactive') {
-          clients.deleteClient(socket.userID, socket.channelID, socket.id);
-          socket.disconnect(true);
-        } else scheduleBackoff();
+        await backoffAfterReplayFailure();
       } finally {
         replayRunning = false;
         if (replayRequested && currentLegacyOwner(socket)) requestReplay();
@@ -368,8 +376,17 @@ const connectionListener = (socket: CustomSocket, io) => {
       ack({ error: 'Mailbox replay rejected.' });
       return;
     }
-    await deliverOffline(socket as CustomSocket, io);
-    ack({ status: 'accepted' });
+    try {
+      // Keep explicit replay requests on the same lease-aware retry path as wakeups.
+      // A first-contact delivery can be safely rejected before identity pinning; once
+      // the user confirms the peer, the durable row must be retried after its claim lease.
+      await deliverOffline(socket as CustomSocket, io);
+      await schedulePendingReplay();
+      ack({ status: 'accepted' });
+    } catch {
+      await backoffAfterReplayFailure();
+      ack({ error: 'Mailbox replay temporarily unavailable.' });
+    }
   });
 
   socket.on("chat-message", async (payload: { envelope: WireEnvelope; recipientRoutingId?: string } & ProofCarrier, ack: Ack = noop) => {
