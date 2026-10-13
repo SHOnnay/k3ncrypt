@@ -2,7 +2,6 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<!-- Approved K3NCRYPT chapter-based landing page. -->
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>K3ncrypt: private messages for exactly two people</title>
 <meta name="description" content="K3ncrypt is an experimental, open-source two-person messenger (beta). You invite one person, check it is really them, and talk.">
@@ -10,7 +9,7 @@
 <meta property="og:description" content="A name is easy to fake. See why checking matters.">
 <meta name="twitter:card" content="summary">
 <meta name="theme-color" content="#1f2fd8">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%231f2fd8'/%3E%3Ccircle cx='9' cy='16' r='4' fill='%23f1eee4'/%3E%3Ccircle cx='23' cy='16' r='4' fill='%23f1eee4'/%3E%3Cpath d='M13 16h6' stroke='%23f1eee4' stroke-width='2'/%3E%3C/svg%3E">
+<link rel="icon" type="image/svg+xml" sizes="any" href="./assets/k3ncrypt-appicon.svg?v=1">
 <style>
 :root{--tr:16vw;--cobalt:#1f2fd8;--cream:#f1eee4;--ink:#0b1035;--alert:#ff5a3c;
  --ease:cubic-bezier(.2,.8,.2,1);--dur:320ms;
@@ -69,7 +68,7 @@ h1,h2{font-weight:800;letter-spacing:-.05em;line-height:.88;margin:0}
 .c0{--tr:10vw}
 .c0 .halves{width:100%;justify-content:center}
 .c0 .halves span{flex:0 0 50%}
-.c0 .halves .l{text-align:right;color:color-mix(in srgb,var(--ink),var(--cream) min(100%,calc(var(--cu,0)*220%)))}.c0 .halves .r{text-align:left;color:var(--cream)}
+.c0 .halves .l{text-align:right}.c0 .halves .r{text-align:left}.c0 .halves span{color:color-mix(in srgb,var(--ink),var(--cream) min(100%,max(0%,calc((var(--cu,0) - .4)*200%))))}
 .c0 .thread b{background:var(--cream)}
 .c0 .tag{color:var(--cream)}
 @media (max-width:700px){
@@ -83,31 +82,24 @@ h1,h2{font-weight:800;letter-spacing:-.05em;line-height:.88;margin:0}
  .c0 .tag{color:var(--cream)}
 }
 /* Claim, doubt, and the question that Chapter 1 answers */
-/* Opening: dialogue across the seam. Both voices hug the cobalt spine; the question is the climax. */
-.open{--q:clamp(2.6rem,min(11.2vw,19.5vh),13rem);--lh:clamp(2.6rem,calc(var(--q)*.3),4.2rem)}
-.pnl{align-items:flex-end;padding:1rem clamp(1.2rem,4vw,4.5rem) 1rem 1rem;text-align:right}
-.pnr{align-items:flex-start;padding:1rem 1rem 1rem clamp(1.2rem,4vw,4.5rem)}
-.pnl .pc,.pnr .pc{justify-content:center}
-.grp{transform:translate3d(calc(var(--hk,0)*7vw),0,0)}.pnr .grp{transform:translate3d(calc(var(--hk,0)*-7vw),0,0)}
-.snd,.you{display:flex;align-items:center;height:var(--lh);margin:0;font:700 max(16px,clamp(.9rem,.75rem + .5vw,1.25rem))/1 var(--mono);letter-spacing:.14em;text-transform:uppercase}
-.snd{justify-content:flex-end}.you{opacity:.7}
-.pnl .snd .nm{font:inherit;letter-spacing:inherit;text-transform:inherit;text-align:right;color:inherit;transform:none;width:calc(var(--n,11)*(1ch + .14em) + 1em);max-width:100%;padding:.7em .1em;margin:-.7em 0;text-decoration:underline dotted;text-decoration-thickness:1px;text-underline-offset:.5em;text-decoration-color:rgba(11,16,53,.45);caret-color:var(--cobalt)}
-.pnl .snd .nm:focus,.pnl .snd .nm:focus-visible{outline:none;border-radius:0;text-decoration-style:solid;text-decoration-color:var(--cobalt);text-decoration-thickness:2px}
-.nm::placeholder{color:inherit;opacity:.45}
-.wd,.q{margin:0;font-family:var(--display);font-weight:800;letter-spacing:-.045em}
-.wd{font-size:calc(var(--q)*.6)}.q{font-size:var(--q)}
-.ln{display:flex;box-sizing:border-box;overflow:hidden;align-items:flex-end;height:calc(var(--q)*1.14);margin-bottom:calc(var(--q)*-.16);padding:0 .08em calc(var(--q)*.16)}
-.wd .ln{justify-content:flex-end}
-.ln>i{display:block;font-style:normal;line-height:.86;transition:transform .9s var(--ease)}
-.js .ln:not(.on)>i{transform:translateY(160%)}
-.sm{position:absolute;z-index:5;left:50%;top:0;bottom:0;width:clamp(10px,1.1vw,16px);margin-left:calc(clamp(10px,1.1vw,16px)/-2);background:var(--cobalt);opacity:calc(1 - var(--hk,0)*3)}
-@media (max-width:700px){
- .open{--q:clamp(3.2rem,min(25vw,13.5vh),7rem)}
- .pnl,.pnr{align-items:flex-start;text-align:left;padding:1rem 1.5rem}
- .pnl .pc{padding-top:3rem}.snd{justify-content:flex-start}.pnl .snd .nm{text-align:left}
- .wd .ln{justify-content:flex-start;height:calc(var(--q)*.74);margin-bottom:calc(var(--q)*-.1);padding-bottom:calc(var(--q)*.1)}.ln.gap{display:none}
- .grp{transform:translate3d(0,calc(var(--hk,0)*10svh),0)}.pnr .grp{transform:translate3d(0,calc(var(--hk,0)*-10svh),0)}
- .sm{left:0;right:0;top:50%;bottom:auto;width:auto;height:10px;margin:-5px 0 0}}
+/* Opening: one quiet page. A message arrives, the name keeps changing, the message never does. Then the mark. */
+.open{display:block;background:var(--cream);color:var(--ink);opacity:calc(1 - var(--cu,0))}
+.scene{position:absolute;inset:0;display:grid;place-items:center;padding:4.5rem 1.5rem 7vh;opacity:calc(1 - var(--hk,0)*2.6);transform:scale(calc(1 - var(--hk,0)*.05))}
+.col{display:flex;flex-direction:column;align-items:flex-start;--f:clamp(1.5rem,.8rem + min(2.4vw,4.2vh),3.2rem)}
+.msg{display:flex;flex-direction:column;align-items:flex-start;gap:.65rem;transition:opacity .7s var(--ease),transform .9s cubic-bezier(.2,1.25,.3,1)}
+.js .msg:not(.in){opacity:0;transform:translateY(22px) scale(.94)}
+.msg .bub{background:var(--ink);color:var(--cream);font-size:var(--f);margin:0}
+.who{display:block}
+.who .nm{display:inline-block;min-width:4ch;font:600 clamp(.95rem,.8rem + .35vw,1.2rem)/1.2 var(--sans);letter-spacing:0;text-align:left;width:auto;pointer-events:auto;cursor:text;color:inherit;padding:.6em 0;margin:-.6em 0;transform:none;outline:none;caret-color:var(--cobalt)}
+.who .nm.sw{animation:swp .45s var(--ease)}@keyframes swp{from{opacity:0;transform:translateY(.5em)}}
+.who .nm.edit{text-decoration:underline dotted;text-decoration-thickness:1px;text-underline-offset:.45em;text-decoration-color:rgba(11,16,53,.4)}
+.who .nm:focus{text-decoration:underline solid var(--cobalt);text-decoration-thickness:2px;text-underline-offset:.45em;outline:none}
+.who .nm.demo::after{content:"";display:inline-block;width:2px;height:1.05em;margin-left:2px;background:var(--cobalt);vertical-align:-.15em;animation:bl 1s steps(2) infinite}
+.who .nm:focus::after{display:none}
+.who .nm:empty:not(.demo)::before{content:"Your friend";opacity:.4}
+.but{margin:clamp(1.6rem,5vh,2.8rem) 0 0;font:500 clamp(1rem,.75rem + min(1vw,2vh),1.45rem)/1.3 var(--sans);opacity:.62;transition:opacity 1.2s var(--ease),transform 1.2s var(--ease)}
+.js .but:not(.in){opacity:0;transform:translateY(8px)}
+@media (max-width:700px){.col{--f:clamp(1.9rem,9vw,2.7rem)}.scene{padding:4.5rem 1.4rem 9vh}}
 .thread em{position:absolute;top:1.3rem;transform:translateX(-50%);font:700 1.15rem/1 var(--mono);font-style:normal;color:var(--cream);white-space:nowrap;opacity:calc(var(--p0,0)*2 - 1)}
 .thread .ta{left:calc(var(--p0,0)*var(--tr)*-1 + .7rem);transform:none}.thread .tb{left:calc(var(--p0,0)*var(--tr) - .7rem);transform:translateX(-100%)}
 @media (max-width:700px){.c0 .thread em{left:1.1rem;transform:translateY(-50%);top:auto}.c0 .thread .ta{top:calc(var(--p0,0)*var(--tr)*-1 + 1.5rem)}.c0 .thread .tb{top:calc(var(--p0,0)*var(--tr) - 1.5rem)}}
@@ -220,12 +212,11 @@ button:active{transform:scale(.96)}
 <script>document.documentElement.classList.add("js")</script>
 <section class="c0" id="c0" aria-label="Title">
   <div class="pin">
-    <div class="open">
-      <div class="pn pnl"><div class="pc"><div class="grp"><div class="snd"><label class="sr" for="nm">Name of the person writing to you</label><input class="nm" id="nm" value="Your friend" placeholder="Your friend" maxlength="16" autocomplete="off" autocapitalize="words" spellcheck="false"></div><p class="wd"><span class="ln" id="l1"><i>hey.</i></span><span class="ln" id="l2"><i>it's me.</i></span><span class="ln gap" aria-hidden="true"></span></p></div></div></div>
-      <div class="pn pnr" aria-hidden="true"><div class="pc"><div class="grp"><p class="you">you</p><p class="q"><span class="ln" id="q1"><i>how do</i></span><span class="ln" id="q2"><i>you</i></span><span class="ln" id="q3"><i>know?</i></span></p></div></div></div>
-      <i class="sm" aria-hidden="true"></i>
-    </div>
-    <p class="sr">Opening scene: someone who says they are your friend writes "hey." and "it's me." You answer: "how do you know?"</p>
+    <div class="open"><div class="scene" id="scene"><div class="col">
+      <div class="msg" id="msg"><div class="who"><span class="nm" id="nm" contenteditable="plaintext-only" role="textbox" aria-label="Sender name (you can edit it)" tabindex="0" spellcheck="false" autocapitalize="words">Your friend</span></div><p class="bub">hi, it’s me.</p></div>
+      <p class="but" id="but">But who’s actually there?</p>
+    </div></div></div>
+    <p class="sr">Opening scene: a message arrives, "hi, it's me." The sender's name keeps changing and the message never does. Then: "But who's actually there?"</p>
     <h1 class="halves"><span class="l">K3NC</span><span class="r">RYPT</span></h1>
     <div class="thread" aria-hidden="true"><b></b><i class="da"></i><i class="db"></i><em class="ta">you</em><em class="tb"><span data-n="c">Your friend</span>?</em></div>
     <p class="tag">Private messages for exactly two people. Open source. Beta.</p>
@@ -298,7 +289,7 @@ button:active{transform:scale(.96)}
     <div class="caps" id="caps5" aria-live="polite">
       <div><h2>Now you can just talk.</h2><p>Messages are encrypted on your phone before they leave. The relay delivers them, and that is all it does with the content.</p></div>
       <div><h2>The people you checked stay checked.</h2><p>An invitation connects you. It doesn't prove who someone is. Checking does, and your phone remembers.</p></div>
-      <div><h2>Then you can call them.</h2><p>Audio/video and secure files are implemented for verified contacts. Physical Web↔Android testing remains pending. Calls depend on your network and device.</p></div>
+      <div><h2>Then you can call them.</h2><p>Voice calls with verified contacts. How well they work depends on your network and device.</p></div>
       <div><h2>Your phone stays yours.</h2><p>The app unlocks on your phone with your device passphrase. Keep it private: a compromised phone can expose what's on it.</p></div>
       <div><h2>Nothing hidden.</h2><p>K3ncrypt is open source under Apache-2.0. Read it, run it, question it.</p></div>
     </div>
@@ -312,8 +303,8 @@ button:active{transform:scale(.96)}
 
 <section class="c6b" id="get" aria-labelledby="c6t">
   <h2 id="c6t">Can I try it? Yes. It's a beta.</h2>
-  <a class="dl" href="https://github.com/SHOnnay/k3ncrypt/releases">View official release artifacts</a>
-  <p class="meta">Upcoming personal beta: signed release and physical media/file validation pending. Older artifacts may predate current source.</p>
+  <a class="dl" href="https://github.com/SHOnnay/k3ncrypt/releases/download/v0.1-beta/K3NCRYPT-v0.1-beta.apk">Download the Android beta</a>
+  <p class="meta">K3NCRYPT-v0.1-beta.apk, from the official GitHub release.</p>
   <p><a class="alt" href="https://k3ncrypt.onrender.com/">Open the web version</a><a class="alt" href="https://github.com/SHOnnay/k3ncrypt">Read the source</a></p>
   <p class="meta">Desktop apps for Linux and Mac are coming. They aren't available yet.</p>
   <ol class="steps3">
@@ -327,7 +318,7 @@ button:active{transform:scale(.96)}
     <div><h3>Where it comes from</h3><p>K3ncrypt grows out of <a href="https://github.com/muke1908/chat-e2ee">muke1908/chat-e2ee</a> and keeps that project's history and required notices.</p><p>Open source under Apache-2.0. <a href="https://github.com/SHOnnay/k3ncrypt">Read the source</a>.</p></div>
   </div>
 </section>
-<div class="honest"><p>No fonts, scripts or trackers load from other servers, and this page sets no cookies.</p></div>
+<div class="honest"><p>K3NCRYPT is open source under Apache-2.0. <a href="https://github.com/SHOnnay/k3ncrypt">Read the source</a> and <a href="https://github.com/SHOnnay/k3ncrypt/security">security policy</a>. No fonts, scripts or trackers load from other servers, and this page sets no cookies.</p></div>
 
 <script>
 /* Scroll position picks a beat; CSS does the moving. */
@@ -403,16 +394,27 @@ else{$i('s3').onclick=send;$i('t3').addEventListener('keydown',e=>{if(e.key==='E
   $i('m3').onclick=async e=>{D.mitm=!D.mitm;e.currentTarget.setAttribute('aria-pressed',D.mitm);e.currentTarget.textContent=D.mitm?'Take them out':'Put someone in the middle';
     D.send=null;await session();$i('r3').textContent='...';$i('w3').textContent='(send a message)';navigator.vibrate&&D.mitm&&navigator.vibrate(30)};
   new IntersectionObserver((e,o)=>{if(e[0].isIntersecting){o.disconnect();session()}}).observe($i('c3'))}
-/* Chapter 0: dialogue across the seam. The name is typography you can edit. */
-const nm=$('#nm'),L=['#l1','#l2','#q1','#q2','#q3'].map(x=>$(x)),sleep=ms=>new Promise(r=>setTimeout(r,ms));let skip=false;
-const size=()=>nm.style.setProperty('--n',Math.max(4,nm.value.length||11));
-const applyNames=()=>{const v=nm.value.trim();who=v&&!['your friend','a friend'].includes(v.toLowerCase())?v:'your friend';document.querySelectorAll('[data-n]').forEach(e=>{const m=e.dataset.n;e.textContent=m==='c'?up(who):m==='u'?who.toUpperCase():who});document.querySelectorAll('[data-ni]').forEach(e=>e.textContent=(who==='your friend'?'F':who[0]).toUpperCase())};
-function final(){skip=true;L.forEach(e=>e.classList.add('on'))}
-async function film(){for(const [i,ms] of [[0,300],[1,420],[2,700],[3,150],[4,150]]){await sleep(ms);if(skip)return;L[i].classList.add('on')}}
-nm.addEventListener('input',()=>{size();applyNames();apply()});
-nm.addEventListener('focus',()=>setTimeout(()=>{if(nm.value==='Your friend')nm.select()},0));
+/* Chapter 0: the message stays the same while the name changes. Then the question, then the mark. */
+const nm=$('#nm'),msg=$('#msg'),but=$('#but'),sleep=ms=>new Promise(r=>setTimeout(r,ms));let skip=false,live=false,fresh=true;
+if(nm.contentEditable!=='plaintext-only')nm.contentEditable='true';
+const lab=t=>{nm.textContent=t;nm.classList.remove('sw');void nm.offsetWidth;nm.classList.add('sw')};
+const applyNames=()=>{const v=nm.textContent.trim();who=v&&!['your friend','a friend','anyone'].includes(v.toLowerCase())?v:'your friend';document.querySelectorAll('[data-n]').forEach(e=>{const m=e.dataset.n;e.textContent=m==='c'?up(who):m==='u'?who.toUpperCase():who});document.querySelectorAll('[data-ni]').forEach(e=>e.textContent=(who==='your friend'?'F':who[0]).toUpperCase())};
+const selAll=()=>{const r=document.createRange();r.selectNodeContents(nm);const s=getSelection();s.removeAllRanges();s.addRange(r)};
+function reveal(){skip=true;msg.classList.add('in');but.classList.add('in');nm.classList.remove('demo');nm.classList.add('edit')}
+function final(){reveal();if(!live)nm.textContent='Anyone'}
+async function film(){
+ await sleep(800);if(skip)return;msg.classList.add('in');
+ await sleep(1300);for(const t of['Alex','Sam','Dad','You','Alex']){if(skip)return;lab(t);await sleep(480)}
+ if(skip)return;nm.classList.add('demo','edit');await sleep(600);
+ while(nm.textContent.length&&!skip){nm.textContent=nm.textContent.slice(0,-1);await sleep(100)}
+ for(const c of'Anyone'){if(skip)return;nm.textContent+=c;await sleep(90)}
+ await sleep(1100);if(skip)return;but.classList.add('in');nm.classList.remove('demo')}
+nm.addEventListener('focus',()=>{fresh=true;reveal();if(!live)nm.textContent='Your friend';selAll();setTimeout(()=>{if(fresh)selAll()},0)});
+nm.addEventListener('input',()=>{fresh=false;live=true;reveal();const t=nm.textContent.replace(/\n/g,'');if(t.length>16){nm.textContent=t.slice(0,16);selAll();getSelection().collapseToEnd()}applyNames();apply()});
+nm.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();nm.blur()}});
+nm.addEventListener('paste',e=>{e.preventDefault();document.execCommand('insertText',false,(e.clipboardData.getData('text')||'').replace(/\s+/g,' ').slice(0,16))});
 addEventListener('scroll',()=>{if(!skip&&prog(c0)>.04)final()},{passive:true});
-size();applyNames();RM?final():film();
+RM?final():film();
 apply();
 })();
 </script>
