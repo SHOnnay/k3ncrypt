@@ -17,7 +17,7 @@ These capabilities are implemented and have software-test coverage. Local Web ac
 | Audio and video calls | Implemented for supported Web flows and verified contacts. Calls use WebRTC; no default STUN/TURN service is bundled, so calls can fail across some networks and direct ICE can reveal network addresses to the peer. |
 | Encrypted files | Protected file transfer is implemented, including explicit Send, authenticated encrypted chunks and recipient checks. Web Beta transfers are limited to 8 MiB and expire; see the [file-transfer report](docs/MAIN_FILE_TRANSFER_IMPLEMENTATION_REPORT.md). |
 | Local encrypted vault | The Web client encrypts protected records at rest and requires the user to unlock with their passphrase. There is no server-side passphrase recovery. |
-| Android client | Android source and software tests are included. Signed personal-beta artifacts and physical Web↔Android call/file interoperability remain pending. |
+| Android client | A private-beta APK is available: [K3NCRYPT for Android — Beta (0.1.0-beta.5)](https://github.com/SHOnnay/k3ncrypt/releases/download/v0.1-beta/K3NCRYPT-Main-Android-Beta-5.apk). Beta 5 updates the available Beta 4 build in place, but not the original Beta 1 build because it uses a different signing key. Physical Web↔Android call/file interoperability remains pending. |
 
 ### Experimental or not available
 
@@ -116,7 +116,7 @@ Production rollout requires an owner-operated maintenance window, verified backu
 - The beta is not independently security-certified; automated or local tests are not proof of absence of vulnerabilities.
 - Modern identity authenticity still depends on users comparing fingerprints through another trusted channel.
 - Legacy invite-based sessions do not provide forward secrecy or post-compromise recovery.
-- Web↔Android physical messaging, call-media and file-transfer interoperability has not completed its release gate; current Android signing/publication gates are also pending.
+- Web↔Android physical messaging, call-media and file-transfer interoperability has not completed its release gate. Beta 5 cannot update original Beta 1 installations in place because their APK signing certificates differ; users who need their local vault data must not uninstall Beta 1.
 - Calls may fail behind NAT/firewalls without a working operator-configured TURN service. Android calls are foreground-only and do not survive process death.
 - Browser storage, installed extensions, same-origin compromise and endpoint compromise remain security boundaries users must account for.
 - Group conversations, dependable push/background calling and anonymous routing are not currently implemented.
