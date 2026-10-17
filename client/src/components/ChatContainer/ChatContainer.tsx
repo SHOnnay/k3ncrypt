@@ -13,6 +13,8 @@ import { Button } from '../common/Button';
 import { PlusIcon } from '../common/icons';
 import { copy } from '../../content/copy';
 import { callStartFailureMessage, terminalCallStatusMessage } from '../../calls/callLaunchReadiness';
+import { emptyStateOpenStatus } from '../../product/conversationOpenCopy';
+import { contactDisplayName } from '../../content/copy';
 
 interface ChatContainerProps {
   isHidden: boolean;
@@ -21,7 +23,7 @@ interface ChatContainerProps {
 }
 
 export const ChatContainer: React.FC<ChatContainerProps> = ({ isHidden, onNewConversation, onVerifyContact }) => {
-  const { startCall, startVideoCall, callLifecycleState, callError: remoteCallError, conversations, channelHash, protocolMode } = useChat();
+  const { startCall, startVideoCall, callLifecycleState, callError: remoteCallError, conversations, channelHash, protocolMode, pendingConversation, conversationOpenError } = useChat();
   const [isStartingCall, setIsStartingCall] = useState<boolean>(false);
   const [callError, setCallError] = useState('');
   const isCallBusy = ['initiating', 'ringing', 'incoming', 'connecting', 'connected', 'ending'].includes(callLifecycleState);
@@ -31,11 +33,16 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ isHidden, onNewCon
 
   if (!hasActiveConversation) {
     const hasContacts = conversations.length > 0;
+    const openStatus = emptyStateOpenStatus({ pending: pendingConversation, error: conversationOpenError }, (roomId) => {
+      const item = conversations.find((conversation) => conversation.roomId === roomId);
+      return contactDisplayName(item?.label, roomId, item?.remoteDisplayName, item?.localNickname);
+    });
     return <main className={`chat-empty-page ${isHidden ? 'hidden' : ''}`} aria-label="Chats">
       <div className="chat-empty-card">
         <span className="chat-empty-mark" aria-hidden="true"><img src="/branding/k3ncrypt-cluster-white.svg" alt="" /></span>
         <h1>{hasContacts ? 'Choose a conversation' : copy.contactsEmpty.title}</h1>
         <p>{hasContacts ? 'Select a saved contact from the list to open your conversation.' : copy.contactsEmpty.description}</p>
+        {openStatus && <p className={`chat-empty-open-status chat-empty-open-status--${openStatus.kind}`} role={openStatus.kind === 'failed' ? 'alert' : 'status'} aria-live="polite">{openStatus.text}</p>}
         {!hasContacts && <Button variant="primary" onClick={onNewConversation}><PlusIcon size={17} /> Create or join an invitation</Button>}
       </div>
     </main>;

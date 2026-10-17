@@ -5,6 +5,7 @@ import { ApprovedIcon } from '../common/ApprovedIcon';
 import { Avatar } from '../common/Avatar';
 import { contactDisplayName, copy } from '../../content/copy';
 import { classifySidebarConversations, conversationStateCopy } from '../../product/conversationEligibility';
+import { conversationRowOpenStatus } from '../../product/conversationOpenCopy';
 import './AppShell.css';
 
 interface SidebarProps {
@@ -23,7 +24,7 @@ const formatSidebarTime = (date?: Date): string => {
 };
 
 export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection, onNavigate, onNewConversation, onOpenConversation, onOpenSettings, settingsOpen = false }) => {
-  const { channelHash, messages, conversations, syncStatus, sessionHealth, profileDisplayName, protocolMode, accountState, unavailableConversations = [], orphanedConversationRecords, setPendingInvitationDismissed } = useChat();
+  const { channelHash, messages, conversations, syncStatus, sessionHealth, profileDisplayName, protocolMode, accountState, unavailableConversations = [], orphanedConversationRecords, setPendingInvitationDismissed, pendingConversation, conversationOpenError } = useChat();
   const latest = messages.at(-1);
   const groups = classifySidebarConversations(conversations, unavailableConversations);
   const displayName = (conversation: typeof conversations[number]) => contactDisplayName(conversation.label, conversation.roomId, conversation.remoteDisplayName, conversation.localNickname);
@@ -64,12 +65,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection
         <p className="section-label" id="sidebar-chats-heading">Chats</p>
         {groups.chats.map((conversation) => {
           const diagnostic = unavailableConversations.find(item => item.roomId === conversation.roomId);
+          const openStatus = conversationRowOpenStatus(conversation.roomId, { pending: pendingConversation, error: conversationOpenError });
+          const isActive = !isWelcomeActive && channelHash === conversation.roomId;
           return (
-          <button key={conversation.roomId} className={`conversation-row ${!isWelcomeActive && channelHash === conversation.roomId ? 'active' : ''}`} type="button" onClick={() => onOpenConversation(conversation.roomId)}>
+          <button key={conversation.roomId} className={`conversation-row ${isActive ? 'active' : ''}`} type="button" aria-current={isActive ? 'true' : undefined} aria-busy={pendingConversation?.roomId === conversation.roomId ? true : undefined} onClick={() => onOpenConversation(conversation.roomId)}>
             <Avatar label={displayName(conversation)} size="medium" />
             <span className="conversation-copy">
               <span className="conversation-name-row"><span className="conversation-name">{displayName(conversation)}</span><time>{channelHash === conversation.roomId ? formatSidebarTime(latest?.timestamp) : ''}</time></span>
-              <span className="conversation-preview">{diagnostic ? conversationStateCopy(diagnostic) : conversation.bootstrapState === 'PENDING_REMOTE' || conversation.bootstrapState === 'PENDING_LOCAL' || conversation.relationship === 'invitation' && !conversation.remoteAddress ? 'Waiting for contact to accept' : conversation.bootstrapState === 'FAILED_OR_UNSUPPORTED' ? 'Invitation needs a compatible link' : channelHash === conversation.roomId && protocolMode === 'modern' && sessionHealth !== 'healthy' ? 'Review connection' : channelHash === conversation.roomId && latest?.text ? latest.text : syncStatus === 'blocked' ? 'Review connection' : channelHash === conversation.roomId ? 'Conversation open' : 'Saved on this device'}</span>
+              <span className="conversation-preview">{openStatus ?? (diagnostic ? conversationStateCopy(diagnostic) : conversation.bootstrapState === 'PENDING_REMOTE' || conversation.bootstrapState === 'PENDING_LOCAL' || conversation.relationship === 'invitation' && !conversation.remoteAddress ? 'Waiting for contact to accept' : conversation.bootstrapState === 'FAILED_OR_UNSUPPORTED' ? 'Invitation needs a compatible link' : channelHash === conversation.roomId && protocolMode === 'modern' && sessionHealth !== 'healthy' ? 'Review connection' : channelHash === conversation.roomId && latest?.text ? latest.text : syncStatus === 'blocked' ? 'Review connection' : channelHash === conversation.roomId ? 'Conversation open' : 'Saved on this device')}</span>
             </span>
           </button>
         ); })}

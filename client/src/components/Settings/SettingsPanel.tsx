@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { useModalKeyboard } from '../../hooks/useModalKeyboard';
 import { VerificationPanel } from './VerificationPanel';
 import { contactDisplayName } from '../../content/copy';
 import { useChat } from '../../context/ChatContext';
@@ -73,11 +74,14 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, initialVie
     }
   }, [isOpen]);
 
+  const panelRef = useRef<HTMLElement>(null);
+  useModalKeyboard(isOpen, panelRef, onClose);
+
   if (!isOpen) return null;
 
   return (
     <div className="settings-scrim" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <aside className="settings-panel" aria-label={viewTitles[view]}>
+      <aside className="settings-panel" ref={panelRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={viewTitles[view]}>
         <header className="settings-panel__header">
           {view !== 'settings' ? (
             <button className="quiet-icon-button" type="button" onClick={() => setView('settings')} aria-label="Back to settings"><ArrowLeftIcon size={19} /></button>
