@@ -3,10 +3,13 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'crypto';
 import db from '../../db';
 import { PREKEY_COLLECTION } from '../../db/const';
 import asyncHandler from '../../middleware/asyncHandler';
-import { controlRateLimit } from '../../middleware/controlRateLimit';
+import { controlRateLimit, createControlRateLimit } from '../../middleware/controlRateLimit';
 import { authorizeRoomControl, isValidControlCapability, isValidRoomId, readControlCapability } from '../../security/controlCapability';
 
 const router = express.Router({ mergeParams: true });
+// Read-only pin checks happen for every protected-file chunk. Keep the burst bounded
+// and match the existing aggregate API refill budget; mutation limits stay stricter.
+export const prekeyReadRateLimit = createControlRateLimit(20, 2);
 const MAX_BUNDLE_BYTES = 32 * 1024;
 const MAX_KEYS = 100;
 export const PREKEY_BUNDLE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -72,7 +75,7 @@ router.post('/', controlRateLimit, asyncHandler(async (req, res) => {
   return res.status(201).send({ address, renewalProof });
 }));
 
-router.get('/:address', controlRateLimit, asyncHandler(async (req, res) => {
+router.get('/:address', prekeyReadRateLimit, asyncHandler(async (req, res) => {
   if (!ready()) return res.status(503).send({ error: 'Modern pre-key storage is unavailable' });
   db.cleanupExpiredPrekeyBundles();
   const { channel, address } = req.params;
