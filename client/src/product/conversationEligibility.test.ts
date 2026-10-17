@@ -267,3 +267,9 @@ it('does not apply delayed terminal observations after selection, identity, desc
     expect(terminal).not.toHaveBeenCalled();
   }
 });
+
+it('does not start a probe already superseded before dispatch', async () => {
+  const probe=jest.fn(async()=> 'CONVERSATION_ROOM_MISSING' as const);
+  await observeAuthoritativeRoomState(descriptor,probe,jest.fn(),()=>false);
+  expect(probe).not.toHaveBeenCalled();
+});

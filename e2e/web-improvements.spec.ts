@@ -163,3 +163,12 @@ test('late failure and completion cannot change a new room or a newly unlocked i
   await page.evaluate(()=>(window as any).__ui.pending.shift().resolve());
   await expect(input).toHaveValue('new identity draft');
 });
+
+test('returning to a room with an in-flight send does not send its retained draft twice', async ({page}) => {
+  await fixture(page);const input=page.locator('#msg-input');await input.fill('one send');await input.press('Enter');
+  await update(page,{channelHash:'b'});await update(page,{channelHash:'a'});
+  await expect(input).toHaveValue('one send');await expect(input).toHaveAttribute('readonly','');
+  await input.press('Enter');expect(await page.evaluate(()=>(window as any).__ui.sends.length)).toBe(1);
+  await page.evaluate(()=>(window as any).__ui.pending.shift().resolve());
+  await expect(input).toHaveValue('');await expect(input).not.toHaveAttribute('readonly','');
+});

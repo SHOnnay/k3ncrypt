@@ -977,12 +977,11 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const descriptor = conversations.find((item) => item.roomId === roomId);
       if (!descriptor) throw new Error('Conversation is unavailable.');
       // Local-only eligibility: opening a saved conversation must not wait on (or fail because of) a
-      // cold or unreachable server. Authoritative expiry/deletion is observed beside the connection.
+      // cold or unreachable server. Terminal status is observed only if admission fails.
       const failure = await conversationEligibility(vault, descriptor);
       if (failure) throw conversationFailure(failure);
       conversationOpenStage('eligible');
       const observation = new AbortController(); roomObservation.current = observation;
-      let openingFailed = false;
       const currentObservation = () => historyVault.current === vault && roomObservationCurrent(
         { operation: operationId, scope: plaintextSession, descriptor },
         { operation: conversationOpenGeneration.current, scope: plaintextSessionRef.current,
@@ -990,24 +989,19 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           aborted: observation.signal.aborted, connected: roomStatesRef.current[roomId]?.connection === 'connected' },
       );
       const applyTerminal = (code: SafeDiagnosticCode) => {
-        if (!openingFailed || !currentObservation()) return;
+        if (!currentObservation()) return;
         setUnavailableConversations(current => [...current.filter(item => item.roomId !== roomId), conversationDiagnostic(descriptor, code)]);
         setRoomState(roomId, { connection: 'failed' });
         setConversations(current => current.filter(item => item.roomId !== roomId));
         setConversationOpenError({ roomId, operationId, code });
       };
-      let terminalCode: SafeDiagnosticCode | undefined;
-      void observeAuthoritativeRoomState(descriptor, item => probeConversationRoom(item, observation.signal), code => {
-        terminalCode = code; applyTerminal(code);
-      }, currentObservation);
       try {
         await connectModern(vault, descriptor, false, operationId);
-        // Authenticated admission wins over an earlier status observation.
+        // Authenticated admission is authoritative; no status query is needed on success.
         observation.abort();
       } catch (error) {
-        openingFailed = true;
-        // Queue after the ordinary failure projection, but never after a newer selection/admission.
-        if (terminalCode) queueMicrotask(() => applyTerminal(terminalCode!));
+        // Failure diagnostics run off the opening path. They cannot revoke a newer admission.
+        void observeAuthoritativeRoomState(descriptor, item => probeConversationRoom(item, observation.signal), applyTerminal, currentObservation);
         throw error;
       }
       conversationOpenStage('connected');

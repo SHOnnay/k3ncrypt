@@ -129,7 +129,7 @@ export async function diagnoseOrphanedConversationRecords(storage: ProductSecure
 /**
  * Opening a saved conversation must never wait on the network. Local eligibility (identity, pinned
  * contact, session records) decides whether it may open; the room-status probe only reports
- * authoritative expiry/deletion. It runs beside the connection attempt and calls back solely for
+ * authoritative expiry/deletion. It runs after a failed connection attempt and calls back solely for
  * terminal results. Offline, waking-server, 503 and 401/403 outcomes are not terminal here: the
  * authenticated connection step enforces its own admission and reports its own failure.
  */
@@ -140,6 +140,7 @@ export async function observeAuthoritativeRoomState(
   isCurrent: () => boolean = () => true,
 ): Promise<void> {
   try {
+    if (!isCurrent()) return;
     const code = await probe(descriptor);
     if (code && authoritativeTerminal(code) && isCurrent()) onTerminal(code);
   } catch { /* Best-effort observation only. */ }

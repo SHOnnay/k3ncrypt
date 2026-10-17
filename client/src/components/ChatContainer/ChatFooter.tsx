@@ -2,7 +2,7 @@
  * Chat footer component (message input)
  */
 
-import React, { useEffect, useLayoutEffect, useState, useRef } from 'react';
+import React, { useEffect, useLayoutEffect, useState, useRef, useSyncExternalStore } from 'react';
 import { useChat } from '../../context/ChatContext';
 import { Button } from '../common/Button';
 import { MicIcon, PaperclipIcon, SendIcon } from '../common/icons';
@@ -39,15 +39,16 @@ const RoomComposer: React.FC<{ onVerifyContact: () => void; drafts: ComposerDraf
   const transferStatus = fileTransferCopy(transfer);
   const busy = transferStatus.active;
   const verified = contactIdentity?.verification === 'verified' && contactIdentity.changeStatus === 'unchanged';
-  const [, refreshDraft] = useState(0);
+  useSyncExternalStore(drafts.subscribe, drafts.snapshot, drafts.snapshot);
   const message = drafts.get(channelHash);
-  const setMessage = (text: string) => { drafts.set(channelHash, text); refreshDraft(n => n + 1); };
+  const setMessage = (text: string) => { drafts.set(channelHash, text); };
   const mounted = useRef(false);
   const sending = useRef(false);
   const currentScope = useRef(plaintextSession); currentScope.current = plaintextSession;
   const current = () => mounted.current && scope?.isCurrent() === true && currentScope.current === scope && drafts.boundTo(scope);
   useLayoutEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  const [isSending, setIsSending] = useState<boolean>(false);
+  const [localSending, setIsSending] = useState<boolean>(false);
+  const isSending = localSending || drafts.isSending(channelHash);
   const [attachmentDraft, setAttachmentDraft] = useState<{ file: File; roomId: string; image: boolean }>();
   const [attachmentPreviewUrl, setAttachmentPreviewUrl] = useState<string>();
   const attachmentSendLock = useRef(false);
@@ -113,6 +114,8 @@ const RoomComposer: React.FC<{ onVerifyContact: () => void; drafts: ComposerDraf
     }
 
     const sendingRoom = channelHash;
+    const ticket = drafts.beginSend(sendingRoom, scope);
+    if (!ticket) return;
     sending.current = true;
     const sentText = message;
     try {
@@ -121,7 +124,6 @@ const RoomComposer: React.FC<{ onVerifyContact: () => void; drafts: ComposerDraf
       await sendMessage(sentText);
       // Clear only the draft of the room the text was sent from, and only if it was not edited meanwhile.
       if (drafts.boundTo(scope)) drafts.clearIfUnchanged(sendingRoom, sentText);
-      if (current()) refreshDraft(n => n + 1);
     } catch (err) {
       if (!current()) return;
       debugError('Message send failed', err);
@@ -130,6 +132,7 @@ const RoomComposer: React.FC<{ onVerifyContact: () => void; drafts: ComposerDraf
         ? message
         : 'Couldn’t confirm this message was sent. Your draft is retained. Check its status before retrying; if the chat offers Retry, use that or this draft, not both.');
     } finally {
+      drafts.endSend(sendingRoom, ticket, scope);
       sending.current = false;
       if (current()) setIsSending(false);
       // The composer stays focusable while sending (read-only, not disabled), so keyboard users can

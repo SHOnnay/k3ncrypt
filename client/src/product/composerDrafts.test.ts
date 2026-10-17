@@ -52,3 +52,11 @@ it('clears plaintext on lock/identity change and rejects an old session completi
   expect(drafts.boundTo(first)).toBe(false);
   expect(drafts.get('a')).toBe('new identity');
 });
+
+it('keeps a per-room send fence across remounts and rejects stale completion after identity change', () => {
+  const drafts=new ComposerDrafts(),scope={};drafts.bind(scope);
+  const ticket=drafts.beginSend('a',scope)!;expect(drafts.isSending('a')).toBe(true);
+  expect(drafts.beginSend('a',scope)).toBeUndefined();expect(drafts.beginSend('b',scope)).toBeDefined();
+  drafts.endSend('a',ticket,scope);expect(drafts.isSending('a')).toBe(false);
+  drafts.bind({});drafts.endSend('b',ticket,scope);expect(drafts.isSending('b')).toBe(false);
+});
