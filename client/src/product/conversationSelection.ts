@@ -6,3 +6,14 @@ export class ConversationSelection {
     this.queue = next; return next;
   }
 }
+
+/** Load room-bound UI data first; a superseded load must not partially project a room. */
+export async function commitPreparedSelection<T>(
+  load: () => Promise<T>, current: () => boolean, commit: (value: T) => void,
+): Promise<T> {
+  const value = await load();
+  if (!current()) throw new Error('Conversation open was superseded.');
+  // No asynchronous boundary between the fence and the UI projection.
+  commit(value);
+  return value;
+}

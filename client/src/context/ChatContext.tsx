@@ -1,6 +1,6 @@
 import { enrichInvitationExpiries } from '../product/invitationExpiryEnrichment';
 import { probeConversationRoom, probeInvitationExpiry } from '../product/conversationRoom';
-import { ConversationSelection } from '../product/conversationSelection';
+import { ConversationSelection, commitPreparedSelection } from '../product/conversationSelection';
 import { authoritativeTerminal, conversationDiagnostic, conversationEligibility, conversationFailure, diagnoseOrphanedConversationRecords, observeAuthoritativeRoomState, readConversationIndex, roomObservationCurrent, type ConversationDiagnostic } from '../product/conversationEligibility';
 import { classifySafeDiagnostic, type SafeDiagnosticCode } from '../product/safeDiagnostics';
 import { LocalCallHistory } from '../product/callHistory';
@@ -505,22 +505,32 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const existing = selected ?? roomStatesRef.current[descriptor.roomId]?.conversation;
       const details = muxDetails.current.get(descriptor.roomId);
       if (existing && details && await muxEligible(secureVault, descriptor, sendJoinIntroduction)) {
-        callConversationRooms.current.set(existing, descriptor.roomId);
-        selectedConversation.current = existing;
-        setRoomState(descriptor.roomId, { conversation: existing, connection: 'connected', contactIdentity: await existing.getContact() });
-        setRoomMessages(descriptor.roomId, await readMessages(secureVault, descriptor.roomId));
-        modernProjection.setModern(existing); modernProjection.setChannelHash(descriptor.roomId); modernProjection.setProtocolMode('modern'); modernProjection.setOwnFingerprint(details.ownFingerprint); modernProjection.setUserId(details.ownAddress);
-        modernProjection.setContactIdentity(await existing.getContact()); modernProjection.setDeviceLifecycleState(await existing.getDeviceLifecycleState());
-        const health = existing.getSessionHealth(); const trust = await existing.getDeviceTrust();
-        modernProjection.setSessionHealth(health); modernProjection.setSyncStatus(health !== 'healthy' ? 'blocked' : trust === 'trusted' ? 'ready' : 'blocked'); modernProjection.setIsConnected(true);
-        if (!callActiveRef.current) {
-          modernCallCompositionRef.current = null;
-          modernCallIdRef.current = undefined;
-          activeCallRoomIdRef.current = undefined;
-          modernProjection.setModernCallComposition(null); modernProjection.setModernCallId(undefined);
-          setActiveCallRoomId(undefined);
-        }
-        const restored = await existing.getContact();
+        const prepared = await commitPreparedSelection(async () => ({
+          history: await readMessages(secureVault, descriptor.roomId),
+          lifecycle: await existing.getDeviceLifecycleState(),
+          trust: await existing.getDeviceTrust(),
+          contact: await existing.getContact(),
+        }), () => !secureVault.isLocked() && historyVault.current === secureVault &&
+          (operationId === undefined || conversationOpenGeneration.current === operationId) &&
+          muxRoomIds.current.has(descriptor.roomId) && muxDetails.current.get(descriptor.roomId) === details,
+        ({ history, lifecycle, trust, contact }) => {
+          callConversationRooms.current.set(existing, descriptor.roomId);
+          selectedConversation.current = existing;
+          setRoomState(descriptor.roomId, { conversation: existing, connection: 'connected', contactIdentity: contact });
+          setRoomMessages(descriptor.roomId, history);
+          modernProjection.setModern(existing); modernProjection.setChannelHash(descriptor.roomId); modernProjection.setProtocolMode('modern'); modernProjection.setOwnFingerprint(details.ownFingerprint); modernProjection.setUserId(details.ownAddress);
+          modernProjection.setContactIdentity(contact); modernProjection.setDeviceLifecycleState(lifecycle);
+          const health = existing.getSessionHealth();
+          modernProjection.setSessionHealth(health); modernProjection.setSyncStatus(health !== 'healthy' ? 'blocked' : trust === 'trusted' ? 'ready' : 'blocked'); modernProjection.setIsConnected(true);
+          if (!callActiveRef.current) {
+            modernCallCompositionRef.current = null;
+            modernCallIdRef.current = undefined;
+            activeCallRoomIdRef.current = undefined;
+            modernProjection.setModernCallComposition(null); modernProjection.setModernCallId(undefined);
+            setActiveCallRoomId(undefined);
+          }
+        });
+        const restored = prepared.contact;
         if (existing.hasEstablishedSession() && restored?.verification === 'verified' && restored.changeStatus === 'unchanged') await ensureModernCallReceiver(existing);
         return details;
       }
