@@ -34,8 +34,10 @@ export async function probeInvitationExpiry(descriptor: ConversationDescriptor):
 }
 
 /** Only authoritative room states quarantine. Offline availability is not corruption. */
-export async function probeConversationRoom(descriptor: ConversationDescriptor): Promise<SafeDiagnosticCode | undefined> {
+export async function probeConversationRoom(descriptor: ConversationDescriptor, signal?: AbortSignal): Promise<SafeDiagnosticCode | undefined> {
   const controller = new AbortController();
+  const abort = () => controller.abort();
+  if (signal?.aborted) controller.abort(); else signal?.addEventListener('abort', abort, { once: true });
   const timeout = setTimeout(() => controller.abort(), 10000);
   try {
     const response = await rateLimitedRequest(() => fetch(`${getRuntimeConfig().baseUrl ?? ''}/api/chat-link/status/${encodeURIComponent(descriptor.roomId)}`, { signal: controller.signal, headers: { 'X-K3ncrypt-Control-Capability': descriptor.controlCapability } }), controller.signal);
@@ -53,5 +55,5 @@ export async function probeConversationRoom(descriptor: ConversationDescriptor):
     if (!body || typeof body !== 'object' || !('state' in body)) return undefined;
     return body.state === 'EXPIRED' ? 'CONVERSATION_INVITATION_EXPIRED' : body.state === 'DELETED' || body.state === 'NOT_FOUND' ? 'CONVERSATION_ROOM_MISSING' : undefined;
   } catch { return 'NETWORK_FAILURE'; }
-  finally { clearTimeout(timeout); }
+  finally { clearTimeout(timeout); signal?.removeEventListener('abort', abort); }
 }

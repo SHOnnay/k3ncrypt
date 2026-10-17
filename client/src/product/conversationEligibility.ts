@@ -125,3 +125,31 @@ export async function diagnoseOrphanedConversationRecords(storage: ProductSecure
   const candidates = [...new Set(records.flatMap(item => item.recordIds))].filter(roomId => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(roomId) && !known.has(roomId) && !removals.includes(roomId));
   return { roomIds: candidates.slice(0, CONVERSATION_WINDOW), truncated: candidates.length > CONVERSATION_WINDOW || records.some(item => item.truncated), available: true };
 }
+
+/**
+ * Opening a saved conversation must never wait on the network. Local eligibility (identity, pinned
+ * contact, session records) decides whether it may open; the room-status probe only reports
+ * authoritative expiry/deletion. It runs beside the connection attempt and calls back solely for
+ * terminal results. Offline, waking-server, 503 and 401/403 outcomes are not terminal here: the
+ * authenticated connection step enforces its own admission and reports its own failure.
+ */
+export async function observeAuthoritativeRoomState(
+  descriptor: ConversationDescriptor,
+  probe: RoomProbe,
+  onTerminal: (code: SafeDiagnosticCode) => void,
+  isCurrent: () => boolean = () => true,
+): Promise<void> {
+  try {
+    const code = await probe(descriptor);
+    if (code && authoritativeTerminal(code) && isCurrent()) onTerminal(code);
+  } catch { /* Best-effort observation only. */ }
+}
+
+/** A status probe has no authority over a new selection/session or an authenticated admission. */
+export function roomObservationCurrent(
+  started: { operation: number; scope?: object; descriptor: object },
+  now: { operation: number; scope?: object; descriptor?: object; aborted: boolean; connected: boolean },
+): boolean {
+  return !!started.scope && !now.aborted && !now.connected && started.operation === now.operation &&
+    started.scope === now.scope && started.descriptor === now.descriptor;
+}

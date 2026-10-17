@@ -2,7 +2,7 @@
  * Chat footer component (message input)
  */
 
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useLayoutEffect, useState, useRef } from 'react';
 import { useChat } from '../../context/ChatContext';
 import { Button } from '../common/Button';
 import { MicIcon, PaperclipIcon, SendIcon } from '../common/icons';
@@ -15,16 +15,38 @@ import { fileTransferCopy } from '../../product/fileTransferCopy';
 import { classifySafeDiagnostic, logSafeFailure, safeFailureCopy, type SafeDiagnosticCode } from '../../product/safeDiagnostics';
 import { SafeDiagnosticDetails } from '../common/SafeDiagnosticDetails';
 import { MAX_USER_MESSAGE_UTF8_BYTES } from '@chat-e2ee/service';
+import { ComposerDrafts } from '../../product/composerDrafts';
 
-export const ChatFooter: React.FC<{ onVerifyContact: () => void }> = ({ onVerifyContact }) => {
-  const { sendMessage, sessionHealth, contactIdentity, conversations, channelHash } = useChat();
+export const ChatFooter: React.FC<{ onVerifyContact: () => void }> = (props) => {
+  const { channelHash, plaintextSession } = useChat();
+  const drafts = useRef(new ComposerDrafts());
+  const lifetime = useRef({ scope: plaintextSession, epoch: 0 });
+  if (lifetime.current.scope !== plaintextSession) { lifetime.current = { scope: plaintextSession, epoch: lifetime.current.epoch + 1 }; }
+  drafts.current.bind(plaintextSession);
+  useEffect(() => {
+    const clear = () => drafts.current.clearAll();
+    window.addEventListener('pagehide', clear);
+    return () => { window.removeEventListener('pagehide', clear); clear(); };
+  }, []);
+  return <RoomComposer key={`${lifetime.current.epoch}:${channelHash}`} {...props} drafts={drafts.current} scope={plaintextSession} />;
+};
+
+const RoomComposer: React.FC<{ onVerifyContact: () => void; drafts: ComposerDrafts; scope?: { readonly isCurrent: () => boolean } }> = ({ onVerifyContact, drafts, scope }) => {
+  const { sendMessage, sessionHealth, contactIdentity, conversations, channelHash, plaintextSession } = useChat();
   const { sendFile, retry, transfer, cancel: cancelTransfer } = useFiles();
   const activeContact = conversations?.find((item) => item.roomId === channelHash);
   const contactLabel = contactDisplayName(activeContact?.label, activeContact?.roomId, activeContact?.remoteDisplayName, activeContact?.localNickname);
   const transferStatus = fileTransferCopy(transfer);
   const busy = transferStatus.active;
   const verified = contactIdentity?.verification === 'verified' && contactIdentity.changeStatus === 'unchanged';
-  const [message, setMessage] = useState<string>('');
+  const [, refreshDraft] = useState(0);
+  const message = drafts.get(channelHash);
+  const setMessage = (text: string) => { drafts.set(channelHash, text); refreshDraft(n => n + 1); };
+  const mounted = useRef(false);
+  const sending = useRef(false);
+  const currentScope = useRef(plaintextSession); currentScope.current = plaintextSession;
+  const current = () => mounted.current && scope?.isCurrent() === true && currentScope.current === scope && drafts.boundTo(scope);
+  useLayoutEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const [isSending, setIsSending] = useState<boolean>(false);
   const [attachmentDraft, setAttachmentDraft] = useState<{ file: File; roomId: string; image: boolean }>();
   const [attachmentPreviewUrl, setAttachmentPreviewUrl] = useState<string>();
@@ -69,6 +91,8 @@ export const ChatFooter: React.FC<{ onVerifyContact: () => void }> = ({ onVerify
   }, [attachmentDraft]);
 
   useEffect(() => {
+    // Each conversation owns its own unsent text; switching rooms swaps the visible draft instead of
+    // carrying text into a different contact's composer.
     setAttachmentDraft(undefined);
     setActionMessage('');
     setActionDiagnostic(undefined);
@@ -82,33 +106,42 @@ export const ChatFooter: React.FC<{ onVerifyContact: () => void }> = ({ onVerify
   }, [isRecording]);
 
   const handleSendMessage = async () => {
-    if (!message.trim()) return;
+    if (sessionHealth === 'unhealthy' || !current() || sending.current || isSending || busy || !message.trim()) return;
     if (new TextEncoder().encode(message).byteLength > MAX_USER_MESSAGE_UTF8_BYTES) {
       setActionMessage(`Messages can be up to ${MAX_USER_MESSAGE_UTF8_BYTES.toLocaleString()} UTF-8 bytes.`);
       return;
     }
 
+    const sendingRoom = channelHash;
+    sending.current = true;
+    const sentText = message;
     try {
       setActionMessage('');
       setIsSending(true);
-      await sendMessage(message);
-      setMessage('');
-      inputRef.current?.focus();
+      await sendMessage(sentText);
+      // Clear only the draft of the room the text was sent from, and only if it was not edited meanwhile.
+      if (drafts.boundTo(scope)) drafts.clearIfUnchanged(sendingRoom, sentText);
+      if (current()) refreshDraft(n => n + 1);
     } catch (err) {
+      if (!current()) return;
       debugError('Message send failed', err);
       const message = err instanceof Error ? err.message : '';
       setActionMessage(message.includes('reserved protocol marker') || message.includes('reserved protected-file marker')
         ? message
-        : 'Could not confirm sending. Check the message status before retrying.');
+        : 'Couldn’t confirm this message was sent. Your draft is retained. Check its status before retrying; if the chat offers Retry, use that or this draft, not both.');
     } finally {
-      setIsSending(false);
+      sending.current = false;
+      if (current()) setIsSending(false);
+      // The composer stays focusable while sending (read-only, not disabled), so keyboard users can
+      // keep typing the next message after a send or a failure without clicking back into it.
+      if (current()) inputRef.current?.focus();
     }
   };
 
   const handleAttachment = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     event.target.value = '';
-    if (!file) return;
+    if (!file || !current()) return;
     setActionDiagnostic(undefined);
     if (file.size > 8 * 1024 * 1024) { setActionMessage(file.type.startsWith('image/') ? 'This photo is larger than the current 8 MiB limit.' : 'This file is larger than the current 8 MiB limit.'); return; }
     setActionMessage('');
@@ -124,7 +157,7 @@ export const ChatFooter: React.FC<{ onVerifyContact: () => void }> = ({ onVerify
 
   const handleSendAttachment = async () => {
     const draft = attachmentDraft;
-    if (!draft || attachmentSendLock.current || isSending || busy) return;
+    if (!current() || !draft || attachmentSendLock.current || isSending || busy) return;
     if (!channelHash || draft.roomId !== channelHash) {
       removeAttachment();
       setActionMessage('The conversation changed. Attach the file again in the intended chat.');
@@ -136,19 +169,24 @@ export const ChatFooter: React.FC<{ onVerifyContact: () => void }> = ({ onVerify
     setActionDiagnostic(undefined);
     try { await sendFile(draft.file); }
     catch (error) {
+      if (!current()) return;
       const code = classifySafeDiagnostic('file-send', error);
       if (loggedFileFailure.current !== code) logSafeFailure('file_send_failed', code);
       loggedFileFailure.current = code;
       setActionDiagnostic(code);
       setActionMessage(safeFailureCopy('file-send'));
     } finally {
-      setAttachmentDraft(current => current === draft ? undefined : current);
+      if (current()) setAttachmentDraft(value => value === draft ? undefined : value);
       attachmentSendLock.current = false;
-      setIsSending(false);
+      if (current()) setIsSending(false);
     }
   };
 
-  const retryAttachment = retry;
+  const retryAttachment = async () => {
+    if (!current()) return;
+    try { await retry(); }
+    catch { if (current()) setActionMessage('Another file operation may still be active. Wait for it to finish or cancel it, then retry.'); }
+  };
 
   const toggleRecording = async () => {
     if (isRecording) {
@@ -158,6 +196,7 @@ export const ChatFooter: React.FC<{ onVerifyContact: () => void }> = ({ onVerify
     try {
       discardRecording.current = false;
       const stream = await capture.current.request({ audio: true });
+      if (!current()) { stream.getTracks().forEach(track => track.stop()); capture.current.release(); return; }
       const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
       const chunks: Blob[] = []; let recordedBytes = 0;
       recorder.ondataavailable = (event) => {
@@ -171,10 +210,10 @@ export const ChatFooter: React.FC<{ onVerifyContact: () => void }> = ({ onVerify
         stream.getTracks().forEach((track) => track.stop());
         setIsRecording(false);
         recorderRef.current = null;
-        if (discardRecording.current) { discardRecording.current = false; return; }
+        if (!current() || discardRecording.current) { discardRecording.current = false; return; }
         const file = new File(chunks, 'voice-message.webm', { type: recorder.mimeType });
-        try { await sendFile(file); setActionMessage('Voice message added to the conversation.'); }
-        catch { setActionMessage('Could not confirm the voice message send. Check the conversation before retrying.'); }
+        try { await sendFile(file); if (current()) setActionMessage('Voice message added to the conversation.'); }
+        catch { if (current()) setActionMessage('Could not confirm the voice message send. Check the conversation before retrying.'); }
       };
       recorder.start(1000);
       recorderRef.current = recorder;
@@ -204,7 +243,7 @@ export const ChatFooter: React.FC<{ onVerifyContact: () => void }> = ({ onVerify
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
-      handleSendMessage();
+      if (attachmentDraft) void handleSendAttachment(); else void handleSendMessage();
     }
   };
 
@@ -220,10 +259,13 @@ export const ChatFooter: React.FC<{ onVerifyContact: () => void }> = ({ onVerify
           placeholder="Write a message"
           aria-label="Write a message"
           rows={1}
+          maxLength={MAX_USER_MESSAGE_UTF8_BYTES}
           value={message}
-          onChange={(e) => setMessage(e.target.value)}
+          onChange={(e) => { if (!isSending) setMessage(e.target.value); }}
           onKeyDown={handleKeyPress}
-          disabled={sessionHealth === 'unhealthy' || isSending}
+          disabled={sessionHealth === 'unhealthy'}
+          readOnly={isSending}
+          aria-busy={isSending}
         />
         {isRecording && <span className="recording-indicator" role="status"><span />{Math.floor(recordingSeconds / 60)}:{String(recordingSeconds % 60).padStart(2, '0')}</span>}
         {isRecording && <button className="recording-cancel" type="button" onClick={cancelRecording} aria-label="Discard voice recording">Discard</button>}

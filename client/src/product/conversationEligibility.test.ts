@@ -1,4 +1,4 @@
-import { authoritativeTerminal, classifySidebarConversations, conversationStateCopy, conversationDiagnostic, conversationEligibility, diagnoseOrphanedConversationRecords, readConversationIndex } from './conversationEligibility';
+import { authoritativeTerminal, classifySidebarConversations, conversationStateCopy, conversationDiagnostic, conversationEligibility, diagnoseOrphanedConversationRecords, observeAuthoritativeRoomState, readConversationIndex, roomObservationCurrent } from './conversationEligibility';
 import { readConversationDescriptors, saveConversationDescriptor } from './sessionStore';
 import { TestProductStorage as Store } from './testStorage';
 import { classifySafeDiagnostic } from './safeDiagnostics';
@@ -226,4 +226,44 @@ it('does not promote pending introductions or unbound descriptors after a remote
   store.records.delete('contact-identity:'+descriptor.remoteAddress);
   expect(await conversationEligibility(store,descriptor)).toBe('CONTACT_REGISTRY_MISSING');
   expect((await diagnoseOrphanedConversationRecords({read:store.read,write:store.write,listRecordIds})).roomIds).toHaveLength(0);
+});
+describe('opening a saved conversation does not depend on the network', () => {
+  it('local eligibility passes while the server is unreachable; only a probe would have failed the open', async () => {
+    const store = await valid();
+    const offlineProbe = jest.fn(async () => 'NETWORK_FAILURE' as const);
+    // The old open path passed the probe into eligibility and was rejected when the server was cold/offline.
+    expect(await conversationEligibility(store, descriptor, offlineProbe)).toBe('NETWORK_FAILURE');
+    // The open path now decides on local records alone.
+    expect(await conversationEligibility(store, descriptor)).toBeUndefined();
+  });
+
+  it('reports only authoritative expiry or deletion from the background probe', async () => {
+    const seen: string[] = [];
+    for (const code of ['CONVERSATION_ROOM_MISSING', 'CONVERSATION_INVITATION_EXPIRED'] as const) {
+      await observeAuthoritativeRoomState(descriptor, async () => code, value => seen.push(value));
+    }
+    for (const code of ['NETWORK_FAILURE', 'SERVICE_NOT_READY', 'VERIFICATION_REQUIRED', undefined] as const) {
+      await observeAuthoritativeRoomState(descriptor, async () => code, value => seen.push(value));
+    }
+    expect(seen).toEqual(['CONVERSATION_ROOM_MISSING', 'CONVERSATION_INVITATION_EXPIRED']);
+  });
+
+  it('swallows probe exceptions without disturbing the open and does not mutate stored records', async () => {
+    const store = await valid(); const before = [...store.records];
+    await expect(observeAuthoritativeRoomState(descriptor, async () => { throw new Error('boom'); }, () => { throw new Error('unexpected'); })).resolves.toBeUndefined();
+    expect([...store.records]).toEqual(before);
+  });
+});
+
+it('does not apply delayed terminal observations after selection, identity, descriptor, admission or teardown changes', async () => {
+  const scope = {}; const started = {operation:1, scope, descriptor};
+  const current = {...started, aborted:false, connected:false};
+  expect(roomObservationCurrent(started,current)).toBe(true);
+  for (const change of [{operation:2},{scope:{}},{descriptor:{}},{connected:true},{aborted:true}]) {
+    let finish!: (code: 'CONVERSATION_ROOM_MISSING') => void;
+    let now: Parameters<typeof roomObservationCurrent>[1] = current; const terminal = jest.fn();
+    const pending = observeAuthoritativeRoomState(descriptor, () => new Promise(resolve => { finish=resolve; }), terminal, () => roomObservationCurrent(started,now));
+    now = {...current,...change}; finish('CONVERSATION_ROOM_MISSING'); await pending;
+    expect(terminal).not.toHaveBeenCalled();
+  }
 });

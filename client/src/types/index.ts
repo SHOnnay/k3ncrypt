@@ -48,6 +48,8 @@ export interface AppState {
 
 // Chat context type
 export interface ChatContextType {
+  // Opaque lifetime for transient plaintext UI resources, never authorization.
+  plaintextSession?: { readonly isCurrent: () => boolean };
   // State
   chat: IChatE2EE | null;
   userId: string;

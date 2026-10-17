@@ -1,7 +1,7 @@
 import { enrichInvitationExpiries } from '../product/invitationExpiryEnrichment';
 import { probeConversationRoom, probeInvitationExpiry } from '../product/conversationRoom';
 import { ConversationSelection } from '../product/conversationSelection';
-import { authoritativeTerminal, conversationDiagnostic, conversationEligibility, conversationFailure, diagnoseOrphanedConversationRecords, readConversationIndex, type ConversationDiagnostic } from '../product/conversationEligibility';
+import { authoritativeTerminal, conversationDiagnostic, conversationEligibility, conversationFailure, diagnoseOrphanedConversationRecords, observeAuthoritativeRoomState, readConversationIndex, roomObservationCurrent, type ConversationDiagnostic } from '../product/conversationEligibility';
 import { classifySafeDiagnostic, type SafeDiagnosticCode } from '../product/safeDiagnostics';
 import { LocalCallHistory } from '../product/callHistory';
 import { parseFileReference } from '@chat-e2ee/service';
@@ -9,7 +9,7 @@ import { parseFileReference } from '@chat-e2ee/service';
  * Chat context provider for explicit legacy and modern service paths.
  */
 
-import React, { createContext, useContext, ReactNode, useState, useCallback, useEffect, useRef } from 'react';
+import React, { createContext, useContext, ReactNode, useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { createChatInstance, utils, BrowserSecureStorage, IndexedDbVaultPersistence, ModernConversation, parseEncryptedMediaMessage, BrowserCallTransport, ProductionCallNegotiator, MultiplexedRelayConnection, ContactIdentityRegistry, ConversationModeStore } from '@chat-e2ee/service';
 import type { IChatE2EE, IE2ECall, CallLifecycleState, CallLifecycleUpdate, StoredContactIdentity, AuthenticatedCallComposition, EnrollmentRequest, EnrollmentApprovalPacket, DeviceControlEvent, LifecycleStateSnapshot, ModernConnectionDetails } from '@chat-e2ee/service';
 import { ChatContextType, InviteInfo, Message } from '../types/index';
@@ -166,12 +166,17 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const callMediaFailureRef = useRef<'microphone-unavailable' | 'camera-unavailable' | undefined>();
   const locallyAcceptedCalls = useRef(new Set<string>());
   const [userId, setUserId] = useState<string>('');
+  const vaultLocked = vault?.isLocked() ?? false;
+  const plaintextSession = useMemo(() => accountState === 'ready' && !vaultLocked ? { isCurrent: () => !vault?.isLocked() } : undefined, [accountState, vault, ownFingerprint, vaultLocked]);
+  const plaintextSessionRef = useRef(plaintextSession); plaintextSessionRef.current = plaintextSession;
   const [channelHash, setChannelHash] = useState<string>('');
   const [roomStates, setRoomStates] = useState<Record<string, RoomState<ModernConversation>>>({});
   const roomStatesRef = useRef(roomStates); roomStatesRef.current = roomStates;
   const [pendingConversation, setPendingConversation] = useState<{ roomId: string; operationId: number }>();
   const [conversationOpenError, setConversationOpenError] = useState<{ roomId: string; operationId: number; code: SafeDiagnosticCode }>();
   const conversationOpenGeneration = useRef(0);
+  const roomObservation = useRef<AbortController>();
+  useEffect(() => () => roomObservation.current?.abort(), []);
   const [activeCallRoomId, setActiveCallRoomId] = useState<string>();
   const activeCallRoomIdRef = useRef<string>();
   const activeRoom = channelHash ? roomStates[channelHash] : undefined;
@@ -958,6 +963,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, [modern]);
 
   const openConversation = useCallback(async (roomId: string): Promise<void> => {
+    roomObservation.current?.abort();
     const operationId = ++conversationOpenGeneration.current;
     setPendingConversation({ roomId, operationId });
     setConversationOpenError(current => current?.roomId === roomId ? undefined : current);
@@ -970,10 +976,40 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (!vault) throw new Error('Unlock this device before opening a conversation.');
       const descriptor = conversations.find((item) => item.roomId === roomId);
       if (!descriptor) throw new Error('Conversation is unavailable.');
-      const failure = await conversationEligibility(vault, descriptor, probeConversationRoom);
+      // Local-only eligibility: opening a saved conversation must not wait on (or fail because of) a
+      // cold or unreachable server. Authoritative expiry/deletion is observed beside the connection.
+      const failure = await conversationEligibility(vault, descriptor);
       if (failure) throw conversationFailure(failure);
       conversationOpenStage('eligible');
-      await connectModern(vault, descriptor, false, operationId);
+      const observation = new AbortController(); roomObservation.current = observation;
+      let openingFailed = false;
+      const currentObservation = () => historyVault.current === vault && roomObservationCurrent(
+        { operation: operationId, scope: plaintextSession, descriptor },
+        { operation: conversationOpenGeneration.current, scope: plaintextSessionRef.current,
+          descriptor: conversationsRef.current.find(item => item.roomId === roomId),
+          aborted: observation.signal.aborted, connected: roomStatesRef.current[roomId]?.connection === 'connected' },
+      );
+      const applyTerminal = (code: SafeDiagnosticCode) => {
+        if (!openingFailed || !currentObservation()) return;
+        setUnavailableConversations(current => [...current.filter(item => item.roomId !== roomId), conversationDiagnostic(descriptor, code)]);
+        setRoomState(roomId, { connection: 'failed' });
+        setConversations(current => current.filter(item => item.roomId !== roomId));
+        setConversationOpenError({ roomId, operationId, code });
+      };
+      let terminalCode: SafeDiagnosticCode | undefined;
+      void observeAuthoritativeRoomState(descriptor, item => probeConversationRoom(item, observation.signal), code => {
+        terminalCode = code; applyTerminal(code);
+      }, currentObservation);
+      try {
+        await connectModern(vault, descriptor, false, operationId);
+        // Authenticated admission wins over an earlier status observation.
+        observation.abort();
+      } catch (error) {
+        openingFailed = true;
+        // Queue after the ordinary failure projection, but never after a newer selection/admission.
+        if (terminalCode) queueMicrotask(() => applyTerminal(terminalCode!));
+        throw error;
+      }
       conversationOpenStage('connected');
       if (conversationOpenGeneration.current === operationId) {
         setUnavailableConversations(current => current.filter(item => item.roomId !== roomId));
@@ -993,7 +1029,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }
       throw error;
     }
-  }, [channelHash, conversations, modern, vault]);
+  }, [channelHash, conversations, modern, vault, plaintextSession]);
 
   const verifyContact = useCallback(async (): Promise<void> => {
     if (!modern) throw new Error('No modern contact is open.');
@@ -1684,6 +1720,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, [chat, channelHash, modern, protocolMode, vault]);
 
   const value: ChatContextType = {
+    plaintextSession,
     chat,
     userId,
     channelHash,

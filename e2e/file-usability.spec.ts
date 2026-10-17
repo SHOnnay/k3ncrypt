@@ -22,7 +22,7 @@ async function transfer(sender: Page, recipient: Page, file: typeof fixtures[num
   await expect(save).toBeVisible({ timeout: 300000 });
   const download = recipient.waitForEvent('download'); await save.click(); const artifact = await download; await artifact.saveAs(output);
   expect(createHash('sha256').update(await readFile(output)).digest('hex')).toBe(createHash('sha256').update(file.buffer).digest('hex'));
-  await recipient.getByRole('button', { name: 'Discard verified output', exact: true }).click();
+  await recipient.getByRole('button', { name: 'Close', exact: true }).click();
 }
 test('file selection is a local draft until explicit Send, then encrypted transfer completes', async ({ browser }, testInfo) => {
   test.setTimeout(900000); const { a, b, alice, bob } = await connectedPair(browser);
@@ -85,7 +85,7 @@ test('file selection is a local draft until explicit Send, then encrypted transf
   const downloadEvent = bob.waitForEvent('download'); await save.click(); const download = await downloadEvent;
   const output = testInfo.outputPath('explicit-send-received.png'); await download.saveAs(output);
   expect(createHash('sha256').update(await readFile(output)).digest('hex')).toBe(createHash('sha256').update(file.buffer).digest('hex'));
-  await bob.getByRole('button', { name: 'Discard verified output', exact: true }).click();
+  await bob.getByRole('button', { name: 'Close', exact: true }).click();
   await a.close(); await b.close(); await c.close();
 });
 for (const file of fixtures) test(`verified browser transfer both directions: ${file.mimeType}, ${file.buffer.length} bytes`, async ({ browser }, testInfo) => {
@@ -122,4 +122,33 @@ test('retry, cancel, next transfer, oversize photo and scoped state after reload
   await alice.reload(); await alice.getByRole('button', { name: 'Unlock this device', exact: true }).click(); await alice.locator('input[type=password]').fill('alpha-family-existing-account-2026'); await alice.getByRole('button', { name: 'Unlock account', exact: true }).click();
   await expect(alice.getByText(/This transfer was interrupted/)).not.toBeVisible(); await expect(alice.locator('.media-transfer-status')).not.toBeVisible();
   await a.close(); await b.close();
+});
+
+test('two verified files keep independent Save links after cancellation and release on room teardown', async ({browser},testInfo) => {
+  test.setTimeout(120000);
+  const {a,b,alice,bob}=await connectedPair(browser);
+  try {
+    for (const file of fixtures.slice(0,2)) {
+      await alice.locator('input[type=file]').setInputFiles(file);
+      await alice.getByRole('button',{name:'Send file',exact:true}).click();
+      await expect(alice.locator('.media-transfer-status')).toContainText('Sent',{timeout:30000});
+      await bob.getByRole('button',{name:'Download protected file',exact:true}).last().click();
+      const save=bob.getByRole('link',{name:`Save ${file.name}`,exact:true});
+      await expect(save).toBeVisible({timeout:30000});
+      const started=bob.waitForEvent('download');await save.click();const download=await started;
+      if(file===fixtures[0]) await download.cancel();
+      else {
+        const output=testInfo.outputPath('verified-second-file');await download.saveAs(output);
+        expect(createHash('sha256').update(await readFile(output)).digest('hex')).toBe(createHash('sha256').update(file.buffer).digest('hex'));
+      }
+      await expect(save).toBeVisible();
+    }
+    await expect(bob.getByRole('link',{name:'Save document.pdf',exact:true})).toBeVisible();
+    await expect(bob.getByRole('link',{name:'Save photo.png',exact:true})).toBeVisible();
+    await bob.getByRole('button',{name:'Close',exact:true}).first().click();
+    await expect(bob.getByRole('link',{name:'Save document.pdf',exact:true})).toHaveCount(0);
+    await expect(bob.getByRole('link',{name:'Save photo.png',exact:true})).toBeVisible();
+    await bob.getByRole('button',{name:'Contacts',exact:true}).click();
+    await expect(bob.getByRole('link',{name:'Save photo.png',exact:true})).toHaveCount(0);
+  } finally {await a.close();await b.close();}
 });

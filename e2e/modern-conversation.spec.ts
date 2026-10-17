@@ -408,7 +408,7 @@ test('Alice can stay in Carol while Bob accepts, then accept Bob from durable ma
   const safeSummary = await Promise.all([alice.page, bobPage].map(async page => ({
     localProfile: await page.locator('.sidebar-profile strong').textContent(),
     draftRetained: Boolean(await page.locator('#msg-input').inputValue()),
-    safeSendFailureDisplayed: (await page.getByRole('status').filter({ hasText: 'Could not confirm sending' }).count()) > 0,
+    safeSendFailureDisplayed: (await page.getByRole('status').filter({ hasText: 'confirm this message was sent' }).count()) > 0,
     sentTextProjected: (await page.locator('#messages-area').getByText(firstMessage).count()) > 0,
     inbound: await cryptoDiagnostics(page),
     renderedMessageCount: await page.locator('#messages-area .message').count(),
