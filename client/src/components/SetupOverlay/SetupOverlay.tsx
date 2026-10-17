@@ -11,6 +11,7 @@ import { JoinHashView } from './JoinHashView';
 import { InvitationQr } from './InvitationQr';
 import './SetupOverlay.css';
 import { debugError } from '../../utils/debug';
+import { setupErrorMessage } from './setupError';
 
 interface SetupOverlayProps {
   onSetupComplete: (roomId: string, secret: string, controlCapability: string) => Promise<void>;
@@ -19,16 +20,6 @@ interface SetupOverlayProps {
 }
 
 type ViewType = 'initial' | 'create' | 'join' | 'modern' | 'restore' | 'deleted';
-
-const setupErrorMessage = (error: unknown, action: 'invitation' | 'contact'): string => {
-  const status = typeof error === 'object' && error !== null && 'status' in error ? (error as { status?: unknown }).status : undefined;
-  if (status === 503) return 'K3NCRYPT is starting or its secure storage is unavailable. Wait a moment, then retry.';
-  if (status === 404 || status === 502 || status === 504) return 'The K3NCRYPT backend is unavailable or is not the expected service. Check the server address, then retry.';
-  if (error instanceof TypeError) return 'Could not reach the K3NCRYPT backend. Check your connection, then retry.';
-  return action === 'invitation'
-    ? 'Could not create an invitation. Retry after checking the K3NCRYPT backend.'
-    : 'Could not create this contact. Use a passphrase of at least 12 characters, then retry.';
-};
 
 export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onModernSetupComplete, isHidden }) => {
   const { createNewChannel, createModernChannel, joinModernChannel, restoreSession, accountState } = useChat();
@@ -66,7 +57,6 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onM
       setStatus('');
     } catch (err) {
       setStatus(setupErrorMessage(err, 'invitation'));
-      debugError('Invitation generation failed', err);
     } finally {
       setIsLoading(false);
     }
@@ -139,7 +129,7 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onM
         await joinModernChannel(modern, localPassphrase, accountState === 'new' ? displayName : undefined);
         onModernSetupComplete();
         setStatus('');
-      } catch { setStatus('Could not open this contact. Check the invitation and local passphrase.'); }
+      } catch (error) { setStatus(setupErrorMessage(error, 'join')); }
       finally { setIsLoading(false); }
       return;
     }
