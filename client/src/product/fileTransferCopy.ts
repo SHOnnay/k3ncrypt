@@ -17,6 +17,7 @@ export const fileDownloadForReference = (download: ScopedFileDownload | undefine
 const safeFailureCopy = (failure: string): string => {
   const reason = failure.toLocaleLowerCase();
   if (/8 mib|file size/.test(reason)) return 'Files must be 8 MiB or smaller.';
+  if (/rate limit|too many requests/.test(reason)) return 'The file service is busy. Wait a moment, then retry this transfer.';
   if (/expired/.test(reason)) return 'This file has expired. Ask your contact to send it again.';
   if (/verification|identity|contact/.test(reason)) return 'Verify this contact again before sending files.';
   if (/quota/.test(reason)) return 'File storage quota reached. Try again after older files expire.';

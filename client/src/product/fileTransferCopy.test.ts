@@ -9,6 +9,7 @@ describe('file transfer wording', () => {
 
   it('uses bounded, actionable failure language without exposing internal errors', () => {
     expect(fileTransferCopy({ phase: 'Failed', bytes: 0, total: 100, failure: 'attachment:create request-failed' }).label).toBe('Could not connect. Check your connection and retry in this session.');
+    expect(fileTransferCopy({ phase: 'Failed', bytes: 0, total: 100, failure: 'Rate limit exceeded.' }).label).toBe('The file service is busy. Wait a moment, then retry this transfer.');
     expect(fileTransferCopy({ phase: 'Failed', bytes: 0, total: 100, failure: 'Sealed file cache was lost.' }).label).toContain('original file');
   });
 
