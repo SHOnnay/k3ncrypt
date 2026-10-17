@@ -74,3 +74,65 @@ test('service restart preserves incomplete bytes/accounting; cleanup expires/rec
     await expect(service.put(auth(), f.context.transferId, 0, object(17))).rejects.toThrow('expired');
     now += L.TRANSFER_EXPIRY; await service.cleanup(); expect(persistence.records.get('account-alice')!.transfers).toEqual([]);
 });
+test('status and verified chunk reads need no ledger write, including a write outage', async () => {
+    const f = await create(); const id = f.context.transferId;
+    await service.put(auth(), id, 'manifest', object(80, 1));
+    await service.put(auth(), id, 0, object(17, 2)); await service.complete(auth(), id);
+    const revision = persistence.records.get('account-alice')!.revision;
+    const read = jest.spyOn(persistence, 'read');
+    const write = jest.spyOn(persistence, 'replace').mockRejectedValue(new Error('simulated write outage'));
+    await expect(service.status(auth(bob), id)).resolves.toMatchObject({ state: 'available' });
+    await expect(service.chunk(auth(bob), id, 0)).resolves.toEqual(object(17, 2));
+    expect(read).toHaveBeenCalledTimes(2); expect(write).not.toHaveBeenCalled();
+    expect(persistence.records.get('account-alice')!.revision).toBe(revision);
+    await expect(service.chunk(auth(mallory), id, 0)).rejects.toThrow('authorization');
+    await expect(service.chunk({ ...auth(bob), deviceTrust: { assertTrusted: async () => { throw new Error('revoked'); } } }, id, 0)).rejects.toThrow('revoked');
+});
+test('read-only expiry projection never returns expired bytes and does not reclaim storage itself', async () => {
+    const f = await create(); const id = f.context.transferId;
+    await service.put(auth(), id, 'manifest', object(80, 1)); await service.put(auth(), id, 0, object(17, 2)); await service.complete(auth(), id);
+    const before = structuredClone(persistence.records.get('account-alice'));
+    now += L.TRANSFER_EXPIRY;
+    await expect(service.status(auth(bob), id)).resolves.toMatchObject({ state: 'expired', indices: [] });
+    await expect(service.chunk(auth(bob), id, 0)).rejects.toThrow('expired');
+    expect(persistence.records.get('account-alice')).toEqual(before);
+    await service.cleanup(); expect(persistence.records.get('account-alice')!.transfers[0].reserved).toBe(0);
+});
+test('concurrent download reads cannot exhaust mutation CAS retries or change revision', async () => {
+    const f = await create(); const id = f.context.transferId;
+    await service.put(auth(), id, 'manifest', object(80, 1)); await service.put(auth(), id, 0, object(17, 2)); await service.complete(auth(), id);
+    const write = jest.spyOn(persistence, 'replace');
+    await Promise.all(Array.from({ length: 40 }, () => service.chunk(auth(bob), id, 0)));
+    expect(write).not.toHaveBeenCalled();
+    await service.cancel(auth(), id);
+    await expect(service.chunk(auth(bob), id, 0)).rejects.toThrow('canceled');
+});
+test('cancel committed during a delayed object read fences the stale ciphertext response', async () => {
+    const f = await create(); const id = f.context.transferId;
+    await service.put(auth(), id, 'manifest', object(80, 1)); await service.put(auth(), id, 0, object(17, 2)); await service.complete(auth(), id);
+    let release!: () => void; let started!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    const original = persistence.object.bind(persistence);
+    jest.spyOn(persistence, 'object').mockImplementation(async (...args) => { const value = await original(...args); started(); await gate; return value; });
+    const reading = service.chunk(auth(bob), id, 0);
+    await entered; await service.cancel(auth(), id); release();
+    await expect(reading).rejects.toThrow('canceled');
+});
+test('expiry during a delayed object read fails closed without a ledger write', async () => {
+    const f = await create(); const id = f.context.transferId;
+    await service.put(auth(), id, 'manifest', object(80, 1)); await service.put(auth(), id, 0, object(17, 2)); await service.complete(auth(), id);
+    const original = persistence.object.bind(persistence);
+    jest.spyOn(persistence, 'object').mockImplementation(async (...args) => { const value = await original(...args); now += L.TRANSFER_EXPIRY; return value; });
+    const write = jest.spyOn(persistence, 'replace');
+    await expect(service.chunk(auth(bob), id, 0)).rejects.toThrow('expired');
+    expect(write).not.toHaveBeenCalled();
+});
+
+test('unrelated ledger mutation during a delayed read does not invalidate file authority', async () => {
+    const f = await create(); const id = f.context.transferId;
+    await service.put(auth(), id, 'manifest', object(80, 1)); await service.put(auth(), id, 0, object(17, 2)); await service.complete(auth(), id);
+    const original = persistence.object.bind(persistence);
+    jest.spyOn(persistence, 'object').mockImplementation(async (...args) => { const value = await original(...args); await create(); return value; });
+    await expect(service.chunk(auth(bob), id, 0)).resolves.toEqual(object(17, 2));
+});

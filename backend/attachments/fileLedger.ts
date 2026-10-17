@@ -57,7 +57,26 @@ export class FileLedgerService {
         await this.trusted(auth, permission);
         if (!/^[0-9a-f-]{36}$/.test(id)) deny();
         const ledger = await this.persistence.locate(id); if (!ledger) deny();
-        return this.atomic(ledger._id, current => { const f = current.transfers.find(t => t.context.transferId === id); if (!f) deny(); this.authorize(auth, f, permission !== 'attachment:read'); return action(f, ledger._id); }, object);
+        if (permission === 'attachment:read') {
+            // A download must not depend on a majority-journal write or contend with
+            // uploading chunks. Expiry is projected exactly as for a mutation; only
+            // mutations/background cleanup reclaim storage. Never mutate the snapshot.
+            const snapshot = structuredClone(ledger); this.expire(snapshot);
+            const f = snapshot.transfers.find(t => t.context.transferId === id); if (!f) deny();
+            this.authorize(auth, f, false);
+            const result = await action(f, ledger._id);
+            // Replace the removed CAS serialization point with a read-only fence.
+            // A cancel/expiry committed while ciphertext was fetched must win;
+            // unrelated ledger mutations must not fail an authorized download.
+            const latest = await this.persistence.read(ledger._id); if (!latest) deny();
+            const checked = structuredClone(latest); this.expire(checked);
+            const current = checked.transfers.find(t => t.context.transferId === id); if (!current) deny();
+            this.authorize(auth, current, false);
+            if (auth.expiresAt <= this.now()) deny();
+            await auth.deviceTrust.assertTrusted();
+            return current.state === f.state ? result : action(current, ledger._id);
+        }
+        return this.atomic(ledger._id, current => { const f = current.transfers.find(t => t.context.transferId === id); if (!f) deny(); this.authorize(auth, f, true); return action(f, ledger._id); }, object);
     }
     private live(f: StoredFile): void { if (f.state === 'expired' || f.expiresAt <= this.now()) throw new FileError('expired'); if (f.state === 'canceled') throw new FileError('canceled'); }
     status(auth: AuthenticatedContext, id: string): Promise<FileStatus> { return this.access(auth, id, 'attachment:read', f => { const result = view(f); if (auth.participantId !== f.context.senderParticipantId && f.state !== 'available') delete result.manifest; return result; }); }
