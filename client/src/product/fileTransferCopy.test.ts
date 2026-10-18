@@ -13,6 +13,13 @@ describe('file transfer wording', () => {
     expect(fileTransferCopy({ phase: 'Failed', bytes: 0, total: 100, failure: 'Sealed file cache was lost.' }).label).toContain('original file');
   });
 
+  it('preserves an explicit admission-rate failure when no transfer was allocated', () => {
+    expect(fileTransferCopy({ phase: 'Failed', bytes: 0, total: 100, failure: 'File transfer failed. Select the file again to restart.', diagnosticCode: 'FILE_RATE_LIMITED' }).label)
+      .toBe('The file service is busy. Wait a moment, then retry this transfer.');
+    expect(fileTransferCopy({ phase: 'Failed', bytes: 0, total: 100, failure: 'File storage quota reached.', diagnosticCode: 'FILE_QUOTA_EXCEEDED' }).label)
+      .toContain('older files expire');
+  });
+
   it('distinguishes server quota, generic failure, restart and idle', () => {
     expect(fileTransferCopy({ phase: 'Idle', bytes: 0, total: 0 }).label).toBe('');
     expect(fileTransferCopy({ phase: 'Failed', bytes: 0, total: 0, failure: 'File storage quota reached.' }).label).toContain('older files expire');

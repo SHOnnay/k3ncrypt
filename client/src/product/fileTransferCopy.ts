@@ -43,6 +43,6 @@ export const fileTransferCopy = (transfer: FileProgress): FileTransferCopy => {
     case 'Canceled': return { label: `${name}Transfer canceled`, active: false };
     case 'Expired': return { label: safeFailureCopy('expired'), active: false };
     case 'RestartRequired': return { label: 'Select the original file again to restart this transfer.', active: false };
-    case 'Failed': return { label: safeFailureCopy(transfer.failure ?? ''), active: false };
+    case 'Failed': return { label: safeFailureCopy(transfer.diagnosticCode === 'FILE_RATE_LIMITED' ? 'Rate limit exceeded.' : transfer.failure ?? ''), active: false };
   }
 };
