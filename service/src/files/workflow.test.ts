@@ -7,12 +7,12 @@ const fp = (c: string): string => 'K3 ' + Array(10).fill(c.repeat(4)).join(' ') 
 const binding: FileBinding = { conversationId: randomUUID(), senderParticipantId: randomUUID(), recipientParticipantId: randomUUID(), senderIdentityReference: fp('A'), recipientIdentityReference: fp('B') };
 const recipient: FileBinding = { conversationId: binding.conversationId, senderParticipantId: binding.recipientParticipantId, recipientParticipantId: binding.senderParticipantId, senderIdentityReference: binding.recipientIdentityReference, recipientIdentityReference: binding.senderIdentityReference };
 class Gateway implements FileGateway {
-    file!: FileStatus; objects = new Map<number, WireObject>(); uploads: number[] = []; failAfterAccept = false; failBeforeAccept = false; gate?: Promise<void>; tamper = false; cancelCount = 0;
+    file!: FileStatus; objects = new Map<number, WireObject>(); uploads: number[] = []; failAfterAccept = false; failBeforeAccept = false; gate?: Promise<void>; chunkEntered?: () => void; tamper = false; cancelCount = 0;
     async create(b: FileBinding, size: number): Promise<FileStatus> { const createdAt = Date.now(); this.file = { version: 2, context: { ...b, transferId: randomUUID(), fileSize: size, chunkSize: L.MAX_CHUNK_SIZE, chunkCount: Math.ceil(size / L.MAX_CHUNK_SIZE) }, createdAt, expiresAt: createdAt + L.TRANSFER_EXPIRY, state: 'incomplete', indices: [] }; return structuredClone(this.file); }
     async status(): Promise<FileStatus> { return structuredClone(this.file); }
     async put(_id: string, index: 'manifest' | number, v: WireObject): Promise<FileStatus> { if (index === 'manifest') this.file.manifest = v; else { if (this.failBeforeAccept) { this.failBeforeAccept = false; throw new Error('Network unavailable.'); } this.uploads.push(index); this.objects.set(index, v); if (!this.file.indices.includes(index)) this.file.indices.push(index); if (this.failAfterAccept) { this.failAfterAccept = false; throw new Error('Network unavailable.'); } } await this.gate; return this.status(); }
     async complete(): Promise<FileStatus> { this.file.state = 'available'; return this.status(); }
-    async chunk(_id: string, index: number): Promise<WireObject> { await this.gate; const value = { ...this.objects.get(index)! }; if (this.tamper) value.ciphertext = (value.ciphertext[0] === 'A' ? 'B' : 'A') + value.ciphertext.slice(1); return value; }
+    async chunk(_id: string, index: number): Promise<WireObject> { this.chunkEntered?.(); await this.gate; const value = { ...this.objects.get(index)! }; if (this.tamper) value.ciphertext = (value.ciphertext[0] === 'A' ? 'B' : 'A') + value.ciphertext.slice(1); return value; }
     async cancel(): Promise<void> { this.cancelCount++; this.file.state = 'canceled'; }
 }
 const cache = (): SealedFileCache => { const values = new Map<string, WireObject>(); return { get: async i => values.get(i), put: async (i, v) => { values.set(i, structuredClone(v)); }, clear: async () => { values.clear(); } }; };
@@ -62,8 +62,11 @@ test('cancel mid upload and stale acknowledgement cannot resurrect terminal stat
 test('cancel mid download discards output and stale chunk completion cannot claim complete', async () => {
     const gateway = new Gateway(); let reference = ''; const s = new FileTransferWorkflow(gateway, async () => binding, async () => cache(), async r => { reference = r; }); await s.send(source());
     let release!: () => void; gateway.gate = new Promise<void>(resolve => { release = resolve; }); const target = output();
+    let entered!: () => void; const downloading = new Promise<void>(resolve => { entered = resolve; }); gateway.chunkEntered = entered;
     const recv = new FileTransferWorkflow(gateway, async () => recipient, async () => cache(), async () => {}); const promise = recv.receive(reference, async () => target.out);
-    while (recv.state.value.phase !== 'Downloading') await new Promise(resolve => setTimeout(resolve, 1)); await new Promise(resolve => setTimeout(resolve, 2)); recv.cancel(); release(); await promise;
+    // Downloading is entered before asynchronous manifest authentication/output setup.
+    // Wait for the actual blocked chunk read, not an arbitrary crypto timing delay.
+    await downloading; recv.cancel(); release(); await promise;
     expect(recv.state.value.phase).toBe('Canceled'); expect(target.finished()).toBe(false); expect(target.discarded()).toBe(true);
 });
 test('full output storage fails once and does not retry forever; new process does not pretend sender can resume', async () => {
