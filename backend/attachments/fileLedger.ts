@@ -53,7 +53,7 @@ export class FileLedgerService {
             ledger.transfers.push(f); return view(f);
         });
     }
-    private async access<T>(auth: AuthenticatedContext, id: string, permission: 'attachment:read' | 'attachment:write' | 'attachment:delete', action: (f: StoredFile, account: string) => T | Promise<T>, object?: FileObjectWrite): Promise<T> {
+    private async access<T>(auth: AuthenticatedContext, id: string, permission: 'attachment:read' | 'attachment:write' | 'attachment:delete', action: (f: StoredFile, account: string) => T | Promise<T>, object?: FileObjectWrite, refreshReadResult = false): Promise<T> {
         await this.trusted(auth, permission);
         if (!/^[0-9a-f-]{36}$/.test(id)) deny();
         const ledger = await this.persistence.locate(id); if (!ledger) deny();
@@ -74,12 +74,14 @@ export class FileLedgerService {
             this.authorize(auth, current, false);
             if (auth.expiresAt <= this.now()) deny();
             await auth.deviceTrust.assertTrusted();
-            return current.state === f.state ? result : action(current, ledger._id);
+            // Status includes mutable chunk/manifest progress, not just state.
+            // Project it from the final authorized snapshot without refetching ciphertext.
+            return !refreshReadResult && current.state === f.state ? result : action(current, ledger._id);
         }
         return this.atomic(ledger._id, current => { const f = current.transfers.find(t => t.context.transferId === id); if (!f) deny(); this.authorize(auth, f, true); return action(f, ledger._id); }, object);
     }
     private live(f: StoredFile): void { if (f.state === 'expired' || f.expiresAt <= this.now()) throw new FileError('expired'); if (f.state === 'canceled') throw new FileError('canceled'); }
-    status(auth: AuthenticatedContext, id: string): Promise<FileStatus> { return this.access(auth, id, 'attachment:read', f => { const result = view(f); if (auth.participantId !== f.context.senderParticipantId && f.state !== 'available') delete result.manifest; return result; }); }
+    status(auth: AuthenticatedContext, id: string): Promise<FileStatus> { return this.access(auth, id, 'attachment:read', f => { const result = view(f); if (auth.participantId !== f.context.senderParticipantId && f.state !== 'available') delete result.manifest; return result; }, undefined, true); }
     put(auth: AuthenticatedContext, id: string, index: 'manifest' | number, object: WireObject): Promise<FileStatus> {
         return this.access(auth, id, 'attachment:write', async (f, account) => {
             this.live(f);

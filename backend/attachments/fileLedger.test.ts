@@ -136,3 +136,33 @@ test('unrelated ledger mutation during a delayed read does not invalidate file a
     jest.spyOn(persistence, 'object').mockImplementation(async (...args) => { const value = await original(...args); await create(); return value; });
     await expect(service.chunk(auth(bob), id, 0)).resolves.toEqual(object(17, 2));
 });
+
+test('status returns chunk progress from the final read fence even while state stays incomplete', async () => {
+    const f = await create(); const id = f.context.transferId;
+    const original = persistence.read.bind(persistence);
+    let release!: () => void, started!: () => void;
+    const gate = new Promise<void>(r => { release = r; });
+    const entered = new Promise<void>(r => { started = r; });
+    jest.spyOn(persistence, 'read').mockImplementationOnce(async account => { started(); await gate; return original(account); });
+    const reading = service.status(auth(), id);
+    await entered;
+    await service.put(auth(), id, 0, object(17, 2));
+    await service.put(auth(), id, 'manifest', object(80, 1));
+    release();
+    await expect(reading).resolves.toMatchObject({ state: 'incomplete', indices: [0], manifest: object(80, 1) });
+});
+
+test.each(['trust', 'session'])('delayed chunk read revalidates %s before returning ciphertext', async kind => {
+    const f = await create(); const id = f.context.transferId;
+    await service.put(auth(), id, 'manifest', object(80, 1));
+    await service.put(auth(), id, 0, object(17, 2)); await service.complete(auth(), id);
+    let revoked = false;
+    const request = { ...auth(bob), expiresAt: now + 1000, deviceTrust: { assertTrusted: async () => { if (revoked) throw new Error('revoked'); } } };
+    const original = persistence.object.bind(persistence);
+    jest.spyOn(persistence, 'object').mockImplementation(async (...args) => {
+        const value = await original(...args);
+        if (kind === 'trust') revoked = true; else now += 1000;
+        return value;
+    });
+    await expect(service.chunk(request, id, 0)).rejects.toThrow(kind === 'trust' ? 'revoked' : 'authorization');
+});
