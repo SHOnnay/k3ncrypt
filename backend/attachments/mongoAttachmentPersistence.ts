@@ -1,13 +1,25 @@
-import type { Collection, Db } from 'mongodb';
+import { Binary, type Collection, type Db } from 'mongodb';
 import type { EncryptedAttachmentChunk } from '../../service/src/attachments/contracts';
 import type { AttachmentChunkPersistence, AttachmentMetadataPersistence, PersistentAttachmentPersistence, PersistentAttachmentRecord } from '../../service/src/attachments/persistentDelivery';
 
-type MetadataDocument = Omit<PersistentAttachmentRecord, 'encryptedMetadata'> & { encryptedMetadata: { nonce: Buffer; ciphertext: Buffer } };
-type ChunkDocument = Omit<EncryptedAttachmentChunk, 'nonce' | 'ciphertext'> & { nonce: Buffer; ciphertext: Buffer; storedAt: number };
+type MetadataDocument = Omit<PersistentAttachmentRecord, 'encryptedMetadata'> & { encryptedMetadata: { nonce: Buffer | Binary; ciphertext: Buffer | Binary } };
+type ChunkDocument = Omit<EncryptedAttachmentChunk, 'nonce' | 'ciphertext'> & { nonce: Buffer | Binary; ciphertext: Buffer | Binary; storedAt: number };
+/** The driver returns BSON Binary by default (promoteBuffers is false).
+ * Copy only logical bytes, never a Binary object's spare backing capacity.
+ * Unexpected persisted representations fail closed instead of becoming empty bytes.
+ */
+const bytes = (value: Buffer | Binary): Uint8Array => {
+    if (Buffer.isBuffer(value)) return new Uint8Array(value);
+    if (value instanceof Binary && value.sub_type === Binary.SUBTYPE_DEFAULT &&
+        Number.isInteger(value.position) && value.position >= 0 && value.position <= value.buffer.byteLength) {
+        return new Uint8Array(value.value());
+    }
+    throw new Error('Attachment binary storage unavailable.');
+};
 const metadataDocument = (record: PersistentAttachmentRecord): MetadataDocument => ({ ...record, encryptedMetadata: { nonce: Buffer.from(record.encryptedMetadata.nonce), ciphertext: Buffer.from(record.encryptedMetadata.ciphertext) } });
-const metadataRecord = (document: MetadataDocument): PersistentAttachmentRecord => ({ ...document, encryptedMetadata: { nonce: new Uint8Array(document.encryptedMetadata.nonce), ciphertext: new Uint8Array(document.encryptedMetadata.ciphertext) } });
+const metadataRecord = (document: MetadataDocument): PersistentAttachmentRecord => ({ ...document, encryptedMetadata: { nonce: bytes(document.encryptedMetadata.nonce), ciphertext: bytes(document.encryptedMetadata.ciphertext) } });
 const chunkDocument = (chunk: EncryptedAttachmentChunk): ChunkDocument => ({ ...chunk, nonce: Buffer.from(chunk.nonce), ciphertext: Buffer.from(chunk.ciphertext), storedAt: Date.now() });
-const chunkRecord = (document: ChunkDocument): EncryptedAttachmentChunk => ({ attachmentId: document.attachmentId, index: document.index, total: document.total, nonce: new Uint8Array(document.nonce), ciphertext: new Uint8Array(document.ciphertext) });
+const chunkRecord = (document: ChunkDocument): EncryptedAttachmentChunk => ({ attachmentId: document.attachmentId, index: document.index, total: document.total, nonce: bytes(document.nonce), ciphertext: bytes(document.ciphertext) });
 
 /** Mongo persistence only; it never decrypts or interprets ciphertext. */
 export class MongoAttachmentPersistence implements PersistentAttachmentPersistence {

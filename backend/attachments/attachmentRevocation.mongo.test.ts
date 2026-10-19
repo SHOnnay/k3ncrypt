@@ -35,7 +35,7 @@ suite('request-scoped attachment revocation using real signed devices and Mongo'
     store = new MongoDeviceTrustStore(database); authority = new DurableDeviceTrustAuthority(store, process.env.K3NCRYPT_DEVICE_TRUST_PROOF_SECRET);
     jest.spyOn(db, 'getDatabase').mockReturnValue(database);
     jest.spyOn(db, 'findOneFromDB').mockImplementation(async (query, collection) => await database.collection(collection).findOne(query) as any);
-    sealKey = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt']);
+    sealKey = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
   });
   afterAll(async () => { jest.restoreAllMocks(); if (client) { await database.dropDatabase(); await client.close(); } if (originalSecret === undefined) delete process.env.K3NCRYPT_DEVICE_TRUST_PROOF_SECRET; else process.env.K3NCRYPT_DEVICE_TRUST_PROOF_SECRET = originalSecret; });
   async function device() {
@@ -162,13 +162,21 @@ suite('request-scoped attachment revocation using real signed devices and Mongo'
     await service.completeUpload(await f.admitted(f.sender, 'attachment:write'), file.id, file.capability);
     const app = express(); app.use(express.json()); app.use('/legacy', createAttachmentRouter({ authenticate: authenticateAttachment, attachments: service }));
     const h = () => f.headers(f.recipient, 'attachment:read');
-    return { f, persistence, app, file, object, h };
+    return { f, persistence, app, file, object, metadata, h };
   }
 
   test('legacy binary round-trip preserves stored encrypted bytes', async () => {
-    const { app, file, object, h } = await legacyFixture();
+    const { app, file, object, metadata, persistence, h } = await legacyFixture();
     const normal = await request(app).get('/legacy/' + file.id + '/chunks').set(await h()).set('X-K3ncrypt-Attachment-Capability', file.capability);
     expect(normal.status).toBe(200); expect(normal.body[0].ciphertext).toBe(object.ciphertext);
+    expect(normal.body[0].nonce).toBe(object.nonce);
+    const record = await persistence.metadata.find(file.id);
+    expect(Buffer.from(record!.encryptedMetadata.nonce).toString('base64url')).toBe(metadata.nonce);
+    expect(Buffer.from(record!.encryptedMetadata.ciphertext).toString('base64url')).toBe(metadata.ciphertext);
+    const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: Buffer.from(object.nonce, 'base64url') }, sealKey, Buffer.from(normal.body[0].ciphertext, 'base64url'));
+    expect(new Uint8Array(plaintext)).toEqual(new Uint8Array(1));
+    const corrupted = Buffer.from(normal.body[0].ciphertext, 'base64url'); corrupted[0] ^= 1;
+    await expect(crypto.subtle.decrypt({ name: 'AES-GCM', iv: Buffer.from(object.nonce, 'base64url') }, sealKey, corrupted)).rejects.toThrow();
   }, 20000);
 
   test('legacy completion is fenced after signed revocation during Mongo fetch', async () => {
