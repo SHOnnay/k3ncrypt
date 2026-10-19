@@ -206,4 +206,16 @@ suite('request-scoped attachment revocation using real signed devices and Mongo'
     expect((await request(f.app).get('/files/' + id).set(h)).status).toBe(403);
     expect((await request(f.app).get('/files/' + id).set(await other.headers(other.sender, 'attachment:read'))).status).toBe(403);
   }, 20000);
+
+  test('available recipient manifest metadata is denied after revocation at the final status read', async () => {
+    const f = await fixture(), id = (await f.service.create(await f.admitted(f.sender, 'attachment:create'), f.input)).context.transferId;
+    await f.service.put(await f.admitted(f.sender, 'attachment:write'), id, 'manifest', await f.sealed(64));
+    await f.service.put(await f.admitted(f.sender, 'attachment:write'), id, 0, await f.sealed(1));
+    await f.service.complete(await f.admitted(f.sender, 'attachment:write'), id);
+    const block = gate(), original = f.persistence.read.bind(f.persistence);
+    jest.spyOn(f.persistence, 'read').mockImplementationOnce(async account => { const value = await original(account); block.enter(); await block.wait; return value; });
+    const response = Promise.resolve(request(f.app).get('/files/' + id).set(await f.headers(f.recipient, 'attachment:read')));
+    try { await block.entered; await f.recipient.revoke(); } finally { block.release(); }
+    const result = await response; expect(result.status).toBe(403); expect(result.body).toEqual({ failure: 'authorization' });
+  }, 20000);
 });

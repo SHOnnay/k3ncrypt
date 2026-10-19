@@ -1,0 +1,1388 @@
+{
+  "start": "cc1ab159d19f4c0c56f189445ad2829a9676adc4",
+  "liveReference": "871fa99d0ae94c88239f6c392325f224d2c085c4",
+  "runtimeCorrection": "566c71e5a56f6de1a772d351533920b180ffa21e",
+  "baselineArtifacts": {
+    "source": "27f8e1cf1b0c29dd3c7cca2de4e380d0eb99cf16",
+    "image": "sha256:ee0fcd37565d2380b5242bf78a0b5c18fd69d7317deeeb5895779198b90f2a79",
+    "limit": 536870912,
+    "servedAssets": 7,
+    "files": [
+      {
+        "path": "client/dist/assets/browser-CX9d01rI.js",
+        "sha256": "1d11df89b05ecdf95837b69499de171aa9ff334209c1317a9bf004103db625a5"
+      },
+      {
+        "path": "client/dist/assets/esm-6mZTTw7n.js",
+        "sha256": "6a49a04a42f4fe1d5ce892110b3f089d03bccb430793985031411302e0800868"
+      },
+      {
+        "path": "client/dist/assets/index-CHBe3qCp.css",
+        "sha256": "58babb8ad9a946ca8ffaeaa1ac9e55c3c40288e2c63086814d7b09b5520180c2"
+      },
+      {
+        "path": "client/dist/assets/index-NyyapSKy.js",
+        "sha256": "7786a9b26e4beff4e29483f146dc66615fe648540f8bd8464c50a0165f06bf29"
+      },
+      {
+        "path": "client/dist/assets/k3ncrypt_vodozemac_bg-C-RDrm41.wasm",
+        "sha256": "c1ebcd701b70d9f302798918c13c92118e0c1bb82c84eef97bcad43e11e00011"
+      },
+      {
+        "path": "client/dist/branding/k3ncrypt-appicon.svg",
+        "sha256": "3eb9dbef9fbbb62836f9db71af8583be5af46b8ee0637268a8766b240110ca80"
+      },
+      {
+        "path": "client/dist/branding/k3ncrypt-cluster-monochrome.svg",
+        "sha256": "f9341efb26a11fe194164ec3fa9f1669a4d8d016875bdd4c5c164ac9f1c0850d"
+      },
+      {
+        "path": "client/dist/branding/k3ncrypt-cluster-white.svg",
+        "sha256": "186fb579dbd51c6fee93f83c513333c67104ce304694d280da49024ac3eeb197"
+      },
+      {
+        "path": "client/dist/branding/k3ncrypt-cluster.svg",
+        "sha256": "87ebb901516876840bda98258632f93f777a9bf9dd96f526e977ede9ed4bdebf"
+      },
+      {
+        "path": "client/dist/branding/k3ncrypt-lockup.svg",
+        "sha256": "c1eecbbfefdb1745a0dcec56444ab1b6c469ea3ea92915dcee938598c8636659"
+      },
+      {
+        "path": "client/dist/icons/back.svg",
+        "sha256": "f5757254a0af1ff526f19ebc9a08f235d1a47bcdc48f8d5374b0322bc6f54722"
+      },
+      {
+        "path": "client/dist/icons/bell.svg",
+        "sha256": "3b71ad57ba1f81c804e7532be91ae916133672a752cc44a1416623a80357af2e"
+      },
+      {
+        "path": "client/dist/icons/call.svg",
+        "sha256": "5635accb2f149bba1862b38b90369444219703f35b06e0687f8eb7dde1d683b3"
+      },
+      {
+        "path": "client/dist/icons/chat.svg",
+        "sha256": "f14900afe1976470dfbab7537ca0f3622e30a1cbd8a62976343b1ccc808a0efb"
+      },
+      {
+        "path": "client/dist/icons/check1.svg",
+        "sha256": "061a9d780a8820dac5d0cb4219a9a159fb230c0843dabf2db3c416730fe19883"
+      },
+      {
+        "path": "client/dist/icons/check2.svg",
+        "sha256": "6cc82e3e46875381b4a310e0af1374bbe6b181861d45162a0209c64e0f0c979d"
+      },
+      {
+        "path": "client/dist/icons/chev.svg",
+        "sha256": "5d2a2e1fd30e446801594575e270b006f128745b5ded57cf09eb8f5ac164fe6f"
+      },
+      {
+        "path": "client/dist/icons/clip.svg",
+        "sha256": "e40b50bdf33cea94eed299dc9efe11bc10d69b9e9dda189a0c7678818e97851c"
+      },
+      {
+        "path": "client/dist/icons/close.svg",
+        "sha256": "6554b9cb9d549d7d074e01135b38e516ded169bb870affb74abfa6c4a3954530"
+      },
+      {
+        "path": "client/dist/icons/contacts.svg",
+        "sha256": "45422f740d1e436c54d56f23eaf85dd65b748f10a3d218eb0c87793c28ab5a47"
+      },
+      {
+        "path": "client/dist/icons/devices.svg",
+        "sha256": "cf5d9afa8ee6834061b3f9221d546f9bd1aa7f82499a070d2a8a3018fb152380"
+      },
+      {
+        "path": "client/dist/icons/download.svg",
+        "sha256": "0db1d6f63386176edf8834b6d02eb249f5e5cdc577aa714a07d85f1d70ea7507"
+      },
+      {
+        "path": "client/dist/icons/endcall.svg",
+        "sha256": "9d316ac34f9a0507f1498a575b4602b8207ebaab300e7da70733842714338c2e"
+      },
+      {
+        "path": "client/dist/icons/file.svg",
+        "sha256": "086c297bd61178f656f35fc694cb2aaed919cf2a2df9167d9ee6d8f4b132a19c"
+      },
+      {
+        "path": "client/dist/icons/fingerprint.svg",
+        "sha256": "9d7224c51fa18234f5cb64ba75f00aec5327316cd72a8d413ac0ccefa4b8c095"
+      },
+      {
+        "path": "client/dist/icons/globe.svg",
+        "sha256": "ad986c77c30c63030fd421e1c0f5440c7b5fe9732f3c81f75485413b495db556"
+      },
+      {
+        "path": "client/dist/icons/key.svg",
+        "sha256": "6858e2e57eaf7af903a747644c3588d315797c28ae960d0dba34bed10801105f"
+      },
+      {
+        "path": "client/dist/icons/logo.svg",
+        "sha256": "87ebb901516876840bda98258632f93f777a9bf9dd96f526e977ede9ed4bdebf"
+      },
+      {
+        "path": "client/dist/icons/mic.svg",
+        "sha256": "4d1e400ee42d2aa5f4e60c79ac9648b1555966975d2f4ccf8564072e3fe18386"
+      },
+      {
+        "path": "client/dist/icons/more.svg",
+        "sha256": "3530a127c815cd95cbb92eaec83334e982097fb1768f1fc5e2a0acb23f011e0e"
+      },
+      {
+        "path": "client/dist/icons/mute.svg",
+        "sha256": "51befcf4e992df6dabcf9336a9f2bba68dbaca0c62db779ac9cbd182e212ede2"
+      },
+      {
+        "path": "client/dist/icons/palette.svg",
+        "sha256": "f9ddafc492f00cad7d961e5aa738c8677797b6cb8302f77788a83308a5580542"
+      },
+      {
+        "path": "client/dist/icons/play.svg",
+        "sha256": "db0b382e64f489d4b64c18faf3a3dddb3306acbd382968046978ded468e8468a"
+      },
+      {
+        "path": "client/dist/icons/plus.svg",
+        "sha256": "691c7f959048e7d53399c675b04bcb2d36dc08a354e7902262ce8c854079a6cc"
+      },
+      {
+        "path": "client/dist/icons/qr.svg",
+        "sha256": "d3b5339f63f8ae3694ec8a907979c3ef0a39af8c50ffad1de47958bd4a906839"
+      },
+      {
+        "path": "client/dist/icons/reply.svg",
+        "sha256": "a34de567b55eb3d85558aa78d6feb6e95e5e53ee8f509fc13d26ba646d5740c5"
+      },
+      {
+        "path": "client/dist/icons/search.svg",
+        "sha256": "40842344f54bf36e996f07c6005f00600749457eb2cb4cf13b459929691d0f20"
+      },
+      {
+        "path": "client/dist/icons/securechat.svg",
+        "sha256": "944b1a6b6e1d55787a756afd3e2802d94720ac381b3d86a525a929ff5ffc6d55"
+      },
+      {
+        "path": "client/dist/icons/send.svg",
+        "sha256": "39cd7c5dfec4a934726b6d2df9a6644be2835e9251cadfb47f0c6c873aa99958"
+      },
+      {
+        "path": "client/dist/icons/settings.svg",
+        "sha256": "220a114d1ddf6742770c3b100b99c0682a073e5f53dd008a2a04e2adc6b0b209"
+      },
+      {
+        "path": "client/dist/icons/shield.svg",
+        "sha256": "82bf6df98bad8b4cdc447550bf1c22aaf4ad8aad38b4502aca4527757294ed0b"
+      },
+      {
+        "path": "client/dist/icons/signal.svg",
+        "sha256": "63a56f4363a36c80e06aa7e1ba47e11a7fb09d9bd2affd89ecfbf1a12f5df66d"
+      },
+      {
+        "path": "client/dist/icons/speaker.svg",
+        "sha256": "649ebc04de288b7af83bdcf89a54ef35be61726f1a5599c740dac4ab02075103"
+      },
+      {
+        "path": "client/dist/icons/storage.svg",
+        "sha256": "85e089642e591d6b36fd971d911e595ec0d2dc3476a56840711457fe3913e342"
+      },
+      {
+        "path": "client/dist/icons/userplus.svg",
+        "sha256": "2a6f6432292b9c712aef5b84fb8dbae8a3352cecb42843ccc5d8a098a1bc2442"
+      },
+      {
+        "path": "client/dist/icons/video.svg",
+        "sha256": "5219676d079187b4a4b2e1293863b88de1875c46a01966267777e81456495ca0"
+      },
+      {
+        "path": "client/dist/icons/warn.svg",
+        "sha256": "fbca59d08a99ab7b1ea5cd16d318edc12d12c53c0699619fd8d4f89e3f15dfeb"
+      },
+      {
+        "path": "client/dist/index.html",
+        "sha256": "6760c43c208fc6a8a8152f0723008d84ba649dcc3c142d1b012eb11fd2786633"
+      },
+      {
+        "path": "client/dist/startup.css",
+        "sha256": "33e931105634bcb14558b1cd36b4f2a4fc5dd3f5ad2925f4f33db31b62735cbb"
+      },
+      {
+        "path": "dist/backend/api/attachments/production.js",
+        "sha256": "8397b76637f883aca5de40e70f69ced814242559601e48502db2c090a1d75785"
+      },
+      {
+        "path": "dist/backend/attachments/fileLedger.js",
+        "sha256": "f5ca78b7d62e63f02d55ab1d0f71e9b7f7491bcd7e3de4daa06ac9592d6f0180"
+      },
+      {
+        "path": "dist/backend/security/authenticatedAttachmentService.js",
+        "sha256": "787a32c6a9cb4891e67a3b9c37a4c7688f3fa42483be2daa430fd6074409bb31"
+      }
+    ]
+  },
+  "candidateArtifacts": {
+    "source": "566c71e5a56f6de1a772d351533920b180ffa21e",
+    "image": "sha256:b942388142232084d33a62c0f424b8fa81e159d4b18f0cec5b97cf77f1a2bdf7",
+    "limit": 536870912,
+    "servedAssets": 7,
+    "files": [
+      {
+        "path": "client/dist/assets/browser-CX9d01rI.js",
+        "sha256": "1d11df89b05ecdf95837b69499de171aa9ff334209c1317a9bf004103db625a5"
+      },
+      {
+        "path": "client/dist/assets/esm-6mZTTw7n.js",
+        "sha256": "6a49a04a42f4fe1d5ce892110b3f089d03bccb430793985031411302e0800868"
+      },
+      {
+        "path": "client/dist/assets/index-CHBe3qCp.css",
+        "sha256": "58babb8ad9a946ca8ffaeaa1ac9e55c3c40288e2c63086814d7b09b5520180c2"
+      },
+      {
+        "path": "client/dist/assets/index-NyyapSKy.js",
+        "sha256": "7786a9b26e4beff4e29483f146dc66615fe648540f8bd8464c50a0165f06bf29"
+      },
+      {
+        "path": "client/dist/assets/k3ncrypt_vodozemac_bg-C-RDrm41.wasm",
+        "sha256": "c1ebcd701b70d9f302798918c13c92118e0c1bb82c84eef97bcad43e11e00011"
+      },
+      {
+        "path": "client/dist/branding/k3ncrypt-appicon.svg",
+        "sha256": "3eb9dbef9fbbb62836f9db71af8583be5af46b8ee0637268a8766b240110ca80"
+      },
+      {
+        "path": "client/dist/branding/k3ncrypt-cluster-monochrome.svg",
+        "sha256": "f9341efb26a11fe194164ec3fa9f1669a4d8d016875bdd4c5c164ac9f1c0850d"
+      },
+      {
+        "path": "client/dist/branding/k3ncrypt-cluster-white.svg",
+        "sha256": "186fb579dbd51c6fee93f83c513333c67104ce304694d280da49024ac3eeb197"
+      },
+      {
+        "path": "client/dist/branding/k3ncrypt-cluster.svg",
+        "sha256": "87ebb901516876840bda98258632f93f777a9bf9dd96f526e977ede9ed4bdebf"
+      },
+      {
+        "path": "client/dist/branding/k3ncrypt-lockup.svg",
+        "sha256": "c1eecbbfefdb1745a0dcec56444ab1b6c469ea3ea92915dcee938598c8636659"
+      },
+      {
+        "path": "client/dist/icons/back.svg",
+        "sha256": "f5757254a0af1ff526f19ebc9a08f235d1a47bcdc48f8d5374b0322bc6f54722"
+      },
+      {
+        "path": "client/dist/icons/bell.svg",
+        "sha256": "3b71ad57ba1f81c804e7532be91ae916133672a752cc44a1416623a80357af2e"
+      },
+      {
+        "path": "client/dist/icons/call.svg",
+        "sha256": "5635accb2f149bba1862b38b90369444219703f35b06e0687f8eb7dde1d683b3"
+      },
+      {
+        "path": "client/dist/icons/chat.svg",
+        "sha256": "f14900afe1976470dfbab7537ca0f3622e30a1cbd8a62976343b1ccc808a0efb"
+      },
+      {
+        "path": "client/dist/icons/check1.svg",
+        "sha256": "061a9d780a8820dac5d0cb4219a9a159fb230c0843dabf2db3c416730fe19883"
+      },
+      {
+        "path": "client/dist/icons/check2.svg",
+        "sha256": "6cc82e3e46875381b4a310e0af1374bbe6b181861d45162a0209c64e0f0c979d"
+      },
+      {
+        "path": "client/dist/icons/chev.svg",
+        "sha256": "5d2a2e1fd30e446801594575e270b006f128745b5ded57cf09eb8f5ac164fe6f"
+      },
+      {
+        "path": "client/dist/icons/clip.svg",
+        "sha256": "e40b50bdf33cea94eed299dc9efe11bc10d69b9e9dda189a0c7678818e97851c"
+      },
+      {
+        "path": "client/dist/icons/close.svg",
+        "sha256": "6554b9cb9d549d7d074e01135b38e516ded169bb870affb74abfa6c4a3954530"
+      },
+      {
+        "path": "client/dist/icons/contacts.svg",
+        "sha256": "45422f740d1e436c54d56f23eaf85dd65b748f10a3d218eb0c87793c28ab5a47"
+      },
+      {
+        "path": "client/dist/icons/devices.svg",
+        "sha256": "cf5d9afa8ee6834061b3f9221d546f9bd1aa7f82499a070d2a8a3018fb152380"
+      },
+      {
+        "path": "client/dist/icons/download.svg",
+        "sha256": "0db1d6f63386176edf8834b6d02eb249f5e5cdc577aa714a07d85f1d70ea7507"
+      },
+      {
+        "path": "client/dist/icons/endcall.svg",
+        "sha256": "9d316ac34f9a0507f1498a575b4602b8207ebaab300e7da70733842714338c2e"
+      },
+      {
+        "path": "client/dist/icons/file.svg",
+        "sha256": "086c297bd61178f656f35fc694cb2aaed919cf2a2df9167d9ee6d8f4b132a19c"
+      },
+      {
+        "path": "client/dist/icons/fingerprint.svg",
+        "sha256": "9d7224c51fa18234f5cb64ba75f00aec5327316cd72a8d413ac0ccefa4b8c095"
+      },
+      {
+        "path": "client/dist/icons/globe.svg",
+        "sha256": "ad986c77c30c63030fd421e1c0f5440c7b5fe9732f3c81f75485413b495db556"
+      },
+      {
+        "path": "client/dist/icons/key.svg",
+        "sha256": "6858e2e57eaf7af903a747644c3588d315797c28ae960d0dba34bed10801105f"
+      },
+      {
+        "path": "client/dist/icons/logo.svg",
+        "sha256": "87ebb901516876840bda98258632f93f777a9bf9dd96f526e977ede9ed4bdebf"
+      },
+      {
+        "path": "client/dist/icons/mic.svg",
+        "sha256": "4d1e400ee42d2aa5f4e60c79ac9648b1555966975d2f4ccf8564072e3fe18386"
+      },
+      {
+        "path": "client/dist/icons/more.svg",
+        "sha256": "3530a127c815cd95cbb92eaec83334e982097fb1768f1fc5e2a0acb23f011e0e"
+      },
+      {
+        "path": "client/dist/icons/mute.svg",
+        "sha256": "51befcf4e992df6dabcf9336a9f2bba68dbaca0c62db779ac9cbd182e212ede2"
+      },
+      {
+        "path": "client/dist/icons/palette.svg",
+        "sha256": "f9ddafc492f00cad7d961e5aa738c8677797b6cb8302f77788a83308a5580542"
+      },
+      {
+        "path": "client/dist/icons/play.svg",
+        "sha256": "db0b382e64f489d4b64c18faf3a3dddb3306acbd382968046978ded468e8468a"
+      },
+      {
+        "path": "client/dist/icons/plus.svg",
+        "sha256": "691c7f959048e7d53399c675b04bcb2d36dc08a354e7902262ce8c854079a6cc"
+      },
+      {
+        "path": "client/dist/icons/qr.svg",
+        "sha256": "d3b5339f63f8ae3694ec8a907979c3ef0a39af8c50ffad1de47958bd4a906839"
+      },
+      {
+        "path": "client/dist/icons/reply.svg",
+        "sha256": "a34de567b55eb3d85558aa78d6feb6e95e5e53ee8f509fc13d26ba646d5740c5"
+      },
+      {
+        "path": "client/dist/icons/search.svg",
+        "sha256": "40842344f54bf36e996f07c6005f00600749457eb2cb4cf13b459929691d0f20"
+      },
+      {
+        "path": "client/dist/icons/securechat.svg",
+        "sha256": "944b1a6b6e1d55787a756afd3e2802d94720ac381b3d86a525a929ff5ffc6d55"
+      },
+      {
+        "path": "client/dist/icons/send.svg",
+        "sha256": "39cd7c5dfec4a934726b6d2df9a6644be2835e9251cadfb47f0c6c873aa99958"
+      },
+      {
+        "path": "client/dist/icons/settings.svg",
+        "sha256": "220a114d1ddf6742770c3b100b99c0682a073e5f53dd008a2a04e2adc6b0b209"
+      },
+      {
+        "path": "client/dist/icons/shield.svg",
+        "sha256": "82bf6df98bad8b4cdc447550bf1c22aaf4ad8aad38b4502aca4527757294ed0b"
+      },
+      {
+        "path": "client/dist/icons/signal.svg",
+        "sha256": "63a56f4363a36c80e06aa7e1ba47e11a7fb09d9bd2affd89ecfbf1a12f5df66d"
+      },
+      {
+        "path": "client/dist/icons/speaker.svg",
+        "sha256": "649ebc04de288b7af83bdcf89a54ef35be61726f1a5599c740dac4ab02075103"
+      },
+      {
+        "path": "client/dist/icons/storage.svg",
+        "sha256": "85e089642e591d6b36fd971d911e595ec0d2dc3476a56840711457fe3913e342"
+      },
+      {
+        "path": "client/dist/icons/userplus.svg",
+        "sha256": "2a6f6432292b9c712aef5b84fb8dbae8a3352cecb42843ccc5d8a098a1bc2442"
+      },
+      {
+        "path": "client/dist/icons/video.svg",
+        "sha256": "5219676d079187b4a4b2e1293863b88de1875c46a01966267777e81456495ca0"
+      },
+      {
+        "path": "client/dist/icons/warn.svg",
+        "sha256": "fbca59d08a99ab7b1ea5cd16d318edc12d12c53c0699619fd8d4f89e3f15dfeb"
+      },
+      {
+        "path": "client/dist/index.html",
+        "sha256": "6760c43c208fc6a8a8152f0723008d84ba649dcc3c142d1b012eb11fd2786633"
+      },
+      {
+        "path": "client/dist/startup.css",
+        "sha256": "33e931105634bcb14558b1cd36b4f2a4fc5dd3f5ad2925f4f33db31b62735cbb"
+      },
+      {
+        "path": "dist/backend/api/attachments/production.js",
+        "sha256": "c788ee050883f65842b3b2122077aae58dbf393221cf6e34e464f83f67a7e24b"
+      },
+      {
+        "path": "dist/backend/attachments/fileLedger.js",
+        "sha256": "30da41cecc16ed825cad35d46eb97cd0fe55c22a42f7d45cc44773b676aff6f7"
+      },
+      {
+        "path": "dist/backend/security/attachmentTrust.js",
+        "sha256": "8af0f62e6e927261181df230e6958966bbb0273f0798ed429f9487021b8d87b4"
+      },
+      {
+        "path": "dist/backend/security/authenticatedAttachmentService.js",
+        "sha256": "e3328f75642afe513425ebe160a4857cd61424d030122fe7506c531c8fd5a23c"
+      }
+    ]
+  },
+  "baseline": [
+    {
+      "bytes": 314368,
+      "repeat": 0,
+      "fixtureMs": 5477,
+      "selectionMs": 30,
+      "sendMs": 884,
+      "downloadReadyMs": 396,
+      "integrity": "PASS",
+      "httpCounts": [
+        {
+          "category": "chunk-download",
+          "status": 200,
+          "count": 2
+        },
+        {
+          "category": "chunk-upload",
+          "status": 200,
+          "count": 2
+        },
+        {
+          "category": "complete",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "create",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "device-trust",
+          "status": 200,
+          "count": 10
+        },
+        {
+          "category": "file-status",
+          "status": 200,
+          "count": 2
+        },
+        {
+          "category": "manifest-upload",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "prekey-read",
+          "status": 200,
+          "count": 11
+        }
+      ],
+      "retryCount": 0,
+      "totalRecordedRetryWaitMs": 0
+    },
+    {
+      "bytes": 1258291,
+      "repeat": 0,
+      "fixtureMs": 5477,
+      "selectionMs": 111,
+      "sendMs": 1883,
+      "downloadReadyMs": 1900,
+      "integrity": "PASS",
+      "httpCounts": [
+        {
+          "category": "chunk-download",
+          "status": 200,
+          "count": 5
+        },
+        {
+          "category": "chunk-upload",
+          "status": 200,
+          "count": 5
+        },
+        {
+          "category": "complete",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "create",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "device-trust",
+          "status": 200,
+          "count": 16
+        },
+        {
+          "category": "file-status",
+          "status": 200,
+          "count": 2
+        },
+        {
+          "category": "manifest-upload",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "prekey-read",
+          "status": 200,
+          "count": 17
+        },
+        {
+          "category": "prekey-read",
+          "status": 429,
+          "count": 1
+        }
+      ],
+      "retryCount": 1,
+      "totalRecordedRetryWaitMs": 1002
+    },
+    {
+      "bytes": 314368,
+      "repeat": 1,
+      "fixtureMs": 5477,
+      "selectionMs": 39,
+      "sendMs": 3114,
+      "downloadReadyMs": 1899,
+      "integrity": "PASS",
+      "httpCounts": [
+        {
+          "category": "chunk-download",
+          "status": 200,
+          "count": 2
+        },
+        {
+          "category": "chunk-upload",
+          "status": 200,
+          "count": 2
+        },
+        {
+          "category": "complete",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "create",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "device-trust",
+          "status": 200,
+          "count": 10
+        },
+        {
+          "category": "file-status",
+          "status": 200,
+          "count": 2
+        },
+        {
+          "category": "manifest-upload",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "prekey-read",
+          "status": 200,
+          "count": 11
+        },
+        {
+          "category": "prekey-read",
+          "status": 429,
+          "count": 3
+        }
+      ],
+      "retryCount": 3,
+      "totalRecordedRetryWaitMs": 3009
+    },
+    {
+      "bytes": 1258291,
+      "repeat": 1,
+      "fixtureMs": 5477,
+      "selectionMs": 99,
+      "sendMs": 9147,
+      "downloadReadyMs": 10956,
+      "integrity": "PASS",
+      "httpCounts": [
+        {
+          "category": "chunk-download",
+          "status": 200,
+          "count": 5
+        },
+        {
+          "category": "chunk-download",
+          "status": 429,
+          "count": 4
+        },
+        {
+          "category": "chunk-upload",
+          "status": 200,
+          "count": 5
+        },
+        {
+          "category": "chunk-upload",
+          "status": 429,
+          "count": 1
+        },
+        {
+          "category": "complete",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "create",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "device-trust",
+          "status": 200,
+          "count": 22
+        },
+        {
+          "category": "device-trust",
+          "status": 429,
+          "count": 1
+        },
+        {
+          "category": "file-status",
+          "status": 200,
+          "count": 2
+        },
+        {
+          "category": "file-status",
+          "status": 429,
+          "count": 1
+        },
+        {
+          "category": "manifest-upload",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "prekey-read",
+          "status": 200,
+          "count": 17
+        },
+        {
+          "category": "prekey-read",
+          "status": 429,
+          "count": 5
+        }
+      ],
+      "retryCount": 12,
+      "totalRecordedRetryWaitMs": 17256
+    },
+    {
+      "bytes": 314368,
+      "repeat": 2,
+      "fixtureMs": 5477,
+      "selectionMs": 37,
+      "sendMs": 13166,
+      "downloadReadyMs": 4925,
+      "integrity": "PASS",
+      "httpCounts": [
+        {
+          "category": "chunk-download",
+          "status": 200,
+          "count": 2
+        },
+        {
+          "category": "chunk-download",
+          "status": 429,
+          "count": 2
+        },
+        {
+          "category": "chunk-upload",
+          "status": 200,
+          "count": 2
+        },
+        {
+          "category": "chunk-upload",
+          "status": 429,
+          "count": 1
+        },
+        {
+          "category": "complete",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "complete",
+          "status": 429,
+          "count": 1
+        },
+        {
+          "category": "create",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "create",
+          "status": 429,
+          "count": 1
+        },
+        {
+          "category": "device-trust",
+          "status": 200,
+          "count": 16
+        },
+        {
+          "category": "device-trust",
+          "status": 429,
+          "count": 2
+        },
+        {
+          "category": "file-status",
+          "status": 200,
+          "count": 2
+        },
+        {
+          "category": "file-status",
+          "status": 429,
+          "count": 1
+        },
+        {
+          "category": "manifest-upload",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "prekey-read",
+          "status": 200,
+          "count": 11
+        },
+        {
+          "category": "prekey-read",
+          "status": 429,
+          "count": 7
+        }
+      ],
+      "retryCount": 15,
+      "totalRecordedRetryWaitMs": 15200
+    },
+    {
+      "bytes": 1258291,
+      "repeat": 2,
+      "fixtureMs": 5477,
+      "selectionMs": 110,
+      "sendMs": 17197,
+      "downloadReadyMs": 10933,
+      "integrity": "PASS",
+      "httpCounts": [
+        {
+          "category": "chunk-download",
+          "status": 200,
+          "count": 5
+        },
+        {
+          "category": "chunk-download",
+          "status": 429,
+          "count": 4
+        },
+        {
+          "category": "chunk-upload",
+          "status": 200,
+          "count": 5
+        },
+        {
+          "category": "chunk-upload",
+          "status": 429,
+          "count": 3
+        },
+        {
+          "category": "complete",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "complete",
+          "status": 429,
+          "count": 1
+        },
+        {
+          "category": "create",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "create",
+          "status": 429,
+          "count": 1
+        },
+        {
+          "category": "device-trust",
+          "status": 200,
+          "count": 25
+        },
+        {
+          "category": "device-trust",
+          "status": 429,
+          "count": 5
+        },
+        {
+          "category": "file-status",
+          "status": 200,
+          "count": 2
+        },
+        {
+          "category": "manifest-upload",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "prekey-read",
+          "status": 200,
+          "count": 17
+        },
+        {
+          "category": "prekey-read",
+          "status": 429,
+          "count": 11
+        }
+      ],
+      "retryCount": 25,
+      "totalRecordedRetryWaitMs": 25335
+    }
+  ],
+  "candidate": [
+    {
+      "bytes": 314368,
+      "repeat": 0,
+      "fixtureMs": 5784,
+      "selectionMs": 31,
+      "sendMs": 880,
+      "downloadReadyMs": 412,
+      "integrity": "PASS",
+      "httpCounts": [
+        {
+          "category": "chunk-download",
+          "status": 200,
+          "count": 2
+        },
+        {
+          "category": "chunk-upload",
+          "status": 200,
+          "count": 2
+        },
+        {
+          "category": "complete",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "create",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "device-trust",
+          "status": 200,
+          "count": 10
+        },
+        {
+          "category": "file-status",
+          "status": 200,
+          "count": 2
+        },
+        {
+          "category": "manifest-upload",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "prekey-read",
+          "status": 200,
+          "count": 11
+        }
+      ],
+      "retryCount": 0,
+      "totalRecordedRetryWaitMs": 0
+    },
+    {
+      "bytes": 1258291,
+      "repeat": 0,
+      "fixtureMs": 5784,
+      "selectionMs": 108,
+      "sendMs": 883,
+      "downloadReadyMs": 3003,
+      "integrity": "PASS",
+      "httpCounts": [
+        {
+          "category": "chunk-download",
+          "status": 200,
+          "count": 5
+        },
+        {
+          "category": "chunk-upload",
+          "status": 200,
+          "count": 5
+        },
+        {
+          "category": "complete",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "create",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "device-trust",
+          "status": 200,
+          "count": 16
+        },
+        {
+          "category": "file-status",
+          "status": 200,
+          "count": 2
+        },
+        {
+          "category": "manifest-upload",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "prekey-read",
+          "status": 200,
+          "count": 17
+        },
+        {
+          "category": "prekey-read",
+          "status": 429,
+          "count": 2
+        }
+      ],
+      "retryCount": 2,
+      "totalRecordedRetryWaitMs": 2008
+    },
+    {
+      "bytes": 314368,
+      "repeat": 1,
+      "fixtureMs": 5784,
+      "selectionMs": 26,
+      "sendMs": 3121,
+      "downloadReadyMs": 1891,
+      "integrity": "PASS",
+      "httpCounts": [
+        {
+          "category": "chunk-download",
+          "status": 200,
+          "count": 2
+        },
+        {
+          "category": "chunk-upload",
+          "status": 200,
+          "count": 2
+        },
+        {
+          "category": "complete",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "create",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "device-trust",
+          "status": 200,
+          "count": 10
+        },
+        {
+          "category": "file-status",
+          "status": 200,
+          "count": 2
+        },
+        {
+          "category": "manifest-upload",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "prekey-read",
+          "status": 200,
+          "count": 11
+        },
+        {
+          "category": "prekey-read",
+          "status": 429,
+          "count": 3
+        }
+      ],
+      "retryCount": 3,
+      "totalRecordedRetryWaitMs": 3013
+    },
+    {
+      "bytes": 1258291,
+      "repeat": 1,
+      "fixtureMs": 5784,
+      "selectionMs": 97,
+      "sendMs": 9148,
+      "downloadReadyMs": 9935,
+      "integrity": "PASS",
+      "httpCounts": [
+        {
+          "category": "chunk-download",
+          "status": 200,
+          "count": 5
+        },
+        {
+          "category": "chunk-download",
+          "status": 429,
+          "count": 4
+        },
+        {
+          "category": "chunk-upload",
+          "status": 200,
+          "count": 5
+        },
+        {
+          "category": "chunk-upload",
+          "status": 429,
+          "count": 1
+        },
+        {
+          "category": "complete",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "create",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "device-trust",
+          "status": 200,
+          "count": 21
+        },
+        {
+          "category": "file-status",
+          "status": 200,
+          "count": 2
+        },
+        {
+          "category": "manifest-upload",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "prekey-read",
+          "status": 200,
+          "count": 17
+        },
+        {
+          "category": "prekey-read",
+          "status": 429,
+          "count": 6
+        }
+      ],
+      "retryCount": 11,
+      "totalRecordedRetryWaitMs": 16198
+    },
+    {
+      "bytes": 314368,
+      "repeat": 2,
+      "fixtureMs": 5784,
+      "selectionMs": 42,
+      "sendMs": 12161,
+      "downloadReadyMs": 4920,
+      "integrity": "PASS",
+      "httpCounts": [
+        {
+          "category": "chunk-download",
+          "status": 200,
+          "count": 2
+        },
+        {
+          "category": "chunk-download",
+          "status": 429,
+          "count": 1
+        },
+        {
+          "category": "chunk-upload",
+          "status": 200,
+          "count": 2
+        },
+        {
+          "category": "chunk-upload",
+          "status": 429,
+          "count": 1
+        },
+        {
+          "category": "complete",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "complete",
+          "status": 429,
+          "count": 1
+        },
+        {
+          "category": "create",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "device-trust",
+          "status": 200,
+          "count": 14
+        },
+        {
+          "category": "device-trust",
+          "status": 429,
+          "count": 2
+        },
+        {
+          "category": "file-status",
+          "status": 200,
+          "count": 2
+        },
+        {
+          "category": "file-status",
+          "status": 429,
+          "count": 1
+        },
+        {
+          "category": "manifest-upload",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "prekey-read",
+          "status": 200,
+          "count": 11
+        },
+        {
+          "category": "prekey-read",
+          "status": 429,
+          "count": 8
+        }
+      ],
+      "retryCount": 14,
+      "totalRecordedRetryWaitMs": 14189
+    },
+    {
+      "bytes": 1258291,
+      "repeat": 2,
+      "fixtureMs": 5784,
+      "selectionMs": 116,
+      "sendMs": 16197,
+      "downloadReadyMs": 10934,
+      "integrity": "PASS",
+      "httpCounts": [
+        {
+          "category": "chunk-download",
+          "status": 200,
+          "count": 5
+        },
+        {
+          "category": "chunk-download",
+          "status": 429,
+          "count": 4
+        },
+        {
+          "category": "chunk-upload",
+          "status": 200,
+          "count": 5
+        },
+        {
+          "category": "chunk-upload",
+          "status": 429,
+          "count": 1
+        },
+        {
+          "category": "complete",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "create",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "create",
+          "status": 429,
+          "count": 1
+        },
+        {
+          "category": "device-trust",
+          "status": 200,
+          "count": 23
+        },
+        {
+          "category": "device-trust",
+          "status": 429,
+          "count": 3
+        },
+        {
+          "category": "file-status",
+          "status": 200,
+          "count": 2
+        },
+        {
+          "category": "file-status",
+          "status": 429,
+          "count": 1
+        },
+        {
+          "category": "manifest-upload",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "prekey-read",
+          "status": 200,
+          "count": 17
+        },
+        {
+          "category": "prekey-read",
+          "status": 429,
+          "count": 9
+        }
+      ],
+      "retryCount": 19,
+      "totalRecordedRetryWaitMs": 24241
+    }
+  ],
+  "candidateBoundary": [
+    {
+      "bytes": 8388608,
+      "repeat": 0,
+      "fixtureMs": 5665,
+      "selectionMs": 654,
+      "sendMs": 9929,
+      "downloadReadyMs": 55126,
+      "integrity": "PASS",
+      "httpCounts": [
+        {
+          "category": "chunk-download",
+          "status": 200,
+          "count": 32
+        },
+        {
+          "category": "chunk-download",
+          "status": 429,
+          "count": 21
+        },
+        {
+          "category": "chunk-upload",
+          "status": 200,
+          "count": 32
+        },
+        {
+          "category": "complete",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "create",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "device-trust",
+          "status": 200,
+          "count": 91
+        },
+        {
+          "category": "device-trust",
+          "status": 429,
+          "count": 5
+        },
+        {
+          "category": "file-status",
+          "status": 200,
+          "count": 2
+        },
+        {
+          "category": "manifest-upload",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "prekey-read",
+          "status": 200,
+          "count": 71
+        },
+        {
+          "category": "prekey-read",
+          "status": 429,
+          "count": 29
+        }
+      ],
+      "retryCount": 55,
+      "totalRecordedRetryWaitMs": 55564
+    }
+  ],
+  "memory": {
+    "27f8e1cf1b0c29dd3c7cca2de4e380d0eb99cf16": {
+      "samples": 98,
+      "peakBytes": 94048256,
+      "currentBytes": 57921536,
+      "events": {
+        "low": "0",
+        "high": "0",
+        "max": "0",
+        "oom": "0",
+        "oom_kill": "0",
+        "oom_group_kill": "0"
+      }
+    },
+    "566c71e5a56f6de1a772d351533920b180ffa21e": {
+      "samples": 440,
+      "peakBytes": 95002624,
+      "currentBytes": 56795136,
+      "events": {
+        "low": "0",
+        "high": "0",
+        "max": "0",
+        "oom": "0",
+        "oom_kill": "0",
+        "oom_group_kill": "0"
+      }
+    }
+  },
+  "tests": {
+    "unitPassed": 97,
+    "mongoPassed": 17,
+    "mongoFailed": 1,
+    "knownFailure": "legacy V1 BSON ciphertext round-trip; reproduced on live reference",
+    "remainingLegacyFixtureSkips": 2,
+    "preCorrectionSignedRevocationFailures": 7,
+    "liveReferenceSignedRevocationFailures": 7,
+    "legacyCompletionRevocationPassed": true,
+    "candidateV2BrowserFileSamplesPassed": 7,
+    "baselineV2BrowserFileSamplesPassed": 6,
+    "browserRetryCancelReloadPassed": true,
+    "browserRetryCancelReloadMs": 12200,
+    "freshLifecycleChecks": 100,
+    "freshLifecycleChecksMs": 35.12,
+    "guardAdditionalProofClaims": 0,
+    "readAdditionalLedgerWrites": 0
+  },
+  "phoneStage": "conditional GO for V2-only diagnostic clients and disposable identities after HTTPS exposure approval",
+  "generalLegacyRelease": "NO-GO pending legacy adapter disposition",
+  "legacyBinaryProjection": {
+    "syntheticBsonBytes": 17,
+    "projectedUint8ArrayBytes": 0
+  }
+}
