@@ -26,6 +26,21 @@ suite('disposable Mongo read-only file delivery', () => {
     const created = await service.create(auth(), { version: 2, binding, fileSize: size }); const id = created.context.transferId;
     const object = (bytes: number, nonce: number) => ({ nonce: Buffer.alloc(12, nonce).toString('base64url'), ciphertext: Buffer.alloc(bytes, 71).toString('base64url') });
     await service.put(auth(), id, 'manifest', object(80, 1));
+    // Deterministic status/upload overlap: commit progress before the final read
+    // without transitioning away from incomplete. This uses real Mongo CAS writes.
+    let releaseStatus!: () => void, statusEntered!: () => void;
+    const statusGate = new Promise<void>(resolve => { releaseStatus = resolve; });
+    const statusStarted = new Promise<void>(resolve => { statusEntered = resolve; });
+    const read = persistence.read.bind(persistence);
+    const readSpy = jest.spyOn(persistence, 'read').mockImplementationOnce(async account => {
+      statusEntered(); await statusGate; return read(account);
+    });
+    const pendingStatus = service.status(auth(), id);
+    await statusStarted;
+    await service.put(auth(), id, 0, object(Math.min(262144, size) + 16, 2));
+    releaseStatus();
+    await expect(pendingStatus).resolves.toMatchObject({ state: 'incomplete', indices: [0] });
+    readSpy.mockRestore();
     for (let i=0; i<created.context.chunkCount; i++) await service.put(auth(), id, i, object(Math.min(262144, size-i*262144)+16, i+2));
     await service.complete(auth(), id);
     service = new FileLedgerService(persistence, identities); // Fresh service, same stored ciphertext.

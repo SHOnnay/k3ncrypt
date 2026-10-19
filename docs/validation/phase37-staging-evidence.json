@@ -1,0 +1,2374 @@
+{
+  "runtimeSource": "27f8e1cf1b0c29dd3c7cca2de4e380d0eb99cf16",
+  "imageId": "sha256:ee0fcd37565d2380b5242bf78a0b5c18fd69d7317deeeb5895779198b90f2a79",
+  "memoryLimitBytes": 536870912,
+  "servedAssetsVerified": 7,
+  "compiledFiles": [
+    {
+      "path": "dist/app.js",
+      "sha256": "722f3f314f6669e19fe6e68694ec7c190b28e1ee54de3a2e84d2aa37d588af12"
+    },
+    {
+      "path": "dist/app.js.map",
+      "sha256": "5c61c59b76bd9054a4569bedf637421417d4c229a79e02575115dd2901cfd25c"
+    },
+    {
+      "path": "dist/backend/api/attachments/contracts.js",
+      "sha256": "f14a59805eb63819f5ec8cb76d6b0887426c550f981ff517e74790eb3f1d8746"
+    },
+    {
+      "path": "dist/backend/api/attachments/contracts.js.map",
+      "sha256": "c2cf51e8e98340dab63531a9aadd17759cea554df0538552fcdfc6b375ddde01"
+    },
+    {
+      "path": "dist/backend/api/attachments/files.js",
+      "sha256": "98bac9d59f2f0f142f0ba9e86a9161cf3324569a41e7feb8e7846de38f7c951b"
+    },
+    {
+      "path": "dist/backend/api/attachments/files.js.map",
+      "sha256": "ce23b0efada52a98bc5e156578fca2b4dbe4d57b22c1cabd85d0588d768e9c32"
+    },
+    {
+      "path": "dist/backend/api/attachments/index.js",
+      "sha256": "7adc8c0d06e693e4dadc5a69f1750d1c21f3a7c6cc0d04b71a8b5f623e37a22b"
+    },
+    {
+      "path": "dist/backend/api/attachments/index.js.map",
+      "sha256": "843f9e8f72a041f46d3e2937e6268dfe5a5de8aeb937c9e27577607561a5c515"
+    },
+    {
+      "path": "dist/backend/api/attachments/production.js",
+      "sha256": "8397b76637f883aca5de40e70f69ced814242559601e48502db2c090a1d75785"
+    },
+    {
+      "path": "dist/backend/api/attachments/production.js.map",
+      "sha256": "04f802e3ecdccb52c20b9dbdb77760e2ba87af3b8f7f8051c03f060cc031d99f"
+    },
+    {
+      "path": "dist/backend/api/chatHash/index.js",
+      "sha256": "e00013f8263d716223c59bdbb49dc831b34d14204a669326bda84e17075e6b2c"
+    },
+    {
+      "path": "dist/backend/api/chatHash/index.js.map",
+      "sha256": "425eaccb937c04887bee7357eba228f00b0ca3c9d1741c57d455551821cacf80"
+    },
+    {
+      "path": "dist/backend/api/chatHash/prekeys.js",
+      "sha256": "ed6d4c8f09463ace48e2e06b86feff2beef474646116ed478a816ea9751dc0ba"
+    },
+    {
+      "path": "dist/backend/api/chatHash/prekeys.js.map",
+      "sha256": "005917acae440c86165c1693d058b69bd90a6b691b47ce0978e183892e463fd3"
+    },
+    {
+      "path": "dist/backend/api/chatHash/utils/link.js",
+      "sha256": "4714cf4f7b18019af8c44d710f75215da01ad711d49b7a4baac1dbd52bcbda13"
+    },
+    {
+      "path": "dist/backend/api/chatHash/utils/link.js.map",
+      "sha256": "4a7a6935e7da9227389cd23e807358a01497f161916a8dce03868ca2a33f3c1b"
+    },
+    {
+      "path": "dist/backend/api/chatHash/utils/validateChannel.js",
+      "sha256": "ae30652ebf8e0cd99091ead3bfb1cbfc509107c25e0c5a9c7b8c98fb7bde03ca"
+    },
+    {
+      "path": "dist/backend/api/chatHash/utils/validateChannel.js.map",
+      "sha256": "cc2a8a181823a8fa347fa7929ef77202c8aaa7a9225fc1f523529e8f2589998c"
+    },
+    {
+      "path": "dist/backend/api/deviceTrust.js",
+      "sha256": "2f95eb80ae64d5fe3276e2d1dd6f0b299335dc07380b849b2e746432d3b7693c"
+    },
+    {
+      "path": "dist/backend/api/deviceTrust.js.map",
+      "sha256": "074ffd82a89e0a90cdf71165f46c916711e6140f39a95715fa0a9b65768d957a"
+    },
+    {
+      "path": "dist/backend/api/index.js",
+      "sha256": "1a9a75f9a8726f213e01e3c1fbfc2e3ac8973dca3702e0057798415af4070a23"
+    },
+    {
+      "path": "dist/backend/api/index.js.map",
+      "sha256": "a1a9dc67ae96dfa312fb3e037eb5c4f7924e7a75dacd97aae159653adc9c2b3e"
+    },
+    {
+      "path": "dist/backend/api/messaging/index.js",
+      "sha256": "38321b4b48664ca14fff0a1e365e5f52352db942780620724bb86b5ba3890d1a"
+    },
+    {
+      "path": "dist/backend/api/messaging/index.js.map",
+      "sha256": "17a491ec81c004e2484bdb22d1b51582456ab5ff1db89d08ecee8afd552685be"
+    },
+    {
+      "path": "dist/backend/api/messaging/types.js",
+      "sha256": "b0d2bc4142d0c62d43f996aaeb64f22c4889ac853f8a3765758b505d972d0149"
+    },
+    {
+      "path": "dist/backend/api/messaging/types.js.map",
+      "sha256": "7ef4b822914fa52dea0945ef2cdaa85a72b4c26e602cf5c02f8f6180dc7234d6"
+    },
+    {
+      "path": "dist/backend/api/networkMembership.js",
+      "sha256": "a3ec56275f5c28282567a6afb1c14de1f8fc3a83bc141c6316ab49f1f2ec42ec"
+    },
+    {
+      "path": "dist/backend/api/networkMembership.js.map",
+      "sha256": "b7fbd06945c410ff18018e04b84de613616cc432c8db0126973595289905eb05"
+    },
+    {
+      "path": "dist/backend/api/operations.js",
+      "sha256": "f58f62e50f72c7d3d529f6f669ac41628d0b3eb73fcbed70547fb808729deb7a"
+    },
+    {
+      "path": "dist/backend/api/operations.js.map",
+      "sha256": "4c6be49745457f777360f4a1151198646ac08f9c25aa5af116f086e25bbdae1e"
+    },
+    {
+      "path": "dist/backend/attachments/fileLedger.js",
+      "sha256": "f5ca78b7d62e63f02d55ab1d0f71e9b7f7491bcd7e3de4daa06ac9592d6f0180"
+    },
+    {
+      "path": "dist/backend/attachments/fileLedger.js.map",
+      "sha256": "92fe5cbcdd333996385cfd3f8944e1d9cbdfdccaaf917ad17b19281cf3abf4d5"
+    },
+    {
+      "path": "dist/backend/attachments/index.js",
+      "sha256": "bcfd61ab5e576f53d8c1d6b5d19c7e3bbb39023c0700946d353c0bb08fca3df2"
+    },
+    {
+      "path": "dist/backend/attachments/index.js.map",
+      "sha256": "62dfdfd2459cbbfb781c0b10208db3a79fa9ed336971146e50b7b874af6bcb37"
+    },
+    {
+      "path": "dist/backend/attachments/mongoAttachmentPersistence.js",
+      "sha256": "2f2022e52be07011f841cb999a6a3d67298ff2eca6927b5b697ae9fe2ad01e75"
+    },
+    {
+      "path": "dist/backend/attachments/mongoAttachmentPersistence.js.map",
+      "sha256": "7336d3c55a0c55ad03814e0d022b09cbb5153fe9d47adb94c78ad4427aa4b011"
+    },
+    {
+      "path": "dist/backend/db/const.js",
+      "sha256": "d69a5d65d184be869efc53dabea0acf17d53c279c22583516e0d90a89f879258"
+    },
+    {
+      "path": "dist/backend/db/const.js.map",
+      "sha256": "f678b12272660c5a5ff10ea6f91df2b8b582cd1634e125c5b5a78814429e681f"
+    },
+    {
+      "path": "dist/backend/db/inMemDB.js",
+      "sha256": "4d867f8e55e49e3aa75e1b23719141b24fea0adaef469babd6ad2b3f3308a6e7"
+    },
+    {
+      "path": "dist/backend/db/inMemDB.js.map",
+      "sha256": "8850328070a10a782796acc9fdccf3fee4f6765a87583f49d53b0edcbc1afc23"
+    },
+    {
+      "path": "dist/backend/db/index.js",
+      "sha256": "af3f563f73625f8e65f4a7a67af5bfe5fecbed2ead0d8833b3d045badcf1366a"
+    },
+    {
+      "path": "dist/backend/db/index.js.map",
+      "sha256": "1cbb65021184aaaf46d077c3f5d2171ee602a28348a677a85cae3c82e120f208"
+    },
+    {
+      "path": "dist/backend/db/migrations.js",
+      "sha256": "01fa212160bcb9e8592cc2dac30b8c5887b62c07b8740b9bcb081a9c7ce68975"
+    },
+    {
+      "path": "dist/backend/db/migrations.js.map",
+      "sha256": "24b885d5dbd3af9799169e3640ae23fd0f9ec5233780362337977960487dfdbd"
+    },
+    {
+      "path": "dist/backend/middleware/apiRateLimit.js",
+      "sha256": "a85cd685c254b36ced422db125bddf6c5cda47ae40df00961162168f86b6fd54"
+    },
+    {
+      "path": "dist/backend/middleware/apiRateLimit.js.map",
+      "sha256": "c01d311bacdb4e1fd973f1397ff6f58ee92ed5a58a4e208652702dd4584a18a0"
+    },
+    {
+      "path": "dist/backend/middleware/asyncHandler.js",
+      "sha256": "af9eeae39ca702c0808489e58a5fc0b1d4ad7c5fa0537403ed25fa7bc2700990"
+    },
+    {
+      "path": "dist/backend/middleware/asyncHandler.js.map",
+      "sha256": "ff45a13c7024cd5ec6304913dbc549b409cc3985359be8e9336be94a6a76cd87"
+    },
+    {
+      "path": "dist/backend/middleware/controlRateLimit.js",
+      "sha256": "6348ee59baf35c47eda55cf34c4765d973b1d1261d58b2edae7ca7c84ac88ae0"
+    },
+    {
+      "path": "dist/backend/middleware/controlRateLimit.js.map",
+      "sha256": "f88ec7384a488175ab4c8a499c52b7978e46a1885e707bfdd3e6299af0d695b6"
+    },
+    {
+      "path": "dist/backend/middleware/httpRateLimiter.js",
+      "sha256": "8976be7f0b53235571eb2bd4732eaa286ecb32633bb47a7d808ca73a3c72ff56"
+    },
+    {
+      "path": "dist/backend/middleware/httpRateLimiter.js.map",
+      "sha256": "b9eb77b862e6c716c66e18febc352d6c3a3dbea4b4e436b3d6fa66d96ac039ac"
+    },
+    {
+      "path": "dist/backend/middleware/safeErrorHandler.js",
+      "sha256": "cfe47dfdd0bab0d5c9955119fc160f224075c84499afd2d5aa4d57efea0d3b22"
+    },
+    {
+      "path": "dist/backend/middleware/safeErrorHandler.js.map",
+      "sha256": "0cde4056ca65d1e59e573136108dd4bb368353778ed00cb5252f56e47f02ec5e"
+    },
+    {
+      "path": "dist/backend/operations/logger.js",
+      "sha256": "a03f7707a7132127ef5722d208dbbb35a3801a2c95b5e09f33b07ba69331e217"
+    },
+    {
+      "path": "dist/backend/operations/logger.js.map",
+      "sha256": "e5d6cd98a8619fa770873344301d6c3aecba25e8061ce31c1469898a3bd8f425"
+    },
+    {
+      "path": "dist/backend/operations/maintenanceGate.js",
+      "sha256": "12e5912f6804ee6d32fd32d50c365a04bd35031193669e7a1ba7c87764474f3d"
+    },
+    {
+      "path": "dist/backend/operations/maintenanceGate.js.map",
+      "sha256": "6d277ef076b375cf11a7f434069bae36e497e71d2f0967d7a9cd342dd910e66c"
+    },
+    {
+      "path": "dist/backend/operations/status.js",
+      "sha256": "42cccf1e96fa0346c5a0679ad9426ecd7e719a643995f224b8acd722ea38df05"
+    },
+    {
+      "path": "dist/backend/operations/status.js.map",
+      "sha256": "c0236d79ea598a6cb2506cd2c5a3b16b8e15b849e5d385a27f80cc0c44d7f9e5"
+    },
+    {
+      "path": "dist/backend/privateNetwork/relay.js",
+      "sha256": "d3100813af00cb1e6312ed30d2cf0c0e3a69dff8bdc6f9dd7d66e1addaa9c3c6"
+    },
+    {
+      "path": "dist/backend/privateNetwork/relay.js.map",
+      "sha256": "a24323ee1afa11c486188ed9c910de93b80dd8ce34a6640396b4911e503e71d5"
+    },
+    {
+      "path": "dist/backend/security/authenticatedAttachmentService.js",
+      "sha256": "787a32c6a9cb4891e67a3b9c37a4c7688f3fa42483be2daa430fd6074409bb31"
+    },
+    {
+      "path": "dist/backend/security/authenticatedAttachmentService.js.map",
+      "sha256": "0e998fbda8a0509067d2f571e1730b0bb4821d0025ef4074e9992cb47c49c660"
+    },
+    {
+      "path": "dist/backend/security/authorizationContext.js",
+      "sha256": "76603826030095d1b292584c395d8ec69058db896e104290c756b947a1224430"
+    },
+    {
+      "path": "dist/backend/security/authorizationContext.js.map",
+      "sha256": "424eb0ad284a44999b49d0956ab4d8ede015ec242874a4bd25e5c51644fae83f"
+    },
+    {
+      "path": "dist/backend/security/controlCapability.js",
+      "sha256": "a3309aa457f548bd435bf0812a4001726186cea0157ea51164bfaa01a86e222a"
+    },
+    {
+      "path": "dist/backend/security/controlCapability.js.map",
+      "sha256": "4f9db3e8aa6cc0d0192968c24bb89355678eb8dad94c2b7de3f6bed4bc033d28"
+    },
+    {
+      "path": "dist/backend/security/cors.js",
+      "sha256": "1432a6c00ac7f1f0f361c5ac5b3dcdabb5f9847599de0f6a9bc1d5d562ab2768"
+    },
+    {
+      "path": "dist/backend/security/cors.js.map",
+      "sha256": "0e909be018ba788248ef72237f10307c3d6271a16bda905a9ff0236de74134e4"
+    },
+    {
+      "path": "dist/backend/security/deviceTrust.js",
+      "sha256": "d70531730e139de6e7b0eaa4d35ae2802cfd5410bf77e2f8b270b6863192efbf"
+    },
+    {
+      "path": "dist/backend/security/deviceTrust.js.map",
+      "sha256": "6f6ee9927aa40185783887cef2275d81b0a8b8ec47c7cedc4bf83826b4a456dc"
+    },
+    {
+      "path": "dist/backend/security/durableDeviceTrust.js",
+      "sha256": "28aa4903280ec939659df353495a4c23507bd56cdd2754f8dc5cb0a5bb484475"
+    },
+    {
+      "path": "dist/backend/security/durableDeviceTrust.js.map",
+      "sha256": "c1afb5003e34878327823ee9c968333876e08eeef60bd97e2ba43f829a0ceb8b"
+    },
+    {
+      "path": "dist/backend/security/lifecycleEvent.js",
+      "sha256": "ad1a2b8a1570937d1c99c2bb3370db2f878a1c66e7939355342b1f2d2847fa39"
+    },
+    {
+      "path": "dist/backend/security/lifecycleEvent.js.map",
+      "sha256": "4f61b00904a3b6033a6fc112027610d14f89f3b4a2f153e7bcd5d8b2391267cc"
+    },
+    {
+      "path": "dist/backend/security/muxFeatureGate.js",
+      "sha256": "87e94afc3bbacc0c8ac0ede2f290d3ce73ea201482d8faa33755bbda34569297"
+    },
+    {
+      "path": "dist/backend/security/muxFeatureGate.js.map",
+      "sha256": "9feeb14ad5b0fcd001b06870b18ed73bbe6a498dbf329087bc416fffeff841c0"
+    },
+    {
+      "path": "dist/backend/security/networkMembership.js",
+      "sha256": "016d4cdfe10bdb7ef3aa8c84c47965118888639e49fdbe24e25e87ce589aed44"
+    },
+    {
+      "path": "dist/backend/security/networkMembership.js.map",
+      "sha256": "bca1ecc110a7ee6a19238aaeff58b0738cdf8fe0179249f92a1b64639b1b9587"
+    },
+    {
+      "path": "dist/backend/security/productionAttachmentComposition.js",
+      "sha256": "78a52818a91db9af67a0ad7b7be398f6c5d22922a93bf4be026cc0ae0408a158"
+    },
+    {
+      "path": "dist/backend/security/productionAttachmentComposition.js.map",
+      "sha256": "32cf12c846aa1f82c95a433c95cc401d59acd4dfff1a0b71ae8dff47b33b7c36"
+    },
+    {
+      "path": "dist/backend/security/productionConfig.js",
+      "sha256": "07a1c1bc66ee21c82e6ed4c5d460dac5201027a384066f67895cd8773b87f204"
+    },
+    {
+      "path": "dist/backend/security/productionConfig.js.map",
+      "sha256": "69e0898774d0c37af5350ab85645885bc5649df696272a0e3b49ba850dd29216"
+    },
+    {
+      "path": "dist/backend/security/webHeaders.js",
+      "sha256": "be6a78f03dc93b8ae88493bbe416a24a6b4d18536aa459a9e47b835ae6c7b409"
+    },
+    {
+      "path": "dist/backend/security/webHeaders.js.map",
+      "sha256": "a3e515fd5e15a3f01d852b688b8692474d4f268db42db1f376d14fcf7a75c171"
+    },
+    {
+      "path": "dist/backend/socket.io/clients.js",
+      "sha256": "f4e4d54507ffd6a027251cec1c851f056a6643ba2f8e62596e017b5ff805c23c"
+    },
+    {
+      "path": "dist/backend/socket.io/clients.js.map",
+      "sha256": "9a275644e07f2ec7de66ef0ac102cae668bd6e9d6c35febf875e9cc9b3b768f9"
+    },
+    {
+      "path": "dist/backend/socket.io/index.js",
+      "sha256": "996dd8ea3d4c605335f784309148994fa6c22fecffb2f54ca3f6c450d3e1717f"
+    },
+    {
+      "path": "dist/backend/socket.io/index.js.map",
+      "sha256": "8dc8ebc2a6b855895c08430aa53dd95396046461919a6442ee99f313c992552c"
+    },
+    {
+      "path": "dist/backend/socket.io/listeners.js",
+      "sha256": "a21451e5ba6e42aeb8938553707823babce3376322bf68ee3cd09bd22a281486"
+    },
+    {
+      "path": "dist/backend/socket.io/listeners.js.map",
+      "sha256": "d7e12f3a2c2252e4ebb122f8ecb8458640e459a29a68074e37df585b868a3af3"
+    },
+    {
+      "path": "dist/backend/socket.io/mailboxHeadDiagnostics.js",
+      "sha256": "45f3ab1fb7fcb4a18ba9c5b83400905ef27bc939a6d70d8f2befccf766d6737a"
+    },
+    {
+      "path": "dist/backend/socket.io/mailboxHeadDiagnostics.js.map",
+      "sha256": "c68ee5fe5eaa077d27d1a66c9a3837733d6fa5008b528d926b31721cadd30bb0"
+    },
+    {
+      "path": "dist/backend/socket.io/multiplexed.js",
+      "sha256": "c2addfb4abf1bc03f61aa1bc8a15c973249468a8182271002841ea59d9f05ccc"
+    },
+    {
+      "path": "dist/backend/socket.io/multiplexed.js.map",
+      "sha256": "0b45befb60911bc6b5b92252fb2d9a7d2db184ff20dd66586bf5b85b69655547"
+    },
+    {
+      "path": "dist/backend/socket.io/rateLimiter.js",
+      "sha256": "c8d4431518ce9d8c536c9cb1ef95677f8283ac22ed8b8f10e461aa14c0a5effc"
+    },
+    {
+      "path": "dist/backend/socket.io/rateLimiter.js.map",
+      "sha256": "9dc54b74468be6e46e000b9566544906200bef20ae43a67fda61e74672596287"
+    },
+    {
+      "path": "dist/backend/socket.io/roomEnvelopeStore.js",
+      "sha256": "c9072f0a9dbac17a762bfc2561cb54601e2073d255d69beaa84dc67b9ac88919"
+    },
+    {
+      "path": "dist/backend/socket.io/roomEnvelopeStore.js.map",
+      "sha256": "8d56006009d303052597a7cc21c39f23fc1de84cc06d764691b3d681db25f586"
+    },
+    {
+      "path": "dist/backend/sync/relay.js",
+      "sha256": "7efd074175c93f91e169df1e79dc7dddf7c804629eb8d35b2037ba78a1d5e2d7"
+    },
+    {
+      "path": "dist/backend/sync/relay.js.map",
+      "sha256": "80a34d4853402896ece2dc1680c33392b9cd8bad56b217eb4769b999168d33b1"
+    },
+    {
+      "path": "dist/index.js",
+      "sha256": "3532d683d9652c9dbba225521737c0c0baa4b9dde64f9f9227596e63b680bda4"
+    },
+    {
+      "path": "dist/index.js.map",
+      "sha256": "96ac647dc475e47c198e4a05ea60276f20e4338e9fbf9412c73cf7eacd8bf415"
+    },
+    {
+      "path": "dist/scripts/migrate.js",
+      "sha256": "57020941d95f9962ad37ebd522a7d530415bc2cd6296d9f576e8b8f1586a623c"
+    },
+    {
+      "path": "dist/scripts/migrate.js.map",
+      "sha256": "98b59fac58162c5b340709249790cf8e9f5f0d0278edc1b72fc90f7234aaabd3"
+    },
+    {
+      "path": "dist/service/src/attachments/contracts.js",
+      "sha256": "9cf86de1bec07560e51c61155b2d4306ee77e6a48fcc2c5d1c4e8f16112256ca"
+    },
+    {
+      "path": "dist/service/src/attachments/contracts.js.map",
+      "sha256": "475eb48862d32ee0713102fcb3d22ba2eb6163a1e3faf868873a96ff72bcd24f"
+    },
+    {
+      "path": "dist/service/src/attachments/crypto.js",
+      "sha256": "cca80eacdab422e6d4fab4bcb5c7057ff73926013574407e479becabec38e26f"
+    },
+    {
+      "path": "dist/service/src/attachments/crypto.js.map",
+      "sha256": "8d7d0327f793718d36908677dbd528278f533b1354e9727a6bdc89a1b698887e"
+    },
+    {
+      "path": "dist/service/src/attachments/delivery.js",
+      "sha256": "8b78f8b30606cb05f1dff8a3da0d0b40196c4719cb1892858d0c5f75d1e0b9fa"
+    },
+    {
+      "path": "dist/service/src/attachments/delivery.js.map",
+      "sha256": "334ac8a42fccbbb08f0bd5fe3b5efb0b799b1f01b8a5b75329c2b04cf3f222c0"
+    },
+    {
+      "path": "dist/service/src/attachments/index.js",
+      "sha256": "a6aeec2a74f1c13becfe8665cc42c143cc89f05c275acf06a22b74f6a4c182a4"
+    },
+    {
+      "path": "dist/service/src/attachments/index.js.map",
+      "sha256": "e6965b6f78bf44812e6c978e6363306518da5900eb4137bf12d23c6e01684ce9"
+    },
+    {
+      "path": "dist/service/src/attachments/persistentDelivery.js",
+      "sha256": "2a118f4291cd85c7bac551fc3d53b3f6552cd0abba67e85a68786456342b7e14"
+    },
+    {
+      "path": "dist/service/src/attachments/persistentDelivery.js.map",
+      "sha256": "eff80a7841ead950128452d729d755c363e2c95e86a745b4997764f654724e12"
+    },
+    {
+      "path": "dist/service/src/attachments/portableAead.js",
+      "sha256": "443ab4cab13923a417ff25011e53a830e3eba69e0e0eb2bc4ea276fb7508a2d7"
+    },
+    {
+      "path": "dist/service/src/attachments/portableAead.js.map",
+      "sha256": "dcb187ae85804d95cdf241d643a5cfc072602f01d0dc97e356aa19a3fc151389"
+    },
+    {
+      "path": "dist/service/src/attachments/portableContext.js",
+      "sha256": "9b3fd5a46bfc82c0682bbbb36d4a68d5b9c895c7c2db9f633de27a4f53ec67d4"
+    },
+    {
+      "path": "dist/service/src/attachments/portableContext.js.map",
+      "sha256": "6528f97a1e2d032c33451e37f92c5649bafe4c625cc567394e9efdc49214c481"
+    },
+    {
+      "path": "dist/service/src/attachments/portableManifest.js",
+      "sha256": "5e0841880ddd31ebebc6e74c5f4cdf81db7f75ca50f94c914e979d7df095431e"
+    },
+    {
+      "path": "dist/service/src/attachments/portableManifest.js.map",
+      "sha256": "13f349a5113c2fbe5b9b961f4d61ef0c90da47e215a3802afaa8f9aff7b03792"
+    },
+    {
+      "path": "dist/service/src/attachments/service.js",
+      "sha256": "7b3191cc97759e1b218f2078616483f27ba25d6dc2d2181a47bb5509d51d284e"
+    },
+    {
+      "path": "dist/service/src/attachments/service.js.map",
+      "sha256": "d02cede6bad7f013edc2b7a3b8f6480defac552421de0bd9af22590f7a7813cf"
+    },
+    {
+      "path": "dist/service/src/attachments/storage.js",
+      "sha256": "333482558d8d33b2390981b0ef2b63b2b8b9b24e58e7d5da932fb40d583db108"
+    },
+    {
+      "path": "dist/service/src/attachments/storage.js.map",
+      "sha256": "ec13bd41081bbc7fc0eec8d74d91c4dad821cab3b6a48e431898ad3d7cdae26f"
+    },
+    {
+      "path": "dist/service/src/core/contracts.js",
+      "sha256": "f14a59805eb63819f5ec8cb76d6b0887426c550f981ff517e74790eb3f1d8746"
+    },
+    {
+      "path": "dist/service/src/core/contracts.js.map",
+      "sha256": "8751e70cdb64ae9f73f3b1e6b104782649234d03cb04bcc234f51f711db106cb"
+    },
+    {
+      "path": "dist/service/src/core/vodozemacCryptoSession.js",
+      "sha256": "3307aa304040e4e915c3f914130cbd1d2b57c2cae95fe7cc44dd3d868162b8f7"
+    },
+    {
+      "path": "dist/service/src/core/vodozemacCryptoSession.js.map",
+      "sha256": "1ea3088b8ad9d03fbd966d4f6ecda296eb8dc16e05f609ca987f8e881d57a790"
+    },
+    {
+      "path": "dist/service/src/crypto/base64url.js",
+      "sha256": "5bcc98aa77d9ec6c314f8f3601027289d5563d9d2a2aef5ee1d329f5d3caa1ca"
+    },
+    {
+      "path": "dist/service/src/crypto/base64url.js.map",
+      "sha256": "8f5a856cf21b166e3f5ce9a4d25d64c9595684e75263d72621149eabf011f309"
+    },
+    {
+      "path": "dist/service/src/devices/trustProtocol.js",
+      "sha256": "3756274a2fdf098c2173c54545909b7d80599b4709d14becb75c522219f8590d"
+    },
+    {
+      "path": "dist/service/src/devices/trustProtocol.js.map",
+      "sha256": "159045d440582e031d776509bc0939938e4b84fb1907ddd28214fd1246f6e66d"
+    },
+    {
+      "path": "dist/service/src/files/protocol.js",
+      "sha256": "85a1b4f9622e55f9285bfd4e18d4458b17da05e0ccfa9b33e150fd306954d7d9"
+    },
+    {
+      "path": "dist/service/src/files/protocol.js.map",
+      "sha256": "ca6777fd72b7f5dd80c64235a190ef6c8dfcea6bc5694c11656a19127f445a19"
+    },
+    {
+      "path": "dist/service/src/identity/vodozemacBundle.js",
+      "sha256": "dfb0b08348e23d9a8e901c788e5c6e488a26f07eca162ab5f132d6f2eecb225a"
+    },
+    {
+      "path": "dist/service/src/identity/vodozemacBundle.js.map",
+      "sha256": "fbed787595b0d1aa84a66a54e20af27958dfa88be855c26768ac0e4a0ecf40a5"
+    },
+    {
+      "path": "dist/service/src/identity/vodozemacIdentity.js",
+      "sha256": "190fd564191e861ee0254e4fbe832e1aac6a19e9d9ede5bed86b3d68374eac8e"
+    },
+    {
+      "path": "dist/service/src/identity/vodozemacIdentity.js.map",
+      "sha256": "d3636bdfbb2ae31c501607370559bcb3cd9d84e0fd6d2102495c61f48c679713"
+    },
+    {
+      "path": "dist/service/src/utils/testDiagnostics.js",
+      "sha256": "2b6984ff5d2205ffe72c5be529af7fe3c73b1410d2c34917514f386aab0393ad"
+    },
+    {
+      "path": "dist/service/src/utils/testDiagnostics.js.map",
+      "sha256": "dd3a36a7b7a2262c842c5a964dd49ce92b40042f5456cf1fbb2565eb7b306763"
+    },
+    {
+      "path": "client/dist/assets/browser-CX9d01rI.js",
+      "sha256": "1d11df89b05ecdf95837b69499de171aa9ff334209c1317a9bf004103db625a5"
+    },
+    {
+      "path": "client/dist/assets/esm-6mZTTw7n.js",
+      "sha256": "6a49a04a42f4fe1d5ce892110b3f089d03bccb430793985031411302e0800868"
+    },
+    {
+      "path": "client/dist/assets/index-CHBe3qCp.css",
+      "sha256": "58babb8ad9a946ca8ffaeaa1ac9e55c3c40288e2c63086814d7b09b5520180c2"
+    },
+    {
+      "path": "client/dist/assets/index-NyyapSKy.js",
+      "sha256": "7786a9b26e4beff4e29483f146dc66615fe648540f8bd8464c50a0165f06bf29"
+    },
+    {
+      "path": "client/dist/assets/k3ncrypt_vodozemac_bg-C-RDrm41.wasm",
+      "sha256": "c1ebcd701b70d9f302798918c13c92118e0c1bb82c84eef97bcad43e11e00011"
+    },
+    {
+      "path": "client/dist/branding/k3ncrypt-appicon.svg",
+      "sha256": "3eb9dbef9fbbb62836f9db71af8583be5af46b8ee0637268a8766b240110ca80"
+    },
+    {
+      "path": "client/dist/branding/k3ncrypt-cluster-monochrome.svg",
+      "sha256": "f9341efb26a11fe194164ec3fa9f1669a4d8d016875bdd4c5c164ac9f1c0850d"
+    },
+    {
+      "path": "client/dist/branding/k3ncrypt-cluster-white.svg",
+      "sha256": "186fb579dbd51c6fee93f83c513333c67104ce304694d280da49024ac3eeb197"
+    },
+    {
+      "path": "client/dist/branding/k3ncrypt-cluster.svg",
+      "sha256": "87ebb901516876840bda98258632f93f777a9bf9dd96f526e977ede9ed4bdebf"
+    },
+    {
+      "path": "client/dist/branding/k3ncrypt-lockup.svg",
+      "sha256": "c1eecbbfefdb1745a0dcec56444ab1b6c469ea3ea92915dcee938598c8636659"
+    },
+    {
+      "path": "client/dist/icons/back.svg",
+      "sha256": "f5757254a0af1ff526f19ebc9a08f235d1a47bcdc48f8d5374b0322bc6f54722"
+    },
+    {
+      "path": "client/dist/icons/bell.svg",
+      "sha256": "3b71ad57ba1f81c804e7532be91ae916133672a752cc44a1416623a80357af2e"
+    },
+    {
+      "path": "client/dist/icons/call.svg",
+      "sha256": "5635accb2f149bba1862b38b90369444219703f35b06e0687f8eb7dde1d683b3"
+    },
+    {
+      "path": "client/dist/icons/chat.svg",
+      "sha256": "f14900afe1976470dfbab7537ca0f3622e30a1cbd8a62976343b1ccc808a0efb"
+    },
+    {
+      "path": "client/dist/icons/check1.svg",
+      "sha256": "061a9d780a8820dac5d0cb4219a9a159fb230c0843dabf2db3c416730fe19883"
+    },
+    {
+      "path": "client/dist/icons/check2.svg",
+      "sha256": "6cc82e3e46875381b4a310e0af1374bbe6b181861d45162a0209c64e0f0c979d"
+    },
+    {
+      "path": "client/dist/icons/chev.svg",
+      "sha256": "5d2a2e1fd30e446801594575e270b006f128745b5ded57cf09eb8f5ac164fe6f"
+    },
+    {
+      "path": "client/dist/icons/clip.svg",
+      "sha256": "e40b50bdf33cea94eed299dc9efe11bc10d69b9e9dda189a0c7678818e97851c"
+    },
+    {
+      "path": "client/dist/icons/close.svg",
+      "sha256": "6554b9cb9d549d7d074e01135b38e516ded169bb870affb74abfa6c4a3954530"
+    },
+    {
+      "path": "client/dist/icons/contacts.svg",
+      "sha256": "45422f740d1e436c54d56f23eaf85dd65b748f10a3d218eb0c87793c28ab5a47"
+    },
+    {
+      "path": "client/dist/icons/devices.svg",
+      "sha256": "cf5d9afa8ee6834061b3f9221d546f9bd1aa7f82499a070d2a8a3018fb152380"
+    },
+    {
+      "path": "client/dist/icons/download.svg",
+      "sha256": "0db1d6f63386176edf8834b6d02eb249f5e5cdc577aa714a07d85f1d70ea7507"
+    },
+    {
+      "path": "client/dist/icons/endcall.svg",
+      "sha256": "9d316ac34f9a0507f1498a575b4602b8207ebaab300e7da70733842714338c2e"
+    },
+    {
+      "path": "client/dist/icons/file.svg",
+      "sha256": "086c297bd61178f656f35fc694cb2aaed919cf2a2df9167d9ee6d8f4b132a19c"
+    },
+    {
+      "path": "client/dist/icons/fingerprint.svg",
+      "sha256": "9d7224c51fa18234f5cb64ba75f00aec5327316cd72a8d413ac0ccefa4b8c095"
+    },
+    {
+      "path": "client/dist/icons/globe.svg",
+      "sha256": "ad986c77c30c63030fd421e1c0f5440c7b5fe9732f3c81f75485413b495db556"
+    },
+    {
+      "path": "client/dist/icons/key.svg",
+      "sha256": "6858e2e57eaf7af903a747644c3588d315797c28ae960d0dba34bed10801105f"
+    },
+    {
+      "path": "client/dist/icons/logo.svg",
+      "sha256": "87ebb901516876840bda98258632f93f777a9bf9dd96f526e977ede9ed4bdebf"
+    },
+    {
+      "path": "client/dist/icons/mic.svg",
+      "sha256": "4d1e400ee42d2aa5f4e60c79ac9648b1555966975d2f4ccf8564072e3fe18386"
+    },
+    {
+      "path": "client/dist/icons/more.svg",
+      "sha256": "3530a127c815cd95cbb92eaec83334e982097fb1768f1fc5e2a0acb23f011e0e"
+    },
+    {
+      "path": "client/dist/icons/mute.svg",
+      "sha256": "51befcf4e992df6dabcf9336a9f2bba68dbaca0c62db779ac9cbd182e212ede2"
+    },
+    {
+      "path": "client/dist/icons/palette.svg",
+      "sha256": "f9ddafc492f00cad7d961e5aa738c8677797b6cb8302f77788a83308a5580542"
+    },
+    {
+      "path": "client/dist/icons/play.svg",
+      "sha256": "db0b382e64f489d4b64c18faf3a3dddb3306acbd382968046978ded468e8468a"
+    },
+    {
+      "path": "client/dist/icons/plus.svg",
+      "sha256": "691c7f959048e7d53399c675b04bcb2d36dc08a354e7902262ce8c854079a6cc"
+    },
+    {
+      "path": "client/dist/icons/qr.svg",
+      "sha256": "d3b5339f63f8ae3694ec8a907979c3ef0a39af8c50ffad1de47958bd4a906839"
+    },
+    {
+      "path": "client/dist/icons/reply.svg",
+      "sha256": "a34de567b55eb3d85558aa78d6feb6e95e5e53ee8f509fc13d26ba646d5740c5"
+    },
+    {
+      "path": "client/dist/icons/search.svg",
+      "sha256": "40842344f54bf36e996f07c6005f00600749457eb2cb4cf13b459929691d0f20"
+    },
+    {
+      "path": "client/dist/icons/securechat.svg",
+      "sha256": "944b1a6b6e1d55787a756afd3e2802d94720ac381b3d86a525a929ff5ffc6d55"
+    },
+    {
+      "path": "client/dist/icons/send.svg",
+      "sha256": "39cd7c5dfec4a934726b6d2df9a6644be2835e9251cadfb47f0c6c873aa99958"
+    },
+    {
+      "path": "client/dist/icons/settings.svg",
+      "sha256": "220a114d1ddf6742770c3b100b99c0682a073e5f53dd008a2a04e2adc6b0b209"
+    },
+    {
+      "path": "client/dist/icons/shield.svg",
+      "sha256": "82bf6df98bad8b4cdc447550bf1c22aaf4ad8aad38b4502aca4527757294ed0b"
+    },
+    {
+      "path": "client/dist/icons/signal.svg",
+      "sha256": "63a56f4363a36c80e06aa7e1ba47e11a7fb09d9bd2affd89ecfbf1a12f5df66d"
+    },
+    {
+      "path": "client/dist/icons/speaker.svg",
+      "sha256": "649ebc04de288b7af83bdcf89a54ef35be61726f1a5599c740dac4ab02075103"
+    },
+    {
+      "path": "client/dist/icons/storage.svg",
+      "sha256": "85e089642e591d6b36fd971d911e595ec0d2dc3476a56840711457fe3913e342"
+    },
+    {
+      "path": "client/dist/icons/userplus.svg",
+      "sha256": "2a6f6432292b9c712aef5b84fb8dbae8a3352cecb42843ccc5d8a098a1bc2442"
+    },
+    {
+      "path": "client/dist/icons/video.svg",
+      "sha256": "5219676d079187b4a4b2e1293863b88de1875c46a01966267777e81456495ca0"
+    },
+    {
+      "path": "client/dist/icons/warn.svg",
+      "sha256": "fbca59d08a99ab7b1ea5cd16d318edc12d12c53c0699619fd8d4f89e3f15dfeb"
+    },
+    {
+      "path": "client/dist/index.html",
+      "sha256": "6760c43c208fc6a8a8152f0723008d84ba649dcc3c142d1b012eb11fd2786633"
+    },
+    {
+      "path": "client/dist/startup.css",
+      "sha256": "33e931105634bcb14558b1cd36b4f2a4fc5dd3f5ad2925f4f33db31b62735cbb"
+    }
+  ],
+  "transfers": [
+    {
+      "sample": 1,
+      "bytes": 23552,
+      "fixtureMs": 5772,
+      "selectionMs": 13,
+      "sendMs": 388,
+      "downloadReadyMs": 146,
+      "integrity": "PASS",
+      "httpCounts": [
+        {
+          "category": "chunk-download",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "chunk-upload",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "complete",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "create",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "device-trust",
+          "status": 200,
+          "count": 8
+        },
+        {
+          "category": "file-status",
+          "status": 200,
+          "count": 2
+        },
+        {
+          "category": "manifest-upload",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "prekey-read",
+          "status": 200,
+          "count": 9
+        }
+      ],
+      "retryWaits": {},
+      "browser": {
+        "sender": {
+          "crypto": {
+            "encrypt-manifest": {
+              "count": 1,
+              "ms": 0,
+              "bytes": 94
+            },
+            "encrypt-chunk": {
+              "count": 1,
+              "ms": 0,
+              "bytes": 23552
+            }
+          },
+          "source": {
+            "count": 1,
+            "ms": 0.2999999523162842,
+            "bytes": 23552
+          },
+          "heapStart": 9878523,
+          "heapPeak": 10492235,
+          "phases": [
+            {
+              "phase": "Preparing",
+              "ms": 48
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 145
+            },
+            {
+              "phase": "Sending",
+              "ms": 147
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 180
+            },
+            {
+              "phase": "Sending",
+              "ms": 183
+            },
+            {
+              "phase": "Sent",
+              "ms": 322
+            }
+          ]
+        },
+        "recipient": {
+          "crypto": {
+            "decrypt-manifest": {
+              "count": 1,
+              "ms": 0,
+              "bytes": 110
+            },
+            "decrypt-chunk": {
+              "count": 1,
+              "ms": 0,
+              "bytes": 23568
+            }
+          },
+          "source": {
+            "count": 0,
+            "ms": 0,
+            "bytes": 0
+          },
+          "heapStart": 7135996,
+          "heapPeak": 7905909,
+          "phases": []
+        }
+      }
+    },
+    {
+      "sample": 2,
+      "bytes": 174080,
+      "fixtureMs": 5772,
+      "selectionMs": 20,
+      "sendMs": 379,
+      "downloadReadyMs": 503,
+      "integrity": "PASS",
+      "httpCounts": [
+        {
+          "category": "chunk-download",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "chunk-upload",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "complete",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "create",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "device-trust",
+          "status": 200,
+          "count": 8
+        },
+        {
+          "category": "file-status",
+          "status": 200,
+          "count": 2
+        },
+        {
+          "category": "manifest-upload",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "prekey-read",
+          "status": 200,
+          "count": 9
+        }
+      ],
+      "retryWaits": {},
+      "browser": {
+        "sender": {
+          "crypto": {
+            "encrypt-manifest": {
+              "count": 1,
+              "ms": 0,
+              "bytes": 94
+            },
+            "encrypt-chunk": {
+              "count": 1,
+              "ms": 0.19999992847442627,
+              "bytes": 174080
+            }
+          },
+          "source": {
+            "count": 1,
+            "ms": 0.5,
+            "bytes": 174080
+          },
+          "heapStart": 10540731,
+          "heapPeak": 10540731,
+          "phases": [
+            {
+              "phase": "Sent",
+              "ms": 20
+            },
+            {
+              "phase": "Preparing",
+              "ms": 44
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 120
+            },
+            {
+              "phase": "Sending",
+              "ms": 120
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 152
+            },
+            {
+              "phase": "Sending",
+              "ms": 161
+            },
+            {
+              "phase": "Sent",
+              "ms": 361
+            }
+          ]
+        },
+        "recipient": {
+          "crypto": {
+            "decrypt-manifest": {
+              "count": 1,
+              "ms": 0.09999990463256836,
+              "bytes": 110
+            },
+            "decrypt-chunk": {
+              "count": 1,
+              "ms": 0.20000004768371582,
+              "bytes": 174096
+            }
+          },
+          "source": {
+            "count": 0,
+            "ms": 0,
+            "bytes": 0
+          },
+          "heapStart": 8047075,
+          "heapPeak": 10585803,
+          "phases": []
+        }
+      }
+    },
+    {
+      "sample": 3,
+      "bytes": 1258291,
+      "fixtureMs": 5772,
+      "selectionMs": 122,
+      "sendMs": 4109,
+      "downloadReadyMs": 2904,
+      "integrity": "PASS",
+      "httpCounts": [
+        {
+          "category": "chunk-download",
+          "status": 200,
+          "count": 5
+        },
+        {
+          "category": "chunk-upload",
+          "status": 200,
+          "count": 5
+        },
+        {
+          "category": "complete",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "create",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "device-trust",
+          "status": 200,
+          "count": 16
+        },
+        {
+          "category": "file-status",
+          "status": 200,
+          "count": 2
+        },
+        {
+          "category": "manifest-upload",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "prekey-read",
+          "status": 200,
+          "count": 17
+        },
+        {
+          "category": "prekey-read",
+          "status": 429,
+          "count": 4
+        }
+      ],
+      "retryWaits": {
+        "prekey-read": {
+          "count": 4,
+          "totalWaitMs": 4015
+        }
+      },
+      "browser": {
+        "sender": {
+          "crypto": {
+            "encrypt-manifest": {
+              "count": 1,
+              "ms": 0,
+              "bytes": 94
+            },
+            "encrypt-chunk": {
+              "count": 5,
+              "ms": 0.7999999523162842,
+              "bytes": 1258291
+            }
+          },
+          "source": {
+            "count": 5,
+            "ms": 6.100000023841858,
+            "bytes": 1258291
+          },
+          "heapStart": 8612494,
+          "heapPeak": 41704595,
+          "phases": [
+            {
+              "phase": "Sent",
+              "ms": 123
+            },
+            {
+              "phase": "Preparing",
+              "ms": 362
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 431
+            },
+            {
+              "phase": "Sending",
+              "ms": 432
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 460
+            },
+            {
+              "phase": "Sending",
+              "ms": 468
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 606
+            },
+            {
+              "phase": "Sending",
+              "ms": 615
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 730
+            },
+            {
+              "phase": "Sending",
+              "ms": 737
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 857
+            },
+            {
+              "phase": "Sending",
+              "ms": 864
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 2005
+            },
+            {
+              "phase": "Sending",
+              "ms": 2017
+            },
+            {
+              "phase": "Sent",
+              "ms": 3298
+            }
+          ]
+        },
+        "recipient": {
+          "crypto": {
+            "decrypt-manifest": {
+              "count": 1,
+              "ms": 0,
+              "bytes": 110
+            },
+            "decrypt-chunk": {
+              "count": 5,
+              "ms": 0.5000001192092896,
+              "bytes": 1258371
+            }
+          },
+          "source": {
+            "count": 0,
+            "ms": 0,
+            "bytes": 0
+          },
+          "heapStart": 8382464,
+          "heapPeak": 20438902,
+          "phases": []
+        }
+      }
+    },
+    {
+      "sample": 4,
+      "bytes": 4194304,
+      "fixtureMs": 5772,
+      "selectionMs": 345,
+      "sendMs": 21239,
+      "downloadReadyMs": 32081,
+      "integrity": "PASS",
+      "httpCounts": [
+        {
+          "category": "chunk-download",
+          "status": 200,
+          "count": 16
+        },
+        {
+          "category": "chunk-download",
+          "status": 429,
+          "count": 12
+        },
+        {
+          "category": "chunk-upload",
+          "status": 200,
+          "count": 16
+        },
+        {
+          "category": "chunk-upload",
+          "status": 429,
+          "count": 2
+        },
+        {
+          "category": "complete",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "create",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "device-trust",
+          "status": 200,
+          "count": 53
+        },
+        {
+          "category": "device-trust",
+          "status": 429,
+          "count": 8
+        },
+        {
+          "category": "file-status",
+          "status": 200,
+          "count": 2
+        },
+        {
+          "category": "file-status",
+          "status": 429,
+          "count": 1
+        },
+        {
+          "category": "manifest-upload",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "prekey-read",
+          "status": 200,
+          "count": 39
+        },
+        {
+          "category": "prekey-read",
+          "status": 429,
+          "count": 17
+        }
+      ],
+      "retryWaits": {
+        "prekey-read": {
+          "count": 17,
+          "totalWaitMs": 17095
+        },
+        "chunk-upload": {
+          "count": 2,
+          "totalWaitMs": 7122
+        },
+        "device-trust": {
+          "count": 8,
+          "totalWaitMs": 8033
+        },
+        "file-status": {
+          "count": 1,
+          "totalWaitMs": 1021
+        },
+        "chunk-download": {
+          "count": 12,
+          "totalWaitMs": 12280
+        }
+      },
+      "browser": {
+        "sender": {
+          "crypto": {
+            "encrypt-manifest": {
+              "count": 1,
+              "ms": 0,
+              "bytes": 94
+            },
+            "encrypt-chunk": {
+              "count": 16,
+              "ms": 2.1999999284744263,
+              "bytes": 4194304
+            }
+          },
+          "source": {
+            "count": 16,
+            "ms": 24.200000047683716,
+            "bytes": 4194304
+          },
+          "heapStart": 37605740,
+          "heapPeak": 120431964,
+          "phases": [
+            {
+              "phase": "Sent",
+              "ms": 344
+            },
+            {
+              "phase": "Preparing",
+              "ms": 593
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 720
+            },
+            {
+              "phase": "Sending",
+              "ms": 722
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 761
+            },
+            {
+              "phase": "Sending",
+              "ms": 769
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 897
+            },
+            {
+              "phase": "Sending",
+              "ms": 905
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 2049
+            },
+            {
+              "phase": "Sending",
+              "ms": 2064
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 2211
+            },
+            {
+              "phase": "Sending",
+              "ms": 2218
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 2353
+            },
+            {
+              "phase": "Sending",
+              "ms": 2361
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 3505
+            },
+            {
+              "phase": "Sending",
+              "ms": 3520
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 3699
+            },
+            {
+              "phase": "Sending",
+              "ms": 3706
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 3845
+            },
+            {
+              "phase": "Sending",
+              "ms": 3852
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 10091
+            },
+            {
+              "phase": "Sending",
+              "ms": 10099
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 10254
+            },
+            {
+              "phase": "Sending",
+              "ms": 10262
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 10472
+            },
+            {
+              "phase": "Sending",
+              "ms": 10479
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 10663
+            },
+            {
+              "phase": "Sending",
+              "ms": 10676
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 11823
+            },
+            {
+              "phase": "Sending",
+              "ms": 11830
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 13394
+            },
+            {
+              "phase": "Sending",
+              "ms": 13401
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 14825
+            },
+            {
+              "phase": "Sending",
+              "ms": 14832
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 16254
+            },
+            {
+              "phase": "Sending",
+              "ms": 16267
+            },
+            {
+              "phase": "Sent",
+              "ms": 20876
+            }
+          ]
+        },
+        "recipient": {
+          "crypto": {
+            "decrypt-manifest": {
+              "count": 1,
+              "ms": 0.10000002384185791,
+              "bytes": 110
+            },
+            "decrypt-chunk": {
+              "count": 16,
+              "ms": 2.5999999046325684,
+              "bytes": 4194560
+            }
+          },
+          "source": {
+            "count": 0,
+            "ms": 0,
+            "bytes": 0
+          },
+          "heapStart": 7625753,
+          "heapPeak": 33374751,
+          "phases": []
+        }
+      }
+    },
+    {
+      "sample": 5,
+      "bytes": 8388608,
+      "fixtureMs": 5773,
+      "selectionMs": 662,
+      "sendMs": 37045,
+      "downloadReadyMs": 61107,
+      "integrity": "PASS",
+      "httpCounts": [
+        {
+          "category": "chunk-download",
+          "status": 200,
+          "count": 32
+        },
+        {
+          "category": "chunk-download",
+          "status": 429,
+          "count": 24
+        },
+        {
+          "category": "chunk-upload",
+          "status": 200,
+          "count": 32
+        },
+        {
+          "category": "chunk-upload",
+          "status": 429,
+          "count": 6
+        },
+        {
+          "category": "complete",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "complete",
+          "status": 429,
+          "count": 1
+        },
+        {
+          "category": "create",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "device-trust",
+          "status": 200,
+          "count": 102
+        },
+        {
+          "category": "device-trust",
+          "status": 429,
+          "count": 5
+        },
+        {
+          "category": "file-status",
+          "status": 200,
+          "count": 2
+        },
+        {
+          "category": "file-status",
+          "status": 429,
+          "count": 1
+        },
+        {
+          "category": "manifest-upload",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "prekey-read",
+          "status": 200,
+          "count": 71
+        },
+        {
+          "category": "prekey-read",
+          "status": 429,
+          "count": 40
+        }
+      ],
+      "retryWaits": {
+        "prekey-read": {
+          "count": 40,
+          "totalWaitMs": 40132
+        },
+        "chunk-upload": {
+          "count": 6,
+          "totalWaitMs": 16413
+        },
+        "complete": {
+          "count": 1,
+          "totalWaitMs": 1021
+        },
+        "file-status": {
+          "count": 1,
+          "totalWaitMs": 1028
+        },
+        "device-trust": {
+          "count": 5,
+          "totalWaitMs": 5018
+        },
+        "chunk-download": {
+          "count": 24,
+          "totalWaitMs": 24468
+        }
+      },
+      "browser": {
+        "sender": {
+          "crypto": {
+            "encrypt-manifest": {
+              "count": 1,
+              "ms": 0,
+              "bytes": 94
+            },
+            "encrypt-chunk": {
+              "count": 32,
+              "ms": 4.000000715255737,
+              "bytes": 8388608
+            }
+          },
+          "source": {
+            "count": 32,
+            "ms": 30.49999976158142,
+            "bytes": 8388608
+          },
+          "heapStart": 9943178,
+          "heapPeak": 155792925,
+          "phases": [
+            {
+              "phase": "Preparing",
+              "ms": 706
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 793
+            },
+            {
+              "phase": "Sending",
+              "ms": 795
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 827
+            },
+            {
+              "phase": "Sending",
+              "ms": 835
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 1028
+            },
+            {
+              "phase": "Sending",
+              "ms": 1036
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 1179
+            },
+            {
+              "phase": "Sending",
+              "ms": 1185
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 1298
+            },
+            {
+              "phase": "Sending",
+              "ms": 1305
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 1413
+            },
+            {
+              "phase": "Sending",
+              "ms": 1420
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 1538
+            },
+            {
+              "phase": "Sending",
+              "ms": 1546
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 1665
+            },
+            {
+              "phase": "Sending",
+              "ms": 1672
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 1785
+            },
+            {
+              "phase": "Sending",
+              "ms": 1792
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 1932
+            },
+            {
+              "phase": "Sending",
+              "ms": 1939
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 2076
+            },
+            {
+              "phase": "Sending",
+              "ms": 2083
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 2236
+            },
+            {
+              "phase": "Sending",
+              "ms": 2244
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 2364
+            },
+            {
+              "phase": "Sending",
+              "ms": 2371
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 2524
+            },
+            {
+              "phase": "Sending",
+              "ms": 2531
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 2652
+            },
+            {
+              "phase": "Sending",
+              "ms": 2660
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 3819
+            },
+            {
+              "phase": "Sending",
+              "ms": 3833
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 5023
+            },
+            {
+              "phase": "Sending",
+              "ms": 5037
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 7302
+            },
+            {
+              "phase": "Sending",
+              "ms": 7316
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 8525
+            },
+            {
+              "phase": "Sending",
+              "ms": 8538
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 10798
+            },
+            {
+              "phase": "Sending",
+              "ms": 10809
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 11957
+            },
+            {
+              "phase": "Sending",
+              "ms": 11964
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 14187
+            },
+            {
+              "phase": "Sending",
+              "ms": 14196
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 20475
+            },
+            {
+              "phase": "Sending",
+              "ms": 20483
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 20654
+            },
+            {
+              "phase": "Sending",
+              "ms": 20661
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 20785
+            },
+            {
+              "phase": "Sending",
+              "ms": 20791
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 20926
+            },
+            {
+              "phase": "Sending",
+              "ms": 20933
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 22089
+            },
+            {
+              "phase": "Sending",
+              "ms": 22103
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 28316
+            },
+            {
+              "phase": "Sending",
+              "ms": 28323
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 28480
+            },
+            {
+              "phase": "Sending",
+              "ms": 28488
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 28671
+            },
+            {
+              "phase": "Sending",
+              "ms": 28678
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 28850
+            },
+            {
+              "phase": "Sending",
+              "ms": 28857
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 30033
+            },
+            {
+              "phase": "Sending",
+              "ms": 30045
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 32318
+            },
+            {
+              "phase": "Sending",
+              "ms": 32333
+            },
+            {
+              "phase": "Sent",
+              "ms": 36783
+            }
+          ]
+        },
+        "recipient": {
+          "crypto": {
+            "decrypt-manifest": {
+              "count": 1,
+              "ms": 0,
+              "bytes": 110
+            },
+            "decrypt-chunk": {
+              "count": 32,
+              "ms": 5.099999666213989,
+              "bytes": 8389120
+            }
+          },
+          "source": {
+            "count": 0,
+            "ms": 0,
+            "bytes": 0
+          },
+          "heapStart": 7158866,
+          "heapPeak": 38111702,
+          "phases": []
+        }
+      }
+    },
+    {
+      "sample": 6,
+      "bytes": 8388608,
+      "fixtureMs": 10051,
+      "selectionMs": 691,
+      "sendMs": 60180,
+      "downloadReadyMs": 61092,
+      "integrity": "PASS",
+      "httpCounts": [
+        {
+          "category": "chunk-download",
+          "status": 200,
+          "count": 32
+        },
+        {
+          "category": "chunk-download",
+          "status": 429,
+          "count": 24
+        },
+        {
+          "category": "chunk-upload",
+          "status": 200,
+          "count": 32
+        },
+        {
+          "category": "chunk-upload",
+          "status": 429,
+          "count": 9
+        },
+        {
+          "category": "complete",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "complete",
+          "status": 429,
+          "count": 1
+        },
+        {
+          "category": "create",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "device-trust",
+          "status": 200,
+          "count": 105
+        },
+        {
+          "category": "device-trust",
+          "status": 429,
+          "count": 11
+        },
+        {
+          "category": "file-status",
+          "status": 200,
+          "count": 2
+        },
+        {
+          "category": "file-status",
+          "status": 429,
+          "count": 1
+        },
+        {
+          "category": "manifest-upload",
+          "status": 200,
+          "count": 1
+        },
+        {
+          "category": "prekey-read",
+          "status": 200,
+          "count": 71
+        },
+        {
+          "category": "prekey-read",
+          "status": 429,
+          "count": 39
+        }
+      ],
+      "retryWaits": {
+        "prekey-read": {
+          "count": 39,
+          "totalWaitMs": 39122
+        },
+        "file-status": {
+          "count": 1,
+          "totalWaitMs": 1022
+        },
+        "device-trust": {
+          "count": 11,
+          "totalWaitMs": 11034
+        },
+        "chunk-upload": {
+          "count": 9,
+          "totalWaitMs": 34705
+        },
+        "complete": {
+          "count": 1,
+          "totalWaitMs": 1009
+        },
+        "chunk-download": {
+          "count": 24,
+          "totalWaitMs": 24509
+        }
+      },
+      "browser": {
+        "sender": {
+          "crypto": {
+            "encrypt-manifest": {
+              "count": 1,
+              "ms": 0.10000002384185791,
+              "bytes": 94
+            },
+            "encrypt-chunk": {
+              "count": 32,
+              "ms": 3.4999996423721313,
+              "bytes": 8388608
+            }
+          },
+          "source": {
+            "count": 32,
+            "ms": 34.00000011920929,
+            "bytes": 8388608
+          },
+          "heapStart": 8791338,
+          "heapPeak": 139081403,
+          "phases": [
+            {
+              "phase": "Preparing",
+              "ms": 721
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 2875
+            },
+            {
+              "phase": "Sending",
+              "ms": 2878
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 4970
+            },
+            {
+              "phase": "Sending",
+              "ms": 4988
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 11255
+            },
+            {
+              "phase": "Sending",
+              "ms": 11263
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 11409
+            },
+            {
+              "phase": "Sending",
+              "ms": 11416
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 11536
+            },
+            {
+              "phase": "Sending",
+              "ms": 11543
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 11681
+            },
+            {
+              "phase": "Sending",
+              "ms": 11688
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 12837
+            },
+            {
+              "phase": "Sending",
+              "ms": 12851
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 14120
+            },
+            {
+              "phase": "Sending",
+              "ms": 14127
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 16332
+            },
+            {
+              "phase": "Sending",
+              "ms": 16339
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 22548
+            },
+            {
+              "phase": "Sending",
+              "ms": 22556
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 22676
+            },
+            {
+              "phase": "Sending",
+              "ms": 22684
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 22814
+            },
+            {
+              "phase": "Sending",
+              "ms": 22821
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 22938
+            },
+            {
+              "phase": "Sending",
+              "ms": 22945
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 24188
+            },
+            {
+              "phase": "Sending",
+              "ms": 24195
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 26417
+            },
+            {
+              "phase": "Sending",
+              "ms": 26431
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 32688
+            },
+            {
+              "phase": "Sending",
+              "ms": 32698
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 32834
+            },
+            {
+              "phase": "Sending",
+              "ms": 32841
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 33005
+            },
+            {
+              "phase": "Sending",
+              "ms": 33012
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 33150
+            },
+            {
+              "phase": "Sending",
+              "ms": 33158
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 34344
+            },
+            {
+              "phase": "Sending",
+              "ms": 34358
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 40639
+            },
+            {
+              "phase": "Sending",
+              "ms": 40647
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 40817
+            },
+            {
+              "phase": "Sending",
+              "ms": 40824
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 40962
+            },
+            {
+              "phase": "Sending",
+              "ms": 40970
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 41117
+            },
+            {
+              "phase": "Sending",
+              "ms": 41124
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 42285
+            },
+            {
+              "phase": "Sending",
+              "ms": 42299
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 44573
+            },
+            {
+              "phase": "Sending",
+              "ms": 44592
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 45783
+            },
+            {
+              "phase": "Sending",
+              "ms": 45790
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 52137
+            },
+            {
+              "phase": "Sending",
+              "ms": 52146
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 52328
+            },
+            {
+              "phase": "Sending",
+              "ms": 52337
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 52559
+            },
+            {
+              "phase": "Sending",
+              "ms": 52569
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 52799
+            },
+            {
+              "phase": "Sending",
+              "ms": 52807
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 53979
+            },
+            {
+              "phase": "Sending",
+              "ms": 53993
+            },
+            {
+              "phase": "Protecting file",
+              "ms": 55188
+            },
+            {
+              "phase": "Sending",
+              "ms": 55196
+            },
+            {
+              "phase": "Sent",
+              "ms": 60738
+            }
+          ]
+        },
+        "recipient": {
+          "crypto": {
+            "decrypt-manifest": {
+              "count": 1,
+              "ms": 0.10000002384185791,
+              "bytes": 110
+            },
+            "decrypt-chunk": {
+              "count": 32,
+              "ms": 4.800000071525574,
+              "bytes": 8389120
+            }
+          },
+          "source": {
+            "count": 0,
+            "ms": 0,
+            "bytes": 0
+          },
+          "heapStart": 8964450,
+          "heapPeak": 37749314,
+          "phases": []
+        }
+      }
+    }
+  ],
+  "applicationMemory": {
+    "elapsedSeconds": 1043,
+    "samples": 947,
+    "peakBytes": 98566144,
+    "currentBytes": 35037184,
+    "events": {
+      "low": "0",
+      "high": "0",
+      "max": "0",
+      "oom": "0",
+      "oom_kill": "0",
+      "oom_group_kill": "0"
+    }
+  },
+  "tests": {
+    "backendUnitPassed": 45,
+    "securityBoundaryPassed": 18,
+    "fileWorkflowPassed": 20,
+    "realMongoPassed": 2,
+    "legacyMongoCasesNotRun": 2,
+    "verifiedTransferSamples": 6,
+    "applicationRestartAndUnlockMs": 3971,
+    "offlineUiBeforeRecipient": "pending per existing modern Web contract",
+    "offlineReceiptAfterUnlock": true,
+    "offlineRecipientCopies": 1,
+    "postRecipientAcceptanceUi": "Sent",
+    "unsupportedDeliveredAssertionCorrected": true,
+    "abruptOfflineRestartPassed": true,
+    "abruptRestartToReceiptMs": 2774,
+    "cleanOfflineControlMs": 7900,
+    "plannedApplicationRestarts": 2,
+    "unexpectedRestarts": 0,
+    "bootstrap429Observed": true
+  },
+  "overallGate": "NO_GO_pending_trust_window_disposition_and_exposure_approval",
+  "localFunctionalGate": "PASS"
+}

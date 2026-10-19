@@ -137,19 +137,23 @@ test('unrelated ledger mutation during a delayed read does not invalidate file a
     await expect(service.chunk(auth(bob), id, 0)).resolves.toEqual(object(17, 2));
 });
 
-test('status returns chunk progress from the final read fence even while state stays incomplete', async () => {
+test.each(['sender', 'recipient'])('status returns chunk progress from final read fence with unchanged state (%s)', async role => {
+    const participant = role === 'sender' ? alice : bob;
     const f = await create(); const id = f.context.transferId;
     const original = persistence.read.bind(persistence);
     let release!: () => void, started!: () => void;
     const gate = new Promise<void>(r => { release = r; });
     const entered = new Promise<void>(r => { started = r; });
     jest.spyOn(persistence, 'read').mockImplementationOnce(async account => { started(); await gate; return original(account); });
-    const reading = service.status(auth(), id);
+    const reading = service.status(auth(participant), id);
     await entered;
     await service.put(auth(), id, 0, object(17, 2));
     await service.put(auth(), id, 'manifest', object(80, 1));
     release();
-    await expect(reading).resolves.toMatchObject({ state: 'incomplete', indices: [0], manifest: object(80, 1) });
+    const result = await reading;
+    expect(result).toMatchObject({ state: 'incomplete', indices: [0] });
+    if (participant === alice) expect(result.manifest).toEqual(object(80, 1));
+    else expect(result).not.toHaveProperty('manifest');
 });
 
 test.each(['trust', 'session'])('delayed chunk read revalidates %s before returning ciphertext', async kind => {
