@@ -1,0 +1,317 @@
+{
+  "start": "407d78fbdbf393c39bb2da0bb7c2bdbeb97338ce",
+  "liveReference": "871fa99d0ae94c88239f6c392325f224d2c085c4",
+  "v1Correction": "81986b293e10414c780ae827c8a4c458e22e6a85",
+  "hotfixRuntime": "5a82e06c7b0b2d3029cb7b6324760b623cb04850",
+  "stabilizationRuntime": "62650cf5b1f9eb75e76e3a17ef5630937a36bb4e",
+  "tests": {
+    "stabilization": {
+      "passed": 105,
+      "failed": 0,
+      "skipped": 2
+    },
+    "hotfix": {
+      "passed": 61,
+      "failed": 1,
+      "skipped": 2,
+      "failure": "unchanged legacy BSON empty-ciphertext round-trip"
+    },
+    "ancillarySecurityEach": {
+      "passed": 15
+    },
+    "stagingBoundary": {
+      "passed": 20
+    },
+    "initialPrefixPolicy": {
+      "passed": 17,
+      "failed": 3,
+      "status": "corrected before final approval"
+    }
+  },
+  "browser": {
+    "baseline": [
+      {
+        "revision": "871fa99d",
+        "bytes": 314368,
+        "repeat": 0,
+        "fixtureMs": 5134,
+        "selectionMs": 31,
+        "sendMs": 901,
+        "downloadReadyMs": 392,
+        "integrity": "PASS",
+        "http429": 0,
+        "requestsByCategory": {
+          "chunk-download": 2,
+          "chunk-upload": 2,
+          "complete": 1,
+          "create": 1,
+          "device-trust": 10,
+          "file-status": 2,
+          "manifest-upload": 1,
+          "prekey-read": 11
+        }
+      },
+      {
+        "revision": "871fa99d",
+        "bytes": 1258291,
+        "repeat": 0,
+        "fixtureMs": 5134,
+        "selectionMs": 115,
+        "sendMs": 17983,
+        "downloadReadyMs": 25013,
+        "integrity": "PASS",
+        "http429": 10,
+        "requestsByCategory": {
+          "chunk-download": 5,
+          "chunk-upload": 5,
+          "complete": 1,
+          "create": 1,
+          "device-trust": 16,
+          "file-status": 2,
+          "manifest-upload": 1,
+          "prekey-read": 27
+        }
+      }
+    ],
+    "hotfix": [
+      {
+        "revision": "5a82e06c",
+        "bytes": 314368,
+        "repeat": 0,
+        "fixtureMs": 5731,
+        "selectionMs": 32,
+        "sendMs": 890,
+        "downloadReadyMs": 404,
+        "integrity": "PASS",
+        "http429": 0,
+        "requestsByCategory": {
+          "chunk-download": 2,
+          "chunk-upload": 2,
+          "complete": 1,
+          "create": 1,
+          "device-trust": 10,
+          "file-status": 2,
+          "manifest-upload": 1,
+          "prekey-read": 11
+        }
+      },
+      {
+        "revision": "5a82e06c",
+        "bytes": 1258291,
+        "repeat": 0,
+        "fixtureMs": 5731,
+        "selectionMs": 113,
+        "sendMs": 17980,
+        "downloadReadyMs": 24991,
+        "integrity": "PASS",
+        "http429": 10,
+        "requestsByCategory": {
+          "chunk-download": 5,
+          "chunk-upload": 5,
+          "complete": 1,
+          "create": 1,
+          "device-trust": 16,
+          "file-status": 2,
+          "manifest-upload": 1,
+          "prekey-read": 27
+        }
+      }
+    ],
+    "stabilization-final": [
+      {
+        "revision": "62650cf5",
+        "bytes": 314368,
+        "repeat": 0,
+        "fixtureMs": 5707,
+        "selectionMs": 31,
+        "sendMs": 892,
+        "downloadReadyMs": 390,
+        "integrity": "PASS",
+        "http429": 0,
+        "requestsByCategory": {
+          "chunk-download": 2,
+          "chunk-upload": 2,
+          "complete": 1,
+          "create": 1,
+          "device-trust": 10,
+          "file-status": 2,
+          "manifest-upload": 1,
+          "prekey-read": 11
+        }
+      },
+      {
+        "revision": "62650cf5",
+        "bytes": 1258291,
+        "repeat": 0,
+        "fixtureMs": 5707,
+        "selectionMs": 113,
+        "sendMs": 1898,
+        "downloadReadyMs": 1918,
+        "integrity": "PASS",
+        "http429": 1,
+        "requestsByCategory": {
+          "chunk-download": 5,
+          "chunk-upload": 5,
+          "complete": 1,
+          "create": 1,
+          "device-trust": 16,
+          "file-status": 2,
+          "manifest-upload": 1,
+          "prekey-read": 18
+        }
+      }
+    ],
+    "stabilizationFaults": {
+      "result": "PASS",
+      "elapsedMs": 12100,
+      "cases": [
+        "503 and manual retry with same ciphertext",
+        "deterministic cancel",
+        "following transfer integrity",
+        "oversize rejected",
+        "reload/unlock scoped cleanup"
+      ],
+      "source": "62650cf5b1f9eb75e76e3a17ef5630937a36bb4e"
+    }
+  },
+  "artifacts": {
+    "baseline": {
+      "source": "871fa99d0ae94c88239f6c392325f224d2c085c4",
+      "image": "sha256:1680e07e654c3d6690673d996350817f54f1fd895b6c5905afa4dd76a696a933",
+      "servedAssets": [
+        {
+          "path": "/assets/browser-CWxOpWd5.js",
+          "sha256": "60358880cd41572e134c6ca7695d4bf89aa2e5d00c7490bcccaf7c07bef8ce95"
+        },
+        {
+          "path": "/assets/esm-6mZTTw7n.js",
+          "sha256": "6a49a04a42f4fe1d5ce892110b3f089d03bccb430793985031411302e0800868"
+        },
+        {
+          "path": "/assets/index-CHBe3qCp.css",
+          "sha256": "58babb8ad9a946ca8ffaeaa1ac9e55c3c40288e2c63086814d7b09b5520180c2"
+        },
+        {
+          "path": "/assets/index-xMn7Ww9J.js",
+          "sha256": "8a84d3afb67ce0af28ee60839111f74e821e77973923c61e1707b74bcd445565"
+        },
+        {
+          "path": "/assets/k3ncrypt_vodozemac_bg-C-RDrm41.wasm",
+          "sha256": "c1ebcd701b70d9f302798918c13c92118e0c1bb82c84eef97bcad43e11e00011"
+        },
+        {
+          "path": "/index.html",
+          "sha256": "b113bc0fbdc46ba623a503b9aaf6ba81b269a2fc4e1df1fb550b473488f74379"
+        },
+        {
+          "path": "/startup.css",
+          "sha256": "33e931105634bcb14558b1cd36b4f2a4fc5dd3f5ad2925f4f33db31b62735cbb"
+        }
+      ],
+      "memory": {
+        "current": 64364544,
+        "peak": 92053504,
+        "events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n",
+        "limit": 536870912,
+        "oomKilled": false
+      }
+    },
+    "hotfix": {
+      "source": "5a82e06c7b0b2d3029cb7b6324760b623cb04850",
+      "image": "sha256:4092283608fe6e797b9432156bc6392f33d264a89914cfe530ee149c04d03114",
+      "servedAssets": [
+        {
+          "path": "/assets/browser-CWxOpWd5.js",
+          "sha256": "60358880cd41572e134c6ca7695d4bf89aa2e5d00c7490bcccaf7c07bef8ce95"
+        },
+        {
+          "path": "/assets/esm-6mZTTw7n.js",
+          "sha256": "6a49a04a42f4fe1d5ce892110b3f089d03bccb430793985031411302e0800868"
+        },
+        {
+          "path": "/assets/index-CHBe3qCp.css",
+          "sha256": "58babb8ad9a946ca8ffaeaa1ac9e55c3c40288e2c63086814d7b09b5520180c2"
+        },
+        {
+          "path": "/assets/index-xMn7Ww9J.js",
+          "sha256": "8a84d3afb67ce0af28ee60839111f74e821e77973923c61e1707b74bcd445565"
+        },
+        {
+          "path": "/assets/k3ncrypt_vodozemac_bg-C-RDrm41.wasm",
+          "sha256": "c1ebcd701b70d9f302798918c13c92118e0c1bb82c84eef97bcad43e11e00011"
+        },
+        {
+          "path": "/index.html",
+          "sha256": "b113bc0fbdc46ba623a503b9aaf6ba81b269a2fc4e1df1fb550b473488f74379"
+        },
+        {
+          "path": "/startup.css",
+          "sha256": "33e931105634bcb14558b1cd36b4f2a4fc5dd3f5ad2925f4f33db31b62735cbb"
+        }
+      ],
+      "memory": {
+        "current": 62283776,
+        "peak": 90271744,
+        "events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n",
+        "limit": 536870912,
+        "oomKilled": false
+      }
+    },
+    "stabilization-final": {
+      "source": "62650cf5b1f9eb75e76e3a17ef5630937a36bb4e",
+      "image": "sha256:eab54fa08898aa6768d01a377db899dfda77ed763ddaeef681963559e2ce4f77",
+      "servedAssets": [
+        {
+          "path": "/assets/browser-CX9d01rI.js",
+          "sha256": "1d11df89b05ecdf95837b69499de171aa9ff334209c1317a9bf004103db625a5"
+        },
+        {
+          "path": "/assets/esm-6mZTTw7n.js",
+          "sha256": "6a49a04a42f4fe1d5ce892110b3f089d03bccb430793985031411302e0800868"
+        },
+        {
+          "path": "/assets/index-CHBe3qCp.css",
+          "sha256": "58babb8ad9a946ca8ffaeaa1ac9e55c3c40288e2c63086814d7b09b5520180c2"
+        },
+        {
+          "path": "/assets/index-NyyapSKy.js",
+          "sha256": "7786a9b26e4beff4e29483f146dc66615fe648540f8bd8464c50a0165f06bf29"
+        },
+        {
+          "path": "/assets/k3ncrypt_vodozemac_bg-C-RDrm41.wasm",
+          "sha256": "c1ebcd701b70d9f302798918c13c92118e0c1bb82c84eef97bcad43e11e00011"
+        },
+        {
+          "path": "/index.html",
+          "sha256": "6760c43c208fc6a8a8152f0723008d84ba649dcc3c142d1b012eb11fd2786633"
+        },
+        {
+          "path": "/startup.css",
+          "sha256": "33e931105634bcb14558b1cd36b4f2a4fc5dd3f5ad2925f4f33db31b62735cbb"
+        }
+      ],
+      "memory": {
+        "current": 65429504,
+        "peak": 93065216,
+        "events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n",
+        "limit": 536870912,
+        "oomKilled": false
+      }
+    },
+    "hotfixFrontendIdenticalToBaseline": true
+  },
+  "limitations": [
+    "one initial live-source baseline bootstrap HTTP 403; unchanged retry passed; precise cause unresolved",
+    "two old fixed-container Mongo restart fixtures skipped",
+    "phone trusted HTTPS not provisioned or exposed",
+    "no physical Android testing",
+    "no repeated 8 MiB test in this phase; prior Phase 3.8 evidence retained"
+  ],
+  "cleanup": {
+    "temporaryContainersRemoved": true,
+    "temporaryNetworksRemoved": true,
+    "temporarySecretsAndProfilesRemoved": true,
+    "localProductionImagesRetained": true,
+    "externalEndpointCreated": false
+  }
+}
