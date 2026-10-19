@@ -1,5 +1,7 @@
 # Phase 4B — isolated V2 staging readiness
 
+**Phase4C clarification:** The repeated8MiB rejection was subsequently reproduced with an explicit server `failure=quota` response and is expected under the12MiB encoded reservation limit. The earlier suggestion that this particular quota label was misleading was not established. Separate header-only client misclassification was corrected and tested; see [Phase4C results](PHASE4C_FILE_FEEDBACK.md). Historical timings below are retained.
+
 ## Source and isolation
 
 Branch `codex/phase4b-v2-staging`, based on `8f8fb3625106f8e914f7977e4e9aed0197aef6b0`. No application runtime code was changed. Source contains the Phase 3.8 trust-revocation fences and V1 BSON correction. Compared against production hotfix `f3aab1d64edf47a6f84b4c5bafc52ebace94855f`: attachment trust, authenticated authorization and BSON adapter files are byte-identical; staging retains its separately validated optimized ledger reads. No blind security cherry-picks were performed.

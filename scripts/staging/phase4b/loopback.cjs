@@ -29,7 +29,10 @@ if (process.argv[2] === 'stop') {
   for (const [kind, name] of owned) docker(kind, 'rm', ...(kind === 'container' ? ['-f', name] : [name]));
   fs.rmSync(dir, { recursive: true, force: true });
   console.log('Owned stage resources and temporary secrets removed.');
-} else if (process.argv[2] === 'start') {
+} else if (['start', 'start-reviewed-client'].includes(process.argv[2])) {
+  const reviewedClient = process.argv[2] === 'start-reviewed-client';
+  const clientDist = path.join(root, 'client/dist');
+  if (reviewedClient && !fs.existsSync(path.join(clientDist, 'index.html'))) throw new Error('Build the reviewed client before starting.');
   if (fs.existsSync(dir)) throw new Error('Stage directory already exists; inspect or stop this stage first.');
   for (const [kind, values] of [['container', [...names, 'phase4b-b-migrate']], ['network', networks]]) {
     const existing = docker(kind, 'ls', ...(kind === 'container' ? ['-a'] : []), '--format', kind === 'container' ? '{{.Names}}' : '{{.Name}}').trim().split('\n');
@@ -55,9 +58,9 @@ if (process.argv[2] === 'stop') {
   for (let n = 0; n < 60; n++) { try { docker('exec', names[2], 'mongosh', '--quiet', '--eval', 'quit(db.runCommand({ping:1}).ok ? 0 : 1)'); ready = true; break; } catch { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000); } }
   if (!ready) throw new Error('Disposable Mongo did not start.');
   docker('run', '--rm', '--label', label, '--name', 'phase4b-b-migrate', '--network', 'phase4b-b-internal', '--env-file', path.join(dir, 'app.env'), image, 'node', 'dist/scripts/migrate.js');
-  docker('run', '-d', '--label', label, '--name', names[1], '--network', 'phase4b-b-internal', '--memory', '512m', '--cpus', '1', '--env-file', path.join(dir, 'app.env'), image);
+  docker('run', '-d', '--label', label, '--name', names[1], '--network', 'phase4b-b-internal', '--memory', '512m', '--cpus', '1', '--env-file', path.join(dir, 'app.env'), ...(reviewedClient ? ['-v', `${clientDist}:/app/client/dist:ro`] : []), image);
   docker('run', '-d', '--label', label, '--name', names[0], '--network', 'phase4b-b-ingress', '--memory', '128m', '-p', '127.0.0.1:3453:3453', '-v', `${dir}:/stage:ro`, '-v', `${path.join(root, 'scripts/staging')}:/tooling:ro`, 'node:22-alpine', 'node', '/tooling/phase4b/proxy.cjs');
   docker('network', 'connect', 'phase4b-b-internal', names[0]);
   console.log('On setup failure, use stop with the retained ownership receipt; never remove unrelated resources.');
   console.log('Loopback stage started at https://phase4b.localhost:3453; browser exception only.');
-} else throw new Error('Usage: node scripts/staging/phase4b/loopback.cjs start|stop');
+} else throw new Error('Usage: node scripts/staging/phase4b/loopback.cjs start|start-reviewed-client|stop');
