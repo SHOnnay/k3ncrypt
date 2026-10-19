@@ -30,7 +30,7 @@ suite('request-scoped attachment revocation using real signed devices and Mongo'
   let sealKey: CryptoKey;
   beforeAll(async () => {
     if (!uri || new URL(uri).hostname !== '127.0.0.1') throw new Error('Disposable loopback Mongo only');
-    client = await new MongoClient(uri).connect(); database = client.db(databaseName); await applyMigrations(database);
+    client = await new MongoClient(uri, { monitorCommands: true }).connect(); database = client.db(databaseName); await applyMigrations(database);
     process.env.K3NCRYPT_DEVICE_TRUST_PROOF_SECRET = randomBytes(32).toString('hex');
     store = new MongoDeviceTrustStore(database); authority = new DurableDeviceTrustAuthority(store, process.env.K3NCRYPT_DEVICE_TRUST_PROOF_SECRET);
     jest.spyOn(db, 'getDatabase').mockReturnValue(database);
@@ -226,4 +226,32 @@ suite('request-scoped attachment revocation using real signed devices and Mongo'
     try { await block.entered; await f.recipient.revoke(); } finally { block.release(); }
     const result = await response; expect(result.status).toBe(403); expect(result.body).toEqual({ failure: 'authorization' });
   }, 20000);
+  test('V2-only staging performs signed encrypted round-trip without any legacy Mongo collection operation', async () => {
+    const f = await fixture();
+    const { allowStagingPath } = require('../../scripts/staging/attachmentPolicy.cjs');
+    const app = express(); app.use(express.json());
+    app.use((req, res, next) => allowStagingPath(req.originalUrl) ? next() : void res.sendStatus(404));
+    app.use('/api/attachments/v2', createFileRouter(authenticateAttachment, () => f.service));
+    let legacyDispatches = 0, legacyCommands = 0;
+    app.use('/api/attachments', (_req, res) => { legacyDispatches++; res.sendStatus(500); });
+    const observed = (event: any) => {
+      const command = event.command;
+      if (['attachment_metadata', 'attachment_chunks', 'attachment_access'].includes(command.find ?? command.insert ?? command.update ?? command.delete)) legacyCommands++;
+    };
+    client.on('commandStarted', observed);
+    try {
+      expect((await request(app).post('/api/attachments/create').set(await f.headers(f.sender, 'attachment:create')).send(f.input)).status).toBe(404);
+      const created = await request(app).post('/api/attachments/v2/create').set(await f.headers(f.sender, 'attachment:create')).send(f.input);
+      expect(created.status).toBe(200); const id = created.body.context.transferId;
+      expect((await request(app).put('/api/attachments/v2/' + id + '/manifest').set(await f.headers(f.sender, 'attachment:write')).send(await f.sealed(64))).status).toBe(200);
+      const chunk = await f.sealed(1);
+      expect((await request(app).put('/api/attachments/v2/' + id + '/chunks/0').set(await f.headers(f.sender, 'attachment:write')).set('Content-Type', 'application/octet-stream').set('X-K3ncrypt-File-Nonce', chunk.nonce).send(Buffer.from(chunk.ciphertext, 'base64url'))).status).toBe(200);
+      expect((await request(app).post('/api/attachments/v2/' + id + '/complete').set(await f.headers(f.sender, 'attachment:write')).send({})).status).toBe(200);
+      const downloaded = await request(app).get('/api/attachments/v2/' + id + '/chunks/0').set(await f.headers(f.recipient, 'attachment:read'));
+      expect(downloaded.status).toBe(200); expect(downloaded.body).toEqual(chunk);
+      expect((await request(app).get('/api/attachments/v2/' + id).set(await f.headers(f.recipient, 'attachment:read'))).status).toBe(200);
+      expect(legacyDispatches).toBe(0); expect(legacyCommands).toBe(0);
+    } finally { client.off('commandStarted', observed); }
+  }, 20000);
+
 });
