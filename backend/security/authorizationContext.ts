@@ -47,6 +47,13 @@ export class ConversationAuthorizationService {
 
   constructor(private readonly memberships: ConversationMembershipStore, private readonly attachments: AttachmentAccessStore, private readonly now: () => number = Date.now) {}
 
+  /** Recheck an admitted request without consuming its request/proof a second time. */
+  async revalidate(context: AuthenticatedContext): Promise<void> {
+    this.validateContext(context);
+    await context.deviceTrust.assertTrusted();
+    this.validateContext(context);
+  }
+
   async authorizeConversation(context: AuthenticatedContext, conversationId: string, permission: AttachmentPermission): Promise<void> {
     this.validateContext(context);
     await context.deviceTrust.assertTrusted();

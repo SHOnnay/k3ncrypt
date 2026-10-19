@@ -170,3 +170,18 @@ test.each(['trust', 'session'])('delayed chunk read revalidates %s before return
     });
     await expect(service.chunk(request, id, 0)).rejects.toThrow(kind === 'trust' ? 'revoked' : 'authorization');
 });
+
+test('transfer expiry during the final asynchronous trust fence cannot release ciphertext', async () => {
+    const f = await create(); const id = f.context.transferId;
+    await service.put(auth(), id, 'manifest', object(80, 1));
+    await service.put(auth(), id, 0, object(17, 2)); await service.complete(auth(), id);
+    let checks = 0;
+    const request = { ...auth(bob), deviceTrust: { assertTrusted: async () => { if (++checks === 2) now += L.TRANSFER_EXPIRY; } } };
+    await expect(service.chunk(request, id, 0)).rejects.toThrow('expired');
+});
+
+test.each([2, 3])('write expiry at trust fence %i cannot report an available upload', async fence => {
+    const f = await create(); let checks = 0;
+    const request = { ...auth(), deviceTrust: { assertTrusted: async () => { if (++checks === fence) now += L.TRANSFER_EXPIRY; } } };
+    await expect(service.put(request, f.context.transferId, 0, object(17, 2))).rejects.toThrow('expired');
+});

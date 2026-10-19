@@ -16,18 +16,24 @@ export class FileLedgerService {
         for (const f of ledger.transfers) if (f.expiresAt <= this.now()) { f.state = 'expired'; f.reserved = 0; f.chunks = {}; delete f.manifest; }
         ledger.transfers = ledger.transfers.filter(f => f.expiresAt + L.TRANSFER_EXPIRY > this.now());
     }
-    private async atomic<T>(account: string, change: (value: FileLedger) => T | Promise<T>, object?: FileObjectWrite): Promise<T> {
+    private async atomic<T>(account: string, change: (value: FileLedger) => T | Promise<T>, object?: FileObjectWrite, beforeCommit?: () => Promise<void>): Promise<T> {
         for (let n = 0; n < 12; n++) {
             const before = await this.persistence.read(account);
             const after: FileLedger = before ? structuredClone(before) : { _id: account, revision: 0, transfers: [] };
             this.expire(after); const result = await change(after); after.revision++;
+            await beforeCommit?.();
             if (await this.persistence.replace(before, after, object)) return result;
         }
         throw new FileError('storage');
     }
+    private async revalidate(auth: AuthenticatedContext): Promise<void> {
+        if (auth.expiresAt <= this.now()) deny();
+        await auth.deviceTrust.assertTrusted();
+        if (auth.expiresAt <= this.now()) deny();
+    }
     private async trusted(auth: AuthenticatedContext, permission: import('../security/authorizationContext').AttachmentPermission): Promise<void> {
         if (!auth.accountIdentityReference || auth.expiresAt <= this.now() || !auth.permissions.includes(permission)) deny();
-        await auth.deviceTrust.assertTrusted();
+        await this.revalidate(auth);
         if (!auth.identityReference || await this.identity(auth.conversationId, auth.participantId) !== auth.identityReference) deny();
     }
     private authorize(auth: AuthenticatedContext, f: StoredFile, owner: boolean): void {
@@ -45,13 +51,15 @@ export class FileLedgerService {
         try { validateFileContext(context); } catch { throw new FileError('limits'); }
         if (context.conversationId !== auth.conversationId || context.senderParticipantId !== auth.participantId || context.senderIdentityReference !== auth.identityReference || await this.identity(context.conversationId, context.recipientParticipantId) !== context.recipientIdentityReference) deny();
         const reserved = reservationBytes(context.fileSize, context.chunkCount);
-        return this.atomic(auth.accountIdentityReference!, ledger => {
+        const result = await this.atomic(auth.accountIdentityReference!, ledger => {
             const stored = ledger.transfers.reduce((s, f) => s + f.reserved, 0);
             const active = ledger.transfers.filter(f => f.state === 'incomplete');
             if (ledger.transfers.length >= L.MAX_RECORDS || active.length >= L.MAX_ACTIVE_TRANSFERS || stored + reserved > L.MAX_STORED_BYTES_PER_USER || active.reduce((s, f) => s + f.reserved, 0) + reserved > L.MAX_INCOMPLETE_BYTES_PER_USER) throw new FileError('quota');
             const createdAt = this.now(); const f: StoredFile = { version: 2, context, createdAt, expiresAt: createdAt + L.TRANSFER_EXPIRY, state: 'incomplete', indices: [], reserved, chunks: {} };
             ledger.transfers.push(f); return view(f);
-        });
+        }, undefined, () => this.revalidate(auth));
+        await this.revalidate(auth);
+        return result;
     }
     private async access<T>(auth: AuthenticatedContext, id: string, permission: 'attachment:read' | 'attachment:write' | 'attachment:delete', action: (f: StoredFile, account: string) => T | Promise<T>, object?: FileObjectWrite, refreshReadResult = false): Promise<T> {
         await this.trusted(auth, permission);
@@ -72,13 +80,22 @@ export class FileLedgerService {
             const checked = structuredClone(latest); this.expire(checked);
             const current = checked.transfers.find(t => t.context.transferId === id); if (!current) deny();
             this.authorize(auth, current, false);
-            if (auth.expiresAt <= this.now()) deny();
-            await auth.deviceTrust.assertTrusted();
+            await this.revalidate(auth);
+            // The trust lookup is asynchronous: project time expiry again before release.
+            this.expire(checked);
+            if (!checked.transfers.includes(current)) deny();
             // Status includes mutable chunk/manifest progress, not just state.
             // Project it from the final authorized snapshot without refetching ciphertext.
             return !refreshReadResult && current.state === f.state ? result : action(current, ledger._id);
         }
-        return this.atomic(ledger._id, current => { const f = current.transfers.find(t => t.context.transferId === id); if (!f) deny(); this.authorize(auth, f, true); return action(f, ledger._id); }, object);
+        const checkWriteExpiry = (): void => {
+            const f = ledger.transfers.find(t => t.context.transferId === id);
+            if (permission === 'attachment:write' && f) this.live(f);
+        };
+        const result = await this.atomic(ledger._id, current => { const f = current.transfers.find(t => t.context.transferId === id); if (!f) deny(); this.authorize(auth, f, true); return action(f, ledger._id); }, object, async () => { await this.revalidate(auth); checkWriteExpiry(); });
+        await this.revalidate(auth);
+        checkWriteExpiry();
+        return result;
     }
     private live(f: StoredFile): void { if (f.state === 'expired' || f.expiresAt <= this.now()) throw new FileError('expired'); if (f.state === 'canceled') throw new FileError('canceled'); }
     status(auth: AuthenticatedContext, id: string): Promise<FileStatus> { return this.access(auth, id, 'attachment:read', f => { const result = view(f); if (auth.participantId !== f.context.senderParticipantId && f.state !== 'available') delete result.manifest; return result; }, undefined, true); }

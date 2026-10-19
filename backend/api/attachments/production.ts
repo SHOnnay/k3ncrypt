@@ -10,6 +10,7 @@ import { createProductionAuthenticatedAttachmentService } from '../../security/p
 import type { AttachmentAccessRecord, AttachmentAccessStore, AuthenticatedContext, ConversationMembershipStore } from '../../security/authorizationContext';
 import { createAttachmentRouter } from './index';
 import { type DeviceAuthorizationProof, type DeviceOperation } from '../../security/deviceTrust';
+import { attachmentTrustGuard } from '../../security/attachmentTrust';
 import { durableDeviceTrustAuthority } from '../../security/durableDeviceTrust';
 import { fingerprintVodozemacIdentity, type VodozemacPublicIdentity } from '../../../service/src/identity/vodozemacIdentity';
 
@@ -75,7 +76,8 @@ export const authenticateAttachment = async (request: Request, requiredOperation
   if (!operation || !/^[A-Za-z0-9_-]{16,128}$/.test(deviceNonce)) return undefined;
   let deviceProof: DeviceAuthorizationProof;
   try { deviceProof = JSON.parse(Buffer.from(deviceProofText, 'base64url').toString('utf8')) as DeviceAuthorizationProof; } catch { return undefined; }
-  const authority = durableDeviceTrustAuthority(db.getDatabase());
+  const database = db.getDatabase();
+  const authority = durableDeviceTrustAuthority(database);
   if (!authority || deviceProof.nonce !== deviceNonce) return undefined;
   let trustedDevice;
   try { trustedDevice = await authority.verify(deviceProof, operation, { conversationId }); } catch { return undefined; }
@@ -85,7 +87,7 @@ export const authenticateAttachment = async (request: Request, requiredOperation
   if (trustedDevice.deviceIdentityReference !== identityReference || deviceProof.deviceIdentityReference !== identityReference) return undefined;
   productionService();
   const now = Date.now();
-  const verifiedDevice = { deviceId: deviceProof.deviceId, accountIdentityReference: deviceProof.accountIdentityReference, trustEpoch: deviceProof.trustEpoch, operation, expiresAt: deviceProof.expiresAt };
+  const expiresAt = Math.min(now + 30_000, deviceProof.expiresAt);
   return {
     sessionId: `attachment:${participantId}`,
     participantId,
@@ -95,10 +97,8 @@ export const authenticateAttachment = async (request: Request, requiredOperation
     identityReference,
     accountIdentityReference: trustedDevice.accountIdentityReference,
     createdAt: now,
-    expiresAt: now + 30_000,
-    deviceTrust: { assertTrusted: async () => {
-      if (verifiedDevice.expiresAt <= Date.now() || verifiedDevice.deviceId !== deviceProof.deviceId || verifiedDevice.accountIdentityReference !== deviceProof.accountIdentityReference || verifiedDevice.operation !== operation) throw new Error('Device trust unavailable.');
-    } },
+    expiresAt,
+    deviceTrust: attachmentTrustGuard(database!, trustedDevice, expiresAt),
   };
 };
 

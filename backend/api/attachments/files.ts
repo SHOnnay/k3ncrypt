@@ -1,4 +1,5 @@
 import express, { type Request } from 'express';
+import { AttachmentTrustError } from '../../security/attachmentTrust';
 import db from '../../db';
 import { PREKEY_COLLECTION } from '../../db/const';
 import { fingerprintVodozemacIdentity, type VodozemacPublicIdentity } from '../../../service/src/identity/vodozemacIdentity';
@@ -16,7 +17,7 @@ export const createFileRouter = (authenticate: (req: Request, operation: DeviceO
             const auth = await authenticate(req, operation); if (!auth) return void res.status(403).json({ failure: 'authorization' });
             res.json(await run(auth, req));
         } catch (e) {
-            const category = e instanceof FileError ? e.category : 'storage';
+            const category = e instanceof FileError ? e.category : e instanceof AttachmentTrustError ? 'authorization' : 'storage';
             res.status(category === 'authorization' ? 403 : category === 'quota' ? 429 : category === 'expired' ? 410 : category === 'storage' ? 503 : 409).json({ failure: category });
         }
     };
