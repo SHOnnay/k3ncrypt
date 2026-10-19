@@ -54,3 +54,7 @@ Cleanup: stop the ownership-labeled stage, remove its approved LAN binding/acces
 ## Verdict
 
 GO for review/private controlled testing of this Web correction; no capacity increase or production release is implied. Rate limits and actual storage quota remain authoritative and unchanged. Sustained throughput is not claimed improved by a feedback correction. Physical Android behavior, access-control/TLS setup and independent staging exposure require owner approval/testing. No production hotfix integration, Android implementation change, Firebase enablement or new APK occurred in this branch.
+
+## Disposable volume cleanup check
+
+Mongo image declarations create anonymous data volumes even without explicit volume flags. Ownership-fenced stop now uses container removal with`-v` to remove only its anonymous volumes. The initial stage's exact two volumes were identified by matching its destroy/unmount event container IDs, verified unreferenced, then removed; no global prune or name/time guess was used. Fresh startup/stop verification confirms its two anonymous volumes disappear. No unrelated database/container/volume was changed.

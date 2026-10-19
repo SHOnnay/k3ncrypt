@@ -26,7 +26,7 @@ if (process.argv[2] === 'stop') {
       owned.push([kind, name]);
     }
   }
-  for (const [kind, name] of owned) docker(kind, 'rm', ...(kind === 'container' ? ['-f', name] : [name]));
+  for (const [kind, name] of owned) docker(kind, 'rm', ...(kind === 'container' ? ['-f', '-v', name] : [name]));
   fs.rmSync(dir, { recursive: true, force: true });
   console.log('Owned stage resources and temporary secrets removed.');
 } else if (['start', 'start-reviewed-client'].includes(process.argv[2])) {
