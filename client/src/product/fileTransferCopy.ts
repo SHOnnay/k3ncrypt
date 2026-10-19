@@ -43,6 +43,13 @@ export const fileTransferCopy = (transfer: FileProgress): FileTransferCopy => {
     case 'Canceled': return { label: `${name}Transfer canceled`, active: false };
     case 'Expired': return { label: safeFailureCopy('expired'), active: false };
     case 'RestartRequired': return { label: 'Select the original file again to restart this transfer.', active: false };
-    case 'Failed': return { label: safeFailureCopy(transfer.diagnosticCode === 'FILE_RATE_LIMITED' ? 'Rate limit exceeded.' : transfer.failure ?? ''), active: false };
+    case 'Failed': {
+      const label = transfer.diagnosticCode === 'FILE_RATE_LIMITED' ? 'The file service is busy. Wait a moment, then retry this transfer.'
+        : transfer.diagnosticCode === 'FILE_QUOTA_EXCEEDED' ? 'File storage quota reached. Try again after older files expire.'
+        : transfer.diagnosticCode === 'FILE_SERVICE_UNAVAILABLE' ? 'The file service is temporarily unavailable. Try again later.'
+        : transfer.diagnosticCode === 'FILE_AUTHORIZATION_FAILED' ? 'This file request is not authorized. Reopen the conversation before retrying.'
+        : safeFailureCopy(transfer.failure ?? '');
+      return { label, active: false };
+    }
   }
 };

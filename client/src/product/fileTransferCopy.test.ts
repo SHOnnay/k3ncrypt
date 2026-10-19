@@ -40,3 +40,8 @@ describe('file transfer wording', () => {
     expect(fileDownloadForReference(undefined, 'file-reference-a')).toBeUndefined();
   });
 });
+
+it('keeps fixed service and authorization failures distinct from storage and verification', () => {
+  expect(fileTransferCopy({ phase: 'Failed', bytes: 0, total: 0, diagnosticCode: 'FILE_SERVICE_UNAVAILABLE' })).toMatchObject({ label: 'The file service is temporarily unavailable. Try again later.', active: false });
+  expect(fileTransferCopy({ phase: 'Failed', bytes: 0, total: 0, diagnosticCode: 'FILE_AUTHORIZATION_FAILED' })).toMatchObject({ label: 'This file request is not authorized. Reopen the conversation before retrying.', active: false });
+});
