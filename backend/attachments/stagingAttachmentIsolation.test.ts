@@ -7,7 +7,7 @@ test.each(['/api/attachments', '/api/attachments/create', '/API/ATTACHMENTS/crea
   expect(allowStagingPath(target)).toBe(false);
 });
 
-test.each(['/api/attachments/v2/create', '/api/attachments/v2/id/chunks/0', '/api/attachments/v2/id?synthetic=1', '/api/device-trust/proofs', '/socket.io/?EIO=4&transport=websocket'])('staging preserves canonical V2 and shared authority path %s', target => {
+test.each(['/api/attachments/v2/create', '/api/attachments/v2/00000000-0000-4000-8000-000000000001/chunks/0', '/api/attachments/v2/00000000-0000-4000-8000-000000000001?synthetic=1', '/api/device-trust/proofs', '/socket.io/?EIO=4&transport=websocket'])('staging preserves canonical V2 and shared authority path %s', target => {
   expect(allowStagingPath(target)).toBe(true);
 });
 
@@ -24,4 +24,14 @@ test('boundary blocks V1 before dispatch; V2 still requires its version and auth
   expect(authenticate).not.toHaveBeenCalled();
   expect((await request(app).post('/api/attachments/v2/create').set('X-K3ncrypt-File-Version', '2')).status).toBe(403);
   expect(authenticate).toHaveBeenCalledTimes(1); expect(service).not.toHaveBeenCalled(); expect(legacy).toBe(0);
+});
+
+test.each(['/api/attachments/v2', '/api/attachments/v2/chunk', '/api/attachments/v2/complete'])('unknown V2-shaped path cannot fall through to the legacy router: %s', async path => {
+  let legacy = 0;
+  const app = express();
+  app.use((req, res, next) => allowStagingPath(req.originalUrl) ? next() : void res.sendStatus(404));
+  app.use('/api/attachments/v2', createFileRouter(jest.fn(), jest.fn()));
+  app.use('/api/attachments', (_req, res) => { legacy++; res.sendStatus(500); });
+  const result = path.endsWith('/chunk') ? await request(app).put(path) : path.endsWith('/complete') ? await request(app).post(path) : await request(app).delete(path);
+  expect(result.status).toBe(404); expect(legacy).toBe(0);
 });
