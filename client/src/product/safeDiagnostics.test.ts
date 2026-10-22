@@ -26,7 +26,7 @@ describe('safe diagnostics', () => {
     ['NETWORK_FAILURE', new TypeError('Failed to fetch https://secret.example/token/abc'), 'conversation-open'],
     ['NETWORK_FAILURE', Object.assign(new Error('service unavailable'), { status: 503 }), 'conversation-open'],
     ['NETWORK_FAILURE', Object.assign(new Error('rate limited'), { status: 429 }), 'conversation-open'],
-    ['CONTACT_REGISTRY_MISSING', Object.assign(new Error('Pre-key bundle unavailable'), { status: 404 }), 'conversation-open'],
+    ['CONVERSATION_PREKEY_UNAVAILABLE', Object.assign(new Error('Pre-key bundle unavailable'), { status: 404 }), 'conversation-open'],
     ['VERIFICATION_REQUIRED', new Error('Verification required.'), 'contact-authority'],
     ['UNKNOWN_SAFE_FAILURE', new Error('opaque private detail'), 'file-send'],
   ] as const)('maps to %s', (expected, error, context) => {

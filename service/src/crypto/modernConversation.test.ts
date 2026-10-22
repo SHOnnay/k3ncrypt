@@ -2052,3 +2052,35 @@ it('retains terminally rejected sender intent, suppresses automatic retry, and n
     expect(outbox).toEqual([expect.objectContaining({ clientId, terminallyRejected: true })]);
     await conversation.close();
 });
+
+
+it('an unavailable remote prekey blocks established-session restoration without deleting pinned identity or history', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
+    const storage = new Storage();
+    const first = new ModernConversation(storage, loader, fakeTransport().transport);
+    await first.connect(room, key(9), remoteAddress, await remoteCommitment());
+    await first.sendWithReceipt('synthetic history', sentHistoryUpdate(storage, 'synthetic history'));
+    await first.acceptDelivery('relay-1');
+    await first.verifyContact(true);
+    await first.close(false);
+    const before = await Promise.all([
+        storage.read('contact-identity', remoteAddress), storage.read('conversation-protocol', room),
+        storage.read('vodozemac-session', room), storage.read('product-messages', room),
+    ]);
+    expect(await new ContactIdentityRegistry(storage).get(remoteAddress, false)).toMatchObject({ verification: 'verified' });
+    const missingPrekey = Object.assign(new Error('Pre-key bundle unavailable'), { status: 404 });
+    jest.mocked(fetchVodozemacBundle).mockRejectedValueOnce(missingPrekey);
+    const transport = fakeTransport();
+    const restarted = new ModernConversation(storage, loader, transport.transport);
+    try {
+        await expect(restarted.connect(room, key(9), remoteAddress, await remoteCommitment())).rejects.toBe(missingPrekey);
+        expect(jest.mocked(fetchVodozemacBundle).mock.calls.at(-1)).toEqual([room, key(9), remoteAddress]);
+        expect(await Promise.all([
+            storage.read('contact-identity', remoteAddress), storage.read('conversation-protocol', room),
+            storage.read('vodozemac-session', room), storage.read('product-messages', room),
+        ])).toEqual(before);
+        expect(transport.sent).toHaveLength(0);
+    } finally { await restarted.close(false); }
+});

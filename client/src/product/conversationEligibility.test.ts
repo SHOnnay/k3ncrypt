@@ -1,6 +1,7 @@
 import { authoritativeTerminal, classifySidebarConversations, conversationDiagnostic, conversationEligibility, diagnoseOrphanedConversationRecords, readConversationIndex } from './conversationEligibility';
 import { readConversationDescriptors, saveConversationDescriptor } from './sessionStore';
 import { TestProductStorage as Store } from './testStorage';
+import { classifySafeDiagnostic } from './safeDiagnostics';
 const room = '11111111-1111-4111-8111-111111111111';
 const descriptor = { version: 1 as const, roomId: room, controlCapability: 'a'.repeat(43), label: 'Private contact', updatedAt: 1, remoteAddress: 'peer-address', remoteIdentityCommitment: 'K3 ' + 'A'.repeat(43) };
 async function valid() {
@@ -131,4 +132,51 @@ it('missing canonical contact is quarantined; changed identity remains available
   expect(await conversationEligibility(store, descriptor)).toBe('CONTACT_REGISTRY_MISSING');
   await store.put('contact-identity', descriptor.remoteAddress, { contactId: descriptor.remoteAddress, identityId: descriptor.remoteIdentityCommitment, algorithm: 'Olm-Curve25519+Ed25519', publicKey: 'AAAA', verification: 'unverified', changeStatus: 'changed-pending-review' });
   expect(await conversationEligibility(store, descriptor)).toBeUndefined();
+});
+
+
+it('local missing-contact diagnosis follows the room probe and never reaches the session read', async () => {
+  const store = await valid();
+  store.records.delete('contact-identity:' + descriptor.remoteAddress);
+  const before = [...store.records];
+  const read = jest.spyOn(store, 'read');
+  let readsAtProbe = -1;
+  const failure = await conversationEligibility(store, descriptor, async () => {
+    readsAtProbe = read.mock.calls.length;
+    return undefined;
+  });
+  expect(readsAtProbe).toBe(0);
+  expect(failure).toBe('CONTACT_REGISTRY_MISSING');
+  expect(read.mock.calls).toContainEqual(['contact-identity', descriptor.remoteAddress]);
+  expect(read.mock.calls.some(([type]) => type === 'vodozemac-session')).toBe(false);
+  expect([...store.records]).toEqual(before);
+});
+
+it('separates a post-eligibility prekey 404 from a missing canonical contact without changing records', async () => {
+  const store = await valid();
+  const before = [...store.records];
+  const descriptors = await readConversationDescriptors(store);
+  expect(await conversationEligibility(store, descriptor, async () => undefined)).toBeUndefined();
+  // Models the real connect path: eligibility succeeded before the HTTP lookup failed.
+  const code = classifySafeDiagnostic('conversation-open', Object.assign(new Error('Pre-key bundle unavailable'), { status: 404 }));
+  expect(code).toBe('CONVERSATION_PREKEY_UNAVAILABLE');
+  const diagnostic = conversationDiagnostic(descriptor, code);
+  expect(diagnostic.state).toBe('retryable');
+  expect(authoritativeTerminal(code)).toBe(false);
+  const groups = classifySidebarConversations(descriptors, [diagnostic]);
+  expect(groups.chats).toHaveLength(0);
+  expect(groups.unavailable).toHaveLength(1);
+  // Filtered Chats do not imply loss of the saved descriptor or pinned trust.
+  expect(await readConversationDescriptors(store)).toHaveLength(1);
+  expect([...store.records]).toEqual(before);
+});
+
+it('maintenance and authorization failures occur before local lookup and do not delete or grant trust', async () => {
+  const store = await valid(); const before = [...store.records];
+  const read = jest.spyOn(store, 'read');
+  for (const code of ['SERVICE_NOT_READY', 'VERIFICATION_REQUIRED', 'CONVERSATION_ROOM_MISSING'] as const) {
+    expect(await conversationEligibility(store, descriptor, async () => code)).toBe(code);
+  }
+  expect(read).not.toHaveBeenCalled();
+  expect([...store.records]).toEqual(before);
 });
