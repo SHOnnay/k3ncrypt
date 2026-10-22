@@ -52,3 +52,12 @@ describe('safe diagnostics', () => {
     warn.mockRestore();
   });
 });
+
+
+it('explains missing server keys without claiming loss of local trust or successful recovery', () => {
+  const text = safeFailureCopy('conversation-open', 'CONVERSATION_PREKEY_UNAVAILABLE');
+  expect(text).toContain('This contact is still saved');
+  expect(text).toContain('reconnection is paused');
+  expect(text).not.toMatch(/create.*invitation|connected successfully|restored successfully/i);
+  expect(safeFailureCopy('conversation-open', 'CONTACT_REGISTRY_MISSING')).toBe('This saved conversation could not be opened.');
+});

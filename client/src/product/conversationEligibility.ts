@@ -45,7 +45,7 @@ export function conversationDiagnostic(descriptor: Pick<ConversationDescriptor, 
   const label = descriptor.localNickname ?? descriptor.remoteDisplayName ?? descriptor.label;
   return { roomId: descriptor.roomId, label: label === 'Private contact' ? `${label} · ${descriptor.roomId.slice(-8)}` : label, state, code };
 }
-export const conversationStateCopy = (diagnostic: ConversationDiagnostic): string => diagnostic.code === 'CONVERSATION_IN_USE' ? 'Open in another tab — close it and retry' : ({
+export const conversationStateCopy = (diagnostic: ConversationDiagnostic): string => diagnostic.code === 'CONVERSATION_PREKEY_UNAVAILABLE' ? 'Contact saved · reconnection paused' : diagnostic.code === 'CONVERSATION_IN_USE' ? 'Open in another tab — close it and retry' : ({
   saved: 'Saved on this device', pending: 'Waiting for contact to accept', retryable: 'Disconnected — retry opening',
   terminal: 'Room expired or removed', 'local-incomplete': 'Local records incomplete — access paused',
   'review-required': 'Identity or room binding needs review', deferred: 'More saved entries retained on this device',
@@ -53,11 +53,17 @@ export const conversationStateCopy = (diagnostic: ConversationDiagnostic): strin
 export interface ConversationIndex { conversations: ConversationDescriptor[]; unavailable: ConversationDiagnostic[]; }
 export interface SidebarConversationGroups { chats: ConversationDescriptor[]; pendingInvitations: ConversationDescriptor[]; unavailable: ConversationDiagnostic[]; }
 
-/** Separate presentation from persisted access records; this never mutates or deletes them. */
+const remoteAvailabilityFailures = new Set<SafeDiagnosticCode>(['CONVERSATION_PREKEY_UNAVAILABLE', 'NETWORK_FAILURE', 'SERVICE_NOT_READY']);
+const showSavedChatWithAvailabilityFailure = (descriptor: ConversationDescriptor, code?: SafeDiagnosticCode): boolean =>
+  Boolean(code && remoteAvailabilityFailures.has(code) && descriptor.remoteAddress && descriptor.remoteIdentityCommitment &&
+    (!descriptor.bootstrapState || descriptor.bootstrapState === 'ESTABLISHED'));
+
+/** Presentation only: keeping a saved row visible never authorizes connection or grants trust. */
 export function classifySidebarConversations(descriptors: readonly ConversationDescriptor[], diagnostics: readonly ConversationDiagnostic[]): SidebarConversationGroups {
   const chats: ConversationDescriptor[] = [];
   const pendingInvitations: ConversationDescriptor[] = [];
-  const unavailable = diagnostics.filter(item => !descriptors.some(descriptor => descriptor.roomId === item.roomId && descriptor.relationship === 'invitation' && !descriptor.remoteAddress));
+  const unavailable = diagnostics.filter(item => !descriptors.some(descriptor => descriptor.roomId === item.roomId &&
+    (descriptor.relationship === 'invitation' && !descriptor.remoteAddress || showSavedChatWithAvailabilityFailure(descriptor, item.code))));
   const unavailableRooms = new Set(unavailable.flatMap(item => item.roomId ? [item.roomId] : []));
   for (const descriptor of descriptors) {
     if (descriptor.relationship === 'invitation' && !descriptor.remoteAddress) {

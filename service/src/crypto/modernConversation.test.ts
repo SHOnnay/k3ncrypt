@@ -2084,3 +2084,61 @@ it('an unavailable remote prekey blocks established-session restoration without 
         expect(transport.sent).toHaveLength(0);
     } finally { await restarted.close(false); }
 });
+
+
+it.each([404, 503])('preserves established-contact lookup HTTP %s on the own address without inventing invitation expiry', async status => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
+    const storage = new Storage();
+    const first = new ModernConversation(storage, loader, fakeTransport().transport);
+    await first.connect(room, key(9), remoteAddress, await remoteCommitment());
+    await first.sendWithReceipt('synthetic history', sentHistoryUpdate(storage, 'synthetic history'));
+    await first.acceptDelivery('relay-1'); await first.verifyContact(true); await first.close(false);
+    const pinned = await storage.read('contact-identity', remoteAddress);
+    const sessionBefore = await storage.read('vodozemac-session', room);
+    const failure = Object.assign(new Error(status === 404 ? 'Pre-key bundle unavailable' : 'service unavailable'), { status });
+    jest.mocked(fetchVodozemacBundle).mockImplementation(async (_room, _proof, address) => {
+        if (address === localAddress) throw failure;
+        return bundle;
+    });
+    const transport = fakeTransport(); const restarted = new ModernConversation(storage, loader, transport.transport);
+    try {
+        await expect(restarted.connect(room, key(9), remoteAddress, await remoteCommitment())).rejects.toBe(failure);
+        expect(await storage.read('contact-identity', remoteAddress)).toEqual(pinned);
+        expect(await storage.read('vodozemac-session', room)).toEqual(sessionBefore);
+        expect(transport.sent).toHaveLength(0);
+    } finally { await restarted.close(false); }
+});
+
+it('retries a temporary prekey failure with the same pinned identity and existing session, without new publication or verification', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
+    const storage = new Storage();
+    const first = new ModernConversation(storage, loader, fakeTransport().transport);
+    await first.connect(room, key(9), remoteAddress, await remoteCommitment());
+    await first.sendWithReceipt('saved synthetic history', sentHistoryUpdate(storage, 'saved synthetic history'));
+    await first.acceptDelivery('relay-1'); await first.verifyContact(true); await first.close(false);
+    const pinned = await storage.read('contact-identity', remoteAddress);
+    const history = await storage.read('product-messages', room);
+    jest.mocked(fetchVodozemacBundle).mockRejectedValueOnce(Object.assign(new Error('Pre-key bundle unavailable'), { status: 404 }));
+    const failed = new ModernConversation(storage, loader, fakeTransport().transport);
+    await expect(failed.connect(room, key(9), remoteAddress, await remoteCommitment())).rejects.toMatchObject({ status: 404 });
+    await failed.close(false);
+    // Availability returns for the original authenticated binding. No new address/identity is published.
+    jest.clearAllMocks();
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    jest.mocked(renewVodozemacBundle).mockResolvedValue(undefined);
+    const recovered = new ModernConversation(storage, loader, fakeTransport().transport);
+    try {
+        await recovered.connect(room, key(9), remoteAddress, await remoteCommitment());
+        expect(recovered.hasEstablishedSession()).toBe(true);
+        expect(await recovered.getContact()).toMatchObject({ verification: 'verified', changeStatus: 'unchanged' });
+        expect(await storage.read('contact-identity', remoteAddress)).toEqual(pinned);
+        expect(await storage.read('product-messages', room)).toEqual(history);
+        expect(publishVodozemacBundle).not.toHaveBeenCalled();
+        expect(claimVodozemacOneTimeKey).not.toHaveBeenCalled();
+        expect(renewVodozemacBundle).toHaveBeenCalledWith(room, key(9), localAddress, 'r'.repeat(43), expect.any(Object));
+    } finally { await recovered.close(false); }
+});

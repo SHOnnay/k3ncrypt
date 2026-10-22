@@ -51,8 +51,13 @@ test('counts namespaces without reading values, writing, networking or exposing 
     const before = await snapshot(page);
     await page.evaluate(() => {
       const transaction = IDBDatabase.prototype.transaction;
+      const decrypt = SubtleCrypto.prototype.decrypt;
+      SubtleCrypto.prototype.decrypt = () => { throw new Error('Test disallows decryption'); };
+      const exportUrl = URL.createObjectURL;
+      URL.createObjectURL = () => { throw new Error('Test disallows file exports'); };
       globalThis.restoreDiagnosticGuards = () => {
         IDBDatabase.prototype.transaction = transaction; IDBObjectStore.prototype.get = get;
+        SubtleCrypto.prototype.decrypt = decrypt; URL.createObjectURL = exportUrl;
       };
       IDBDatabase.prototype.transaction = function(stores, mode, ...args) {
         if (mode !== 'readonly') throw new Error('Test disallows writes');

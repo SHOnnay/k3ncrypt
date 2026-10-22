@@ -15,7 +15,8 @@ export const SAFE_DIAGNOSTIC_CODES = [
 export type SafeDiagnosticCode = typeof SAFE_DIAGNOSTIC_CODES[number];
 export type DiagnosticContext = 'conversation-open' | 'contact-authority' | 'file-send';
 
-export const safeFailureCopy = (context: DiagnosticContext): string => {
+export const safeFailureCopy = (context: DiagnosticContext, code?: SafeDiagnosticCode): string => {
+  if (context === 'conversation-open' && code === 'CONVERSATION_PREKEY_UNAVAILABLE') return 'This contact is still saved. Required contact keys are unavailable from the service, so reconnection is paused. Retry later; keep your existing vault and contact.';
   if (context === 'conversation-open') return 'This saved conversation could not be opened.';
   if (context === 'file-send') return 'This protected file send could not be completed.';
   return 'K3NCRYPT can’t confirm this contact right now.';

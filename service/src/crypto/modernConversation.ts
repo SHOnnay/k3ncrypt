@@ -596,7 +596,13 @@ export class ModernConversation {
         let routingProof = saved?.routingProof ?? publication?.routingProof;
         if (localAddress) {
             try { await fetchVodozemacBundle(roomId, capability, localAddress); }
-            catch { throw new Error('This private invitation expired. Create a fresh conversation to continue.'); }
+            catch (error) {
+                // An existing session's server-side key lookup failure is not
+                // evidence that its invitation or local verified identity expired.
+                // Preserve the error/status and keep restoration fail-closed.
+                if (saved?.sessionId) throw error;
+                throw new Error('This private invitation expired. Create a fresh conversation to continue.');
+            }
             const localBundle = await this.runtime.getPublicBundle();
             if (localBundle.oneTimeKeys.length < 10) {
                 try {

@@ -39,7 +39,7 @@ const AppContent: React.FC = () => {
     if (code === 'CONVERSATION_OPEN_SUPERSEDED') return;
     logSafeFailure('conversation_open_failed', code);
     setErrorDiagnostic(code);
-    setError(safeFailureCopy('conversation-open'));
+    setError(safeFailureCopy('conversation-open', code));
   };
   const beginConversationOpen = (roomId: string) => {
     setError('');

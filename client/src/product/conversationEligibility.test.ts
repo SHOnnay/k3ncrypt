@@ -1,4 +1,4 @@
-import { authoritativeTerminal, classifySidebarConversations, conversationDiagnostic, conversationEligibility, diagnoseOrphanedConversationRecords, readConversationIndex } from './conversationEligibility';
+import { authoritativeTerminal, classifySidebarConversations, conversationStateCopy, conversationDiagnostic, conversationEligibility, diagnoseOrphanedConversationRecords, readConversationIndex } from './conversationEligibility';
 import { readConversationDescriptors, saveConversationDescriptor } from './sessionStore';
 import { TestProductStorage as Store } from './testStorage';
 import { classifySafeDiagnostic } from './safeDiagnostics';
@@ -164,9 +164,9 @@ it('separates a post-eligibility prekey 404 from a missing canonical contact wit
   expect(diagnostic.state).toBe('retryable');
   expect(authoritativeTerminal(code)).toBe(false);
   const groups = classifySidebarConversations(descriptors, [diagnostic]);
-  expect(groups.chats).toHaveLength(0);
-  expect(groups.unavailable).toHaveLength(1);
-  // Filtered Chats do not imply loss of the saved descriptor or pinned trust.
+  expect(groups.chats).toHaveLength(1);
+  expect(groups.unavailable).toHaveLength(0);
+  // Saved presentation does not grant connection authorization or mutate pinned trust.
   expect(await readConversationDescriptors(store)).toHaveLength(1);
   expect([...store.records]).toEqual(before);
 });
@@ -179,4 +179,32 @@ it('maintenance and authorization failures occur before local lookup and do not 
   }
   expect(read).not.toHaveBeenCalled();
   expect([...store.records]).toEqual(before);
+});
+
+
+it.each(['CONVERSATION_PREKEY_UNAVAILABLE', 'NETWORK_FAILURE', 'SERVICE_NOT_READY'] as const)('retains established saved chats under %s without claiming a live session', async code => {
+  const store = await valid(); const before = [...store.records];
+  const restoredDescriptors = await readConversationDescriptors(store);
+  const diagnostic = conversationDiagnostic(descriptor, code);
+  const groups = classifySidebarConversations(restoredDescriptors, [diagnostic]);
+  expect(groups.chats).toEqual(restoredDescriptors);
+  expect(groups.unavailable).toHaveLength(0);
+  expect(diagnostic.state).toBe('retryable');
+  if (code === 'CONVERSATION_PREKEY_UNAVAILABLE') expect(conversationStateCopy(diagnostic)).toBe('Contact saved · reconnection paused');
+  expect([...store.records]).toEqual(before);
+});
+
+it.each(['CONTACT_REGISTRY_MISSING', 'CONVERSATION_LOCAL_RECORD_INVALID', 'PINNED_IDENTITY_CHANGED', 'ROOM_MEMBERSHIP_MISMATCH', 'VERIFICATION_REQUIRED', 'CONVERSATION_ROOM_MISSING'] as const)('does not turn %s into an availability-only saved chat', async code => {
+  const store = await valid(); const before = [...store.records];
+  const groups = classifySidebarConversations(await readConversationDescriptors(store), [conversationDiagnostic(descriptor, code)]);
+  expect(groups.chats).toHaveLength(0);
+  expect(groups.unavailable).toHaveLength(1);
+  expect([...store.records]).toEqual(before);
+});
+
+it('does not promote pending introductions or unbound descriptors after a remote error', () => {
+  for (const entry of [{ ...descriptor, bootstrapState: 'PENDING_REMOTE' as const }, { ...descriptor, remoteIdentityCommitment: undefined }]) {
+    const groups = classifySidebarConversations([entry], [conversationDiagnostic(entry, 'CONVERSATION_PREKEY_UNAVAILABLE')]);
+    expect(groups.chats).toHaveLength(0); expect(groups.unavailable).toHaveLength(1);
+  }
 });
