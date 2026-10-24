@@ -17,6 +17,7 @@ const admitted = async (req: Request) => {
   const encoded = req.get('X-K3ncrypt-Device-Proof') ?? '';
   if (encoded.length > 8192) throw new RoutingAuthorizationError();
   const proof = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')) as DeviceAuthorizationProof;
+  if (!proof || typeof proof !== 'object' || Array.isArray(proof)) throw new RoutingAuthorizationError();
   if (proof.nonce !== req.get('X-K3ncrypt-Device-Nonce')) throw new RoutingAuthorizationError();
   const authority = durableDeviceTrustAuthority(db.getDatabase()), store = routingOwnershipStore();
   if (!authority || !store) throw new Error('unavailable');
@@ -29,7 +30,9 @@ const handler = (run: (req: Request) => Promise<unknown>): express.RequestHandle
   res.set('Cache-Control', 'no-store');
   try { res.json(await run(req)); }
   catch (error) {
-    res.status(!durableRoutingEnabled() || error instanceof Error && error.message === 'unavailable' ? 503 : 403)
+    const denied = error instanceof RoutingAuthorizationError || error instanceof SyntaxError ||
+      error instanceof Error && error.message === 'Device proof rejected.';
+    res.status(!durableRoutingEnabled() || !denied ? 503 : 403)
       .json({ error: 'Authenticated routing recovery unavailable', code: 'ROUTING_RECOVERY_REQUIRED' });
   }
 };

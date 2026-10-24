@@ -182,6 +182,35 @@ suite('durable routing with signed disposable devices and actual Mongo TTL', () 
       await request(app()).get(`/api/chat-link/${r.channel}/routing/${p.address}/identity`).set(await headers(a, r, p)).expect(503);
     } finally { process.env.K3NCRYPT_DURABLE_ROUTING = 'true'; }
   });
+  test.each(['requester', 'peer'])('identity response rechecks %s revocation at its final asynchronous release boundary', async target => {
+    const a = await actor(), b = await actor(), r = await room(), p = await publication(a, r.channel), q = await publication(b, r.channel);
+    await adopt(a, r, p); await adopt(b, r, q);
+    const block = gate(), original = RoutingOwnershipStore.prototype.current; let paused = false;
+    const spy = jest.spyOn(RoutingOwnershipStore.prototype, 'current').mockImplementation(async function(channel, address) {
+      const result = await original.call(this, channel, address);
+      if (channel === r.channel && address === q.address && !paused) { paused = true; block.enter(); await block.wait; }
+      return result;
+    });
+    const pending = request(app()).get(`/api/chat-link/${r.channel}/routing/${q.address}/identity`).set(await headers(a, r, p)).then((response: any) => response.status);
+    await block.entered; const actorToRevoke = target === 'requester' ? a : b, route = target === 'requester' ? p : q;
+    const d = await admitted(actorToRevoke, r.channel); await store.revoke(r.channel, route.address, route.proof, d.device, d.until);
+    block.release(); expect(await pending).toBe(403); spy.mockRestore();
+  });
+  test('proof expiry during admission aborts the transaction without an owner', async () => {
+    const a = await actor(), r = await room(), p = await publication(a, r.channel), d = await admitted(a, r.channel), block = gate();
+    let now = Date.now(); const clocked = new RoutingOwnershipStore(database, client, () => now), original = (clocked as any).fenceDevice.bind(clocked);
+    const spy = jest.spyOn(clocked as any, 'fenceDevice').mockImplementationOnce(async (...args: unknown[]) => { block.enter(); await block.wait; return original(...args); });
+    const pending = clocked.adopt(r.channel, p.address, p.proof, d.device, d.until).catch(error => error);
+    await block.entered; now = d.until + 1; block.release(); expect(await pending).toBeInstanceOf(Error); spy.mockRestore();
+    expect((await database.collection('links').findOne({ hash: r.channel }))!.routingOwners).toBeUndefined();
+  });
+  test('database unavailability is a retryable 503, not a missing local contact or permanent authorization result', async () => {
+    const a = await actor(), r = await room(), p = await publication(a, r.channel); await adopt(a, r, p);
+    jest.mocked(db.getMongoClient).mockImplementationOnce(() => { throw new Error('Synthetic database unavailable'); });
+    const response = await request(app()).get(`/api/chat-link/${r.channel}/routing/${p.address}/identity`).set(await headers(a, r, p)).expect(503);
+    expect(response.body).toEqual({ error: 'Authenticated routing recovery unavailable', code: 'ROUTING_RECOVERY_REQUIRED' });
+    expect(await store.current(r.channel, p.address)).toBeDefined();
+  });
   test('signed device revocation invalidates existing owner and previously issued proof/epoch', async () => {
     const a = await actor(), siblingPair = generateKeyPairSync('ed25519'), sibling = randomUUID(), publicKey = siblingPair.publicKey.export({ format: 'der', type: 'spki' }).subarray(-32).toString('base64url');
     const siblingIdentity = 'synthetic-sibling', at = Date.now();
