@@ -208,3 +208,22 @@ it('does not promote pending introductions or unbound descriptors after a remote
     expect(groups.chats).toHaveLength(0); expect(groups.unavailable).toHaveLength(1);
   }
 });
+
+ it('three intact saved contacts can have zero orphan rooms while remote lookups fail', async () => {
+  const store = await valid();
+  const descriptors = [descriptor, {...descriptor, roomId:'22222222-2222-4222-8222-222222222222', label:'Fixture two'}, {...descriptor, roomId:'33333333-3333-4333-8333-333333333333', label:'Fixture three'}];
+  for (const item of descriptors.slice(1)) {
+    await saveConversationDescriptor(store, item);
+    await store.put('conversation-protocol', item.roomId, {version:1,mode:'modern',localAddress:'self',remoteAddress:item.remoteAddress,routingProof:'b'.repeat(43),sessionId:'session'});
+    await store.write('vodozemac-session',item.roomId,new Uint8Array([1]).buffer);
+  }
+  const listRecordIds = async () => ({recordIds:descriptors.map(item=>item.roomId),truncated:false});
+  expect(await diagnoseOrphanedConversationRecords({read:store.read,write:store.write,listRecordIds})).toEqual({roomIds:[],truncated:false,available:true});
+  for (const item of descriptors) expect(await conversationEligibility(store,item)).toBeUndefined();
+  const failures = descriptors.map(item=>conversationDiagnostic(item,classifySafeDiagnostic('conversation-open',Object.assign(new Error('Pre-key bundle unavailable'),{status:404}))));
+  const groups=classifySidebarConversations(descriptors,failures);
+  expect(groups.chats).toHaveLength(3); expect(groups.unavailable).toHaveLength(0);
+  store.records.delete('contact-identity:'+descriptor.remoteAddress);
+  expect(await conversationEligibility(store,descriptor)).toBe('CONTACT_REGISTRY_MISSING');
+  expect((await diagnoseOrphanedConversationRecords({read:store.read,write:store.write,listRecordIds})).roomIds).toHaveLength(0);
+});

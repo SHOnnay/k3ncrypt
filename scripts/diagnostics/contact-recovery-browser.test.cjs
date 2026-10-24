@@ -108,6 +108,13 @@ test('seven-day missing prekeys keep a verified saved contact/history visible ac
     const baseline = await page.evaluate(() => globalThis.contactFixture.inspect());
     assert.equal(baseline.verification, 'verified'); assert.equal(baseline.contactRows, 1);
     const digest = await page.evaluate(() => globalThis.contactFixture.digest());
+    for (const days of [0, 4, 5, 7, 8, 15, 30]) {
+      serverAgeDays = days;
+      const state = await page.evaluate(() => globalThis.contactFixture.inspect());
+      assert.equal(state.code, days >= 7 ? 'CONVERSATION_PREKEY_UNAVAILABLE' : undefined);
+      assert.equal(state.verification, 'verified'); assert.equal(state.contactRows, 1);
+      assert.equal(await page.evaluate(() => globalThis.contactFixture.digest()), digest);
+    }
     serverAgeDays = 7;
     let paused = await page.evaluate(() => globalThis.contactFixture.inspect());
     assert.equal(paused.code, 'CONVERSATION_PREKEY_UNAVAILABLE'); assert.equal(paused.contactRows, 1);

@@ -102,7 +102,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection
         </section>
       </div>
 
-      {orphanedConversationRecords && <details className="conversation-recovery"><summary>Local record diagnostic</summary>{!orphanedConversationRecords.available ? <p>Record inspection is unavailable; no recovery claim can be made.</p> : <><p>{orphanedConversationRecords.roomIds.length} rooms have local records without a usable access descriptor. A lost access capability cannot be recovered automatically.</p><ul>{orphanedConversationRecords.roomIds.map(roomId => <li key={roomId}>Saved room · {roomId.slice(-8)}</li>)}</ul>{orphanedConversationRecords.truncated && <p>Inspection reached its safe limit; additional records may exist.</p>}</>}</details>}
+      {orphanedConversationRecords && <details className="conversation-recovery"><summary>Local record diagnostic</summary>{!orphanedConversationRecords.available ? <p>Record inspection is unavailable; no recovery claim can be made.</p> : <><p>{orphanedConversationRecords.roomIds.length} rooms have protocol/session records without a matching saved access descriptor. This count does not check contact identities, session usability or server availability. A missing access capability cannot be recovered automatically.</p><ul>{orphanedConversationRecords.roomIds.map(roomId => <li key={roomId}>Saved room · {roomId.slice(-8)}</li>)}</ul>{orphanedConversationRecords.truncated && <p>Inspection reached its safe limit; additional records may exist.</p>}</>}</details>}
       <div className="sidebar-profile">
         <Avatar label={profileDisplayName} size="small" />
         <span><strong>{profileDisplayName}</strong><small>Your profile · this device</small></span>

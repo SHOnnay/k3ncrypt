@@ -1,3 +1,4 @@
+import { enrichInvitationExpiries } from '../product/invitationExpiryEnrichment';
 import { probeConversationRoom, probeInvitationExpiry } from '../product/conversationRoom';
 import { ConversationSelection } from '../product/conversationSelection';
 import { authoritativeTerminal, conversationDiagnostic, conversationEligibility, conversationFailure, diagnoseOrphanedConversationRecords, readConversationIndex, type ConversationDiagnostic } from '../product/conversationEligibility';
@@ -444,14 +445,6 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     try { descriptors = await readConversationDescriptors(storage); }
     catch { descriptors = conversationsRef.current; }
     const index = await readConversationIndex(storage, descriptors, checkRoom ? probeConversationRoom : undefined);
-    const legacyInvitations = index.conversations.filter(item => item.relationship === 'invitation' && !item.remoteAddress && !Number.isSafeInteger(item.signedInvitation?.expiresAt) && !Number.isSafeInteger(item.pendingInvitationExpiresAt)).slice(0, 12);
-    for (const invitation of legacyInvitations) {
-      if (invitationExpiryLookups.current.has(invitation.roomId)) continue;
-      invitationExpiryLookups.current.set(invitation.roomId, null);
-      const expiresAt = await probeInvitationExpiry(invitation);
-      if (expiresAt === undefined) invitationExpiryLookups.current.delete(invitation.roomId);
-      else invitationExpiryLookups.current.set(invitation.roomId, expiresAt);
-    }
     for (const item of index.conversations) {
       const expiresAt = Number.isSafeInteger(item.signedInvitation?.expiresAt) ? item.signedInvitation!.expiresAt : item.pendingInvitationExpiresAt ?? invitationExpiryLookups.current.get(item.roomId) ?? undefined;
       if (item.relationship === 'invitation' && expiresAt !== undefined) item.pendingInvitationExpiresAt = expiresAt;
@@ -459,6 +452,13 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (generation === conversationIndexGeneration.current) {
       setConversations(index.conversations); setUnavailableConversations(index.unavailable);
     }
+    // Expiry labels are optional network enrichment, never a prerequisite for local chats.
+    // Keep the existing serial bound and do not reconnect/authorize from this result.
+    void enrichInvitationExpiries(index.conversations, invitationExpiryLookups.current,
+      probeInvitationExpiry, () => generation === conversationIndexGeneration.current && !storage.isLocked(),
+      (roomId, expiresAt) => setConversations(current => current.map(item =>
+        item.roomId === roomId && item.relationship === 'invitation' && !item.remoteAddress
+          ? { ...item, pendingInvitationExpiresAt: expiresAt } : item)));
     if (checkRoom) setOrphanedConversationRecords(await diagnoseOrphanedConversationRecords(storage).catch(() => ({ roomIds: [], truncated: false, available: false })));
     return index;
   };
