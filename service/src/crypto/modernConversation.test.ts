@@ -2194,3 +2194,35 @@ it('does not report Sent if the relay receipt cannot be durably correlated local
     expect(relay.sent[1]).toEqual(relay.sent[0]);
     await conversation.close();
 });
+
+ it.each(['established', 'forged-signature', 'missing-pin', 'pending-introduction'])('expired invitation restoration requires intact accepted authority: %s', async scenario => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
+    const storage = new Storage(); const invitation = await signedInvitation();
+    const transport = fakeTransport(false, 0, false, true); let first!: ModernConversation;
+    transport.setBeforeSubmitReturns(async id => first.acceptDelivery(id));
+    first = new ModernConversation(storage, loader, transport.transport);
+    await first.connect(room,key(9),remoteAddress,await remoteCommitment(),undefined,undefined,undefined,{sendJoinIntroduction:true,invitation});
+    await first.verifyContact(true); await first.close(false);
+    const pinned = await storage.read('contact-identity',remoteAddress);
+    expect(JSON.parse(new TextDecoder().decode((await storage.read('conversation-join-introduction',room))!)).state).toBe('ESTABLISHED');
+    if (scenario === 'forged-signature') invitation.signature = 'A'.repeat(86);
+    if (scenario === 'missing-pin') await storage.delete('contact-identity',remoteAddress);
+    if (scenario === 'pending-introduction') {
+      const record = JSON.parse(new TextDecoder().decode((await storage.read('conversation-join-introduction',room))!));
+      await storage.write('conversation-join-introduction',room,new TextEncoder().encode(JSON.stringify({...record,state:'PENDING_REMOTE'})).buffer);
+    }
+    const clock = jest.spyOn(Date,'now').mockReturnValue(invitation.expiresAt+1);
+    const restarted = new ModernConversation(storage,loader,fakeTransport().transport);
+    try {
+      const operation = restarted.connect(room,key(9),remoteAddress,await remoteCommitment(),undefined,undefined,undefined,{invitation});
+      if (scenario === 'established') {
+        await operation; expect(restarted.hasEstablishedSession()).toBe(true);
+        expect(await storage.read('contact-identity',remoteAddress)).toEqual(pinned);
+      } else {
+        await expect(operation).rejects.toThrow(/signed invitation/);
+        if (scenario === 'missing-pin') expect(await storage.read('contact-identity',remoteAddress)).toBeUndefined();
+      }
+    } finally { clock.mockRestore(); await restarted.close(false); }
+});

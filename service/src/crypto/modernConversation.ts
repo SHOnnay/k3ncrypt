@@ -587,7 +587,19 @@ export class ModernConversation {
             let contactBundle;
             try { contactBundle = validateVodozemacPublicBundle(await fetchVodozemacBundle(roomId, capability, this.remoteAddress)); }
             catch (error) { this.lastConnectionFailureCategory = 'prekey-session-lookup-failure'; throw error; }
-            try { if (options?.invitation) await this.verifyModernInvitation(options.invitation, contactBundle.identity, roomId, capability, this.remoteAddress!, remoteIdentityCommitment);
+            try {
+                if (options?.invitation) {
+                    const pinned = await this.registry.get(this.remoteAddress, false);
+                    // Invitation expiry gates first admission, not a previously accepted relationship.
+                    // Require the encrypted local receipt, restored session and exact unchanged pin;
+                    // still verify the signed invitation and require normal server/device admission.
+                    const established = this.sessionHealth === 'healthy' && Boolean(this.runtime.activeSessionId) &&
+                        introductionRecord?.state === 'ESTABLISHED' && introductionRecord.invitationId === options.invitation.invitationId &&
+                        introductionRecord.recipientAddress === this.remoteAddress && introductionRecord.recipientIdentityCommitment === remoteIdentityCommitment &&
+                        pinned?.contactId === this.remoteAddress && pinned.changeStatus === 'unchanged' &&
+                        pinned.identityId === remoteIdentityCommitment && pinned.identityId === await fingerprintVodozemacIdentity(contactBundle.identity);
+                    await this.verifyModernInvitation(options.invitation, contactBundle.identity, roomId, capability, this.remoteAddress!, remoteIdentityCommitment, established);
+                }
                 await this.observe(this.remoteAddress, contactBundle.identity, remoteIdentityCommitment); }
             catch (error) { this.lastConnectionFailureCategory = 'sender-identity-mismatch'; throw error; }
         }
@@ -726,7 +738,7 @@ export class ModernConversation {
         return { ...unsigned, signature: canonicalSignatureEncoding(await this.runtime.signControlEvent(canonicalInvitation(unsigned))) };
     }
 
-    private async verifyModernInvitation(invitation: SignedModernInvitation, identity: VodozemacPublicIdentity, roomId: string, capability: string, address: string, commitment?: string): Promise<void> {
+    private async verifyModernInvitation(invitation: SignedModernInvitation, identity: VodozemacPublicIdentity, roomId: string, capability: string, address: string, commitment?: string, established = false): Promise<void> {
         const now = Date.now();
         const failClosed = async (): Promise<never> => {
             const bytes = await this.storage.read(JOIN_INTRODUCTION_RECORD, roomId);
@@ -737,7 +749,7 @@ export class ModernConversation {
         if (invitation.version !== 2 || invitation.type !== 'k3ncrypt-first-contact-invitation' || invitation.roomId !== roomId || invitation.controlCapability !== capability ||
             invitation.inviterAddress !== address || invitation.identityCommitment !== commitment || invitation.capabilities.length !== 2 ||
             invitation.capabilities[0] !== 'join-introduction-v1' || invitation.capabilities[1] !== 'room-message-v1' || invitation.createdAt > now + 30_000 ||
-            invitation.expiresAt <= now || invitation.expiresAt <= invitation.createdAt || invitation.expiresAt - invitation.createdAt > 24 * 60 * 60 * 1000) return failClosed();
+            (!established && invitation.expiresAt <= now) || invitation.expiresAt <= invitation.createdAt || invitation.expiresAt - invitation.createdAt > 24 * 60 * 60 * 1000) return failClosed();
         if (await fingerprintVodozemacIdentity(identity) !== invitation.identityCommitment || !await this.verifyModernInvitationSignature(invitation, identity.ed25519)) return failClosed();
     }
 
