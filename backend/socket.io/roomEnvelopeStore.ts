@@ -1,3 +1,4 @@
+import { durableRoutingEnabled, currentRoutingIdentity } from '../security/routingOwnership';
 import { createHash } from 'crypto';
 import db from '../db';
 import { OFFLINE_MESSAGE_COLLECTION } from '../db/const';
@@ -9,6 +10,9 @@ export const roomEnvelopeDedupeKey = (channel: string, mailbox: string, sender: 
 /** Both transports use the existing legacy key. Recognize already persisted Mux
  * keys without rewriting rows, claims, ciphertext or terminal rejection records. */
 export const storeRoomEnvelope = async <T extends Record<string, unknown> & { channel: string; mailbox: string; sender: string; envelope: WireEnvelope }>(data: T): Promise<T> => {
+  if (durableRoutingEnabled() && (!await currentRoutingIdentity(data.channel, data.sender, false) || !await currentRoutingIdentity(data.channel, data.mailbox, false))) {
+    throw new Error('Authenticated routing ownership is unavailable.');
+  }
   const priorMuxKey = createHash('sha256').update(JSON.stringify({ roomId: data.channel, mailbox: data.mailbox, sender: data.sender, envelope: data.envelope })).digest('hex');
   const prior = await db.findOneFromDB<T>({ dedupeKey: priorMuxKey }, OFFLINE_MESSAGE_COLLECTION);
   if (prior) return prior;

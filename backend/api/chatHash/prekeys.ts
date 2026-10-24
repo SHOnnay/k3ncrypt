@@ -1,3 +1,4 @@
+import { authorizeCurrentRouting, routingOwnershipStore } from '../../security/routingOwnership';
 import express from 'express';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'crypto';
 import db from '../../db';
@@ -31,7 +32,7 @@ const exactKeys = (value: Record<string, unknown>, expected: string[]): boolean 
 
 const validKey = (value: unknown): value is string => typeof value === 'string' && BASE64_KEY.test(value);
 
-const validBundle = (value: unknown): boolean => {
+export const validBundle = (value: unknown): boolean => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   if (JSON.stringify(value).length > MAX_BUNDLE_BYTES) return false;
   const bundle = value as Record<string, unknown>;
@@ -92,8 +93,14 @@ router.post('/:address/renew', controlRateLimit, asyncHandler(async (req, res) =
   const { channel, address } = req.params;
   const capability = readControlCapability(req);
   if (!ADDRESS.test(address) || !await authorize(channel, capability) || !validBundle(req.body)) return res.status(404).send({ error: 'Pre-key bundle unavailable' });
-  const existing = await db.findOneFromDB<{ bundle: { identity: unknown }; renewalProofHash: string }>({ channel, address }, PREKEY_COLLECTION);
+  const existing = await db.findOneFromDB<{ bundle: { identity: unknown }; renewalProofHash: string; expiresAt?: Date }>({ channel, address }, PREKEY_COLLECTION);
   const renewalProof = req.get(RENEWAL_HEADER);
+  const ownerRoom = await routingOwnershipStore()?.room(channel);
+  // An existing tombstone/owner always overrides temporary material; legacy renew never recreates expired material.
+  if (ownerRoom?.routingOwners?.some(owner => owner.address === address) &&
+      (!await authorizeCurrentRouting(channel, address, renewalProof) || !existing?.expiresAt || existing.expiresAt.getTime() <= Date.now())) {
+    return res.status(403).send({ error: 'Authenticated routing renewal required' });
+  }
   const existingIdentity = existing?.bundle.identity as { curve25519?: unknown; ed25519?: unknown } | undefined;
   const nextIdentity = (req.body as { identity?: { curve25519?: unknown; ed25519?: unknown } }).identity;
   if (!existing || !proofMatches(renewalProof, existing.renewalProofHash) || !existingIdentity || !nextIdentity ||

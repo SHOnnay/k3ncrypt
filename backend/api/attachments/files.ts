@@ -1,8 +1,7 @@
+import { currentRoutingIdentity, durableRoutingEnabled } from '../../security/routingOwnership';
 import express, { type Request } from 'express';
 import { AttachmentTrustError } from '../../security/attachmentTrust';
 import db from '../../db';
-import { PREKEY_COLLECTION } from '../../db/const';
-import { fingerprintVodozemacIdentity, type VodozemacPublicIdentity } from '../../../service/src/identity/vodozemacIdentity';
 import { FILE_LIMITS, b64, type FileBinding, type WireObject } from '../../../service/src/files/protocol';
 import { FileError, FileLedgerService, MongoFileLedgerPersistence } from '../../attachments/fileLedger';
 import type { AuthenticatedContext } from '../../security/authorizationContext';
@@ -37,10 +36,7 @@ let cached: FileLedgerService | undefined;
 const production = (): FileLedgerService => {
     const database = db.getDatabase(); if (!database) throw new FileError('storage');
     if (!cached) {
-        cached = new FileLedgerService(new MongoFileLedgerPersistence(database), async (conversation, participant) => {
-            const published = await database.collection<{ bundle?: { identity?: VodozemacPublicIdentity } }>(PREKEY_COLLECTION).findOne({ channel: conversation, address: participant, expiresAt: { $gt: new Date() } });
-            return published?.bundle?.identity ? fingerprintVodozemacIdentity(published.bundle.identity) : undefined;
-        });
+        cached = new FileLedgerService(new MongoFileLedgerPersistence(database), (conversation, participant) => currentRoutingIdentity(conversation, participant, !durableRoutingEnabled()));
         // No sensitive fields in diagnostics. Persistent state is revisited after every backend restart.
         const timer = setInterval(() => { void cached?.cleanup().catch(() => undefined); }, 60_000); timer.unref();
         void cached.cleanup().catch(() => undefined);

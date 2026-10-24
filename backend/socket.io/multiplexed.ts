@@ -1,4 +1,5 @@
-import { createHash, randomUUID, timingSafeEqual } from 'crypto';
+import { authorizeCurrentRouting, bindVerifiedRouting, boundRoutingDevice, currentRoutingIdentity, durableRoutingEnabled } from '../security/routingOwnership';
+import { randomUUID } from 'crypto';
 import type { Server } from 'socket.io';
 import db from '../db';
 import { LINK_COLLECTION, PREKEY_COLLECTION } from '../db/const';
@@ -107,7 +108,9 @@ export const boundDeviceAuthorization = async (socket: CustomSocket): Promise<Bo
     const database = db.getDatabase();
     if (!database) return 'unavailable';
     const record = await new MongoDeviceTrustStore(database).read(socket.accountIdentityReference, socket.deviceId);
-    return record?.state === 'active' && record.trustEpoch === socket.deviceTrustEpoch ? 'active' : 'inactive';
+    if (record?.state !== 'active' || record.trustEpoch !== socket.deviceTrustEpoch) return 'inactive';
+    if (socket.channelID && socket.userID && !await boundRoutingDevice(socket.channelID, socket.userID, record)) return 'inactive';
+    return 'active';
   } catch { return 'unavailable'; }
 };
 
@@ -146,6 +149,11 @@ const verifyMuxCarrier = async (
   try {
     const record = await authority.verify(carrier.deviceAuthorizationProof, operation, resource);
     if (socket.deviceId && (socket.deviceId !== record.deviceId || socket.accountIdentityReference !== record.accountIdentityReference)) return false;
+    if (operation === 'relay:subscribe' && resource.conversationId && resource.routingAddress) {
+      const roomProof = (carrier as unknown as { routingProof?: string }).routingProof;
+      if (!roomProof) return false;
+      await bindVerifiedRouting(resource.conversationId, resource.routingAddress, roomProof, record, carrier.deviceAuthorizationProof.expiresAt);
+    }
     if (bind) {
       socket.deviceId = record.deviceId;
       socket.accountIdentityReference = record.accountIdentityReference;
@@ -162,6 +170,7 @@ const currentSubscription = async (socket: CustomSocket, roomId: string): Promis
       subscription.connectionGeneration !== socket.id || !isCurrentMuxSocket(socket) || socket.connected === false ||
       !await activeBoundDevice(socket) || !await authorizeRoomControl(roomId, subscription.controlCapability) ||
       !await authorizeRoutingAddress(roomId, subscription.routingAddress, subscription.routingProof) ||
+      !await boundRoutingDevice(roomId, subscription.routingAddress, { accountIdentityReference: socket.accountIdentityReference!, deviceId: socket.deviceId!, trustEpoch: socket.deviceTrustEpoch! }) ||
       !await currentRouteRecord(roomId, subscription.peerRoutingAddress) || !(await channelValid(roomId)).valid) return undefined;
   return locallyOwnsSubscription(socket, subscription) ? subscription : undefined;
 };
@@ -392,18 +401,11 @@ const cancelMailboxPump = (socket: CustomSocket, roomId: string): void => {
 };
 
 const currentRouteRecord = async (roomId: string, address: string): Promise<boolean> => {
+  if (durableRoutingEnabled()) return !!await currentRoutingIdentity(roomId, address);
   const record = await db.findOneFromDB<{ expiresAt?: Date }>({ channel: roomId, address }, PREKEY_COLLECTION);
   return record?.expiresAt instanceof Date && record.expiresAt.getTime() > Date.now();
 };
-
-const authorizeRoutingAddress = async (roomId: string, address: string, proof: unknown): Promise<boolean> => {
-  const record = await db.findOneFromDB<{ renewalProofHash?: string; expiresAt?: Date }>({ channel: roomId, address }, PREKEY_COLLECTION);
-  if (!record || !(record.expiresAt instanceof Date) || record.expiresAt.getTime() <= Date.now() || typeof proof !== 'string' ||
-      !/^[A-Za-z0-9_-]{43}$/.test(proof) || !/^[0-9a-f]{64}$/.test(record.renewalProofHash ?? '')) return false;
-  const supplied = createHash('sha256').update(`k3ncrypt-prekey-renewal-v1\0${proof}`).digest();
-  const expected = Buffer.from(record.renewalProofHash!, 'hex');
-  return supplied.length === expected.length && timingSafeEqual(supplied, expected);
-};
+const authorizeRoutingAddress = authorizeCurrentRouting;
 
 const removeSubscription = (socket: CustomSocket, subscription: MuxRoomSubscription): void => {
   if (socket.muxSubscriptions?.get(subscription.roomId) !== subscription) return;

@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from 'crypto';
+import { authorizeCurrentRouting, bindVerifiedRouting, currentRoutingIdentity, durableRoutingEnabled, routingContinuation } from '../../security/routingOwnership';
 import express, { type Request } from 'express';
 import type { Collection } from 'mongodb';
 import { PersistentAttachmentDeliveryStore } from '../../../service/src/attachments';
@@ -17,11 +17,6 @@ import { fingerprintVodozemacIdentity, type VodozemacPublicIdentity } from '../.
 const ADDRESS = /^[0-9a-f-]{36}$/i;
 const PROOF = /^[A-Za-z0-9_-]{43}$/;
 const UUID = /^[0-9a-f-]{36}$/i;
-const proofHash = (proof: string): string => createHash('sha256').update(`k3ncrypt-prekey-renewal-v1\0${proof}`).digest('hex');
-const proofMatches = (proof: string, expected: string): boolean => {
-  if (!PROOF.test(proof) || !/^[0-9a-f]{64}$/.test(expected)) return false;
-  return timingSafeEqual(Buffer.from(proofHash(proof), 'hex'), Buffer.from(expected, 'hex'));
-};
 
 interface AccessDocument extends AttachmentAccessRecord { attachmentId: string; }
 class MongoAttachmentAccessStore implements AttachmentAccessStore {
@@ -42,12 +37,8 @@ const productionService = () => {
     const accessCollection = database.collection<AccessDocument>('attachment_access');
     const access = new MongoAttachmentAccessStore(accessCollection);
     const memberships: ConversationMembershipStore = {
-      isMember: async (conversationId, participantId) => !!(await database.collection(PREKEY_COLLECTION).findOne({ channel: conversationId, address: participantId, expiresAt: { $gt: new Date() } })),
-      identityReference: async (conversationId, participantId) => {
-        const published = await database.collection<{ bundle?: { identity?: VodozemacPublicIdentity } }>(PREKEY_COLLECTION).findOne({ channel: conversationId, address: participantId, expiresAt: { $gt: new Date() } });
-        if (!published?.bundle?.identity) return undefined;
-        try { return await fingerprintVodozemacIdentity(published.bundle.identity); } catch { return undefined; }
-      },
+      isMember: async (conversationId, participantId) => !!await currentRoutingIdentity(conversationId, participantId, !durableRoutingEnabled()),
+      identityReference: async (conversationId, participantId) => currentRoutingIdentity(conversationId, participantId, !durableRoutingEnabled()),
     };
     service = createProductionAuthenticatedAttachmentService({ memberships, access }, new PersistentAttachmentDeliveryStore(persistence));
   }
@@ -65,7 +56,7 @@ export const authenticateAttachment = async (request: Request, requiredOperation
   if (!isValidRoomId(conversationId) || !ADDRESS.test(participantId) || !isValidControlCapability(capability) || !PROOF.test(proof) || !UUID.test(requestId)) return undefined;
   if (!await authorizeRoomControl(conversationId, capability)) return undefined;
   const record = await db.findOneFromDB<{ renewalProofHash: string; expiresAt: Date; bundle?: { identity?: VodozemacPublicIdentity } }>({ channel: conversationId, address: participantId }, PREKEY_COLLECTION);
-  if (!record || !(record.expiresAt instanceof Date) || record.expiresAt.getTime() <= Date.now() || !proofMatches(proof, record.renewalProofHash)) return undefined;
+  if (!await authorizeCurrentRouting(conversationId, participantId, proof)) return undefined;
   let operation: DeviceOperation | undefined;
   if (request.method === 'POST' && request.path === '/create') operation = 'attachment:create';
   else if (request.method === 'POST' && request.path.endsWith('/complete')) operation = 'attachment:write';
@@ -81,9 +72,14 @@ export const authenticateAttachment = async (request: Request, requiredOperation
   if (!authority || deviceProof.nonce !== deviceNonce) return undefined;
   let trustedDevice;
   try { trustedDevice = await authority.verify(deviceProof, operation, { conversationId }); } catch { return undefined; }
-  if (!record.bundle?.identity) return undefined;
+  let owner;
+  try { owner = await bindVerifiedRouting(conversationId, participantId, proof, trustedDevice, deviceProof.expiresAt); } catch { return undefined; }
   let identityReference: string;
-  try { identityReference = await fingerprintVodozemacIdentity(record.bundle.identity); } catch { return undefined; }
+  if (owner) identityReference = owner.identityReference;
+  else {
+    if (!record?.bundle?.identity) return undefined;
+    try { identityReference = await fingerprintVodozemacIdentity(record.bundle.identity); } catch { return undefined; }
+  }
   if (trustedDevice.deviceIdentityReference !== identityReference || deviceProof.deviceIdentityReference !== identityReference) return undefined;
   productionService();
   const now = Date.now();
@@ -98,7 +94,12 @@ export const authenticateAttachment = async (request: Request, requiredOperation
     accountIdentityReference: trustedDevice.accountIdentityReference,
     createdAt: now,
     expiresAt,
-    deviceTrust: attachmentTrustGuard(database!, trustedDevice, expiresAt),
+    deviceTrust: {
+      assertTrusted: async () => {
+        await attachmentTrustGuard(database!, trustedDevice, expiresAt).assertTrusted();
+        if (owner) await routingContinuation(conversationId, participantId, owner, expiresAt).assertTrusted();
+      },
+    },
   };
 };
 

@@ -128,6 +128,7 @@ export const revokePendingInvitation = async (channel: string): Promise<boolean>
   return result.modifiedCount === 1;
 };
 export const persistentStorageReady = (): boolean => !inMem;
+export const getMongoClient = (): MongoClient | undefined => connectedClient;
 export const getDatabase = (): Db | undefined => inMem || !db ? undefined : db;
 export const ping = async (): Promise<void> => {
   if (inMem || !db) throw new Error('Persistent database unavailable.');
@@ -279,6 +280,7 @@ export default {
   countOfflineMessages,
   persistentStorageReady,
   getDatabase,
+  getMongoClient,
   ping,
   requiredIndexesReady,
 };

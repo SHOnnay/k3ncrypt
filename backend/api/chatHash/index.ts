@@ -14,10 +14,12 @@ import {
   readControlCapability,
 } from '../../security/controlCapability';
 import prekeysRouter from './prekeys';
+import routingRouter from './routing';
 
 const router = express.Router({ mergeParams: true });
 
 router.use('/:channel/prekeys', prekeysRouter);
+router.use('/:channel/routing', routingRouter);
 
 router.post(
   "/",

@@ -1,11 +1,11 @@
-import { createHash, randomUUID, timingSafeEqual } from 'crypto';
+import { randomUUID } from 'crypto';
 import getClientInstance from "./clients";
 import channelValid from "../api/chatHash/utils/validateChannel";
 import { socketEmit, SOCKET_TOPIC, CustomSocket, WireEnvelope } from "./index";
 import { RateLimiter } from "./rateLimiter";
 import { authorizeRoomControl, isValidControlCapability, isValidRoomId } from '../security/controlCapability';
 import db, { type OfflineRejectionReason } from '../db';
-import { PREKEY_COLLECTION } from '../db/const';
+import { authorizeCurrentRouting, bindVerifiedRouting, boundRoutingDevice, durableRoutingEnabled } from '../security/routingOwnership';
 import { durableDeviceTrustAuthority } from '../security/durableDeviceTrust';
 import type { DeviceAuthorizationProof, DeviceOperation } from '../security/deviceTrust';
 import { routeRoomSignal, notifyRoomPeerFeatures, registerLegacyMailboxWakeup, wakeRoomMailbox, notifyRoomSender, muxPeerForLegacy, legacyRoomOwner, muxRoomOwner, releaseMuxRoomOwner, sameDeviceOwner, muxRelayEnabled, muxWouldExceedChannelCapacity, registerMultiplexedRelay, boundDeviceAuthorization, withRoomOwnershipLock, invalidateMuxDeviceSocket } from './multiplexed';
@@ -44,14 +44,7 @@ const traceMessageRelay = (stage: string, roomId: string, relayId: string, state
 const traceCallRelay = (stage: 'signal-received' | 'signal-authorized' | 'recipient-found' | 'forward-attempted' | 'forward-socket-present', reached: boolean): void => {
   if (process.env.NODE_ENV !== 'production' && process.env.K3NCRYPT_TEST_ONLY_DIAGNOSTICS === 'true') console.info(`call-relay-stage ${stage}=${reached}`);
 };
-const routingProofHash = (proof: string): Buffer => createHash('sha256').update(`k3ncrypt-prekey-renewal-v1\0${proof}`).digest();
-
-export const authorizeRoutingAddress = async (channel: string, address: string, proof: unknown): Promise<boolean> => {
-  const record = await db.findOneFromDB<{ renewalProofHash?: string; expiresAt?: Date }>({ channel, address }, PREKEY_COLLECTION);
-  if (!record) return false;
-  if (!(record.expiresAt instanceof Date) || record.expiresAt.getTime() <= Date.now() || typeof proof !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(proof) || !/^[0-9a-f]{64}$/.test(record.renewalProofHash ?? '')) return false;
-  return timingSafeEqual(routingProofHash(proof), Buffer.from(record.renewalProofHash!, 'hex'));
-};
+export const authorizeRoutingAddress = authorizeCurrentRouting;
 
 const isPayloadTooLarge = (payload: unknown): boolean => {
   try {
@@ -93,7 +86,7 @@ const validEnvelopePayload = (payload: unknown): payload is { envelope: WireEnve
   isValidWireEnvelope((payload as { envelope?: unknown }).envelope) &&
   ((payload as { recipientRoutingId?: unknown }).recipientRoutingId === undefined || isValidRoomId((payload as { recipientRoutingId?: unknown }).recipientRoutingId)) && validCarrier(payload) && typeof (payload as ProofCarrier).proofOperation === 'string';
 
-const verifyCarrier = async (socket: CustomSocket, carrier: ProofCarrier, operation: DeviceOperation, bind = false): Promise<boolean> => {
+const verifyCarrier = async (socket: CustomSocket, carrier: ProofCarrier, operation: DeviceOperation, bind = false, routing?: { channel: string; address: string; proof: string }): Promise<boolean> => {
   const authority = durableDeviceTrustAuthority(db.getDatabase());
   if (!authority) return false;
   try {
@@ -101,6 +94,10 @@ const verifyCarrier = async (socket: CustomSocket, carrier: ProofCarrier, operat
     if (record.deviceId !== carrier.deviceAuthorizationProof.deviceId ||
         (socket.deviceId && socket.deviceId !== record.deviceId) ||
         (socket.accountIdentityReference && socket.accountIdentityReference !== record.accountIdentityReference)) return false;
+    if (routing) {
+      if (durableRoutingEnabled() && carrier.deviceAuthorizationProof.resource?.conversationId !== routing.channel) return false;
+      await bindVerifiedRouting(routing.channel, routing.address, routing.proof, record, carrier.deviceAuthorizationProof.expiresAt);
+    } else if (socket.channelID && socket.userID && !await boundRoutingDevice(socket.channelID, socket.userID, record)) return false;
     if (bind) { socket.deviceId = record.deviceId; socket.accountIdentityReference = record.accountIdentityReference; socket.deviceTrustEpoch = record.trustEpoch; }
     return true;
   } catch { return false; }
@@ -292,7 +289,7 @@ const connectionListener = (socket: CustomSocket, io) => {
       rejectJoin('Channel join rejected.', 'routing-authorization');
       return;
     }
-    if (!await verifyCarrier(socket, { deviceAuthorizationProof, proofNonce }, 'relay:message', true)) {
+    if (!await verifyCarrier(socket, { deviceAuthorizationProof, proofNonce }, 'relay:message', true, { channel: channelID, address: userID, proof: routingProof })) {
       console.error('Rejected device authorization proof');
       rejectJoin('Device authorization rejected.', 'device-proof');
       socket.disconnect();
