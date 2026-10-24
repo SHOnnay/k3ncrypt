@@ -251,10 +251,10 @@ export class MultiplexedRelayConnection {
     await this.emitAck('mux-mailbox-replay', { version: MUX_RELAY_PROTOCOL_VERSION, roomId: room.roomId, connectionGeneration: generation, subscriptionNonce: room.nonce });
   }
 
-  public sendEnvelope(roomId: string, channel: CryptoChannel, envelope: EncryptedEnvelope): Promise<{ id?: string; timestamp?: number; terminalRejection?: true }> {
+  public sendEnvelope(roomId: string, channel: CryptoChannel, envelope: EncryptedEnvelope, authenticatedFloor: 0 | 1 = 0): Promise<{ id?: string; timestamp?: number; terminalRejection?: true }> {
     const room = this.requireRoom(roomId);
     if (channel === 'signaling') return this.sendCallSignal(room, envelope);
-    if (!room.manager.requiresRoomMessageV1 || !room.peerFeatures.has('room-message-v1')) throw new Error('The peer has not negotiated room-message-v1 over the multiplexed relay.');
+    if (!room.manager.requiresRoomMessageV1 || !room.peerFeatures.has('room-message-v1') && authenticatedFloor !== 1) throw new Error('The peer has not negotiated room-message-v1 over the multiplexed relay.');
     return this.sendMuxEnvelope(room, envelope);
   }
 
@@ -535,6 +535,7 @@ const retryDelay = (failures: number, error: unknown): number => {
 /** Immutable adapter expected by ModernConversation for one room only. */
 export class MultiplexedRoomTransportManager implements TransportManager, Transport {
   private closed = false;
+  private authenticatedMessageVersionFloor: 0 | 1 = 0;
   private deliveryStatusHandler?: TransportDeliveryStatusHandler;
 
   constructor(private readonly connection: MultiplexedRelayConnection, readonly roomId: string, private readonly peerRoutingAddress: string) {
@@ -543,7 +544,7 @@ export class MultiplexedRoomTransportManager implements TransportManager, Transp
 
   public async start(): Promise<void> { if (this.closed) throw new Error('Mux room handle is closed.'); await this.connection.start(); }
   public async stop(): Promise<void> { await this.close(); }
-  public async close(): Promise<void> { if (this.closed) return; this.closed = true; await this.connection.unsubscribe(this.roomId); }
+  public async close(): Promise<void> { if (this.closed) return; this.closed = true; this.authenticatedMessageVersionFloor = 0; await this.connection.unsubscribe(this.roomId); }
   public async join(roomId: string, routingAddress: string, controlCapability: string, routingProof?: string): Promise<void> {
     if (roomId !== this.roomId || this.closed) throw new Error('Mux room handle cannot change its bound room.');
     await this.start();
@@ -552,13 +553,17 @@ export class MultiplexedRoomTransportManager implements TransportManager, Transp
   public connect(routingAddress: string, controlCapability: string, routingProof?: string): Promise<void> { return this.join(this.roomId, routingAddress, controlCapability, routingProof); }
   public async sendEnvelope(channel: CryptoChannel, envelope: EncryptedEnvelope, recipientRoutingId?: string, _proofOperation?: string): Promise<TransportSendResult> {
     if (recipientRoutingId && recipientRoutingId !== this.peerRoutingAddress) throw new Error('Mux room recipient does not match its immutable peer route.');
-    return this.connection.sendEnvelope(this.roomId, channel, envelope);
+    return this.connection.sendEnvelope(this.roomId, channel, envelope, this.authenticatedMessageVersionFloor);
   }
   public activeTransport(): Transport { return this; }
   public connectionState(): TransportConnectionState { return this.connection.connectionState(); }
   public capabilities() { return { envelopes: true, blobs: false, localOnly: false }; }
   public readonly requiresRoomMessageV1 = true;
   public peerSupportsFeature(feature: string): boolean { return this.connection.peerSupportsFeature(this.roomId, feature); }
+  public setAuthenticatedMessageVersionFloor(floor: 0 | 1): void {
+    if (floor !== 0 && floor !== 1) throw new Error('Invalid authenticated message-version floor.');
+    this.authenticatedMessageVersionFloor = floor;
+  }
   public setProtocolFeatures(features: readonly string[]): void { this.connection.setFeatures(this.roomId, features); }
   public setDeviceProofProvider(provider: MuxDeviceProofProvider | undefined): void { this.connection.setDeviceProofProvider(provider); }
   public setEnvelopeHandler(handler: TransportEnvelopeHandler | undefined): void { this.connection.setHandler(this.roomId, handler); }

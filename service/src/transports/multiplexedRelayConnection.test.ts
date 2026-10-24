@@ -118,6 +118,26 @@ describe('multiplexed relay connection Stage 1A', () => {
     await connection.close();
   });
 
+  it('uses only an explicitly supplied authenticated message floor for offline sends, never for calls or another room', async () => {
+    const socket = new FakeSocket(), connection = new MultiplexedRelayConnection(socket as unknown as Socket), proofs = proofProvider();
+    const roomId = room('8'), peer = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', local = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const manager = connection.forRoom(roomId, peer); manager.setDeviceProofProvider(proofs); manager.setProtocolFeatures(['room-message-v1']);
+    await manager.join(roomId, local, 'control', 'routing-proof');
+    const sub = socket.events.find(({ event }) => event === 'mux-subscribe')!.payload;
+    socket.trigger('mux-peer-subscription', { version: 1, roomId, connectionGeneration: socket.id, subscriptionNonce: sub.proofNonce, peerRoutingAddress: peer, peerFeatures: [] });
+    const envelope = { version: 2, strategy: 'vodozemac-olm-v1', data: { opaque: true } };
+    await expect(manager.sendEnvelope('message', envelope, peer)).rejects.toThrow('not negotiated');
+    manager.setAuthenticatedMessageVersionFloor(1);
+    await expect(manager.sendEnvelope('message', envelope, peer)).resolves.toEqual({ id: 'message-id', timestamp: 123 });
+    expect(manager.peerSupportsFeature('room-message-v1')).toBe(false); // No fabricated live advertisement.
+    await expect(manager.sendEnvelope('signaling', envelope, peer)).rejects.toThrow('not negotiated');
+    await expect(manager.sendEnvelope('message', envelope, local)).rejects.toThrow('immutable peer route');
+    expect(() => manager.setAuthenticatedMessageVersionFloor(2 as 1)).toThrow();
+    manager.setAuthenticatedMessageVersionFloor(0);
+    await expect(manager.sendEnvelope('message', envelope, peer)).rejects.toThrow('not negotiated');
+    await connection.close();
+  });
+
   it('sends only explicit room-bound V1 envelopes and routes acceptance to that room handler', async () => {
     const socket = new FakeSocket();
     const connection = new MultiplexedRelayConnection(socket as unknown as Socket);

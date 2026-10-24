@@ -1380,9 +1380,13 @@ it('requires room-bound device control from the persisted message floor across r
     })).buffer as ArrayBuffer);
 
     const firstTransport = fakeTransport(); // No room-message feature advertisement.
+    const floorDispatch = jest.fn();
+    Object.assign(firstTransport.transport.activeTransport()!, { setAuthenticatedMessageVersionFloor: floorDispatch });
     const first = new ModernConversation(storage, loader, firstTransport.transport);
     await first.connect(room, key(9), remoteAddress, remoteIdentityReference);
     await first.sendWithReceipt('restore room session without relay features');
+    expect(floorDispatch).toHaveBeenCalledWith(1);
+    expect(floorDispatch).toHaveBeenLastCalledWith(0);
     await first.requestTrustRefresh();
     const prefix = 'k3ncrypt-device-control-room-v2:';
     const firstControl = encryptedPlaintexts.map((value) => new TextDecoder().decode(value.slice(2))).find((value) => value.startsWith(prefix));

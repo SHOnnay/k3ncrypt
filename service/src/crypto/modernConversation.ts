@@ -1243,35 +1243,40 @@ export class ModernConversation {
             const safePending = floor >= 1 ? await this.holdLegacyPending(pending) : pending;
             const renewal = this.sessionHealth === 'renewal-pending'
                 ? parseSessionRenewal(await this.storage.read(SESSION_RENEWAL_RECORD, this.roomId!)) : undefined;
-            await this.delivery.retry({
-                pending: safePending,
-                recipientRoutingId: this.remoteAddress,
-                skip: (item) => Boolean(item.terminallyRejected || item.heldNotSentSecurely) || contact?.changeStatus !== 'unchanged' || !contact.identityId ||
-                    item.recipientIdentityReference !== contact.identityId ||
-                    (this.sessionHealth === 'renewal-pending' && item.clientId !== renewal?.clientId) ||
-                    (this.transport.activeTransport()?.requiresRoomMessageV1 === true && item.roomMessageVersion !== 1),
-                beforeSubmit: async () => {
-                    await this.assertCurrentDeviceTrust();
-                    const current = await this.getContact();
-                    if (current?.changeStatus !== 'unchanged' || !current.identityId || current.identityId !== contact?.identityId) {
-                        throw new Error('Review this contact’s changed identity before sending queued messages.');
-                    }
-                    testOnlyDeliveryStage('relay-dispatch');
-                },
-                persist: async (nextPending) => {
-                    await this.storage.write(OUTBOX_RECORD, this.roomId!, asBytes(nextPending));
-                    for (const item of nextPending) {
-                        if (item.clientId && item.relayId && item.roomMessageVersion === 1) {
-                            testOnlyMessageFlow(item.clientId, this.roomId!, 'relay-accepted-and-correlated', { relayId: item.relayId, state: 'relay-acknowledged' });
-                            if (!item.terminallyRejected && !item.heldNotSentSecurely) this.deliveryObserver?.(item.clientId, 'stored');
+            const activeTransport = this.transport.activeTransport();
+            try {
+                await this.delivery.retry({
+                    pending: safePending,
+                    recipientRoutingId: this.remoteAddress,
+                    skip: (item) => Boolean(item.terminallyRejected || item.heldNotSentSecurely) || contact?.changeStatus !== 'unchanged' || !contact.identityId ||
+                        item.recipientIdentityReference !== contact.identityId ||
+                        (this.sessionHealth === 'renewal-pending' && item.clientId !== renewal?.clientId) ||
+                        (this.transport.activeTransport()?.requiresRoomMessageV1 === true && item.roomMessageVersion !== 1),
+                    beforeSubmit: async () => {
+                        await this.assertCurrentDeviceTrust();
+                        const current = await this.getContact();
+                        if (current?.changeStatus !== 'unchanged' || !current.identityId || current.identityId !== contact?.identityId) {
+                            throw new Error('Review this contact’s changed identity before sending queued messages.');
                         }
-                    }
-                },
-                onTerminalRejection: (item) => {
-                    item.terminallyRejected = true;
-                    if (item.clientId) this.deliveryObserver?.(item.clientId, item.heldNotSentSecurely ? 'held' : 'rejected');
-                },
-            });
+                        const currentFloor = await readRoomMessageVersionFloor(this.storage, this.roomId!, current.identityId);
+                        activeTransport?.setAuthenticatedMessageVersionFloor?.(currentFloor >= 1 ? 1 : 0);
+                        testOnlyDeliveryStage('relay-dispatch');
+                    },
+                    persist: async (nextPending) => {
+                        await this.storage.write(OUTBOX_RECORD, this.roomId!, asBytes(nextPending));
+                        for (const item of nextPending) {
+                            if (item.clientId && item.relayId && item.roomMessageVersion === 1) {
+                                testOnlyMessageFlow(item.clientId, this.roomId!, 'relay-accepted-and-correlated', { relayId: item.relayId, state: 'relay-acknowledged' });
+                                if (!item.terminallyRejected && !item.heldNotSentSecurely) this.deliveryObserver?.(item.clientId, 'stored');
+                            }
+                        }
+                    },
+                    onTerminalRejection: (item) => {
+                        item.terminallyRejected = true;
+                        if (item.clientId) this.deliveryObserver?.(item.clientId, item.heldNotSentSecurely ? 'held' : 'rejected');
+                    },
+                });
+            } finally { activeTransport?.setAuthenticatedMessageVersionFloor?.(0); }
         });
     }
 

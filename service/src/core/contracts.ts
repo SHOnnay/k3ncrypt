@@ -106,6 +106,8 @@ export interface Transport {
     readonly requiresRoomMessageV1?: boolean;
     /** Opts a protocol-aware caller into advertising only explicitly enabled features. */
     setProtocolFeatures?(features: readonly string[]): void;
+    /** Dispatch-scoped evidence from the encrypted, room-and-pin-bound message-version floor. Not authorization. */
+    setAuthenticatedMessageVersionFloor?(floor: 0 | 1): void;
 }
 
 /** Chooses among transports without creating or resetting cryptographic state. */
