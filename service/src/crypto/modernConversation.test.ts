@@ -1,9 +1,10 @@
+import { DeviceProofClient } from '../devices/deviceProofClient';
 import { generateKeyPairSync, sign as ed25519Sign, webcrypto } from 'crypto';
 import type { SecureStorage, TransportManager, EncryptedEnvelope } from '../core/contracts';
 import type { VodozemacAccountHandle } from '../identity/vodozemacIdentity';
 import type { VodozemacSessionHandle } from '../core/vodozemacCryptoSession';
 import { ModernConversation, type SignedModernInvitation } from './modernConversation';
-import { publishVodozemacBundle, fetchVodozemacBundle, claimVodozemacOneTimeKey, renewVodozemacBundle } from '../api/prekeys';
+import { publishVodozemacBundle, fetchVodozemacBundle, claimVodozemacOneTimeKey, renewVodozemacBundle, fetchAuthenticatedRoutingIdentity, replenishAuthenticatedPrekeys } from '../api/prekeys';
 import { AuthenticatedCallSignalTransport } from '../calls/authenticatedTransport';
 import { SecureStorageDeviceLifecyclePersistence } from '../devices/runtime';
 import { fingerprintVodozemacIdentity } from '../identity/vodozemacIdentity';
@@ -13,7 +14,7 @@ import { readRoomMessageVersionFloor, roomMessageVersionFloorRecordId, ROOM_MESS
 import { envelopeIdForEnvelope } from '../delivery/envelopeIdentity';
 
 jest.mock('../api/prekeys', () => ({
-    publishVodozemacBundle: jest.fn(), fetchVodozemacBundle: jest.fn(), claimVodozemacOneTimeKey: jest.fn(), renewVodozemacBundle: jest.fn(),
+    publishVodozemacBundle: jest.fn(), fetchVodozemacBundle: jest.fn(), claimVodozemacOneTimeKey: jest.fn(), renewVodozemacBundle: jest.fn(), fetchAuthenticatedRoutingIdentity: jest.fn(), replenishAuthenticatedPrekeys: jest.fn(),
 }));
 // Bootstrap is exercised against the durable authority integration suite. These
 // conversation tests model its already-verified result so their fake WASM
@@ -229,7 +230,12 @@ const receiveFirstMessage = (conversation: ModernConversation, envelope: Encrypt
 const receiveDecision = (conversation: ModernConversation, envelope: EncryptedEnvelope, senderAddress: string): Promise<import('../core/contracts').InboundTransportDecision> =>
     (conversation as unknown as { decideInbound: (value: EncryptedEnvelope, sender: string) => Promise<import('../core/contracts').InboundTransportDecision> }).decideInbound(envelope, senderAddress);
 
-beforeEach(() => { jest.clearAllMocks(); encryptions = 0; outboundSessionCreations = 0; inboundSessionCreations = 0; sessionDecryptions = 0; decryptedBytes = undefined; encryptedPlaintexts = []; });
+beforeEach(() => {
+    // Fake-WASM unit fixture: real signed proofs and Mongo are exercised separately.
+    jest.spyOn(DeviceProofClient.prototype, 'acquire').mockResolvedValue({ deviceAuthorizationProof: { nonce: 'unit-proof' }, proofNonce: 'unit-proof' } as never);
+    jest.mocked(fetchAuthenticatedRoutingIdentity).mockRejectedValue(Object.assign(new Error('Authenticated routing recovery unavailable'), { status: 403 }));
+    jest.mocked(replenishAuthenticatedPrekeys).mockRejectedValue(Object.assign(new Error('Authenticated routing recovery unavailable'), { status: 403 }));
+    jest.clearAllMocks(); encryptions = 0; outboundSessionCreations = 0; inboundSessionCreations = 0; sessionDecryptions = 0; decryptedBytes = undefined; encryptedPlaintexts = []; });
 
 it('registers and removes the existing relay peer-disconnect observer', () => {
     const conversation = new ModernConversation(new Storage(), loader, fakeTransport().transport);
@@ -2054,7 +2060,7 @@ it('retains terminally rejected sender intent, suppresses automatic retry, and n
 });
 
 
-it('an unavailable remote prekey blocks established-session restoration without deleting pinned identity or history', async () => {
+it('unavailable durable peer authority blocks restoration without deleting pinned identity or history', async () => {
     jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
     jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
     jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
@@ -2071,7 +2077,8 @@ it('an unavailable remote prekey blocks established-session restoration without 
     ]);
     expect(await new ContactIdentityRegistry(storage).get(remoteAddress, false)).toMatchObject({ verification: 'verified' });
     const missingPrekey = Object.assign(new Error('Pre-key bundle unavailable'), { status: 404 });
-    jest.mocked(fetchVodozemacBundle).mockRejectedValueOnce(missingPrekey);
+    jest.mocked(fetchVodozemacBundle).mockImplementation(async (_room, _cap, address) => { if (address === remoteAddress) throw missingPrekey; return bundle; });
+    jest.mocked(fetchAuthenticatedRoutingIdentity).mockRejectedValue(missingPrekey);
     const transport = fakeTransport();
     const restarted = new ModernConversation(storage, loader, transport.transport);
     try {
@@ -2102,6 +2109,7 @@ it.each([404, 503])('preserves established-contact lookup HTTP %s on the own add
         if (address === localAddress) throw failure;
         return bundle;
     });
+    jest.mocked(replenishAuthenticatedPrekeys).mockRejectedValue(failure);
     const transport = fakeTransport(); const restarted = new ModernConversation(storage, loader, transport.transport);
     try {
         await expect(restarted.connect(room, key(9), remoteAddress, await remoteCommitment())).rejects.toBe(failure);
@@ -2122,7 +2130,8 @@ it('retries a temporary prekey failure with the same pinned identity and existin
     await first.acceptDelivery('relay-1'); await first.verifyContact(true); await first.close(false);
     const pinned = await storage.read('contact-identity', remoteAddress);
     const history = await storage.read('product-messages', room);
-    jest.mocked(fetchVodozemacBundle).mockRejectedValueOnce(Object.assign(new Error('Pre-key bundle unavailable'), { status: 404 }));
+    jest.mocked(fetchVodozemacBundle).mockImplementation(async (_room, _cap, address) => { if (address === remoteAddress) throw Object.assign(new Error('Pre-key bundle unavailable'), { status: 404 }); return bundle; });
+    jest.mocked(fetchAuthenticatedRoutingIdentity).mockRejectedValue(Object.assign(new Error('Routing authority unavailable'), { status: 404 }));
     const failed = new ModernConversation(storage, loader, fakeTransport().transport);
     await expect(failed.connect(room, key(9), remoteAddress, await remoteCommitment())).rejects.toMatchObject({ status: 404 });
     await failed.close(false);
@@ -2225,4 +2234,45 @@ it('does not report Sent if the relay receipt cannot be durably correlated local
         if (scenario === 'missing-pin') expect(await storage.read('contact-identity',remoteAddress)).toBeUndefined();
       }
     } finally { clock.mockRestore(); await restarted.close(false); }
+});
+
+it.each([false, true])('restores a pinned session after temporary prekey cleanup without recreating trust (own publication missing: %s)', async ownMissing => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
+    const storage = new Storage(), first = new ModernConversation(storage, loader, fakeTransport().transport);
+    await first.connect(room, key(9), remoteAddress, await remoteCommitment());
+    await first.sendWithReceipt('retained history', sentHistoryUpdate(storage, 'retained history'));
+    await first.acceptDelivery('relay-1'); await first.verifyContact(true); await first.close(false);
+    const pin = await storage.read('contact-identity', remoteAddress), history = await storage.read('product-messages', room);
+    jest.clearAllMocks();
+    jest.mocked(fetchVodozemacBundle).mockImplementation(async (_room, _cap, address) => {
+        if (address === remoteAddress || ownMissing) throw Object.assign(new Error('Temporary keys expired'), { status: 404 }); return bundle;
+    });
+    jest.mocked(fetchAuthenticatedRoutingIdentity).mockResolvedValue(bundle.identity);
+    jest.mocked(replenishAuthenticatedPrekeys).mockResolvedValue(undefined);
+    const restored = new ModernConversation(storage, loader, fakeTransport().transport);
+    try {
+        await restored.connect(room, key(9), remoteAddress, await remoteCommitment());
+        expect(restored.hasEstablishedSession()).toBe(true);
+        expect(await restored.getContact()).toMatchObject({ verification: 'verified', changeStatus: 'unchanged' });
+        expect(await storage.read('contact-identity', remoteAddress)).toEqual(pin);
+        expect(await storage.read('product-messages', room)).toEqual(history);
+        expect(fetchAuthenticatedRoutingIdentity).toHaveBeenCalledWith(room, key(9), remoteAddress, expect.objectContaining({ participant: localAddress, routingProof: 'r'.repeat(43) }));
+        expect(publishVodozemacBundle).not.toHaveBeenCalled(); expect(claimVodozemacOneTimeKey).not.toHaveBeenCalled();
+        if (ownMissing) expect(replenishAuthenticatedPrekeys).toHaveBeenCalledWith(room, key(9), localAddress, expect.any(Object), expect.any(Object));
+    } finally { await restored.close(false); }
+});
+
+it('rejects a changed durable peer identity instead of replacing the existing pin', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle); jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
+    const storage = new Storage(), first = new ModernConversation(storage, loader, fakeTransport().transport);
+    await first.connect(room, key(9), remoteAddress, await remoteCommitment()); await first.sendWithReceipt('history'); await first.acceptDelivery('relay-1'); await first.verifyContact(true); await first.close(false);
+    const pin = await storage.read('contact-identity', remoteAddress);
+    jest.mocked(fetchVodozemacBundle).mockImplementation(async (_room, _cap, address) => { if (address === remoteAddress) throw Object.assign(new Error('Expired'), { status: 404 }); return bundle; });
+    jest.mocked(fetchAuthenticatedRoutingIdentity).mockResolvedValue({ ...bundle.identity, curve25519: key(19) });
+    const restored = new ModernConversation(storage, loader, fakeTransport().transport);
+    try { await expect(restored.connect(room, key(9), remoteAddress, await remoteCommitment())).rejects.toThrow('pinned contact'); expect(await storage.read('contact-identity', remoteAddress)).toEqual(pin); }
+    finally { await restored.close(false); }
 });

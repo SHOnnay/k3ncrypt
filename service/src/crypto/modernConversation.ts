@@ -2,7 +2,7 @@ import { parseFileReference, sameBinding } from '../files/protocol';
 import { testDiagnosticsEnabled } from '../utils/testDiagnostics';
 import type { EncryptedEnvelope, InboundTransportDecision, PermanentInboundRejectionReason, SecureRecordUpdate, SecureStorage, TransportManager } from '../core/contracts';
 import { VODOZEMAC_ENVELOPE_VERSION, VODOZEMAC_STRATEGY_ID } from '../core/vodozemacCryptoSession';
-import { claimVodozemacOneTimeKey, fetchVodozemacBundle, publishVodozemacBundle, renewVodozemacBundle } from '../api/prekeys';
+import { claimVodozemacOneTimeKey, fetchVodozemacBundle, publishVodozemacBundle, renewVodozemacBundle, fetchAuthenticatedRoutingIdentity, replenishAuthenticatedPrekeys, type RoutingRequestAuthority } from '../api/prekeys';
 import { deleteLink } from '../api/links';
 import { ContactIdentityRegistry, type StoredContactIdentity } from '../identity/contactIdentityRegistry';
 import { fingerprintVodozemacIdentity, type VodozemacPublicIdentity } from '../identity/vodozemacIdentity';
@@ -583,40 +583,21 @@ export class ModernConversation {
                 this.sessionHealth = 'unhealthy';
             }
         }
-        if (this.remoteAddress && saved?.sessionId) {
-            let contactBundle;
-            try { contactBundle = validateVodozemacPublicBundle(await fetchVodozemacBundle(roomId, capability, this.remoteAddress)); }
-            catch (error) { this.lastConnectionFailureCategory = 'prekey-session-lookup-failure'; throw error; }
-            try {
-                if (options?.invitation) {
-                    const pinned = await this.registry.get(this.remoteAddress, false);
-                    // Invitation expiry gates first admission, not a previously accepted relationship.
-                    // Require the encrypted local receipt, restored session and exact unchanged pin;
-                    // still verify the signed invitation and require normal server/device admission.
-                    const established = this.sessionHealth === 'healthy' && Boolean(this.runtime.activeSessionId) &&
-                        introductionRecord?.state === 'ESTABLISHED' && introductionRecord.invitationId === options.invitation.invitationId &&
-                        introductionRecord.recipientAddress === this.remoteAddress && introductionRecord.recipientIdentityCommitment === remoteIdentityCommitment &&
-                        pinned?.contactId === this.remoteAddress && pinned.changeStatus === 'unchanged' &&
-                        pinned.identityId === remoteIdentityCommitment && pinned.identityId === await fingerprintVodozemacIdentity(contactBundle.identity);
-                    await this.verifyModernInvitation(options.invitation, contactBundle.identity, roomId, capability, this.remoteAddress!, remoteIdentityCommitment, established);
-                }
-                await this.observe(this.remoteAddress, contactBundle.identity, remoteIdentityCommitment); }
-            catch (error) { this.lastConnectionFailureCategory = 'sender-identity-mismatch'; throw error; }
-        }
-
         let localAddress = saved?.localAddress ?? publication?.address;
         let routingProof = saved?.routingProof ?? publication?.routingProof;
+        let localPublicationExpired = false;
         if (localAddress) {
             try { await fetchVodozemacBundle(roomId, capability, localAddress); }
             catch (error) {
                 // An existing session's server-side key lookup failure is not
                 // evidence that its invitation or local verified identity expired.
                 // Preserve the error/status and keep restoration fail-closed.
-                if (saved?.sessionId) throw error;
-                throw new Error('This private invitation expired. Create a fresh conversation to continue.');
+                if (saved?.sessionId && (error as { status?: number })?.status === 404) localPublicationExpired = true;
+                else if (saved?.sessionId) throw error;
+                else throw new Error('This private invitation expired. Create a fresh conversation to continue.');
             }
             const localBundle = await this.runtime.getPublicBundle();
-            if (localBundle.oneTimeKeys.length < 10) {
+            if (!localPublicationExpired && localBundle.oneTimeKeys.length < 10) {
                 try {
                     await this.runtime.replenishOneTimeKeys(20);
                     if (!saved?.routingProof) throw new Error('Pre-key ownership proof is unavailable.');
@@ -684,6 +665,41 @@ export class ModernConversation {
         );
         await this.syncController.recover();
 
+        const activeTransport = this.transport.activeTransport();
+        this.durableProofs = new DeviceProofClient(
+            { signControlEvent: (payload) => this.runtime.signControlEvent(payload) },
+            async () => {
+                if (!this.userScope || !this.localDeviceId || !this.localIdentityId || this.trustEpoch === undefined) throw new Error('Device trust is unavailable.');
+                return { accountIdentityReference: this.userScope, deviceId: this.localDeviceId, deviceIdentityReference: this.localIdentityId, epoch: this.trustEpoch };
+            },
+        );
+        if (activeTransport && 'setDeviceProofProvider' in activeTransport && typeof activeTransport.setDeviceProofProvider === 'function') activeTransport.setDeviceProofProvider(this.durableProofs);
+        if (localPublicationExpired) {
+            await this.runtime.replenishOneTimeKeys(20);
+            await replenishAuthenticatedPrekeys(roomId, capability, localAddress!, await this.routingRequestAuthority(), await this.runtime.getPublicBundle());
+            await this.runtime.markPublicKeysPublished();
+        }
+        if (this.remoteAddress && saved?.sessionId) {
+            let contactBundle;
+            try { contactBundle = await this.fetchPinnedPeerBundle(this.remoteAddress); }
+            catch (error) { this.lastConnectionFailureCategory = 'prekey-session-lookup-failure'; throw error; }
+            try {
+                if (options?.invitation) {
+                    const pinned = await this.registry.get(this.remoteAddress, false);
+                    // Invitation expiry gates first admission, not a previously accepted relationship.
+                    // Require the encrypted local receipt, restored session and exact unchanged pin;
+                    // still verify the signed invitation and require normal server/device admission.
+                    const established = this.sessionHealth === 'healthy' && Boolean(this.runtime.activeSessionId) &&
+                        introductionRecord?.state === 'ESTABLISHED' && introductionRecord.invitationId === options.invitation.invitationId &&
+                        introductionRecord.recipientAddress === this.remoteAddress && introductionRecord.recipientIdentityCommitment === remoteIdentityCommitment &&
+                        pinned?.contactId === this.remoteAddress && pinned.changeStatus === 'unchanged' &&
+                        pinned.identityId === remoteIdentityCommitment && pinned.identityId === await fingerprintVodozemacIdentity(contactBundle.identity);
+                    await this.verifyModernInvitation(options.invitation, contactBundle.identity, roomId, capability, this.remoteAddress!, remoteIdentityCommitment, established);
+                }
+                await this.observe(this.remoteAddress, contactBundle.identity, remoteIdentityCommitment); }
+            catch (error) { this.lastConnectionFailureCategory = 'sender-identity-mismatch'; throw error; }
+        }
+
         if (this.remoteAddress && !saved?.sessionId) {
             // Validate and pin the invitation identity during join, but defer
             // claiming a peer one-time key until this device actually sends.
@@ -699,17 +715,6 @@ export class ModernConversation {
         }
         this.prepareDeviceControl();
 
-        const activeTransport = this.transport.activeTransport();
-        if (activeTransport && 'setDeviceProofProvider' in activeTransport && typeof activeTransport.setDeviceProofProvider === 'function') {
-            this.durableProofs = new DeviceProofClient(
-                { signControlEvent: (payload) => this.runtime.signControlEvent(payload) },
-                async () => {
-                    if (!this.userScope || !this.localDeviceId || !this.localIdentityId || this.trustEpoch === undefined) throw new Error('Device trust is unavailable.');
-                    return { accountIdentityReference: this.userScope, deviceId: this.localDeviceId, deviceIdentityReference: this.localIdentityId, epoch: this.trustEpoch };
-                },
-            );
-            activeTransport.setDeviceProofProvider(this.durableProofs);
-        }
         if (!routingProof) throw new Error('Modern routing ownership proof is unavailable.');
         this.transport.activeTransport()?.setProtocolFeatures?.([JOIN_INTRODUCTION_FEATURE, ROOM_MESSAGE_V1_FEATURE, ROOM_CALL_SIGNAL_V2_FEATURE]);
         await this.roomTransport!.connect(localAddress, capability, routingProof);
@@ -736,6 +741,31 @@ export class ModernConversation {
         const unsigned: UnsignedModernInvitation = { version: 2, type: 'k3ncrypt-first-contact-invitation', invitationId: crypto.randomUUID(), roomId, controlCapability: capability, inviterAddress, identityCommitment,
             capabilities: ['join-introduction-v1', 'room-message-v1'], createdAt: now, expiresAt: now + 24 * 60 * 60 * 1000 };
         return { ...unsigned, signature: canonicalSignatureEncoding(await this.runtime.signControlEvent(canonicalInvitation(unsigned))) };
+    }
+
+    private async routingRequestAuthority(): Promise<RoutingRequestAuthority> {
+        if (!this.roomId || !this.localAddress || !this.durableProofs || !this.deviceTrust || this.trustEpoch === undefined) throw new Error('Authenticated routing recovery unavailable.');
+        await this.deviceTrust.assertTrustedAt(this.trustEpoch);
+        const mode = await this.modes.read(this.roomId);
+        if (!mode?.routingProof || mode.localAddress !== this.localAddress) throw new Error('Saved routing ownership is unavailable.');
+        return { participant: this.localAddress, routingProof: mode.routingProof, carrier: await this.durableProofs.acquire('device-control', { conversationId: this.roomId }) };
+    }
+
+    /** An established session can compare durable public identity without fetching disposable bootstrap keys. */
+    private async fetchPinnedPeerBundle(address: string): Promise<ReturnType<typeof validateVodozemacPublicBundle>> {
+        if (!this.roomId || !this.capability) throw new Error('Conversation is unavailable.');
+        try { return validateVodozemacPublicBundle(await fetchVodozemacBundle(this.roomId, this.capability, address)); }
+        catch (error) {
+            if ((error as { status?: number })?.status !== 404 || !this.runtime.activeSessionId || this.sessionHealth !== 'healthy' || address !== this.remoteAddress) throw error;
+            const pin = await this.registry.get(address, false);
+            if (!pin || pin.changeStatus !== 'unchanged') throw error;
+            const owner = this.localIdentityId, room = this.roomId;
+            const identity = await fetchAuthenticatedRoutingIdentity(room, this.capability, address, await this.routingRequestAuthority());
+            if (room !== this.roomId || owner !== this.localIdentityId || !this.runtime.activeSessionId || address !== this.remoteAddress || await fingerprintVodozemacIdentity(identity) !== pin.identityId) {
+                throw new Error('The pinned contact or vault session changed.');
+            }
+            return validateVodozemacPublicBundle({ version: 1, protocol: 'vodozemac-olm-v1', identity, oneTimeKeys: [] });
+        }
     }
 
     private async verifyModernInvitation(invitation: SignedModernInvitation, identity: VodozemacPublicIdentity, roomId: string, capability: string, address: string, commitment?: string, established = false): Promise<void> {
@@ -844,7 +874,7 @@ export class ModernConversation {
     public async fileTransferBinding(requireVerified: boolean): Promise<import('../files/protocol').FileBinding> {
         await this.assertCurrentDeviceTrust();
         if (!this.roomId || !this.capability || !this.localAddress || !this.localIdentityId || !this.remoteAddress) throw new Error('File contact unavailable.');
-        const bundle = validateVodozemacPublicBundle(await fetchVodozemacBundle(this.roomId, this.capability, this.remoteAddress));
+        const bundle = await this.fetchPinnedPeerBundle(this.remoteAddress);
         await this.observe(this.remoteAddress, bundle.identity, this.remoteIdentityCommitment);
         const contact = await this.registry.get(this.remoteAddress);
         if (!contact) throw Object.assign(new Error('Verified unchanged contact required.'), { safeDiagnosticCode: 'RECIPIENT_AUTHORITY_MISSING' });
@@ -1680,7 +1710,7 @@ export class ModernConversation {
             const firstSession = !this.runtime.activeSessionId;
             let bundle: ReturnType<typeof validateVodozemacPublicBundle> | undefined;
             if (firstSession) {
-                try { bundle = validateVodozemacPublicBundle(await fetchVodozemacBundle(this.roomId, this.capability, senderAddress)); }
+                try { bundle = await this.fetchPinnedPeerBundle(senderAddress); }
                 catch (error) { this.lastInboundFailureCategory = 'prekey-session-lookup-failure'; throw error; }
                 const pinned = await this.registry.get(senderAddress);
                 senderFingerprint = await fingerprintVodozemacIdentity(bundle.identity);
@@ -1714,7 +1744,7 @@ export class ModernConversation {
                 let authenticatedCommitment: string | undefined;
                 let authenticatedWrapperVersion: number | undefined;
                 if (!senderFingerprint) {
-                    const identity = bundle?.identity ?? validateVodozemacPublicBundle(await fetchVodozemacBundle(this.roomId!, this.capability!, senderAddress)).identity;
+                    const identity = bundle?.identity ?? (await this.fetchPinnedPeerBundle(senderAddress)).identity;
                     senderFingerprint = await fingerprintVodozemacIdentity(identity);
                     if (this.remoteIdentityCommitment && senderFingerprint !== this.remoteIdentityCommitment) {
                         throw new Error('The authenticated sender identity does not match the saved invitation.');
@@ -1773,7 +1803,7 @@ export class ModernConversation {
                     // A new ciphertext may carry an already accepted authenticated event.
                     // Commit the ratchet and ciphertext marker, but do not repeat app effects.
                 } else if (introduction) {
-                    const identity = bundle?.identity ?? validateVodozemacPublicBundle(await fetchVodozemacBundle(this.roomId!, this.capability!, senderAddress)).identity;
+                    const identity = bundle?.identity ?? (await this.fetchPinnedPeerBundle(senderAddress)).identity;
                     acceptedPlan = await this.acceptJoinIntroduction(introduction, senderAddress, identity);
                     updates.push(...acceptedPlan.updates);
                 } else {
@@ -1797,7 +1827,7 @@ export class ModernConversation {
                             next: asBytes({ version: 1, classification: 'active-established', direction: 'inbound', origin: 'first-message' } satisfies SessionAudit),
                         });
                     } else if (!this.remoteAddress || !(await this.getContact())) {
-                        const restoredBundle = validateVodozemacPublicBundle(await fetchVodozemacBundle(this.roomId!, this.capability!, senderAddress));
+                        const restoredBundle = await this.fetchPinnedPeerBundle(senderAddress);
                         const restoredFingerprint = await fingerprintVodozemacIdentity(restoredBundle.identity);
                         if (this.remoteIdentityCommitment && this.remoteIdentityCommitment !== restoredFingerprint) {
                             this.lastInboundFailureCategory = 'sender-identity-mismatch';
