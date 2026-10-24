@@ -1,7 +1,7 @@
 export const SAFE_DIAGNOSTIC_CODES = [
   'FILE_RATE_LIMITED', 'FILE_PREFLIGHT_FAILED', 'FILE_CREATE_FAILED', 'FILE_MANIFEST_UPLOAD_FAILED', 'FILE_CHUNK_UPLOAD_FAILED', 'FILE_FINALIZE_FAILED', 'FILE_REFERENCE_SEND_FAILED', 'FILE_RECIPIENT_FETCH_FAILED', 'FILE_DOWNLOAD_FAILED', 'FILE_AUTHENTICATION_FAILED', 'FILE_SAVE_FAILED', 'FILE_SERVER_STATE_CONFLICT', 'FILE_TRANSFER_EXPIRED', 'FILE_TRANSFER_CANCELED', 'FILE_AUTHORIZATION_FAILED', 'FILE_QUOTA_EXCEEDED',
   'CONVERSATION_RECORD_INVALID', 'CONVERSATION_INVITATION_UNACCEPTED', 'CONVERSATION_INVITATION_EXPIRED', 'CONVERSATION_STATE_INCOMPLETE', 'CONVERSATION_RESTORE_FAILED',
-  'CONVERSATION_SESSION_MISSING', 'CONVERSATION_ROOM_MISSING', 'CONTACT_REGISTRY_MISSING', 'CONVERSATION_PREKEY_UNAVAILABLE', 'MESSAGE_HISTORY_ENTRY_QUARANTINED',
+  'CONVERSATION_SESSION_MISSING', 'CONVERSATION_ROOM_MISSING', 'CONTACT_REGISTRY_MISSING', 'CONVERSATION_PREKEY_UNAVAILABLE', 'CONVERSATION_ROUTING_AUTHORIZATION_UNAVAILABLE', 'MESSAGE_HISTORY_ENTRY_QUARANTINED',
   'CONVERSATION_STORAGE_UNAVAILABLE', 'CONVERSATION_STORAGE_CONFLICT', 'CONVERSATION_REMOVED', 'CONVERSATION_INDEX_LIMIT', 'CONVERSATION_LOCAL_RECORD_INVALID',
   'CONVERSATION_IN_USE',
   'CONVERSATION_INVITATION_LOOKUP_FAILED', 'CONVERSATION_OPEN_SUPERSEDED',
@@ -16,6 +16,7 @@ export type SafeDiagnosticCode = typeof SAFE_DIAGNOSTIC_CODES[number];
 export type DiagnosticContext = 'conversation-open' | 'contact-authority' | 'file-send';
 
 export const safeFailureCopy = (context: DiagnosticContext, code?: SafeDiagnosticCode): string => {
+  if (context === 'conversation-open' && code === 'CONVERSATION_ROUTING_AUTHORIZATION_UNAVAILABLE') return 'Your contact and encrypted history are still saved. Current server routing authorization could not be restored. Keep this vault. Recovery requires current authenticated authority; a saved invitation alone cannot restore it.';
   if (context === 'conversation-open' && code === 'CONVERSATION_PREKEY_UNAVAILABLE') return 'This contact is still saved. Required contact keys are unavailable from the service, so reconnection is paused. Retry later; keep your existing vault and contact.';
   if (context === 'conversation-open') return 'This saved conversation could not be opened.';
   if (context === 'file-send') return 'This protected file send could not be completed.';
@@ -37,6 +38,7 @@ export const classifySafeDiagnostic = (context: DiagnosticContext, error: unknow
     // A server lookup failure says nothing about the presence of local pinned records.
     if (status === 404 && (message.includes('pre-key') || message.includes('prekey'))) return 'CONVERSATION_PREKEY_UNAVAILABLE';
   }
+  if (context === 'conversation-open' && message === 'authenticated routing recovery unavailable') return 'CONVERSATION_ROUTING_AUTHORIZATION_UNAVAILABLE';
   if (context === 'conversation-open' && message.includes('saved conversation') && message.includes('invalid')) return 'CONVERSATION_RECORD_INVALID';
   if (context === 'conversation-open' && message.includes('active in another tab')) return 'CONVERSATION_IN_USE';
   if (context === 'conversation-open' && message === 'conversation open was superseded.') return 'CONVERSATION_OPEN_SUPERSEDED';

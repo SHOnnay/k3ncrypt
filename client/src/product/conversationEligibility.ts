@@ -45,7 +45,7 @@ export function conversationDiagnostic(descriptor: Pick<ConversationDescriptor, 
   const label = descriptor.localNickname ?? descriptor.remoteDisplayName ?? descriptor.label;
   return { roomId: descriptor.roomId, label: label === 'Private contact' ? `${label} · ${descriptor.roomId.slice(-8)}` : label, state, code };
 }
-export const conversationStateCopy = (diagnostic: ConversationDiagnostic): string => diagnostic.code === 'CONVERSATION_PREKEY_UNAVAILABLE' ? 'Contact saved · reconnection paused' : diagnostic.code === 'CONVERSATION_IN_USE' ? 'Open in another tab — close it and retry' : ({
+export const conversationStateCopy = (diagnostic: ConversationDiagnostic): string => diagnostic.code === 'CONVERSATION_ROUTING_AUTHORIZATION_UNAVAILABLE' ? 'Contact saved · authorization recovery required' : diagnostic.code === 'CONVERSATION_PREKEY_UNAVAILABLE' ? 'Contact saved · reconnection paused' : diagnostic.code === 'CONVERSATION_IN_USE' ? 'Open in another tab — close it and retry' : ({
   saved: 'Saved on this device', pending: 'Waiting for contact to accept', retryable: 'Disconnected — retry opening',
   terminal: 'Room expired or removed', 'local-incomplete': 'Local records incomplete — access paused',
   'review-required': 'Identity or room binding needs review', deferred: 'More saved entries retained on this device',
@@ -53,7 +53,7 @@ export const conversationStateCopy = (diagnostic: ConversationDiagnostic): strin
 export interface ConversationIndex { conversations: ConversationDescriptor[]; unavailable: ConversationDiagnostic[]; }
 export interface SidebarConversationGroups { chats: ConversationDescriptor[]; pendingInvitations: ConversationDescriptor[]; unavailable: ConversationDiagnostic[]; }
 
-const remoteAvailabilityFailures = new Set<SafeDiagnosticCode>(['CONVERSATION_PREKEY_UNAVAILABLE', 'NETWORK_FAILURE', 'SERVICE_NOT_READY']);
+const remoteAvailabilityFailures = new Set<SafeDiagnosticCode>(['CONVERSATION_PREKEY_UNAVAILABLE', 'CONVERSATION_ROUTING_AUTHORIZATION_UNAVAILABLE', 'NETWORK_FAILURE', 'SERVICE_NOT_READY']);
 const showSavedChatWithAvailabilityFailure = (descriptor: ConversationDescriptor, code?: SafeDiagnosticCode): boolean =>
   Boolean(code && remoteAvailabilityFailures.has(code) && descriptor.remoteAddress && descriptor.remoteIdentityCommitment &&
     (!descriptor.bootstrapState || descriptor.bootstrapState === 'ESTABLISHED'));

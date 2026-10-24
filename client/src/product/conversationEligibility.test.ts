@@ -182,7 +182,7 @@ it('maintenance and authorization failures occur before local lookup and do not 
 });
 
 
-it.each(['CONVERSATION_PREKEY_UNAVAILABLE', 'NETWORK_FAILURE', 'SERVICE_NOT_READY'] as const)('retains established saved chats under %s without claiming a live session', async code => {
+it.each(['CONVERSATION_PREKEY_UNAVAILABLE', 'CONVERSATION_ROUTING_AUTHORIZATION_UNAVAILABLE', 'NETWORK_FAILURE', 'SERVICE_NOT_READY'] as const)('retains established saved chats under %s without claiming a live session', async code => {
   const store = await valid(); const before = [...store.records];
   const restoredDescriptors = await readConversationDescriptors(store);
   const diagnostic = conversationDiagnostic(descriptor, code);
