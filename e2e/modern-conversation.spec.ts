@@ -161,7 +161,7 @@ test('inviter can stay offline during acceptance and resume the pending first co
   await bob.page.close();
   const bobPage = await resume(bob.context, invitation, bob.outbound, 'Bob');
   await expect(bobPage.locator('#chat-container')).toBeVisible();
-  await expect(bobPage.locator('.conversation-row')).toContainText('Waiting for contact to accept');
+  await expect(bobPage.locator('.unavailable-conversation-action')).toContainText('Waiting for contact to accept');
 
   const aliceReturned = await resume(alice.context, invitation, alice.outbound, 'Alice');
   await expect(aliceReturned.locator('#chat-container')).toBeVisible();

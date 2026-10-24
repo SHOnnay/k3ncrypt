@@ -17,7 +17,7 @@ import { Sidebar } from './client/src/components/AppShell/Sidebar';
 import { BrowserSecureStorage } from './service/src/storage/secureVault';
 import { IndexedDbVaultPersistence } from './service/src/storage/persistence';
 import { ContactIdentityRegistry } from './service/src/identity/contactIdentityRegistry';
-import { conversationEligibility, conversationDiagnostic } from './client/src/product/conversationEligibility';
+import { conversationEligibility, conversationDiagnostic, diagnoseOrphanedConversationRecords } from './client/src/product/conversationEligibility';
 import { readConversationDescriptors } from './client/src/product/sessionStore';
 import { classifySafeDiagnostic, safeFailureCopy } from './client/src/product/safeDiagnostics';
 const persistence = new IndexedDbVaultPersistence();
@@ -32,13 +32,18 @@ globalThis.contactFixture = {
   lock: () => vault.lock(),
   seed: async () => {
     await vault.initializeWithPassphrase(secret);
-    await put('product-session', 'conversations', [descriptor]);
+    const descriptors = [descriptor, {...descriptor, roomId:'22222222-2222-4222-8222-222222222222', label:'Fixture two'}, {...descriptor, roomId:'33333333-3333-4333-8333-333333333333', label:'Fixture three'}];
+    await put('product-session', 'conversations', descriptors);
+    for (const extra of descriptors.slice(1)) {
+      await put('conversation-protocol', extra.roomId, {version:1,mode:'modern',localAddress:'synthetic-self',remoteAddress:extra.remoteAddress,routingProof:'b'.repeat(43),sessionId:'fixture-session'});
+      await vault.write('vodozemac-session', extra.roomId, new Uint8Array([1,2,3]).buffer);
+    }
     await put('conversation-protocol', room, { version: 1, mode: 'modern', localAddress: 'synthetic-self', remoteAddress: descriptor.remoteAddress, routingProof: 'b'.repeat(43), sessionId: 'fixture-session' });
     await put('contact-identity', descriptor.remoteAddress, { contactId: descriptor.remoteAddress, identityId: descriptor.remoteIdentityCommitment, algorithm: 'Olm-Curve25519+Ed25519', publicKey: 'AAAA', verification: 'verified', changeStatus: 'unchanged' });
     await vault.write('vodozemac-session', room, new Uint8Array([1, 2, 3]).buffer);
     await put('product-messages', room, [{ id: 'synthetic-id', text: 'synthetic local history' }]);
   },
-  inspect: async () => {
+  inspect: async (legacyMisclassification = false) => {
     if (vault.isLocked()) await vault.unlock(secret);
     const descriptors = await readConversationDescriptors(vault);
     const eligibility = await conversationEligibility(vault, descriptors[0]);
@@ -47,12 +52,14 @@ globalThis.contactFixture = {
     const response = await fetch('/fixture-prekeys');
     let code;
     if (!response.ok) code = classifySafeDiagnostic('conversation-open', Object.assign(new Error(response.status === 404 ? 'Pre-key bundle unavailable' : 'service unavailable'), { status: response.status }));
-    const diagnostic = code ? conversationDiagnostic(descriptors[0], code) : undefined;
-    globalThis.fixtureChatState = { conversations: descriptors, unavailableConversations: diagnostic ? [diagnostic] : [],
+    if (legacyMisclassification && code === 'CONVERSATION_PREKEY_UNAVAILABLE') code = 'CONTACT_REGISTRY_MISSING';
+    const diagnostics = code ? descriptors.map(item => conversationDiagnostic(item, code)) : [];
+    const orphans = await diagnoseOrphanedConversationRecords(vault);
+    globalThis.fixtureChatState = { conversations: descriptors, unavailableConversations: diagnostics, orphanedConversationRecords: orphans,
       messages: [], syncStatus: 'blocked', accountState: 'ready', profileDisplayName: 'Disposable owner' };
     document.body.innerHTML = renderToStaticMarkup(React.createElement(Sidebar, { isWelcomeActive: true, activeSection: 'chats', onNavigate() {}, onNewConversation() {}, onOpenConversation() {}, onOpenSettings() {} }));
     const contact = await new ContactIdentityRegistry(vault).get(descriptor.remoteAddress, false);
-    return { code, verification: contact?.verification, pinMatches: contact?.identityId === descriptor.remoteIdentityCommitment,
+    return { code, orphanCount: orphans.roomIds.length, verification: contact?.verification, pinMatches: contact?.identityId === descriptor.remoteIdentityCommitment,
       historyEntries: JSON.parse(new TextDecoder().decode(await vault.read('product-messages', room))).length,
       contactRows: document.querySelectorAll('button.conversation-row').length,
       hasPausedCopy: document.body.textContent.includes('Contact saved · reconnection paused'),
@@ -106,18 +113,21 @@ test('seven-day missing prekeys keep a verified saved contact/history visible ac
     let page = await open();
     await page.evaluate(() => globalThis.contactFixture.seed());
     const baseline = await page.evaluate(() => globalThis.contactFixture.inspect());
-    assert.equal(baseline.verification, 'verified'); assert.equal(baseline.contactRows, 1);
+    assert.equal(baseline.verification, 'verified'); assert.equal(baseline.contactRows, 3);
     const digest = await page.evaluate(() => globalThis.contactFixture.digest());
     for (const days of [0, 4, 5, 7, 8, 15, 30]) {
       serverAgeDays = days;
       const state = await page.evaluate(() => globalThis.contactFixture.inspect());
       assert.equal(state.code, days >= 7 ? 'CONVERSATION_PREKEY_UNAVAILABLE' : undefined);
-      assert.equal(state.verification, 'verified'); assert.equal(state.contactRows, 1);
+      assert.equal(state.verification, 'verified'); assert.equal(state.contactRows, 3);
       assert.equal(await page.evaluate(() => globalThis.contactFixture.digest()), digest);
     }
     serverAgeDays = 7;
+    const oldView = await page.evaluate(() => globalThis.contactFixture.inspect(true));
+    assert.equal(oldView.code, 'CONTACT_REGISTRY_MISSING'); assert.equal(oldView.contactRows, 0);
+    assert.equal(oldView.orphanCount, 0); assert.equal(oldView.verification, 'verified');
     let paused = await page.evaluate(() => globalThis.contactFixture.inspect());
-    assert.equal(paused.code, 'CONVERSATION_PREKEY_UNAVAILABLE'); assert.equal(paused.contactRows, 1);
+    assert.equal(paused.code, 'CONVERSATION_PREKEY_UNAVAILABLE'); assert.equal(paused.contactRows, 3);
     assert.equal(paused.hasEmptyTrustClaim, false); assert.equal(paused.hasPausedCopy, true);
     assert.match(paused.feedback, /reconnection is paused/);
     await context.close(); context = undefined;
@@ -125,7 +135,7 @@ test('seven-day missing prekeys keep a verified saved contact/history visible ac
     assert.equal(await page.evaluate(() => globalThis.contactFixture.locked()), true);
     paused = await page.evaluate(() => globalThis.contactFixture.inspect());
     assert.equal(paused.verification, 'verified'); assert.equal(paused.pinMatches, true);
-    assert.equal(paused.historyEntries, 1); assert.equal(paused.contactRows, 1); assert.equal(paused.hasPausedCopy, true);
+    assert.equal(paused.historyEntries, 1); assert.equal(paused.contactRows, 3); assert.equal(paused.hasPausedCopy, true);
     assert.equal(await page.evaluate(() => globalThis.contactFixture.digest()), digest);
     // Expiry remains paused; this fixture does not pretend to renew deleted authority.
     await page.evaluate(() => globalThis.contactFixture.lock());

@@ -78,7 +78,7 @@ test('opt-in authenticated file stage benchmark', async ({ browser }, testInfo) 
         await expect(alice.getByRole('group', { name: 'File attachment draft' })).toBeVisible(); row.selectionMs = Date.now() - origin;
         const sendAt = Date.now(); origin = sendAt;
         await alice.getByRole('button', { name: 'Send file', exact: true }).click();
-        await expect(alice.locator('.media-transfer-status')).toContainText(/Sent|failed|Could not|quota|expired/i, { timeout: 240000 });
+        await expect(alice.locator('.media-transfer-status')).toContainText(/Sent|failed|Could not|quota|expired/i, { timeout: 45000 });
         row.sendMs = Date.now() - sendAt;
         await expect(alice.locator('.media-transfer-status')).toContainText('Sent');
         const completed = requests.find(r => r.category === 'complete' && r.status === 200);
@@ -87,11 +87,11 @@ test('opt-in authenticated file stage benchmark', async ({ browser }, testInfo) 
         const downloadAt = Date.now();
         await bob.getByRole('button', { name: 'Download protected file', exact: true }).last().click();
         const save = bob.getByRole('link', { name: 'Save synthetic.bin', exact: true });
-        await expect(save).toBeVisible({ timeout: 240000 }); row.downloadReadyMs = Date.now() - downloadAt;
+        await expect(save).toBeVisible({ timeout: 45000 }); row.downloadReadyMs = Date.now() - downloadAt;
         const event = bob.waitForEvent('download'); await save.click(); const download = await event; const output = testInfo.outputPath(`verified-${repeat}-${bytes}`); await download.saveAs(output);
         expect(createHash('sha256').update(await readFile(output)).digest('hex')).toBe(createHash('sha256').update(source).digest('hex'));
         row.integrity = 'PASS';
-        await bob.getByRole('button', { name: 'Discard verified output', exact: true }).click();
+        await save.locator('..').getByRole('button', { name: 'Close', exact: true }).click();
       } catch (error) {
         row.integrity = 'INCOMPLETE'; row.elapsedMs = Date.now() - origin;
         row.terminal = 'bounded expectation failed';

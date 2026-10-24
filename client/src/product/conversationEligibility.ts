@@ -72,7 +72,7 @@ export function classifySidebarConversations(descriptors: readonly ConversationD
     }
     if (descriptor.bootstrapState === 'PENDING_LOCAL' || descriptor.bootstrapState === 'PENDING_REMOTE' || descriptor.bootstrapState === 'FAILED_OR_UNSUPPORTED') {
       if (!unavailableRooms.has(descriptor.roomId)) {
-        const code: SafeDiagnosticCode = descriptor.bootstrapState === 'FAILED_OR_UNSUPPORTED' ? 'CONVERSATION_INVITATION_UNACCEPTED' : 'CONVERSATION_STATE_INCOMPLETE';
+        const code: SafeDiagnosticCode = 'CONVERSATION_INVITATION_UNACCEPTED';
         unavailable.push(conversationDiagnostic(descriptor, code));
         unavailableRooms.add(descriptor.roomId);
       }
