@@ -1,0 +1,21 @@
+# Durable routing ownership candidate design
+
+Base: 4eaddb2beec484db5d9ebae33f170689b5d43f41. Isolated branch: codex/web-durable-routing-ownership.
+
+The candidate adds at most two immutable device/identity-bound routing owners, including permanent revocation tombstones, inside the existing durable `links` document. No TTL applies to this ownership. Seven-day `prekey_bundles` remains temporary and independently cleaned. Existing room flags remain authoritative.
+
+Ownership is established only by a freshly consumed signed device authorization, exact public identity and verification-key match, original routing proof, an unexpired existing publication and a live room. A Mongo transaction writes the current active device/epoch fence and the room owner slot together. Room deletion and device revocation therefore conflict with admission; retries recheck current state. Owner slots cannot be overwritten or re-created from an invitation. Revoked slots count toward the two-slot bound.
+
+Every authorization reads current room/owner/device state on the primary. A stored owner is not a positive authorization cache. Request continuations recheck the owner generation, room state, device identity and epoch at their final asynchronous release boundary. Network operations already released before revocation cannot be retracted. No stronger zero-time network guarantee is claimed.
+
+Migration is prospective authenticated adoption, not an unauthenticated bulk copy: users with still-valid publications reconnect through the updated backend before expiry. Each device proves its own identity and routing secret; both participants must have adopted ownership for long-lived offline routing. Already-deleted legacy publications cannot be recovered automatically: the device registry alone does not prove a device's former room/address binding. No endpoint accepts that inference.
+
+New Web clients use a separate authenticated public-identity lookup when a peer's temporary prekeys are missing, but only for an already restored, pinned session. They replenish their own temporary keys with a fresh signed device proof. No expired one-time or fallback key is retained or fabricated. Identity lookup is not bootstrap material; a new cryptographic session still requires current published keys.
+
+Old endpoints and legacy/Mux wire formats remain. Android Beta 22 requires a fallback key even when parsing a bundle only to compare its identity. Returning a fake fallback would be unsafe. Thus the old prekey GET contract stays unchanged (404 on expiry). Updated Web clients can survive temporary-key cleanup; unmodified old clients can retain normal compatibility before expiry but may still require a future identity-only lookup update after expiry. No Android source is changed in this candidate.
+
+Activation is explicit: `K3NCRYPT_DURABLE_ROUTING=true` enables authenticated adoption and new APIs; off is the safe default. If durable owners already exist, updated workers must never fall back to prekeys to override their tombstones, including when the flag is off. Mongo replica-set transactions are a prerequisite. The existing unique `links.hash` and device indexes are reused; no bulk data migration or new TTL index is needed. Additive owner/fence fields are written only during authenticated adoption. This is a schema change requiring release review, not permission for production execution.
+
+Old backend workers do not know the new tombstones. They must be drained and stopped before activation; rolling mixed-authority operation is unsupported. After ownership exists, rollback to old binaries can restore the original authorization weakness and is unsafe. A flag-off updated binary must fail closed for upgraded rooms. Safe rollback uses a compatible updated binary or maintenance isolation, preserving owner/tombstone records.
+
+Scope excludes changes to mailbox persistence/ACK/FIFO, E2EE primitives, client pins or verification, WebRTC, Firebase and Android. Real Mongo TTL, signed disposable clients and persistent browser tests are required before declaring the Web lifecycle corrected. Already-expired legacy recovery and unmodified old-client long-inactivity recovery remain explicitly separate gates.
