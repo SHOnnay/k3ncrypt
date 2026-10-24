@@ -32,12 +32,12 @@ describe('deriveMessageDeliveryVisibility', () => {
     expect(deriveMessageDeliveryVisibility('accepted', 'legacy'))
       .toMatchObject({ state: 'relay-accepted-outcome-unknown', label: 'Sent · recipient not confirmed' });
     expect(deriveMessageDeliveryVisibility('accepted', 'modern'))
-      .toMatchObject({ state: 'recipient-app-accepted-relay-reported', label: 'Recipient app accepted · relay report', summaryLabel: 'Sent' });
+      .toMatchObject({ state: 'recipient-app-accepted-relay-reported', label: 'Recipient app accepted · relay report', summaryLabel: 'Delivered' });
   });
 
   it('keeps technical acceptance evidence available for optional message details', () => {
     const visibility = deriveMessageDeliveryVisibility('accepted', 'modern');
-    expect(visibility.summaryLabel).toBe('Sent');
+    expect(visibility.summaryLabel).toBe('Delivered');
     expect(visibility.explanation).toMatch(/relay reports.*not a signed peer receipt/i);
     expect(visibility.label).toBe('Recipient app accepted · relay report');
   });
@@ -59,4 +59,13 @@ describe('deriveMessageDeliveryVisibility', () => {
     expect(deriveMessageDeliveryVisibility('held', 'modern'))
       .toMatchObject({ state: 'held-not-sent-securely', label: 'Not sent — retry required', summaryLabel: 'Not sent — retry required' });
   });
+});
+
+it('shows Sent for a relay receipt without inventing recipient delivery', () => {
+  expect(deriveMessageDeliveryVisibility('pending', 'modern', true)).toMatchObject({
+    state: 'relay-accepted-outcome-unknown', summaryLabel: 'Sent',
+  });
+  expect(deriveMessageDeliveryVisibility('pending', 'modern', true).explanation).toContain('Recipient acceptance, display and reading are not confirmed');
+  expect(deriveMessageDeliveryVisibility('accepted', 'modern', true).summaryLabel).toBe('Delivered');
+  expect(deriveMessageDeliveryVisibility('failed', 'modern', true).summaryLabel).toBe('Failed · Retry');
 });

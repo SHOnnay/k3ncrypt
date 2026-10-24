@@ -154,6 +154,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const privacyPreferencesRef = useRef(privacyPreferences);
   const [permissionStatus, setPermissionStatus] = useState<{ microphone: PermissionState | 'unknown'; camera: PermissionState | 'unknown' }>({ microphone: 'unknown', camera: 'unknown' });
   const acceptedDeliveries = useRef(new Set<string>());
+  const storedDeliveries = useRef(new Set<string>());
   const rejectedDeliveries = useRef(new Set<string>());
   const endCallRef = useRef<() => Promise<void>>(async () => undefined);
   const callNegotiator = useRef<ProductionCallNegotiator>();
@@ -569,10 +570,13 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }
     });
     conversation.onDeliveryUpdate((clientId, state) => {
-      if (state === 'accepted') acceptedDeliveries.current.add(clientId);
+      if (state === 'stored') storedDeliveries.current.add(clientId);
+      if (state === 'accepted') { acceptedDeliveries.current.add(clientId); storedDeliveries.current.delete(clientId); }
       else if (state === 'rejected') rejectedDeliveries.current.add(clientId);
       testOnlyMessageFlow(clientId, descriptor.roomId, 'sender-delivery-status', state);
-      setMessages((current) => current.map((message) => message.id === clientId ? { ...message, delivery: state === 'accepted' ? 'accepted' : state === 'held' ? 'held' : 'failed' } : message));
+      setMessages((current) => current.map((message) => message.id !== clientId ? message : state === 'stored'
+        ? { ...message, relayAccepted: true }
+        : { ...message, delivery: state === 'accepted' ? 'accepted' : state === 'held' ? 'held' : 'failed' }));
       if (state === 'accepted' || state === 'rejected') {
         void (async () => {
           const latest = (await readConversationDescriptors(secureVault)).find(item => item.roomId === descriptor.roomId);
@@ -1125,7 +1129,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           const rejected = rejectedDeliveries.current.delete(clientId);
           testOnlyMessageFlow(clientId, roomId, 'context-send-room', selectedConversation.current === activeConversation && channelHash === roomId ? 'same-active-room' : 'selection-changed-during-send');
           if (activeConversationRoomId) testOnlyMessageFlow(clientId, activeConversationRoomId, 'context-send-modern-object-room', activeConversationRoomId === roomId ? 'matches-selected-room' : 'mismatch');
-          addMessage(roomId, { ...outgoing, id: clientId, delivery: accepted ? 'accepted' : rejected ? 'failed' : 'pending' });
+          addMessage(roomId, { ...outgoing, id: clientId, relayAccepted: storedDeliveries.current.delete(clientId) || accepted, delivery: accepted ? 'accepted' : rejected ? 'failed' : 'pending' });
           testOnlyMessageFlow(clientId, roomId, 'sender-history-projected', accepted ? 'accepted' : rejected ? 'failed' : 'pending');
           const contact = await activeConversation.getContact();
           if (!callActiveRef.current && activeConversation.hasEstablishedSession() && contact?.verification === 'verified' && contact.changeStatus === 'unchanged' && selectedConversation.current === activeConversation) {
@@ -1156,8 +1160,9 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         prepareHeldTextRetry(vault, roomId, failed.id, { ...outgoing, id }), failed.id);
       const accepted = acceptedDeliveries.current.delete(clientId);
       const rejected = rejectedDeliveries.current.delete(clientId);
+      const relayAccepted = storedDeliveries.current.delete(clientId) || accepted;
       setRoomMessages(roomId, (current) => [...current.filter((message) => message.id !== failed.id), {
-        ...outgoing, id: clientId, delivery: accepted ? 'accepted' : rejected ? 'failed' : 'pending',
+        ...outgoing, id: clientId, relayAccepted, delivery: accepted ? 'accepted' : rejected ? 'failed' : 'pending',
       }]);
       return;
     }
@@ -1167,7 +1172,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         prepareMessageAcceptance(vault, roomId, { ...outgoing, id }));
       const accepted = acceptedDeliveries.current.delete(clientId);
       const rejected = rejectedDeliveries.current.delete(clientId);
-      addMessage(roomId, { ...outgoing, id: clientId, delivery: accepted ? 'accepted' : rejected ? 'failed' : 'pending' });
+      addMessage(roomId, { ...outgoing, id: clientId, relayAccepted: storedDeliveries.current.delete(clientId) || accepted, delivery: accepted ? 'accepted' : rejected ? 'failed' : 'pending' });
       return;
     }
     setRoomMessages(roomId, (current) => current.map((message) => message.id === messageId ? { ...message, delivery: 'pending' } : message));
@@ -1225,7 +1230,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     try {
       const clientId = await conversation.sendWithReceipt(text, async id => prepareMessageAcceptance(vault, roomId, { ...outgoing, id }));
       const accepted = acceptedDeliveries.current.delete(clientId);
-      addMessage(roomId, { ...outgoing, id: clientId, delivery: accepted ? 'accepted' : 'pending' });
+      addMessage(roomId, { ...outgoing, id: clientId, relayAccepted: storedDeliveries.current.delete(clientId) || accepted, delivery: accepted ? 'accepted' : 'pending' });
       if (text.startsWith('k3ncrypt-file-')) setRoomState(roomId, { fileReferences: [...new Set([...(roomStatesRef.current[roomId]?.fileReferences ?? []), text])] });
       const contact = await conversation.getContact();
       if (!callActiveRef.current && conversation.hasEstablishedSession() && contact?.verification === 'verified' && contact.changeStatus === 'unchanged' && selectedConversation.current === conversation) {

@@ -71,3 +71,15 @@ it('keeps held state through stale history writes and replaces held text only wi
   await writeMessages(store, 'room', [{ ...held, id: 'held-file', text: 'k3ncrypt-file-v2:{"opaque":"reference"}', delivery: 'held' }]);
   await expect(prepareHeldTextRetry(store, 'room', 'held-file', { ...replacement, id: 'new-file-event' })).rejects.toThrow('needs a new secure send action');
 });
+
+it('persists a relay-only receipt without changing recipient acceptance and preserves it across stale projections', async () => {
+  const store = new MemoryStore();
+  const message = { id: 'relay-only', sender: 'me', text: 'synthetic', type: 'sent' as const, timestamp: new Date('2026-01-01T00:00:00Z'), delivery: 'pending' as const };
+  await writeMessages(store, 'room', [message]);
+  await writeMessages(store, 'room', [{ ...message, relayAccepted: true }]);
+  await writeMessages(store, 'room', [message]);
+  expect(await readMessages(store, 'room')).toEqual([expect.objectContaining({ delivery: 'pending', relayAccepted: true })]);
+  await writeMessages(store, 'room', [{ ...message, delivery: 'accepted' }]);
+  await writeMessages(store, 'room', [{ ...message, relayAccepted: true }]);
+  expect(await readMessages(store, 'room')).toEqual([expect.objectContaining({ delivery: 'accepted', relayAccepted: true })]);
+});

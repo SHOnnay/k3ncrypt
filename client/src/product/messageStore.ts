@@ -24,7 +24,8 @@ const valid = (value: unknown): value is StoredMessage => {
     && (item.type === 'sent' || item.type === 'received') && typeof item.timestamp === 'string'
     && Number.isFinite(Date.parse(item.timestamp))
     && (item.callEvent === undefined || item.id.startsWith('local-call:') && validLocalCallEvent(item.callEvent))
-    && (item.delivery === undefined || ['pending', 'accepted', 'failed', 'held'].includes(String(item.delivery)));
+    && (item.delivery === undefined || ['pending', 'accepted', 'failed', 'held'].includes(String(item.delivery)))
+    && (item.relayAccepted === undefined || typeof item.relayAccepted === 'boolean');
 };
 
 const decode = (bytes: ArrayBuffer | undefined): StoredMessage[] => {
@@ -152,7 +153,10 @@ const mergeHistory = (current: readonly StoredMessage[], incoming: readonly Stor
   for (const message of incoming) {
     const existing = result.get(message.id);
     if (!existing) { result.set(message.id, message); continue; }
-    if (deliveryRank(message.delivery) > deliveryRank(existing.delivery)) result.set(message.id, { ...existing, delivery: message.delivery });
+    const merged = { ...existing };
+    if (deliveryRank(message.delivery) > deliveryRank(existing.delivery)) merged.delivery = message.delivery;
+    if (message.relayAccepted === true) merged.relayAccepted = true;
+    result.set(message.id, merged);
   }
   return [...result.values()].sort((left, right) => Date.parse(left.timestamp) - Date.parse(right.timestamp)).slice(-MAX_MESSAGES);
 };

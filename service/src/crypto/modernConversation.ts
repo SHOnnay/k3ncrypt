@@ -441,7 +441,7 @@ export class ModernConversation {
     private trustEvents?: TrustStateEventCoordinator;
     private trustEpoch?: number;
     private syncController?: RuntimeSyncController;
-    private deliveryObserver?: (clientId: string, state: 'accepted' | 'rejected' | 'held') => void;
+    private deliveryObserver?: (clientId: string, state: 'accepted' | 'stored' | 'rejected' | 'held') => void;
     private syncRelay?: SocketSyncRelay;
     private groupAdapter?: SecureStorageGroupRuntimeAdapter;
     private groupRuntime?: GroupSecurityRuntime;
@@ -959,7 +959,7 @@ export class ModernConversation {
         throw new Error('The private contact is not ready.');
     }
 
-    public onDeliveryUpdate(observer: (clientId: string, state: 'accepted' | 'rejected' | 'held') => void): void { this.deliveryObserver = observer; }
+    public onDeliveryUpdate(observer: (clientId: string, state: 'accepted' | 'stored' | 'rejected' | 'held') => void): void { this.deliveryObserver = observer; }
 
     /** Observe the existing relay presence event to release active media when a peer leaves. */
     public onPeerDisconnect(observer: () => void): () => void {
@@ -1221,6 +1221,7 @@ export class ModernConversation {
                     for (const item of nextPending) {
                         if (item.clientId && item.relayId && item.roomMessageVersion === 1) {
                             testOnlyMessageFlow(item.clientId, this.roomId!, 'relay-accepted-and-correlated', { relayId: item.relayId, state: 'relay-acknowledged' });
+                            if (!item.terminallyRejected && !item.heldNotSentSecurely) this.deliveryObserver?.(item.clientId, 'stored');
                         }
                     }
                 },

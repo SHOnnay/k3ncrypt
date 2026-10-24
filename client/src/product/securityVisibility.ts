@@ -62,7 +62,14 @@ export const deriveSecurityVisibility = (input: {
 export const deriveMessageDeliveryVisibility = (
   delivery: 'pending' | 'accepted' | 'failed' | 'held' | undefined,
   protocol: ConversationProtocol,
+  relayAccepted = false,
 ): MessageDeliveryVisibility => {
+  if (delivery === 'pending' && relayAccepted) {
+    return {
+      state: 'relay-accepted-outcome-unknown', label: 'Sent · recipient not confirmed', summaryLabel: 'Sent',
+      explanation: 'The relay accepted the encrypted message for delivery or durable mailbox storage. Recipient acceptance, display and reading are not confirmed.',
+    };
+  }
   if (delivery === 'pending') {
     return {
       state: 'pending',
@@ -75,7 +82,7 @@ export const deriveMessageDeliveryVisibility = (
     return {
       state: 'recipient-app-accepted-relay-reported',
       label: 'Recipient app accepted · relay report',
-      summaryLabel: 'Sent',
+      summaryLabel: 'Delivered',
       explanation: 'The relay reports that the recipient application accepted this message. This is not a signed peer receipt and does not show that it was displayed or read.',
     };
   }

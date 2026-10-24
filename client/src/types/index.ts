@@ -17,6 +17,8 @@ export interface Message {
   timestamp: Date;
   callEvent?: import('../product/callHistory').LocalCallEvent;
   delivery?: 'pending' | 'accepted' | 'failed' | 'held';
+  /** Relay receipt only; never implies recipient acceptance or a read receipt. */
+  relayAccepted?: boolean;
   media?: { kind: 'image' | 'file' | 'voice' | 'video'; mimeType?: string; size?: number; reference?: string };
 }
 

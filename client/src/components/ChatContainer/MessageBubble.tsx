@@ -30,7 +30,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
   const [mediaUrl, setMediaUrl] = useState<string>();
   const [mediaError, setMediaError] = useState(false);
   const [isOpening, setIsOpening] = useState(false);
-  const deliveryVisibility = deriveMessageDeliveryVisibility(message.delivery, protocolMode);
+  const deliveryVisibility = deriveMessageDeliveryVisibility(message.delivery, protocolMode, message.relayAccepted);
   const downloadTransfer = fileDownloadForReference(files.download, media?.reference);
   const fileProgress = downloadTransfer ? fileTransferCopy(downloadTransfer) : undefined;
   useEffect(() => () => { if (mediaUrl) URL.revokeObjectURL(mediaUrl); }, [mediaUrl]);

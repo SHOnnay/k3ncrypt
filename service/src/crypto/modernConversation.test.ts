@@ -2142,3 +2142,55 @@ it('retries a temporary prekey failure with the same pinned identity and existin
         expect(renewVodozemacBundle).toHaveBeenCalledWith(room, key(9), localAddress, 'r'.repeat(43), expect.any(Object));
     } finally { await recovered.close(false); }
 });
+
+
+it('reports persisted relay acceptance before recipient acceptance, retaining exact queued ciphertext', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
+    const storage = new Storage();
+    const relay = fakeTransport(false, 0, true, false, 0);
+    const conversation = new ModernConversation(storage, loader, relay.transport);
+    await conversation.connect(room, key(9), remoteAddress, await remoteCommitment());
+    await seedVerifiedContact(storage, remoteAddress);
+    const updates: string[] = [];
+    conversation.onDeliveryUpdate((clientId, state) => updates.push(`${clientId}:${state}`));
+    const clientId = await conversation.sendWithReceipt('synthetic offline recipient');
+    expect(updates).toEqual([`${clientId}:stored`]);
+    const pending = JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!));
+    expect(pending).toEqual([expect.objectContaining({ clientId, relayId: 'relay-1' })]);
+    expect(pending[0].envelope).toEqual(relay.sent[0]);
+    await conversation.acceptDelivery('relay-1');
+    expect(updates).toEqual([`${clientId}:stored`, `${clientId}:accepted`]);
+    expect(JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!))).toEqual([]);
+    await conversation.close();
+});
+
+it('does not report Sent if the relay receipt cannot be durably correlated locally', async () => {
+    jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
+    jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
+    jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
+    const storage = new Storage();
+    const relay = fakeTransport(false, 0, true);
+    const conversation = new ModernConversation(storage, loader, relay.transport);
+    await conversation.connect(room, key(9), remoteAddress, await remoteCommitment());
+    await seedVerifiedContact(storage, remoteAddress);
+    const updates: string[] = [];
+    conversation.onDeliveryUpdate((clientId, state) => updates.push(`${clientId}:${state}`));
+    const write = storage.write.bind(storage);
+    const failure = jest.spyOn(storage, 'write').mockImplementation(async (type, id, bytes) => {
+        if (type === 'modern-outbox') throw new Error('simulated receipt persistence failure');
+        return write(type, id, bytes);
+    });
+    const clientId = await conversation.sendWithReceipt('synthetic uncertain relay receipt');
+    expect(updates).toEqual([]);
+    const pending = JSON.parse(new TextDecoder().decode((await storage.read('modern-outbox', room))!));
+    expect(pending).toEqual([expect.objectContaining({ clientId })]);
+    expect(pending[0].relayId).toBeUndefined();
+    expect(pending[0].envelope).toEqual(relay.sent[0]);
+    failure.mockRestore();
+    await conversation.retryPending();
+    expect(updates).toEqual([`${clientId}:stored`]);
+    expect(relay.sent[1]).toEqual(relay.sent[0]);
+    await conversation.close();
+});
