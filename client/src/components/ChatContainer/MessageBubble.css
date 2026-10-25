@@ -42,3 +42,9 @@
 .message-file-progress button { margin-left: auto; border: 0; padding: 4px 6px; border-radius: 6px; color: var(--brand); background: transparent; font: inherit; cursor: pointer; }
 .message--file .message-meta { width: min(270px, 100%); }
 @media (max-width: 620px) { .message--file { max-width: min(86%, 560px); } }
+.message.sent .message-file-card { color: var(--ink); background: var(--surface-muted); box-shadow: none; }
+.message.sent .message-file-icon { color: var(--ink-soft); background: var(--surface-tint); }
+.message.sent .message-file-details small { color: var(--muted-strong); }
+.message--file.sent .message-meta { color: var(--muted); }
+.message--file.sent .message-file-action { color: var(--muted-strong); }
+.message--file.sent .message-file-action:hover:not(:disabled) { color: var(--brand-strong); background: var(--brand-soft); }
