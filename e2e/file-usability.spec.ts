@@ -22,7 +22,7 @@ async function transfer(sender: Page, recipient: Page, file: typeof fixtures[num
   await expect(save).toBeVisible({ timeout: 300000 });
   const download = recipient.waitForEvent('download'); await save.click(); const artifact = await download; await artifact.saveAs(output);
   expect(createHash('sha256').update(await readFile(output)).digest('hex')).toBe(createHash('sha256').update(file.buffer).digest('hex'));
-  await recipient.getByRole('button', { name: 'Close', exact: true }).click();
+  await recipient.getByRole('button', { name: 'Close file preview', exact: true }).click();
 }
 test('file selection is a local draft until explicit Send, then encrypted transfer completes', async ({ browser }, testInfo) => {
   test.setTimeout(900000); const { a, b, alice, bob } = await connectedPair(browser);
@@ -85,7 +85,7 @@ test('file selection is a local draft until explicit Send, then encrypted transf
   const downloadEvent = bob.waitForEvent('download'); await save.click(); const download = await downloadEvent;
   const output = testInfo.outputPath('explicit-send-received.png'); await download.saveAs(output);
   expect(createHash('sha256').update(await readFile(output)).digest('hex')).toBe(createHash('sha256').update(file.buffer).digest('hex'));
-  await bob.getByRole('button', { name: 'Close', exact: true }).click();
+  await bob.getByRole('button', { name: 'Close file preview', exact: true }).click();
   await a.close(); await b.close(); await c.close();
 });
 for (const file of fixtures) test(`verified browser transfer both directions: ${file.mimeType}, ${file.buffer.length} bytes`, async ({ browser }, testInfo) => {
@@ -145,7 +145,7 @@ test('two verified files keep independent Save links after cancellation and rele
     }
     await expect(bob.getByRole('link',{name:'Save document.pdf',exact:true})).toBeVisible();
     await expect(bob.getByRole('link',{name:'Save photo.png',exact:true})).toBeVisible();
-    await bob.getByRole('button',{name:'Close',exact:true}).first().click();
+    await bob.getByRole('button',{name:'Close file preview',exact:true}).first().click();
     await expect(bob.getByRole('link',{name:'Save document.pdf',exact:true})).toHaveCount(0);
     await expect(bob.getByRole('link',{name:'Save photo.png',exact:true})).toBeVisible();
     await bob.getByRole('button',{name:'Contacts',exact:true}).click();
