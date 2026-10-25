@@ -89,3 +89,15 @@ button.settings-row:focus-visible, .settings-row input:focus-visible, .quiet-ico
 .verification-security-details { margin-top: 20px; }
 .verification-security-details textarea { display: block; width: 100%; min-height: 72px; }
 .verification-view video { max-width: 100%; }
+
+
+.settings-panel { width: min(100%, 380px); background: var(--surface); }
+.settings-panel__header { min-height: 80px; padding: 14px 18px; gap: 10px; }
+.settings-panel__header h2 { font-size: 1.15rem; }
+.settings-panel__body { padding: 20px 18px; }
+.identity-card { border-color: color-mix(in srgb, var(--border) 60%, transparent); border-radius: 18px; background: linear-gradient(150deg, var(--surface-raised), var(--surface-tint)); box-shadow: none; }
+.settings-group, .preference-list { border: 0; border-radius: 14px; background: var(--surface-raised); box-shadow: 0 1px 6px rgba(0, 0, 0, .04); }
+.settings-row { min-height: 62px; border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent); }
+.settings-row:last-child { border-bottom: 0; }
+.settings-row__icon { background: linear-gradient(150deg, var(--brand-soft), color-mix(in srgb, var(--brand-soft) 60%, transparent)); box-shadow: inset 0 1px var(--sheen); }
+@media (max-width: 620px) { .settings-panel { width: 100%; } }

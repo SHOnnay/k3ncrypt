@@ -17,6 +17,11 @@
   --motion-fast: 120ms;
   --motion-normal: 240ms;
   --motion-slow: 400ms;
+  --ease-standard: cubic-bezier(.4, 0, .2, 1);
+  --duration-fast: 150ms;
+  --duration-base: 250ms;
+  --duration-slow: 350ms;
+  --duration-emphasis: 500ms;
 }
 
 :root,
@@ -51,6 +56,12 @@
   --brand-grad: linear-gradient(155deg, #3B6D9E 0%, #244A70 100%);
   --glow: 0 8px 20px rgba(47, 93, 138, .22);
   --sent-grad: linear-gradient(155deg, #3A6D9D 0%, #26496D 100%);
+  --sent-ink: #FFFFFF;
+  --recv: #FBFAF6;
+  --recv-ink: #1B1F24;
+  --warn-soft: #F6ECDA;
+  --glass: rgba(251, 250, 246, .78);
+  --sheen: rgba(255, 255, 255, .3);
 }
 
 :root[data-theme='slate'] {
@@ -84,4 +95,10 @@
   --brand-grad: linear-gradient(155deg, #6DA9E4 0%, #3E76AC 100%);
   --glow: 0 10px 28px rgba(91, 155, 217, .22);
   --sent-grad: linear-gradient(155deg, #2F567B 0%, #1E3B57 100%);
+  --sent-ink: #EAF2FA;
+  --recv: #1A2028;
+  --recv-ink: #EDEFF2;
+  --warn-soft: #3A3220;
+  --glass: rgba(21, 26, 32, .74);
+  --sheen: rgba(255, 255, 255, .06);
 }

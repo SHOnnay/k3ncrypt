@@ -8,3 +8,6 @@
 .btn--circle.btn--large { width: 58px; height: 58px; }.btn svg { flex: none; }
 .btn--icon { min-height: 36px; width: 36px; padding: 0; display: grid; place-items: center; background: var(--surface-raised); color: var(--muted-strong); border-color: var(--border); }
 .btn--icon.btn--tiny { min-height: 28px; width: 28px; }.btn--icon:hover:not(:disabled) { color: var(--brand); background: var(--brand-soft); transform: none; }
+
+.btn--primary { background: var(--brand-grad); box-shadow: var(--glow), inset 0 1px var(--sheen); }
+.btn--primary:hover:not(:disabled) { background: var(--brand-grad); filter: brightness(1.06); }

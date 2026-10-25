@@ -17,3 +17,10 @@
 @keyframes open-status-breathe { 0%, 100% { opacity: .72; } 50% { opacity: 1; } }
 
 @media (prefers-reduced-motion: reduce) { .chat-empty-card p.chat-empty-open-status--opening { animation: none; } }
+
+
+#chat-container { border-radius: 20px; background: var(--canvas); }
+@media (min-width: 621px) { #chat-container { border: 0; border-radius: 0; box-shadow: none; } }
+.chat-empty-page { background: radial-gradient(circle at 50% 32%, var(--surface-raised) 0, var(--canvas) 60%); }
+.chat-empty-card { background: color-mix(in srgb, var(--surface) 94%, transparent); border-color: color-mix(in srgb, var(--border) 60%, transparent); }
+.chat-empty-mark { border-radius: 19px; background: var(--brand-grad); box-shadow: var(--glow), inset 0 1px var(--sheen); }

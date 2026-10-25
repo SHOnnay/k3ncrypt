@@ -1,10 +1,11 @@
 import React from 'react';
 
-export type ApprovedIconName = 'logo' | 'chat' | 'contacts' | 'call' | 'settings' | 'shield' | 'send' | 'video' | 'mic' | 'securechat';
+export type ApprovedIconName = 'logo' | 'chat' | 'contacts' | 'call' | 'settings' | 'shield' | 'send' | 'video' | 'mic' | 'securechat' | 'file' | 'download' | 'more';
 
 const iconFiles: Record<ApprovedIconName, string> = {
   logo: 'logo.svg', chat: 'chat.svg', contacts: 'contacts.svg', call: 'call.svg', settings: 'settings.svg',
   shield: 'shield.svg', send: 'send.svg', video: 'video.svg', mic: 'mic.svg', securechat: 'securechat.svg',
+  file: 'file.svg', download: 'download.svg', more: 'more.svg',
 };
 
 /** Static design asset map; names cannot be influenced by user content. */

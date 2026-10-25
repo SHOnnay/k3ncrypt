@@ -6,6 +6,7 @@ import React, { useState } from 'react';
 import { useChat } from '../../context/ChatContext';
 import { Button } from '../common/Button';
 import { CopyIcon, ShareIcon, PhoneIcon, TrashIcon, VideoIcon } from '../common/icons';
+import { ApprovedIcon } from '../common/ApprovedIcon';
 import { Avatar } from '../common/Avatar';
 import { StatusPill } from '../common/StatusPill';
 import { deriveSecurityVisibility } from '../../product/securityVisibility';
@@ -36,6 +37,13 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({ onStartCall, onStartVide
     sessionHealth: protocolMode === 'modern' ? sessionHealth : undefined,
     protocol: protocolMode,
   });
+  const participantMessage = securityVisibility.identityChange === 'changed-pending-review'
+    ? 'Identity changed. K3NCRYPT can’t confirm this is the same person or device anymore. Compare the new security code before verifying again.'
+    : activeConversation && protocolMode === 'modern' && sessionHealth === 'unhealthy'
+      ? 'Review the security update for this conversation before continuing.'
+      : activeConversation && protocolMode === 'modern' && sessionHealth === 'renewal-pending'
+        ? 'Waiting for your contact to review the connection update.'
+        : undefined;
   const callLaunchBlockReason = getCallLaunchBlockReason({
     hasConversation: Boolean(activeConversation && activeConversation.roomId === channelHash),
     protocolMode,
@@ -102,9 +110,7 @@ const handleDelete = async () => {
             {hashCopied && <span className="copy-feedback-small">Copied!</span>}
           </div>
         )}
-        <p id="participant-info" className="participant-info" role={securityVisibility.identityChange === 'changed-pending-review' ? 'alert' : undefined}>
-          {securityVisibility.identityChange === 'changed-pending-review' ? 'Identity changed. K3NCRYPT can’t confirm this is the same person or device anymore. Compare the new security code before verifying again.' : activeConversation && (protocolMode === 'modern' && sessionHealth === 'unhealthy' ? 'Review the security update for this conversation before continuing.' : protocolMode === 'modern' && sessionHealth === 'renewal-pending' ? 'Waiting for your contact to review the connection update.' : protocolMode === 'modern' ? 'Messages in this conversation are protected.' : 'This private conversation is open.')}
-        </p>
+        {participantMessage && <p id="participant-info" className="participant-info" role={securityVisibility.identityChange === 'changed-pending-review' ? 'alert' : 'status'}>{participantMessage}</p>}
         {pendingConversation && <p className="participant-info" role="status">Opening {roomLabel(pendingConversation.roomId)}… The current conversation remains active until it is ready.</p>}
         {conversationOpenError && <p className="participant-info" role="status">Could not open {roomLabel(conversationOpenError.roomId)}. Your current conversation remains open.</p>}
         {callLaunchBlockReason && <p id="call-launch-reason" className="call-launch-reason" role="status">{callLaunchBlockMessage(callLaunchBlockReason)}</p>}
@@ -153,15 +159,17 @@ const handleDelete = async () => {
         >
           <VideoIcon size={20} />
         </Button>
-        <Button
-          className="btn--icon"
-          variant="danger"
-          onClick={handleDelete}
-          title="Delete Chat"
-          disabled={!activeConversation}
-        >
-          <TrashIcon size={20} />
-        </Button>
+        <details className="chat-more-menu">
+          <summary className="btn btn--icon" aria-label="More conversation actions" title="More">
+            <ApprovedIcon name="more" size={20} />
+          </summary>
+          <div className="chat-more-menu__panel">
+            <button type="button" className="chat-more-menu__delete" onClick={handleDelete} disabled={!activeConversation}>
+              <TrashIcon size={16} />
+              Delete conversation
+            </button>
+          </div>
+        </details>
       </div>
     </header>
   );

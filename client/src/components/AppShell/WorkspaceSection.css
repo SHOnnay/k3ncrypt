@@ -75,3 +75,35 @@
 .call-launch-card__actions button { min-height: 44px; }
 .calls-note { max-width: 680px; }
 @media (max-width: 460px) { .workspace-contact-shell { gap: 1px; padding: 4px; }.workspace-contact { gap: 8px; padding: 7px 5px; }.workspace-contact__message { padding: 7px 8px; font-size: .63rem; }.workspace-contact__call, .workspace-contact__more summary { padding-inline: 7px; font-size: .66rem; }.workspace-contact__copy small { max-width: 34vw; }.workspace-page { padding-inline: 14px; } }
+
+
+.workspace-page { width: min(100%, 920px); }
+.workspace-page__header { align-items: center; margin: 0 0 16px; padding: 20px 24px 14px; border-bottom: 1px solid var(--border); }
+.workspace-page__header h1 { margin: 0 0 6px; font-family: var(--font-display); font-size: 1.15rem; font-weight: 600; letter-spacing: -.015em; }
+.workspace-page__header p, .workspace-page__header .eyebrow { display: none; }
+.workspace-page__header > button { background: var(--brand-grad); box-shadow: var(--glow), inset 0 1px var(--sheen); }
+.workspace-search { margin: 0 24px 14px; padding: 9px 13px; min-height: 42px; border-radius: 12px; }
+.workspace-contact-list { gap: 0; padding: 0 24px; }
+.workspace-contact-shell, .workspace-contact-shell--active {
+  grid-template-columns: minmax(0, 1fr) auto auto; gap: 5px; padding: 5px 4px;
+  border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: transparent; box-shadow: none;
+}
+.workspace-contact-shell:hover { border-color: var(--border); box-shadow: none; transform: none; }
+.workspace-contact { gap: 13px; min-height: 62px; padding: 9px 0; }
+.workspace-contact__copy strong { font-size: .84rem; }
+.workspace-contact__copy small { font-size: .7rem; }
+.workspace-contact__status--verified { padding: 3px 9px; border-radius: var(--radius-round); background: var(--success-soft); font-size: .65rem; font-weight: 700; }
+.workspace-empty { border: 0; background: transparent; box-shadow: none; }
+.call-launch-card { border-color: color-mix(in srgb, var(--border) 60%, transparent); border-radius: 18px; background: linear-gradient(150deg, var(--surface-raised), var(--surface)); box-shadow: none; }
+.calls-note { border-color: color-mix(in srgb, var(--border) 60%, transparent); background: var(--surface-raised); }
+@media (max-width: 620px) {
+  .workspace-page { height: calc(100% - env(safe-area-inset-bottom)); padding: 0 0 24px; }
+  .workspace-page__header { margin-bottom: 14px; padding: 16px 18px 12px; }
+  .workspace-page__header > button { align-self: auto; min-height: 40px; }
+  .workspace-search { margin-inline: 18px; }
+  .workspace-contact-list { padding-inline: 18px; }
+}
+@media (max-width: 460px) {
+  .workspace-contact-shell, .workspace-contact-shell--active { grid-template-columns: minmax(0, 1fr) auto auto; }
+  .workspace-contact__message { padding: 6px 8px; font-size: .63rem; }
+}

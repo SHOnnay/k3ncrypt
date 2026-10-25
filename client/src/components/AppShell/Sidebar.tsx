@@ -50,7 +50,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection
 
       <button className="new-conversation" type="button" onClick={onNewConversation}>
         <PlusIcon size={17} />
-        {copy.contact.title}
+        New conversation
       </button>
 
       <nav className="primary-navigation" aria-label="Main navigation">
@@ -62,7 +62,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection
 
       <div className="conversation-section">
         <section aria-labelledby="sidebar-chats-heading">
-        <p className="section-label" id="sidebar-chats-heading">Chats</p>
+        <p className="section-label" id="sidebar-chats-heading">Conversations</p>
         {groups.chats.map((conversation) => {
           const diagnostic = unavailableConversations.find(item => item.roomId === conversation.roomId);
           const openStatus = conversationRowOpenStatus(conversation.roomId, { pending: pendingConversation, error: conversationOpenError });
@@ -80,7 +80,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection
           <div className="conversation-placeholder"><strong>{copy.contactsEmpty.title}</strong><span>{copy.contactsEmpty.description}</span></div>
         )}
         </section>
-        <section className="sidebar-record-group" aria-labelledby="sidebar-pending-heading">
+        {groups.pendingInvitations.length > 0 && <section className="sidebar-record-group" aria-labelledby="sidebar-pending-heading">
           <p className="section-label" id="sidebar-pending-heading">Pending Invitations</p>
           {groups.pendingInvitations.filter(invitation => !invitation.locallyDismissed).length === 0 ? <p className="sidebar-group-empty">No pending invitations</p> : groups.pendingInvitations.filter(invitation => !invitation.locallyDismissed).map(invitation => (
             <div className="pending-invitation-row" key={invitation.roomId}>
@@ -92,8 +92,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection
             </div>
           ))}
           {groups.pendingInvitations.some(invitation => invitation.locallyDismissed) && <details className="dismissed-invitations"><summary>Dismissed on this device ({groups.pendingInvitations.filter(invitation => invitation.locallyDismissed).length})</summary>{groups.pendingInvitations.filter(invitation => invitation.locallyDismissed).map(invitation => <div className="pending-invitation-row" key={invitation.roomId}><span className="conversation-copy"><strong className="conversation-name">{invitationName(invitation)}</strong><span className="conversation-preview">{invitationExpiry(invitation)}</span></span><button className="invitation-local-action" type="button" disabled={accountState !== 'ready'} onClick={() => void setPendingInvitationDismissed(invitation.roomId, false).catch(() => window.alert('Could not restore this invitation. Its saved data remains unchanged.'))}>Restore</button></div>)}</details>}
-        </section>
-        <section className="sidebar-record-group" aria-labelledby="sidebar-unavailable-heading">
+        </section>}
+        {groups.unavailable.length > 0 && <section className="sidebar-record-group" aria-labelledby="sidebar-unavailable-heading">
           <p className="section-label" id="sidebar-unavailable-heading">Unavailable Conversations</p>
           {groups.unavailable.length === 0 ? <p className="sidebar-group-empty">No unavailable conversations</p> : <ul className="unavailable-list">{groups.unavailable.map((item, index) => {
             const saved = item.roomId ? conversations.find(conversation => conversation.roomId === item.roomId) : undefined;
@@ -102,10 +102,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection
               {item.code && <small>{item.code}</small>}
             </li>;
           })}</ul>}
-        </section>
+        </section>}
       </div>
 
-      {orphanedConversationRecords && <details className="conversation-recovery"><summary>Local record diagnostic</summary>{!orphanedConversationRecords.available ? <p>Record inspection is unavailable; no recovery claim can be made.</p> : <><p>{orphanedConversationRecords.roomIds.length} rooms have protocol/session records without a matching saved access descriptor. This count does not check contact identities, session usability or server availability. A missing access capability cannot be recovered automatically.</p><ul>{orphanedConversationRecords.roomIds.map(roomId => <li key={roomId}>Saved room · {roomId.slice(-8)}</li>)}</ul>{orphanedConversationRecords.truncated && <p>Inspection reached its safe limit; additional records may exist.</p>}</>}</details>}
+      {orphanedConversationRecords && <details className="conversation-recovery"><summary>Local data status</summary>{!orphanedConversationRecords.available ? <p>Record inspection is unavailable; no recovery claim can be made.</p> : <><p>{orphanedConversationRecords.roomIds.length} rooms have protocol/session records without a matching saved access descriptor. This count does not check contact identities, session usability or server availability. A missing access capability cannot be recovered automatically.</p><ul>{orphanedConversationRecords.roomIds.map(roomId => <li key={roomId}>Saved room · {roomId.slice(-8)}</li>)}</ul>{orphanedConversationRecords.truncated && <p>Inspection reached its safe limit; additional records may exist.</p>}</>}</details>}
       <div className="sidebar-profile">
         <Avatar label={profileDisplayName} size="small" />
         <span><strong>{profileDisplayName}</strong><small>Your profile · this device</small></span>

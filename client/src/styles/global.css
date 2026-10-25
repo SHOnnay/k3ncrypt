@@ -43,3 +43,15 @@ video:focus-visible { outline: 3px solid var(--focus-outline); outline-offset: 2
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; } }
 @media (max-width: 900px) { .conversation-workspace { padding: 12px; } }
 @media (max-width: 620px) { .conversation-workspace { padding: 0 0 calc(72px + env(safe-area-inset-bottom)); } }
+
+
+/* Slate Trust reference frame and typography. */
+body { font-synthesis: none; font-feature-settings: "kern"; }
+.app-shell { background: var(--canvas); }
+.conversation-workspace { padding: 0; }
+@media (min-width: 621px) {
+  .conversation-workspace { padding: 0; }
+  #chat-container { border: 0; border-radius: 0; box-shadow: none; }
+}
+@media (max-width: 900px) { .conversation-workspace { padding: 0; } }
+@media (max-width: 620px) { .conversation-workspace { padding: 0 0 calc(72px + env(safe-area-inset-bottom)); } }

@@ -12,6 +12,7 @@ import { formatMessageTime } from '../../utils/messageHandling';
 import { useMedia } from '../../context/MediaContext';
 import { useChat } from '../../context/ChatContext';
 import { deriveMessageDeliveryVisibility } from '../../product/securityVisibility';
+import { ApprovedIcon } from '../common/ApprovedIcon';
 import { fileDownloadForReference, fileTransferCopy } from '../../product/fileTransferCopy';
 import './SecurityVisibility.css';
 import './MessageBubble.css';
@@ -72,19 +73,29 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
   };
   const closePreview = () => { live.current.generation++; files.previews.release(resourceKey); setSaved(undefined); setMediaUrl(undefined); };
   if (message.callEvent) return <div className="message call-history-event" aria-label="Local call history"><strong>{message.text}</strong><div className="message-meta">{message.callEvent.durationSeconds !== undefined && <span>{Math.floor(message.callEvent.durationSeconds / 60)} min {message.callEvent.durationSeconds % 60} sec · </span>}{formatMessageTime(message.timestamp)} · On this device</div></div>;
+  const fileCaption = isFile && message.text !== 'Protected file' && !message.text.startsWith(FILE_PREFIX) ? message.text : undefined;
   return (
-    <div className={`message ${message.type}`}>
-      <div className="message-text">{message.text}</div>
-      {isFile && media?.size !== undefined && <div className="message-meta">Protected file · {formatFileSize(media.size)}</div>}
-      {media?.reference && !mediaUrl && <button className="message-media-action" type="button" onClick={openMedia} disabled={isOpening}>{isOpening ? 'Downloading and verifying…' : isFile ? 'Download protected file' : `Open protected ${media.kind}`}</button>}
-      {isFile && isOpening && fileProgress?.active && <div role="status" aria-live="polite">{fileProgress.label}{fileProgress.progress !== undefined && <progress max={100} value={fileProgress.progress} aria-label="File download progress" />} <button type="button" onClick={files.cancel}>Cancel</button></div>}
+    <div className={`message ${message.type}${isFile ? ' message--file' : ''}`}>
+      {!isFile && <div className="message-text">{message.text}</div>}
+      {isFile && <div className="message-file-card">
+        <span className="message-file-icon" aria-hidden="true"><ApprovedIcon name="file" size={17} /></span>
+        <span className="message-file-details">
+          <strong>{fileCaption ?? 'Protected file'}</strong>
+          <small>{media?.size !== undefined ? formatFileSize(media.size) : 'Encrypted attachment'} · Encrypted</small>
+        </span>
+        {media?.reference && !mediaUrl && <button className="message-file-action" type="button" onClick={openMedia} disabled={isOpening} aria-label={isOpening ? 'Downloading and verifying protected file' : 'Download protected file'} title={isOpening ? 'Downloading and verifying' : 'Download protected file'}><ApprovedIcon name="download" size={17} /></button>}
+        {mediaUrl && saved && <a className="message-file-action" href={mediaUrl} download={saved.filename || 'protected-file'} aria-label={`Save ${saved.filename}`} title="Save verified file"><ApprovedIcon name="download" size={17} /></a>}
+        {mediaUrl && <button className="message-file-close" type="button" onClick={closePreview} aria-label="Close file preview">Close</button>}
+      </div>}
+      {!isFile && media?.reference && !mediaUrl && <button className="message-media-action" type="button" onClick={openMedia} disabled={isOpening}>{isOpening ? 'Opening and verifying…' : `Open protected ${media.kind}`}</button>}
+      {!isFile && mediaUrl && <button className="message-file-close" type="button" onClick={closePreview}>Close</button>}
+      {!isFile && mediaUrl && media && media.kind !== 'image' && media.kind !== 'voice' && media.kind !== 'video' && <a className="message-media-action" href={mediaUrl} download="protected-file">Save protected file</a>}
+      {isFile && isOpening && fileProgress?.active && <div className="message-file-progress" role="status" aria-live="polite"><span>{fileProgress.label}</span>{fileProgress.progress !== undefined && <progress max={100} value={fileProgress.progress} aria-label="File download progress" />} <button type="button" onClick={files.cancel}>Cancel</button></div>}
       {mediaError && <div className="message-media-error" role="status">{mediaError}</div>}
       {saved && mediaUrl && previewableImageType(saved.mimeType) && <img className="message-media-preview" src={mediaUrl} alt="Downloaded photo" />}
       {!isFile && mediaUrl && media?.kind === 'image' && <img className="message-media-preview" src={mediaUrl} alt="Protected image" />}
       {mediaUrl && media?.kind === 'voice' && <audio className="message-media-audio" controls src={mediaUrl} />}
       {mediaUrl && media?.kind === 'video' && <video className="message-media-preview" controls src={mediaUrl} />}
-      {mediaUrl && <button type="button" onClick={closePreview}>Close</button>}
-      {mediaUrl && media && media.kind !== 'image' && media.kind !== 'voice' && media.kind !== 'video' && <a className="message-media-action" href={mediaUrl} download={saved?.filename ?? "protected-file"}>{saved ? `Save ${saved.filename}` : 'Save protected file'}</a>}
       <div className="message-meta">
         <span>{formatMessageTime(message.timestamp)}</span>
         {message.type === 'sent' && message.delivery === 'failed' && <button type="button" title={deliveryVisibility.explanation} onClick={() => retryMessage(message.id)}>Could not confirm · Retry</button>}
