@@ -204,6 +204,17 @@ suite('durable routing with signed disposable devices and actual Mongo TTL', () 
     await block.entered; now = d.until + 1; block.release(); expect(await pending).toBeInstanceOf(Error); spy.mockRestore();
     expect((await database.collection('links').findOne({ hash: r.channel }))!.routingOwners).toBeUndefined();
   });
+  test('temporary-key cleanup racing signed renewal cannot delete durable ownership or change its binding', async () => {
+    const a = await actor(), r = await room(), p = await publication(a, r.channel), owner = await adopt(a, r, p), d = await admitted(a, r.channel), block = gate();
+    const original = (store as any).fenceDevice.bind(store);
+    const spy = jest.spyOn(store as any, 'fenceDevice').mockImplementationOnce(async (...args: unknown[]) => { block.enter(); await block.wait; return original(...args); });
+    const pending = store.renew(r.channel, p.address, p.proof, d.device, d.until, a.bundle());
+    await block.entered; await database.collection('prekey_bundles').deleteOne({ channel: r.channel, address: p.address }); block.release();
+    await pending; spy.mockRestore();
+    expect(await store.current(r.channel, p.address)).toEqual(owner);
+    const renewedPublication = await database.collection('prekey_bundles').findOne({ channel: r.channel, address: p.address });
+    expect(renewedPublication!.bundle.identity).toEqual(owner.identity); expect(renewedPublication!.expiresAt.getTime()).toBeGreaterThan(Date.now());
+  });
   test('database unavailability is a retryable 503, not a missing local contact or permanent authorization result', async () => {
     const a = await actor(), r = await room(), p = await publication(a, r.channel); await adopt(a, r, p);
     jest.mocked(db.getMongoClient).mockImplementationOnce(() => { throw new Error('Synthetic database unavailable'); });
