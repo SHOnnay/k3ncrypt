@@ -1,3 +1,5 @@
+import { spawn, type ChildProcess } from 'node:child_process';
+import socketClient, { type Socket } from 'socket.io-client';
 import express from 'express';
 import { createHash, generateKeyPairSync, randomBytes, randomUUID, sign, webcrypto } from 'crypto';
 import { MongoClient, type Db } from 'mongodb';
@@ -222,6 +224,65 @@ suite('durable routing with signed disposable devices and actual Mongo TTL', () 
     expect(response.body).toEqual({ error: 'Authenticated routing recovery unavailable', code: 'ROUTING_RECOVERY_REQUIRED' });
     expect(await store.current(r.channel, p.address)).toBeDefined();
   });
+  test('two isolated candidate workers keep activation flags process-local and fail closed across adoption, maintenance and restart', async () => {
+    const a = await actor(), r = await room(), p = await publication(a, r.channel);
+    const workers = new Map<number, ChildProcess>(); const sockets: Socket[] = [];
+    const stop = async (port: number) => {
+      const child = workers.get(port); if (!child) return;
+      if (child.exitCode === null && child.signalCode === null) {
+        const exited = new Promise<void>(resolve => child.once('exit', () => resolve()));
+        child.kill('SIGTERM'); const timer = setTimeout(() => child.kill('SIGKILL'), 5000);
+        try { await exited; } finally { clearTimeout(timer); }
+      }
+      workers.delete(port);
+    };
+    const start = async (port: number, enabled: boolean, maintenance = false) => {
+      if (await fetch(`http://127.0.0.1:${port}/api/ready`).then(() => true, () => false)) throw new Error('Disposable worker port occupied');
+      const child = spawn(process.execPath, ['-r', 'ts-node/register', 'index.ts'], { cwd: process.cwd(), stdio: 'ignore', env: {
+        PATH: process.env.PATH, NODE_ENV: 'test', PORT: String(port), K3NCRYPT_BIND_HOST: '127.0.0.1', MONGO_URI: uri!, MONGO_DB_NAME: name,
+        K3NCRYPT_DEVICE_TRUST_PROOF_SECRET: process.env.K3NCRYPT_DEVICE_TRUST_PROOF_SECRET!, K3NCRYPT_DURABLE_ROUTING: String(enabled),
+        K3NCRYPT_MAINTENANCE_MODE: String(maintenance), K3NCRYPT_ALLOWED_ORIGINS: 'http://127.0.0.1:43432',
+      } }); workers.set(port, child);
+      const deadline = Date.now() + 15000; let ready = false;
+      while (Date.now() < deadline) {
+        if (child.exitCode !== null) throw new Error('Disposable worker exited before ready');
+        ready = await fetch(`http://127.0.0.1:${port}/api/ready`).then(response => response.status === 200, () => false);
+        if (ready) break; await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      expect(ready).toBe(true);
+    };
+    const path = `/api/chat-link/${r.channel}/routing/${p.address}/identity`;
+    try {
+      await start(43451, false); await start(43452, true);
+      await request('http://127.0.0.1:43451').get(path).set(await headers(a, r, p)).expect(503);
+      expect((await database.collection('links').findOne({ hash: r.channel }))!.routingOwners).toBeUndefined();
+      const socket = socketClient('http://127.0.0.1:43451', { transports: ['websocket'], reconnection: false }); sockets.push(socket);
+      await new Promise<void>((resolve, reject) => { socket.once('connect', resolve); socket.once('connect_error', reject); });
+      const proof = await a.proof('relay:message', r.channel);
+      const joined = await socket.timeout(5000).emitWithAck('chat-join', { userID: p.address, channelID: r.channel, controlCapability: r.capability,
+        routingProof: p.proof, deviceAuthorizationProof: proof, proofNonce: proof.nonce });
+      expect(joined.status).toBe('accepted');
+      await request('http://127.0.0.1:43452').get(path).set(await headers(a, r, p)).expect(200);
+      const afterAdoption = await a.proof('relay:message', r.channel);
+      const denied = await socket.timeout(5000).emitWithAck('chat-message', { recipientRoutingId: randomUUID(), envelope: { version: 2, strategy: 'vodozemac-olm-v1', data: { version: 1, olmMessage: 'synthetic opaque ciphertext' } },
+        deviceAuthorizationProof: afterAdoption, proofNonce: afterAdoption.nonce, proofOperation: 'relay:message' });
+      expect(typeof denied.error).toBe('string'); expect(await database.collection('offline_messages').countDocuments({ channel: r.channel })).toBe(0);
+      await request('http://127.0.0.1:43451').get(path).set(await headers(a, r, p)).expect(503);
+      const d = await admitted(a, r.channel); await store.revoke(r.channel, p.address, p.proof, d.device, d.until);
+      await request('http://127.0.0.1:43452').get(path).set(await headers(a, r, p)).expect(403);
+      await stop(43452); await start(43452, true);
+      await request('http://127.0.0.1:43452').get(path).set(await headers(a, r, p)).expect(403);
+      socket.disconnect(); await stop(43451); await start(43451, false, true);
+      const maintenance = await request('http://127.0.0.1:43451').post('/api/chat-link').send({}).expect(503);
+      expect(maintenance.headers['retry-after']).toBe('60');
+      const blockedSocket = socketClient('http://127.0.0.1:43451', { transports: ['websocket'], reconnection: false }); sockets.push(blockedSocket);
+      const blocked = await new Promise<string>((resolve, reject) => { blockedSocket.once('connect', () => reject(new Error('Maintenance admitted a socket'))); blockedSocket.once('connect_error', error => resolve(error.message)); });
+      const handshake = await fetch('http://127.0.0.1:43451/socket.io/?EIO=4&transport=polling');
+      expect(handshake.status).toBe(403); expect(await handshake.json()).toMatchObject({ message: 'maintenance' });
+      expect(['maintenance', 'websocket error']).toContain(blocked); expect(blockedSocket.connected).toBe(false);
+      expect(await store.current(r.channel, p.address)).toBeUndefined();
+    } finally { sockets.forEach(socket => socket.disconnect()); await Promise.all([...workers.keys()].map(stop)); }
+  }, 60000);
   test('signed device revocation invalidates existing owner and previously issued proof/epoch', async () => {
     const a = await actor(), siblingPair = generateKeyPairSync('ed25519'), sibling = randomUUID(), publicKey = siblingPair.publicKey.export({ format: 'der', type: 'spki' }).subarray(-32).toString('base64url');
     const siblingIdentity = 'synthetic-sibling', at = Date.now();
