@@ -15,3 +15,12 @@ it('shows a named, explicit verification flow and confines raw codes to security
   expect(markup).toMatch(/<button[^>]*disabled=""[^>]*>Mark as verified<\/button>/);
   expect(markup.split('<details')[0]).not.toContain(peer.identityId);
 });
+it.each(['waiting', 'unavailable'] as const)('does not offer identity confirmation without comparison material: %s', availability => {
+  const action = async () => undefined;
+  const markup = renderToStaticMarkup(createElement(VerificationPanel, { label: 'Contact · 00DB', ownFingerprint: 'K3 AAAA CCCC_DDDD', availability, sessionHealth: 'healthy', verify: action, unverify: action, acceptChange: action, renew: action, block: action, onError: () => undefined, onDone: () => undefined }));
+  expect(markup).toContain('Contact verification');
+  expect(markup.split('<details')[0]).not.toContain('Contact · 00DB');
+  expect(markup).not.toContain('Mark as verified'); expect(markup).not.toContain('Codes match');
+  expect(markup).toContain(availability === 'waiting' ? 'Waiting for authenticated identity' : 'Temporarily unavailable');
+  expect(markup).toMatch(/<button[^>]*disabled=""[^>]*>Check shared QR payload<\/button>/);
+});

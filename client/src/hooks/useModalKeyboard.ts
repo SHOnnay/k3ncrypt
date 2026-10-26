@@ -13,7 +13,17 @@ export const trapTabTarget = (count: number, current: number, shift: boolean): n
   return undefined;
 };
 
-const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+const FOCUSABLE = 'summary, a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/** Closed details bodies can retain layout boxes under grid styling but are not tabbable. */
+const insideClosedDetailsBody = (item: HTMLElement): boolean => {
+  for (let parent = item.parentElement; parent; parent = parent.parentElement) {
+    if (parent.tagName !== 'DETAILS' || parent.hasAttribute('open')) continue;
+    const summary = Array.from(parent.children).find(child => child.tagName === 'SUMMARY');
+    if (!summary?.contains(item)) return true;
+  }
+  return false;
+};
 
 /**
  * Keyboard behavior for a modal panel: Escape closes it, Tab stays inside it, focus moves into it on
@@ -31,7 +41,7 @@ export const useModalKeyboard = (isOpen: boolean, panel: RefObject<HTMLElement>,
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && !event.defaultPrevented) { event.preventDefault(); close.current(); return; }
       if (event.key !== 'Tab' || !panel.current) return;
-      const items = Array.from(panel.current.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(item => !item.matches(':disabled') && item.getClientRects().length > 0 && getComputedStyle(item).visibility !== 'hidden' && !item.closest('[inert]'));
+      const items = Array.from(panel.current.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(item => !item.matches(':disabled') && item.getClientRects().length > 0 && getComputedStyle(item).visibility !== 'hidden' && !item.closest('[inert]') && !insideClosedDetailsBody(item));
       if (!items.length) { event.preventDefault(); panel.current.focus(); return; }
       const target = trapTabTarget(items.length, items.indexOf(document.activeElement as HTMLElement), event.shiftKey);
       if (target !== undefined) { event.preventDefault(); items[target].focus(); }

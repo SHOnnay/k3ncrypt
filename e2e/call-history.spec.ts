@@ -67,6 +67,13 @@ test('both participants restore exactly one completed call from encrypted histor
       await expect(page.getByLabel('Local call history')).toHaveCount(1);
       await expect(page.getByLabel('Local call history')).toContainText('Voice call');
     }
+    // The panel update must preserve real preferences across process restart.
+    for (const page of [alice, bob]) {
+      await page.getByRole('button', { name: 'Open settings' }).click();
+      await page.getByRole('button', { name: /^Privacy / }).click();
+      await page.getByRole('checkbox', { name: /^Blur sensitive content/ }).check();
+      await page.getByRole('button', { name: 'Close settings' }).click();
+    }
     // Closing persistent contexts terminates their Chromium processes. Reopen
     // the same disposable profiles, without copying plaintext storage state.
     await close(a); await close(b);
@@ -75,6 +82,14 @@ test('both participants restore exactly one completed call from encrypted histor
     for (const page of [restartedAlice, restartedBob]) {
       await expect(page.getByLabel('Local call history')).toHaveCount(1);
       await expect(page.getByLabel('Local call history')).toContainText('Voice call');
+      await page.getByRole('button', { name: 'Open settings' }).click();
+      await page.getByRole('button', { name: /^Security / }).click();
+      await expect(page.locator('.verification-summary')).toContainText('Verified');
+      await page.getByRole('button', { name: 'Back to settings' }).click();
+      await page.getByRole('button', { name: /^Privacy / }).click();
+      await expect(page.getByRole('checkbox', { name: /^Blur sensitive content/ })).toBeChecked();
+      await page.getByRole('button', { name: 'Close settings' }).click();
+
     }
   } finally {
     try { await Promise.all([...contexts].map(close)); }

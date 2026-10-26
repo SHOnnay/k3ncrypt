@@ -101,3 +101,52 @@ button.settings-row:focus-visible, .settings-row input:focus-visible, .quiet-ico
 .settings-row:last-child { border-bottom: 0; }
 .settings-row__icon { background: linear-gradient(150deg, var(--brand-soft), color-mix(in srgb, var(--brand-soft) 60%, transparent)); box-shadow: inset 0 1px var(--sheen); }
 @media (max-width: 620px) { .settings-panel { width: 100%; } }
+
+/* Slate Trust panel composition: original 380px shell, readable controls and independent device rows. */
+.settings-panel__body { padding-bottom: calc(28px + env(safe-area-inset-bottom)); }
+.settings-panel :is(p, strong, small, dd, summary, label) { overflow-wrap: anywhere; }
+.settings-panel .status-pill { max-width: 100%; white-space: normal; text-align: left; }
+.settings-panel .btn { max-width: 100%; white-space: normal; height: auto; min-height: 42px; }
+.panel-group { display: grid; gap: 8px; min-width: 0; }
+.panel-group h4 { margin: 0; font: 700 .72rem/1.5 var(--font-interface); color: var(--muted-strong); }
+.panel-group .preference-list { margin-bottom: 0; }
+.settings-panel .settings-row { grid-template-columns: 34px minmax(0, 1fr) auto; }
+.settings-panel .settings-row:has(> .status-pill) { grid-template-columns: 34px minmax(0, 1fr); }
+.settings-panel .settings-row > .status-pill { grid-column: 2; justify-self: start; }
+.settings-row__copy small { text-overflow: clip; overflow: visible; line-height: 1.5; }
+.settings-panel .network-status { grid-template-columns: 10px minmax(0, 1fr); padding: 15px; align-items: start; }
+.network-status .network-pulse { margin-top: 4px; }
+.network-status .status-pill { display: inline-flex; margin-top: 9px; }
+.device-management { display: grid; gap: 14px; min-width: 0; }
+.device-card { display: flex; flex-wrap: wrap; align-items: start; justify-content: space-between; gap: 14px; padding: 16px; border: 1px solid var(--border); border-radius: 14px; background: linear-gradient(150deg, var(--surface-raised), var(--surface-tint)); }
+.device-card__copy { flex: 1 1 170px; min-width: 0; display: grid; gap: 8px; }
+.device-card strong { font-size: .84rem; }
+.device-card .status-pill { justify-self: start; }
+.device-card p, .device-card details, .device-request-details { font-size: .73rem; line-height: 1.55; color: var(--muted-strong); }
+.device-card > .btn { flex: 0 0 auto; width: auto; margin: 0; }
+.settings-panel :is(details, dl, dd) { min-width: 0; max-width: 100%; }
+.settings-panel dd { margin: 3px 0 12px; font: .69rem/1.6 ui-monospace, monospace; word-break: break-all; }
+.settings-panel dt { font-size: .72rem; font-weight: 650; }
+.settings-panel summary { cursor: pointer; color: var(--brand); font-size: .76rem; line-height: 1.5; }
+.settings-panel summary:focus-visible { outline: 3px solid var(--focus-outline); outline-offset: 4px; border-radius: 4px; }
+.panel-details, .verification-security-details { padding: 14px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-raised); }
+.panel-details p, .verification-security-details p { color: var(--muted-strong); font-size: .75rem; line-height: 1.6; margin-top: 12px; }
+.verification-summary .status-pill { display: inline-flex; margin-bottom: 10px; }
+.verification-summary p { font-size: .79rem; line-height: 1.6; }
+.verification-view { padding-top: 0; gap: 18px; }
+.verification-view h4 { margin: 2px 0; font-size: .82rem; }
+.verification-security-details[open] { display: grid; gap: 12px; }
+.verification-security-details textarea, .device-advanced-details input { padding: 10px; min-height: 44px; border: 1px solid var(--border-strong); border-radius: 10px; color: var(--ink); background: var(--surface); font: .72rem/1.5 ui-monospace, monospace; }
+.device-management > .state-card { flex-direction: column; }
+@media (max-width: 420px) {
+  .settings-panel__body { padding: 18px 14px calc(28px + env(safe-area-inset-bottom)); }
+  .settings-panel .settings-row { gap: 8px; padding-inline: 9px; }
+  .device-card { padding: 14px; }
+}
+@media (prefers-reduced-motion: reduce) { .settings-scrim, .settings-panel { animation: none; } }
+
+.settings-panel { --panel-positive-ink: color-mix(in srgb, var(--success) 76%, var(--ink)); }
+.settings-panel .status-pill--positive, .settings-panel .state-card--positive { color: var(--panel-positive-ink); }
+/* Small, panel-only contrast corrections; retain Slate Trust gradients and semantic hues. */
+.settings-panel .btn--danger { color: color-mix(in srgb, var(--danger) 80%, var(--ink)); }
+[data-theme="slate"] .settings-panel .btn--primary { background: linear-gradient(155deg, #6DA9E4 0%, #4982B9 100%); }

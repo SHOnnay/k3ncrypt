@@ -2,15 +2,16 @@ import React, { useEffect, useState } from 'react';
 import { deriveHumanVerificationCode, encodeVerificationQrPayload, verificationQrMatches, type StoredContactIdentity } from '@chat-e2ee/service';
 import { LocalQrImage, LocalQrScanner } from '../common/LocalQr';
 import { StatusPill } from '../common/StatusPill';
+import { verificationPresentation } from './panelPresentation';
 
 interface Props {
-  label: string; ownFingerprint: string; contact?: StoredContactIdentity;
+  label: string; ownFingerprint: string; contact?: StoredContactIdentity; availability?: 'waiting' | 'unavailable';
   sessionHealth: 'healthy' | 'unhealthy' | 'renewal-pending';
   verify(): Promise<void>; unverify(): Promise<void>; acceptChange(): Promise<void>; renew(): Promise<void>; block(): Promise<void>;
   onError(error: unknown): void; onDone(): void;
 }
 
-export const VerificationPanel: React.FC<Props> = ({ label, ownFingerprint, contact, sessionHealth, verify, unverify, acceptChange, renew, block, onError, onDone }) => {
+export const VerificationPanel: React.FC<Props> = ({ label, ownFingerprint, contact, availability = 'waiting', sessionHealth, verify, unverify, acceptChange, renew, block, onError, onDone }) => {
   const [showQr, setShowQr] = useState(false);
   const [showRemote, setShowRemote] = useState(false);
   const [code, setCode] = useState('');
@@ -21,7 +22,9 @@ export const VerificationPanel: React.FC<Props> = ({ label, ownFingerprint, cont
   const changed = contact?.changeStatus === 'changed-pending-review';
   const peer = changed ? contact?.pendingIdentity?.identityId : contact?.identityId;
   const binding = JSON.stringify([ownFingerprint, peer]);
-  const verified = contact?.verification === 'verified' && !changed;
+  const presentation = verificationPresentation(contact, availability);
+  const verified = presentation.state === 'verified';
+  const displayLabel = /^Contact(?: · [A-Z0-9]+)?$/.test(label) ? 'this contact' : label;
   useEffect(() => {
     let active = true; setCode(''); setConfirmed(''); setShowQr(false); setShowRemote(false); setNotice(''); setRenewalConfirmed(false);
     if (peer) void deriveHumanVerificationCode(ownFingerprint, peer).then((value) => { if (active) setCode(value); }).catch(onError);
@@ -32,10 +35,11 @@ export const VerificationPanel: React.FC<Props> = ({ label, ownFingerprint, cont
     setConfirmed(binding); setNotice('Identity matched. Choose Mark as verified to confirm.');
   };
   return <>
-    <h3>{verified ? label : `Verify ${label}`}</h3>
-    <p>Confirm you are really connected to {label}.</p>
-    <StatusPill tone={verified ? 'positive' : 'quiet'}>{changed ? 'Identity changed · review required' : verified ? 'Verified' : 'Unverified'}</StatusPill>
-    {!peer ? <p>This contact’s authenticated identity is not available yet. Keep the conversation open while they connect.</p> : <>
+    <div className="detail-intro"><h3>{displayLabel === 'this contact' ? 'Contact verification' : verified ? displayLabel : `Verify ${displayLabel}`}</h3><p>Names help you recognize people. Security codes confirm identity.</p></div>
+    <div className={`verification-summary state-card ${verified ? 'state-card--positive' : ''}`}>
+      <div><StatusPill tone={verified ? 'positive' : 'quiet'}>{presentation.title}</StatusPill><p>{presentation.description}</p></div>
+    </div>
+    {peer ? <>
       {changed && <p role="alert">This contact’s identity changed. Compare the new code using another trusted way before accepting it. They will still need explicit verification.</p>}
       {!verified && <>
         <h4>Together?</h4>
@@ -45,7 +49,7 @@ export const VerificationPanel: React.FC<Props> = ({ label, ownFingerprint, cont
         <h4>Not together?</h4>
         <button className="btn btn--secondary" type="button" aria-expanded={showRemote} onClick={() => setShowRemote(value => !value)}>Compare security code</button>
         {showRemote && <>
-          <p>Compare this code with {label} using a channel you already trust. Sending it in this unverified chat does not independently confirm identity.</p>
+          <p>Compare this code with {displayLabel} using a channel you already trust. Sending it in this unverified chat does not independently confirm identity.</p>
           <code className="human-verification-code" aria-label="Comparison security code">{code || 'Preparing code…'}</code>
           <button className="btn btn--secondary" type="button" disabled={!code} onClick={() => void navigator.clipboard.writeText(code).catch(() => setNotice('Could not copy. You can read the grouped code aloud.'))}>Copy security code</button>
           <div className="verification-actions"><button className="btn btn--secondary" type="button" disabled={!code} onClick={() => { setConfirmed(binding); setNotice('You chose to confirm comparison. Choose Mark as verified to change local trust.'); }}>Codes match</button><button className="btn btn--secondary" type="button" onClick={() => { setConfirmed(''); setNotice('Do not verify. Compare again using another trusted way.'); }}>They don&apos;t match</button></div>
@@ -53,18 +57,19 @@ export const VerificationPanel: React.FC<Props> = ({ label, ownFingerprint, cont
         {changed ? <button className="btn btn--secondary" type="button" disabled={confirmed !== binding} onClick={() => acceptChange().then(() => setConfirmed('')).catch(onError)}>Accept new identity after review</button> : <button className="btn btn--primary" type="button" disabled={confirmed !== binding} onClick={() => verify().then(() => { setConfirmed(''); setNotice('Verified on this device.'); }).catch(onError)}>Mark as verified</button>}
       </>}
       {verified && <><p>You verified this contact on this device.</p><button type="button" className="btn btn--primary" onClick={onDone}>Back to chat</button></>}
-    </>}
+    </> : <button className="btn btn--secondary" type="button" onClick={onDone}>Back to chats</button>}
     <details><summary>Why verify?</summary><p>Names do not prove identity. Compare in person or through a channel you already trust. A scan or comparison enables your explicit confirmation; it does not silently change trust.</p></details>
     {notice && <p role="status">{notice}</p>}
     <details className="verification-security-details"><summary>Advanced security details</summary>
       <p>Names are claims, not identity proof. QR compares the complete pinned fingerprint. The grouped code is derived from both complete identities. Compare using a trusted channel; only your explicit action changes verification.</p>
+      <strong>Saved conversation label</strong><p>{label}</p>
       <strong>Your security code</strong><code className="verification-code">{ownFingerprint}</code>
       <strong>Contact security code</strong><code className="verification-code">{peer ?? 'Unavailable'}</code>
       {changed && <><strong>Previous security code</strong><code className="verification-code">{contact?.identityId}</code></>}
       <textarea aria-label="Your verification QR payload" readOnly value={encodeVerificationQrPayload(ownFingerprint)} />
       <button className="btn btn--secondary" type="button" onClick={() => void navigator.clipboard.writeText(encodeVerificationQrPayload(ownFingerprint))}>Copy verification QR payload</button>
       <label>Paste a shared QR payload (camera alternative)<textarea aria-label="Contact verification QR payload" value={qrInput} onChange={(event) => setQrInput(event.target.value)} /></label>
-      <button className="btn btn--secondary" type="button" onClick={() => scan(qrInput)}>Check shared QR payload</button>
+      <button className="btn btn--secondary" type="button" disabled={!peer} onClick={() => scan(qrInput)}>Check shared QR payload</button>
       {changed && <button type="button" className="btn btn--danger" onClick={() => block().catch(onError)}>Block conversation</button>}
       {verified && <button className="btn btn--secondary" type="button" onClick={() => unverify().catch(onError)}>Mark unverified</button>}
       {verified && sessionHealth === 'unhealthy' && <><p>This saved encrypted session needs a verified renewal. Your identity and history are preserved.</p><label><input type="checkbox" checked={renewalConfirmed} onChange={(event) => setRenewalConfirmed(event.target.checked)} /> I compared the contact security code again using a trusted channel</label><button className="btn btn--secondary" disabled={!renewalConfirmed} type="button" onClick={() => renew().catch(onError)}>Prepare verified session renewal</button></>}

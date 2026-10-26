@@ -94,7 +94,7 @@ test('independent accounts connect, exchange claimed names, explicitly verify, a
   await bob.getByLabel('Contact verification QR payload', { exact: true }).fill(aliceQr);
   await bob.getByRole('button', { name: 'Check shared QR payload' }).click();
   await expect(mark).toBeEnabled();
-  await expect(bob.locator('.verification-view')).toContainText('Unverified');
+  await expect(bob.locator('.verification-summary')).toContainText('Not yet verified');
   await mark.click(); await bob.getByRole('button', { name: 'Back to chat' }).click();
   await expect(bob.locator('.chat-header')).toContainText('Verified');
   await alice.getByRole('button', { name: 'Close settings' }).click();
