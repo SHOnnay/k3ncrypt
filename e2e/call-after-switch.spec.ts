@@ -161,6 +161,7 @@ test('audio call support follows the selected contact and decline permits a call
   await enableSafeCallDiagnostics(bob, callDiagnostics);
   await enableSafeCallDiagnostics(cara, callDiagnostics);
   await openContact(alice, 'Bob');
+  const completedBobCallsBefore = await alice.getByLabel('Local call history').filter({ hasText: /^Voice call/ }).count();
   await alice.getByRole('button', { name: 'Calls', exact: true }).click();
   const callSetupStartedAt = Date.now();
   await alice.getByRole('button', { name: 'Start audio call', exact: true }).click();
@@ -170,9 +171,22 @@ test('audio call support follows the selected contact and decline permits a call
   console.log('MUX_TIMING', `call-setup-alice-bob elapsedMs=${Date.now() - callSetupStartedAt}`);
   await expect(alice.locator('.call-contact-name')).toHaveText('Bob');
   await expect(alice.locator('#call-status')).toHaveText('Connected');
+  if (muxEnabled) {
+    // The call overlay is modal. Dispatch the existing navigation handler to
+    // exercise a selected-room change while its authenticated call remains on
+    // an already-subscribed room; do not bypass or create any room authority.
+    await alice.locator('.conversation-row').filter({ hasText: 'Cara' }).dispatchEvent('click');
+    await expect(alice.locator('.chat-header')).toContainText('Cara');
+    await expect(alice.locator('.call-contact-name')).toHaveText('Bob');
+    await expect(alice.getByLabel('Local call history')).toHaveCount(0);
+  }
   await bob.getByRole('button', { name: 'End call', exact: true }).click();
   await expect(alice.locator('.call-info')).not.toBeVisible();
   await expect(bob.locator('.call-info')).not.toBeVisible();
+  await openContact(alice, 'Cara');
+  await expect(alice.getByLabel('Local call history')).toHaveCount(0);
+  await openContact(alice, 'Bob');
+  await expect(alice.getByLabel('Local call history').filter({ hasText: /^Voice call/ })).toHaveCount(completedBobCallsBefore + 1);
   await openContact(alice, 'Cara');
   if (muxEnabled) await expect.poll(() => activeTransport(alice), { timeout: 30_000 }).toBe('multiplexed');
   await startAndDecline(alice, cara);
@@ -185,6 +199,8 @@ test('audio call support follows the selected contact and decline permits a call
   await cara.getByRole('button', { name: 'End call', exact: true }).click();
   await expect(alice.locator('.call-info')).not.toBeVisible();
   await expect(cara.locator('.call-info')).not.toBeVisible();
+  await openContact(alice, 'Cara');
+  await expect(alice.getByLabel('Local call history').filter({ hasText: /^Voice call/ })).toHaveCount(1);
   const observed = async (receiver: Page) => {
     try { await startAndDecline(alice, receiver); }
     catch (error) { console.log('SAFE_CALL_DIAGNOSTICS', callDiagnostics.sort().join(',')); throw error; }

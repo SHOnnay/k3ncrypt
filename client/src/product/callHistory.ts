@@ -12,15 +12,23 @@ export const validLocalCallEvent = (value: unknown): value is LocalCallEvent => 
 };
 /** Local observations only; never emits a wire message or peer receipt. */
 export class LocalCallHistory {
-  private readonly calls = new Map<string, { direction: LocalCallEvent['direction']; connectedAt?: number; finished?: boolean; failed?: boolean }>();
+  private readonly calls = new Map<string, { roomId: string; identityBinding: string; direction: LocalCallEvent['direction']; connectedAt?: number; finished?: boolean; failed?: boolean }>();
   constructor(private readonly monotonicNow: () => number = () => performance.now()) {}
   failed(id: string): void { const call = this.calls.get(id); if (call && !call.finished) call.failed = true; }
   connected(id: string): void { const call = this.calls.get(id); if (call && !call.finished) call.connectedAt ??= this.monotonicNow(); }
   observe(session: CallSession): Message | undefined {
+    const terminal = ['ended', 'rejected', 'cancelled', 'expired', 'failed'].includes(session.state);
     let call = this.calls.get(session.callId);
-    if (!call) { call = { direction: session.state === 'ringing' ? 'incoming' : 'outgoing' }; this.calls.set(session.callId, call); }
+    // A terminal callback alone cannot establish a locally observed call or
+    // move an existing observation to a different room or identity session.
+    if (call && (call.roomId !== session.conversationId || call.identityBinding !== session.identityBinding)) return undefined;
+    if (!call) {
+      if (terminal) return undefined;
+      call = { roomId: session.conversationId, identityBinding: session.identityBinding, direction: session.state === 'ringing' ? 'incoming' : 'outgoing' };
+      this.calls.set(session.callId, call);
+    }
     if (session.state === 'connected') this.connected(session.callId);
-    if (!['ended', 'rejected', 'cancelled', 'expired', 'failed'].includes(session.state) || call.finished) return undefined;
+    if (!terminal || call.finished) return undefined;
     call.finished = true;
     const outcome: LocalCallEvent['outcome'] = session.state === 'rejected' ? 'declined' : session.state === 'failed' || call.failed ? 'failed' : call.connectedAt !== undefined ? 'completed' : call.direction === 'incoming' ? 'missed' : 'canceled';
     const event: LocalCallEvent = { mode: session.mediaMode, outcome, direction: call.direction, ...(call.connectedAt === undefined ? {} : { durationSeconds: Math.max(0, Math.floor((this.monotonicNow() - call.connectedAt) / 1000)) }) };

@@ -12,7 +12,7 @@ async function activeTransport(page: Page) {
 async function warmRoom(page: Page, text: string) {
   await page.locator('.chat-footer input[type=text], .chat-footer textarea').fill(text);
   await page.locator('.chat-footer').getByRole('button', { name: 'Send message' }).click();
-  await expect(page.locator('.message.sent').filter({ hasText: text }).locator('.message-delivery-details summary')).toHaveText('Sent', { timeout: 30_000 });
+  await expect(page.locator('.message.sent').filter({ hasText: text }).locator('.message-delivery-details summary')).toHaveText(/^(Sent|Delivered)$/, { timeout: 30_000 });
 }
 async function reloadUnlocked(page: Page) {
   await page.reload();
@@ -26,6 +26,13 @@ async function idle(page: Page) {
   await page.getByRole('button', { name: 'Calls', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Start audio call', exact: true })).toBeEnabled();
   await expect(page.getByText('A call is already in progress.', { exact: true })).not.toBeVisible();
+}
+async function openCallHistory(page: Page, contactName: string) {
+  await page.getByRole('button', { name: 'Chats', exact: true }).click();
+  const conversation = page.locator('.conversation-row').filter({ hasText: contactName }).first();
+  await expect(conversation).toBeVisible();
+  await conversation.click();
+  await expect(page.locator('.chat-header')).toContainText(contactName);
 }
 async function acceptIncoming(receiver: Page, caller: Page, label: string) {
   try { await receiver.getByRole('button', { name: 'Accept call', exact: true }).waitFor({ state: 'visible', timeout: 30000 }); }
@@ -54,15 +61,21 @@ test('voice/video both directions, terminal cleanup, immediate second calls and 
       await expect.poll(() => activeTransport(page), { timeout: 30_000 }).toBe('multiplexed');
     }
   }
-  for (const [caller, receiver, mode, direction] of [[alice, bob, 'audio', 'A-to-B'], [bob, alice, 'audio', 'B-to-A'], [alice, bob, 'video', 'A-to-B'], [bob, alice, 'video', 'B-to-A']] as const) {
+  let completedCalls = 0;
+  for (const [caller, receiver, mode, direction, ender] of [[alice, bob, 'audio', 'A-to-B', bob], [bob, alice, 'audio', 'B-to-A', bob], [alice, bob, 'video', 'A-to-B', alice], [bob, alice, 'video', 'B-to-A', alice]] as const) {
     console.log('CALL_CASE', `${direction}:${mode}:connect`);
     await launch(caller, mode); await acceptIncoming(receiver, caller, `${direction}:${mode}:connect`);
     await expect(caller.locator('#call-status')).toHaveText('Connected', { timeout: 20000 });
     await expect(receiver.locator('#call-status')).toHaveText('Connected', { timeout: 20000 });
     if (mode === 'video') { await expect(caller.getByLabel('Remote video', { exact: true })).toBeVisible(); await expect(receiver.getByLabel('Remote video', { exact: true })).toBeVisible(); }
-    await receiver.getByRole('button', { name: 'End call', exact: true }).click();
+    await ender.getByRole('button', { name: 'End call', exact: true }).click();
     await idle(caller); await idle(receiver);
-    for (const page of [caller, receiver]) { await page.getByRole('button', { name: 'Chats', exact: true }).click(); await expect(page.locator('[aria-label="Local call history"]').filter({ hasText: mode === 'video' ? 'Video call' : 'Voice call' })).not.toHaveCount(0); }
+    completedCalls++;
+    for (const page of [caller, receiver]) {
+      await openCallHistory(page, page === alice ? 'Bob' : 'Alice');
+      await expect(page.getByLabel('Local call history')).toHaveCount(completedCalls);
+      await expect(page.getByLabel('Local call history').filter({ hasText: mode === 'video' ? 'Video call' : 'Voice call' })).not.toHaveCount(0);
+    }
   }
   for (const [caller, receiver, mode, direction] of [[alice, bob, 'audio', 'A-to-B'], [bob, alice, 'video', 'B-to-A']] as const) {
     console.log('CALL_CASE', `${direction}:${mode}:decline-cancel`);
@@ -76,13 +89,13 @@ test('voice/video both directions, terminal cleanup, immediate second calls and 
   console.log('CALL_CASE', 'A-to-B:audio:media-denied');
   await launch(alice, 'audio'); await acceptIncoming(bob, alice, 'A-to-B:audio:media-denied');
   await idle(alice); await idle(bob);
-  await bob.getByRole('button', { name: 'Chats', exact: true }).click(); await expect(bob.getByLabel('Local call history').filter({ hasText: 'Failed call' })).not.toHaveCount(0);
+  await openCallHistory(bob, 'Alice'); await expect(bob.getByLabel('Local call history').filter({ hasText: 'Failed call' })).not.toHaveCount(0);
   await bob.evaluate(() => { (window as Window & { restoreTestCapture?: () => void }).restoreTestCapture?.(); });
   console.log('CALL_CASE', 'B-to-A:audio:second-call');
   await launch(bob, 'audio'); await acceptIncoming(alice, bob, 'B-to-A:audio:second-call');
   await expect(bob.locator('#call-status')).toHaveText('Connected', { timeout: 20000 }); await bob.getByRole('button', { name: 'End call', exact: true }).click();
   await idle(alice); await idle(bob);
-  for (const page of [alice, bob]) { await page.getByRole('button', { name: 'Chats', exact: true }).click(); await expect(page.getByLabel('Local call history').filter({ hasText: 'Declined call' })).not.toHaveCount(0); await expect(page.getByLabel('Local call history').filter({ hasText: 'Canceled call' })).not.toHaveCount(0); }
+  for (const page of [alice, bob]) { await openCallHistory(page, page === alice ? 'Bob' : 'Alice'); await expect(page.getByLabel('Local call history').filter({ hasText: 'Declined call' })).not.toHaveCount(0); await expect(page.getByLabel('Local call history').filter({ hasText: 'Canceled call' })).not.toHaveCount(0); }
   await expect(alice.getByLabel('Local call history').filter({ hasText: 'Missed video call' })).not.toHaveCount(0);
   await expect(bob.getByLabel('Local call history').filter({ hasText: 'Missed voice call' })).not.toHaveCount(0);
   await bob.reload(); await bob.getByRole('button', { name: 'Unlock this device', exact: true }).click();

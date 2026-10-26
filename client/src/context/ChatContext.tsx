@@ -292,6 +292,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const pending = callReceiverInstallations.current.get(conversation);
     if (pending) return pending;
     const epoch = callReceiverEpochs.current.get(conversation) ?? 0;
+    const receiverVault = historyVault.current;
     const installation = (async (): Promise<ModernCallReceiver> => {
       const composition = await conversation.createAuthenticatedCallComposition(refreshSessionBinding);
       if ((callReceiverEpochs.current.get(conversation) ?? 0) !== epoch || callConversationRooms.current.get(conversation) !== receiverRoomId) {
@@ -302,20 +303,24 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       existing?.protocolUnsubscribe();
       callReceivers.current.set(conversation, receiver);
       receiver.stateUnsubscribe = composition.onCallUpdate((session) => {
-        if ((callReceiverEpochs.current.get(conversation) ?? 0) !== epoch || callReceivers.current.get(conversation) !== receiver) return;
+        if ((callReceiverEpochs.current.get(conversation) ?? 0) !== epoch || callReceivers.current.get(conversation) !== receiver || !receiverVault || historyVault.current !== receiverVault || receiverVault.isLocked()) return;
         const terminal = ['rejected', 'cancelled', 'ended', 'expired', 'failed'].includes(session.state);
         const ownsActiveCall = activeCallRoomIdRef.current === session.conversationId && modernCallIdRef.current === session.callId;
-        if (terminal && !ownsActiveCall) return;
         if (session.state === 'ringing' && callActiveRef.current && !ownsActiveCall) {
           void composition.reject(session.callId).catch(() => undefined);
           return;
         }
         const event = localCallHistory.current.observe(session);
-        if (event && historyVault.current) {
-          void writeMessages(historyVault.current, session.conversationId, [event]).then(() => {
+        if (event) {
+          void writeMessages(receiverVault, session.conversationId, [event]).then(() => {
+            if (historyVault.current !== receiverVault || receiverVault.isLocked()) return;
             setRoomMessages(session.conversationId, current => current.some(item => item.id === event.id) ? current : [...current, event]);
           }).catch(() => undefined);
         }
+        // History belongs to an observed authenticated call, even after the
+        // local End action has hidden its UI. Keep the display guard separate
+        // so a late terminal update cannot clear a different active call.
+        if (terminal && !ownsActiveCall) return;
         callActiveRef.current = !terminal;
         const peerIdentityReference = roomStatesRef.current[session.conversationId]?.contactIdentity?.identityId;
         if (terminal) {
