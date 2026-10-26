@@ -31,5 +31,7 @@ it('does not hide a genuine missing registry diagnosis or present it as a usable
   const html = render('CONTACT_REGISTRY_MISSING');
   expect(html).toContain('unavailable-conversation-action');
   expect(html).toContain('CONTACT_REGISTRY_MISSING');
+  expect(html).toContain('<summary>Technical details</summary><small>CONTACT_REGISTRY_MISSING');
+  expect(html).toContain('matching local contact identity is unavailable');
   expect(html).not.toContain('Contact saved · reconnection paused');
 });

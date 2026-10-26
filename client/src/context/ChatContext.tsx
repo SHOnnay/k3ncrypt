@@ -141,6 +141,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [unavailableConversations, setUnavailableConversations] = useState<ConversationDiagnostic[]>([]);
   const [orphanedConversationRecords, setOrphanedConversationRecords] = useState<{ roomIds: string[]; truncated: boolean; available: boolean }>();
   const [conversations, setConversations] = useState<ConversationDescriptor[]>([]);
+  const [savedConversations, setSavedConversations] = useState<ConversationDescriptor[]>([]);
+  const [savedContactVerification, setSavedContactVerification] = useState<Record<string, 'verified' | 'unverified' | 'review-required' | 'unknown'>>({});
   const invitationExpiryLookups = useRef(new Map<string, number | null>());
   const conversationsRef = useRef(conversations); conversationsRef.current = conversations;
   const conversationIndexGeneration = useRef(0);
@@ -456,12 +458,26 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     try { descriptors = await readConversationDescriptors(storage); }
     catch { descriptors = conversationsRef.current; }
     const index = await readConversationIndex(storage, descriptors, checkRoom ? probeConversationRoom : undefined);
+    // Presentation only; canonical registry reads apply recovery-reset semantics
+    // without modifying trust. A saved descriptor/name is never verification.
+    const registry = new ContactIdentityRegistry(storage);
+    const verification: typeof savedContactVerification = {};
+    for (const descriptor of descriptors) {
+      verification[descriptor.roomId] = 'unknown';
+      if (!descriptor.remoteAddress || !descriptor.remoteIdentityCommitment) continue;
+      const contact = await registry.get(descriptor.remoteAddress, false).catch(() => undefined);
+      if (contact?.contactId !== descriptor.remoteAddress || contact.identityId !== descriptor.remoteIdentityCommitment) continue;
+      verification[descriptor.roomId] = contact.changeStatus !== 'unchanged' ? 'review-required' : contact.verification;
+    }
     for (const item of index.conversations) {
       const expiresAt = Number.isSafeInteger(item.signedInvitation?.expiresAt) ? item.signedInvitation!.expiresAt : item.pendingInvitationExpiresAt ?? invitationExpiryLookups.current.get(item.roomId) ?? undefined;
       if (item.relationship === 'invitation' && expiresAt !== undefined) item.pendingInvitationExpiresAt = expiresAt;
     }
-    if (generation === conversationIndexGeneration.current) {
-      setConversations(index.conversations); setUnavailableConversations(index.unavailable);
+    if (generation === conversationIndexGeneration.current && !storage.isLocked()) {
+      setConversations(index.conversations);
+      // A local list edit cannot undo an already observed server expiry/removal.
+      setUnavailableConversations(current => [...index.unavailable, ...current.filter(item => item.roomId && item.code && authoritativeTerminal(item.code) && descriptors.some(saved => saved.roomId === item.roomId) && !index.unavailable.some(next => next.roomId === item.roomId))]);
+      setSavedConversations(descriptors); setSavedContactVerification(verification);
     }
     // Expiry labels are optional network enrichment, never a prerequisite for local chats.
     // Keep the existing serial bound and do not reconnect/authorize from this result.
@@ -954,12 +970,21 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     await refreshConversations(vault);
   }, [vault]);
 
+  const setConversationArchived = useCallback(async (roomId: string, archived: boolean): Promise<void> => {
+    const scope = plaintextSessionRef.current;
+    if (!vault || vault.isLocked() || !scope?.isCurrent()) throw new Error('Unlock this device to organize saved conversations.');
+    await updateConversationDescriptor(vault, roomId, { locallyArchived: archived });
+    if (historyVault.current !== vault || plaintextSessionRef.current !== scope || !scope.isCurrent()) return;
+    await refreshConversations(vault);
+  }, [vault]);
+
   const restoreSession = useCallback(async (passphrase: string): Promise<void> => {
     const secureVault = await openModernVault(passphrase);
     // Local eligibility first. Probe only rooms actually opened, avoiding hundreds of cold-start requests.
     const index = await refreshConversations(secureVault);
     setOrphanedConversationRecords(await diagnoseOrphanedConversationRecords(secureVault).catch(() => ({ roomIds: [], truncated: false, available: false })));
     for (const descriptor of index.conversations) {
+      if (descriptor.locallyArchived) continue;
       try {
         const failure = await conversationEligibility(secureVault, descriptor, probeConversationRoom);
         if (failure) throw conversationFailure(failure);
@@ -1046,7 +1071,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     await modern.verifyContact(true, contactIdentity.identityId);
     setContactIdentity(await modern.getContact());
     if (modern.hasEstablishedSession()) await installModernCallSupport(modern);
-  }, [modern, contactIdentity]);
+    if (vault) void refreshConversations(vault).catch(() => undefined);
+  }, [modern, contactIdentity, vault]);
 
   const unverifyContact = useCallback(async (): Promise<void> => {
     if (!modern) throw new Error('No modern contact is open.');
@@ -1056,7 +1082,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     else {
       await releaseModernCallReceiver(modern);
     }
-  }, [modern]);
+    if (vault) void refreshConversations(vault).catch(() => undefined);
+  }, [modern, vault]);
 
   const acceptChangedIdentity = useCallback(async (): Promise<void> => {
     if (!modern) throw new Error('No modern contact is open.');
@@ -1064,7 +1091,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     await modern.acceptChangedIdentity();
     setContactIdentity(await modern.getContact());
     await releaseModernCallReceiver(modern);
-  }, [modern]);
+    if (vault) void refreshConversations(vault).catch(() => undefined);
+  }, [modern, vault]);
 
   const prepareVerifiedSessionRenewal = useCallback(async (): Promise<void> => {
     if (!modern) throw new Error('No private conversation is open.');
@@ -1757,6 +1785,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     pendingDeviceApproval,
     conversations,
     unavailableConversations,
+    savedConversations,
+    savedContactVerification,
     orphanedConversationRecords,
     profileDisplayName,
     accountState,
@@ -1797,6 +1827,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     updateProfileDisplayName,
     setContactNickname,
     setPendingInvitationDismissed,
+    setConversationArchived,
     updatePrivacyPreferences,
     refreshPermissionStatus,
     attachmentRequestHeaders,

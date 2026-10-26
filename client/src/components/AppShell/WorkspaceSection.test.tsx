@@ -2,6 +2,7 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { ChatContextType } from '../../types';
 import { WorkspaceSection } from './WorkspaceSection';
+import { conversationDiagnostic } from '../../product/conversationEligibility';
 
 const mockUseChat = jest.fn();
 
@@ -33,6 +34,23 @@ const buttonMarkup = (markup: string, label: string): string => {
   if (!escaped) throw new Error(`Missing button: ${label}`);
   return escaped[0];
 };
+
+it('separates actual verified contacts from invitations, unavailable and archived records without trusting a label', () => {
+  const saved = { version: 1 as const, roomId: '00000000-0000-4000-8000-000000000001', label: 'Known friend', controlCapability: 'a'.repeat(43), updatedAt: 1, remoteAddress: 'saved-peer-address' };
+  const pending = { ...saved, roomId: '00000000-0000-4000-8000-000000000002', label: 'Unaccepted invitation', relationship: 'invitation' as const, remoteAddress: undefined };
+  const unknown = { ...saved, roomId: '00000000-0000-4000-8000-000000000003', label: 'Unknown saved label' };
+  const archived = { ...saved, roomId: '00000000-0000-4000-8000-000000000004', label: 'Archived test', locallyArchived: true };
+  mockUseChat.mockReturnValue({ ...verifiedState, accountState: 'ready', conversations: [saved, pending, unknown, archived], savedContactVerification: { [saved.roomId]: 'verified' }, unavailableConversations: [conversationDiagnostic(unknown, 'CONTACT_REGISTRY_MISSING'), { label: 'Invalid saved entry', state: 'local-incomplete', code: 'CONVERSATION_RECORD_INVALID' }] });
+  const html = renderToStaticMarkup(React.createElement(WorkspaceSection, { section: 'contacts', onOpenConversation: () => undefined, onNewConversation: () => undefined }));
+  expect((html.match(/class="workspace-contact"/g) ?? [])).toHaveLength(1);
+  expect(html).toContain('Verified on this device');
+  expect(html).toContain('These are invitations, not established contacts.');
+  expect(html).toContain('matching local contact identity is unavailable');
+  expect(html).toContain('<summary>Technical details</summary><small>CONTACT_REGISTRY_MISSING');
+  expect(html).toContain('Archived conversations (1)');
+  expect(html).toContain('Restore conversation Archived test');
+  expect(html).not.toContain('Archive conversation Invalid saved entry');
+});
 
 describe('Calls workspace launch controls', () => {
   it('exposes both verified call intents on the Calls page', () => {

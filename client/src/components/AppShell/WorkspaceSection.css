@@ -107,3 +107,11 @@
   .workspace-contact-shell, .workspace-contact-shell--active { grid-template-columns: minmax(0, 1fr) auto auto; }
   .workspace-contact__message { padding: 6px 8px; font-size: .63rem; }
 }
+.workspace-records { margin: 22px 24px 0; padding-top: 16px; border-top: 1px solid var(--border); color: var(--ink); }
+.workspace-page > .workspace-feedback { margin: 12px 24px; }
+.workspace-records > h2, .workspace-records > summary { font-family: var(--font-display); font-size: 1.05rem; font-weight: 600; }
+.workspace-records summary { cursor: pointer; }
+.workspace-records p { color: var(--muted); font-size: .8rem; line-height: 1.5; }
+.workspace-record { padding: 12px 0; overflow-wrap: anywhere; }
+.workspace-record details { color: var(--muted); font-size: .75rem; }
+@media (max-width: 620px) { .workspace-records, .workspace-page > .workspace-feedback { margin-inline: 18px; } }

@@ -14,6 +14,35 @@ const descriptor = (roomId: string, updatedAt: number) => ({
   updatedAt,
 });
 
+it('archives reversibly without changing history, identity, other records or access bindings; stale saves cannot unarchive', async () => {
+  const store = new MemoryStore();
+  const first = descriptor('00000000-0000-4000-8000-000000000001', 1);
+  const other = descriptor('00000000-0000-4000-8000-000000000002', 2);
+  await saveConversationDescriptor(store, first); await saveConversationDescriptor(store, other);
+  await store.put('contact-identity', first.remoteAddress, { unchanged: true });
+  await store.put('product-messages', first.roomId, { retained: true });
+  const protectedRecords = [...store.records].filter(([key]) => !key.startsWith('product-session:'));
+  await Promise.all([updateConversationDescriptor(store, first.roomId, { locallyArchived: true }), updateConversationDescriptor(store, first.roomId, { localNickname: 'Saved nickname' })]);
+  await saveConversationDescriptor(store, { ...first, locallyArchived: false });
+  let saved = await readConversationDescriptors(store);
+  expect(saved.find(item => item.roomId === first.roomId)).toMatchObject({ locallyArchived: true, localNickname: 'Saved nickname', controlCapability: first.controlCapability, remoteAddress: first.remoteAddress });
+  expect(saved.find(item => item.roomId === other.roomId)).toEqual(other);
+  expect([...store.records].filter(([key]) => !key.startsWith('product-session:'))).toEqual(protectedRecords);
+  await updateConversationDescriptor(store, first.roomId, { locallyArchived: false });
+  saved = await readConversationDescriptors(store);
+  expect(saved.find(item => item.roomId === first.roomId)?.locallyArchived).toBe(false);
+  await removeConversationDescriptor(store, first.roomId);
+  await expect(updateConversationDescriptor(store, first.roomId, { locallyArchived: false })).rejects.toMatchObject({ safeDiagnosticCode: 'CONVERSATION_REMOVED' });
+});
+
+it('does not archive an ambiguous duplicate or silently remove malformed records', async () => {
+  const store = new MemoryStore(); const item = descriptor('00000000-0000-4000-8000-000000000001', 1);
+  await store.put('product-session', 'conversations', [{ broken: true }, item, item]);
+  const before = await store.read('product-session', 'conversations');
+  await expect(updateConversationDescriptor(store, item.roomId, { locallyArchived: true })).rejects.toThrow('invalid');
+  expect(await store.read('product-session', 'conversations')).toEqual(before);
+});
+
 it('preserves independent field updates, bindings, established state and unknown stored fields', async () => {
   const store = new MemoryStore(); const initial = { ...descriptor('00000000-0000-4000-8000-000000000001', 1), bootstrapState: 'ESTABLISHED' as const, relationship: 'accepted' as const };
   const signedInvitation = { version: 2, retainedSignature: 'fixture-only' };

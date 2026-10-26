@@ -28,6 +28,8 @@ export interface ConversationDescriptor {
   localNickname?: string;
   /** Device-local presentation state only; does not revoke or alter an invitation. */
   locallyDismissed?: boolean;
+  /** Local list presentation only. Retains access, trust and encrypted history. */
+  locallyArchived?: boolean;
   updatedAt: number;
 }
 
@@ -53,6 +55,7 @@ export const validateConversationDescriptor = (value: unknown): ConversationDesc
     || (item.pendingInvitationExpiresAt !== undefined && (!Number.isSafeInteger(item.pendingInvitationExpiresAt) || (item.pendingInvitationExpiresAt as number) < 0))
     || (item.localNickname !== undefined && (typeof item.localNickname !== 'string' || !item.localNickname.trim() || item.localNickname.length > 80 || /[\u0000-\u001f\u007f]/.test(item.localNickname)))
     || (item.locallyDismissed !== undefined && typeof item.locallyDismissed !== 'boolean')
+    || (item.locallyArchived !== undefined && typeof item.locallyArchived !== 'boolean')
     || typeof item.label !== 'string' || !item.label.trim() || item.label.length > 80
     || typeof item.updatedAt !== 'number' || !Number.isSafeInteger(item.updatedAt) || item.updatedAt < 0) {
     throw new Error('Saved conversation is invalid.');
@@ -70,6 +73,7 @@ export const validateConversationDescriptor = (value: unknown): ConversationDesc
     label: item.label.trim(),
     ...(typeof item.localNickname === 'string' && item.localNickname.trim() && item.localNickname.length <= 80 && !/[\u0000-\u001f\u007f]/.test(item.localNickname) ? { localNickname: item.localNickname.trim() } : {}),
     ...(typeof item.locallyDismissed === 'boolean' ? { locallyDismissed: item.locallyDismissed } : {}),
+    ...(typeof item.locallyArchived === 'boolean' ? { locallyArchived: item.locallyArchived } : {}),
     updatedAt: item.updatedAt,
   });
 };
@@ -153,11 +157,11 @@ export const saveConversationDescriptor = async (storage: ProductSecureStorage, 
     return validateConversationDescriptor({ ...current, ...valid, signedInvitation: current.signedInvitation ?? valid.signedInvitation,
       bootstrapState: current.bootstrapState === 'ESTABLISHED' ? current.bootstrapState : valid.bootstrapState ?? current.bootstrapState,
       relationship: current.relationship === 'accepted' ? current.relationship : valid.relationship ?? current.relationship,
-      localNickname: valid.localNickname ?? current.localNickname });
+      localNickname: valid.localNickname ?? current.localNickname, locallyArchived: current.locallyArchived });
   });
 };
 
-export type ConversationPatch = Partial<Pick<ConversationDescriptor, 'label' | 'localNickname' | 'bootstrapState' | 'relationship' | 'remoteAddress' | 'remoteIdentityCommitment' | 'locallyDismissed' | 'pendingInvitationExpiresAt'>>;
+export type ConversationPatch = Partial<Pick<ConversationDescriptor, 'label' | 'localNickname' | 'bootstrapState' | 'relationship' | 'remoteAddress' | 'remoteIdentityCommitment' | 'locallyDismissed' | 'locallyArchived' | 'pendingInvitationExpiresAt'>>;
 export const updateConversationDescriptor = async (storage: ProductSecureStorage, roomId: string, patch: ConversationPatch): Promise<ConversationDescriptor[]> =>
   mutate(storage, roomId, async current => {
     if (!current) throw storageFailure('CONVERSATION_REMOVED');

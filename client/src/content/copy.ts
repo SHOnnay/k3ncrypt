@@ -14,7 +14,7 @@ export const copy = {
     description: 'A contact is not trusted until you compare security codes with them using another trusted way and confirm. Names help you recognize people; they do not prove who someone is.',
   },
   contactsEmpty: {
-    title: 'No trusted contacts yet',
+    title: 'No saved conversations',
     description: 'Create or join an invitation to start a private conversation. A contact becomes trusted only after you compare security codes and confirm.',
   },
   conversationEmpty: {

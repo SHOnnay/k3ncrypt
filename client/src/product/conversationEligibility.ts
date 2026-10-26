@@ -45,13 +45,13 @@ export function conversationDiagnostic(descriptor: Pick<ConversationDescriptor, 
   const label = descriptor.localNickname ?? descriptor.remoteDisplayName ?? descriptor.label;
   return { roomId: descriptor.roomId, label: label === 'Private contact' ? `${label} · ${descriptor.roomId.slice(-8)}` : label, state, code };
 }
-export const conversationStateCopy = (diagnostic: ConversationDiagnostic): string => diagnostic.code === 'CONVERSATION_ROUTING_AUTHORIZATION_UNAVAILABLE' ? 'Contact saved · authorization recovery required' : diagnostic.code === 'CONVERSATION_PREKEY_UNAVAILABLE' ? 'Contact saved · reconnection paused' : diagnostic.code === 'CONVERSATION_IN_USE' ? 'Open in another tab — close it and retry' : ({
+export const conversationStateCopy = (diagnostic: ConversationDiagnostic): string => diagnostic.code === 'CONVERSATION_INVITATION_EXPIRED' ? 'Invitation expired — local identities and history are retained.' : diagnostic.code === 'CONTACT_REGISTRY_MISSING' ? 'Saved conversation — matching local contact identity is unavailable. Access is paused; history has not been deleted.' : diagnostic.code === 'CONVERSATION_SESSION_MISSING' ? 'Saved conversation — encrypted session needs recovery. History is retained.' : diagnostic.code === 'CONVERSATION_RECORD_INVALID' || diagnostic.code === 'CONVERSATION_LOCAL_RECORD_INVALID' ? 'Saved entry could not be read safely. It has been retained for review.' : diagnostic.code === 'CONVERSATION_ROUTING_AUTHORIZATION_UNAVAILABLE' ? 'Contact saved · authorization recovery required' : diagnostic.code === 'CONVERSATION_PREKEY_UNAVAILABLE' ? 'Contact saved · reconnection paused' : diagnostic.code === 'CONVERSATION_IN_USE' ? 'Open in another tab — close it and retry' : ({
   saved: 'Saved on this device', pending: 'Waiting for contact to accept', retryable: 'Disconnected — retry opening',
   terminal: 'Room expired or removed', 'local-incomplete': 'Local records incomplete — access paused',
   'review-required': 'Identity or room binding needs review', deferred: 'More saved entries retained on this device',
 })[diagnostic.state];
 export interface ConversationIndex { conversations: ConversationDescriptor[]; unavailable: ConversationDiagnostic[]; }
-export interface SidebarConversationGroups { chats: ConversationDescriptor[]; pendingInvitations: ConversationDescriptor[]; unavailable: ConversationDiagnostic[]; }
+export interface SidebarConversationGroups { chats: ConversationDescriptor[]; pendingInvitations: ConversationDescriptor[]; unavailable: ConversationDiagnostic[]; archived: ConversationDescriptor[]; }
 
 const remoteAvailabilityFailures = new Set<SafeDiagnosticCode>(['CONVERSATION_PREKEY_UNAVAILABLE', 'CONVERSATION_ROUTING_AUTHORIZATION_UNAVAILABLE', 'NETWORK_FAILURE', 'SERVICE_NOT_READY']);
 const showSavedChatWithAvailabilityFailure = (descriptor: ConversationDescriptor, code?: SafeDiagnosticCode): boolean =>
@@ -62,13 +62,31 @@ const showSavedChatWithAvailabilityFailure = (descriptor: ConversationDescriptor
 export function classifySidebarConversations(descriptors: readonly ConversationDescriptor[], diagnostics: readonly ConversationDiagnostic[]): SidebarConversationGroups {
   const chats: ConversationDescriptor[] = [];
   const pendingInvitations: ConversationDescriptor[] = [];
-  const unavailable = diagnostics.filter(item => !descriptors.some(descriptor => descriptor.roomId === item.roomId &&
-    (descriptor.relationship === 'invitation' && !descriptor.remoteAddress || showSavedChatWithAvailabilityFailure(descriptor, item.code))));
+  const archived = descriptors.filter(item => item.locallyArchived);
+  const terminalRooms = new Set(diagnostics.flatMap(item => item.roomId && item.code && authoritativeTerminal(item.code) ? [item.roomId] : []));
+  const now = Date.now();
+  const isInvitation = (item: ConversationDescriptor) => item.relationship === 'invitation' && !item.remoteAddress;
+  const expired = (item: ConversationDescriptor) => {
+    const expiresAt = item.signedInvitation?.expiresAt ?? item.pendingInvitationExpiresAt;
+    return isInvitation(item) && Number.isSafeInteger(expiresAt) && expiresAt! <= now;
+  };
+  const pending = (item: ConversationDescriptor) => isInvitation(item) && !expired(item) && !terminalRooms.has(item.roomId);
+  const unavailable = diagnostics.map(item => {
+    const descriptor = descriptors.find(saved => saved.roomId === item.roomId);
+    return descriptor && expired(descriptor) && (item.code === 'CONVERSATION_STATE_INCOMPLETE' || item.code === 'CONVERSATION_INVITATION_UNACCEPTED')
+      ? conversationDiagnostic(descriptor, 'CONVERSATION_INVITATION_EXPIRED') : item;
+  }).filter(item => !archived.some(descriptor => descriptor.roomId === item.roomId) && !descriptors.some(descriptor => descriptor.roomId === item.roomId &&
+    (pending(descriptor) || showSavedChatWithAvailabilityFailure(descriptor, item.code))));
   const unavailableRooms = new Set(unavailable.flatMap(item => item.roomId ? [item.roomId] : []));
   for (const descriptor of descriptors) {
-    if (descriptor.relationship === 'invitation' && !descriptor.remoteAddress) {
+    if (descriptor.locallyArchived) continue;
+    if (pending(descriptor)) {
       pendingInvitations.push(descriptor);
       continue;
+    }
+    if (expired(descriptor) && !unavailableRooms.has(descriptor.roomId)) {
+      unavailable.push(conversationDiagnostic(descriptor, 'CONVERSATION_INVITATION_EXPIRED'));
+      unavailableRooms.add(descriptor.roomId);
     }
     if (descriptor.bootstrapState === 'PENDING_LOCAL' || descriptor.bootstrapState === 'PENDING_REMOTE' || descriptor.bootstrapState === 'FAILED_OR_UNSUPPORTED') {
       if (!unavailableRooms.has(descriptor.roomId)) {
@@ -80,7 +98,7 @@ export function classifySidebarConversations(descriptors: readonly ConversationD
     }
     if (!unavailableRooms.has(descriptor.roomId)) chats.push(descriptor);
   }
-  return { chats, pendingInvitations, unavailable };
+  return { chats, pendingInvitations, unavailable, archived };
 }
 
 export async function readConversationIndex(storage: ProductSecureStorage, descriptors: readonly ConversationDescriptor[], roomProbe?: RoomProbe): Promise<ConversationIndex> {

@@ -77,6 +77,9 @@ export interface ChatContextType {
   pendingDeviceEnrollment?: EnrollmentRequest;
   pendingDeviceApproval?: EnrollmentApprovalPacket;
   conversations: ConversationDescriptor[];
+  /** List presentation includes unavailable/archived descriptors; never admission or trust authority. */
+  savedConversations: ConversationDescriptor[];
+  savedContactVerification: Record<string, 'verified' | 'unverified' | 'review-required' | 'unknown'>;
   unavailableConversations: import('../product/conversationEligibility').ConversationDiagnostic[];
   orphanedConversationRecords?: { roomIds: string[]; truncated: boolean; available: boolean };
   profileDisplayName: string;
@@ -120,6 +123,7 @@ export interface ChatContextType {
   updateProfileDisplayName: (name: string) => Promise<void>;
   setContactNickname: (roomId: string, nickname: string) => Promise<void>;
   setPendingInvitationDismissed: (roomId: string, dismissed: boolean) => Promise<void>;
+  setConversationArchived: (roomId: string, archived: boolean) => Promise<void>;
   updatePrivacyPreferences: (next: Partial<PrivacyPreferences>) => void;
   refreshPermissionStatus: () => Promise<void>;
   fileTransferBinding: (verified: boolean) => Promise<import('@chat-e2ee/service').FileBinding>;

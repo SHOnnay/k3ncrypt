@@ -6,6 +6,7 @@ import { Avatar } from '../common/Avatar';
 import { contactDisplayName, copy } from '../../content/copy';
 import { classifySidebarConversations, conversationStateCopy } from '../../product/conversationEligibility';
 import { conversationRowOpenStatus } from '../../product/conversationOpenCopy';
+import { ConversationArchiveButton } from './ConversationArchiveButton';
 import './AppShell.css';
 
 interface SidebarProps {
@@ -24,9 +25,9 @@ const formatSidebarTime = (date?: Date): string => {
 };
 
 export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection, onNavigate, onNewConversation, onOpenConversation, onOpenSettings, settingsOpen = false }) => {
-  const { channelHash, messages, conversations, syncStatus, sessionHealth, profileDisplayName, protocolMode, accountState, unavailableConversations = [], orphanedConversationRecords, setPendingInvitationDismissed, pendingConversation, conversationOpenError } = useChat();
+  const { channelHash, messages, conversations, savedConversations = conversations, syncStatus, sessionHealth, profileDisplayName, protocolMode, accountState, unavailableConversations = [], orphanedConversationRecords, setPendingInvitationDismissed, pendingConversation, conversationOpenError } = useChat();
   const latest = messages.at(-1);
-  const groups = classifySidebarConversations(conversations, unavailableConversations);
+  const groups = classifySidebarConversations(savedConversations, unavailableConversations);
   const displayName = (conversation: typeof conversations[number]) => contactDisplayName(conversation.label, conversation.roomId, conversation.remoteDisplayName, conversation.localNickname);
   const invitationName = (conversation: typeof conversations[number]) => conversation.localNickname ?? (conversation.label !== 'Private contact' ? conversation.label : `Invitation · ${conversation.roomId.slice(-4).toUpperCase()}`);
   const invitationExpiry = (conversation: typeof conversations[number]) => {
@@ -96,13 +97,15 @@ export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection
         {groups.unavailable.length > 0 && <section className="sidebar-record-group" aria-labelledby="sidebar-unavailable-heading">
           <p className="section-label" id="sidebar-unavailable-heading">Unavailable Conversations</p>
           {groups.unavailable.length === 0 ? <p className="sidebar-group-empty">No unavailable conversations</p> : <ul className="unavailable-list">{groups.unavailable.map((item, index) => {
-            const saved = item.roomId ? conversations.find(conversation => conversation.roomId === item.roomId) : undefined;
+            const saved = item.roomId ? savedConversations.find(conversation => conversation.roomId === item.roomId) : undefined;
             return <li key={`${item.roomId ?? 'entry'}-${index}`}>
               {saved ? <button className="unavailable-conversation-action" type="button" onClick={() => onOpenConversation(saved.roomId)}><strong>{item.label}</strong><span className="conversation-preview">{conversationStateCopy(item)}</span></button> : <><strong>{item.label}</strong><span>{conversationStateCopy(item)}</span></>}
-              {item.code && <small>{item.code}</small>}
+              {saved && item.code !== 'CONVERSATION_RECORD_INVALID' && item.code !== 'CONVERSATION_LOCAL_RECORD_INVALID' && <ConversationArchiveButton roomId={saved.roomId} name={item.label} className="invitation-local-action" />}
+              {item.code && <details><summary>Technical details</summary><small>{item.code}</small></details>}
             </li>;
           })}</ul>}
         </section>}
+        {groups.archived.length > 0 && <button className="invitation-local-action" type="button" onClick={() => onNavigate('contacts')}>Archived conversations ({groups.archived.length}) — manage in Contacts</button>}
       </div>
 
       {orphanedConversationRecords && <details className="conversation-recovery"><summary>Local data status</summary>{!orphanedConversationRecords.available ? <p>Record inspection is unavailable; no recovery claim can be made.</p> : <><p>{orphanedConversationRecords.roomIds.length} rooms have protocol/session records without a matching saved access descriptor. This count does not check contact identities, session usability or server availability. A missing access capability cannot be recovered automatically.</p><ul>{orphanedConversationRecords.roomIds.map(roomId => <li key={roomId}>Saved room · {roomId.slice(-8)}</li>)}</ul>{orphanedConversationRecords.truncated && <p>Inspection reached its safe limit; additional records may exist.</p>}</>}</details>}

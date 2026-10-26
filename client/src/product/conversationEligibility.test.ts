@@ -28,6 +28,34 @@ it('classifies established chats, pending invitations and unavailable historical
   expect(groups.pendingInvitations.map(item => item.roomId)).toEqual([pending.roomId]);
   expect(groups.unavailable.map(item => item.roomId)).toEqual([historic.roomId, acceptedButUnfinished.roomId]);
 });
+
+it('archives valid, expired, deleted and unknown saved rows without granting eligibility or hiding unidentifiable records', async () => {
+  const store = await valid();
+  const expired = { ...descriptor, roomId: '00000000-0000-4000-8000-000000000002', relationship: 'invitation' as const, remoteAddress: undefined };
+  const deleted = { ...descriptor, roomId: '00000000-0000-4000-8000-000000000003' };
+  const unknown = { ...descriptor, roomId: '00000000-0000-4000-8000-000000000004' };
+  const entries = [descriptor, expired, deleted, unknown].map(item => ({ ...item, locallyArchived: true }));
+  const diagnostics = [conversationDiagnostic(expired, 'CONVERSATION_INVITATION_EXPIRED'), conversationDiagnostic(deleted, 'CONVERSATION_ROOM_MISSING'), conversationDiagnostic(unknown, 'CONTACT_REGISTRY_MISSING'), { label: 'Invalid saved entry', state: 'local-incomplete' as const, code: 'CONVERSATION_RECORD_INVALID' as const }];
+  const groups = classifySidebarConversations(entries, diagnostics);
+  expect(groups.archived).toHaveLength(4); expect(groups.chats).toEqual([]); expect(groups.pendingInvitations).toEqual([]);
+  expect(groups.unavailable).toEqual([diagnostics[3]]);
+  expect(await conversationEligibility(store, entries[3])).toBe('CONVERSATION_STATE_INCOMPLETE');
+  const restored = classifySidebarConversations(entries.map(item => ({ ...item, locallyArchived: false })), diagnostics);
+  expect(restored.chats).toHaveLength(1); expect(restored.pendingInvitations).toHaveLength(0); expect(restored.unavailable).toHaveLength(4);
+});
+
+it('explains expired unaccepted invitations without expiring an established contact from its old invitation date', () => {
+  const clock = jest.spyOn(Date, 'now').mockReturnValue(1000);
+  try {
+    const invitation = { ...descriptor, roomId: '00000000-0000-4000-8000-000000000007', remoteAddress: undefined, relationship: 'invitation' as const, pendingInvitationExpiresAt: 1000 };
+    const established = { ...descriptor, relationship: 'accepted' as const, pendingInvitationExpiresAt: 1 };
+    const groups = classifySidebarConversations([established, invitation], [conversationDiagnostic(invitation, 'CONVERSATION_STATE_INCOMPLETE')]);
+    expect(groups.chats).toEqual([established]);
+    expect(groups.pendingInvitations).toEqual([]);
+    expect(groups.unavailable).toEqual([conversationDiagnostic(invitation, 'CONVERSATION_INVITATION_EXPIRED')]);
+    expect(conversationStateCopy(groups.unavailable[0])).toContain('Invitation expired');
+  } finally { clock.mockRestore(); }
+});
 it('quarantines old unaccepted, expired, missing session, malformed and mismatched states read-only', async () => {
   const store = await valid();
   expect(await conversationEligibility(store, descriptor, async () => 'CONVERSATION_INVITATION_EXPIRED')).toBe('CONVERSATION_INVITATION_EXPIRED');

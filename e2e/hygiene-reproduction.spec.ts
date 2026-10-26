@@ -6,7 +6,7 @@ test('fresh accounts keep unaccepted invitations out of chats across refresh and
     const context = await browser.newContext(); const page = await context.newPage();
     await create(page, name);
     const chats = page.getByRole('region', { name: 'Conversations' });
-    await expect(chats.getByText('No trusted contacts yet')).toBeVisible();
+    await expect(chats.getByText('No saved conversations')).toBeVisible();
     await expect(chats.locator('.conversation-row')).toHaveCount(0);
     await expect(page.getByRole('button', { name: /^Open pending invitation / })).toBeVisible();
     await page.reload(); await page.getByRole('button', { name: 'Unlock this device', exact: true }).click();
@@ -30,6 +30,7 @@ test('expired pending invitation stays quarantined on restore', async ({ browser
   await page.locator('input[type=password]').fill('alpha-family-existing-account-2026'); await page.getByRole('button', { name: 'Unlock account', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Conversations' }).locator('.conversation-row')).toHaveCount(0);
   const unavailable = page.getByRole('region', { name: 'Unavailable Conversations' });
-  await expect(unavailable).toContainText('Room expired or removed');
+  await expect(unavailable).toContainText('Invitation expired');
+  await unavailable.getByText('Technical details', { exact: true }).click();
   await expect(unavailable).toContainText('CONVERSATION_INVITATION_EXPIRED'); await context.close();
 });
