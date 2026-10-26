@@ -48,3 +48,4 @@
 .message--file.sent .message-meta { color: var(--muted); }
 .message--file.sent .message-file-action { color: var(--muted-strong); }
 .message--file.sent .message-file-action:hover:not(:disabled) { color: var(--brand-strong); background: var(--brand-soft); }
+.message.received .message-meta, .message--file.sent .message-meta { opacity: 1; }

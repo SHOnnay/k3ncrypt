@@ -18,6 +18,9 @@ test('authenticated Slate Trust app navigation, themes, messages, and narrow com
     await alice.locator('#msg-input').fill('Slate UI real-account smoke message');
     await alice.locator('#send-btn').click();
     await expect(bob.locator('#messages-area')).toContainText('Slate UI real-account smoke message', { timeout: 20_000 });
+    await bob.locator('#msg-input').fill('Slate UI received-message contrast check');
+    await bob.locator('#send-btn').click();
+    await expect(alice.locator('#messages-area')).toContainText('Slate UI received-message contrast check', { timeout: 20_000 });
     await alice.screenshot({ path: testInfo.outputPath('authenticated-chat-light-desktop.png'), fullPage: false });
 
     await alice.getByRole('button', { name: 'Contacts', exact: true }).click();
@@ -46,6 +49,39 @@ test('authenticated Slate Trust app navigation, themes, messages, and narrow com
     await alice.getByRole('button', { name: /^Appearance/ }).click();
     await alice.getByRole('radio', { name: /Paper & Ink/ }).click();
     await expect(alice.locator('html')).toHaveAttribute('data-theme', 'paper');
+    const lightMutedContrast = await alice.evaluate(() => {
+      const luminance = (value: string) => {
+        const channels = value.match(/[\da-f]{2}/gi)?.map(channel => parseInt(channel, 16) / 255) ?? [];
+        const linear = channels.map(channel => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
+        return linear.reduce((sum, channel, index) => sum + channel * [0.2126, 0.7152, 0.0722][index], 0);
+      };
+      const style = getComputedStyle(document.documentElement);
+      const foreground = style.getPropertyValue('--muted').trim();
+      return ['--canvas', '--canvas-soft', '--surface', '--surface-raised', '--surface-muted', '--surface-tint', '--brand-soft', '--message-sent', '--success-soft', '--danger-soft', '--warn-soft']
+        .map(token => {
+          const background = style.getPropertyValue(token).trim();
+          const [lighter, darker] = [luminance(foreground), luminance(background)].sort((a, b) => b - a);
+          return (lighter + 0.05) / (darker + 0.05);
+        });
+    });
+    expect(Math.min(...lightMutedContrast)).toBeGreaterThanOrEqual(4.5);
+    const receivedMetadata = alice.locator('.message.received .message-meta').first();
+    await expect(receivedMetadata).toBeVisible();
+    const receivedMetadataContrast = await receivedMetadata.evaluate(element => {
+      const luminance = (value: string) => {
+        const channels = value.match(/[\da-f]{2}/gi)?.map(channel => parseInt(channel, 16) / 255) ?? [];
+        const linear = channels.map(channel => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
+        return linear.reduce((sum, channel, index) => sum + channel * [0.2126, 0.7152, 0.0722][index], 0);
+      };
+      const rgb = (value: string) => value.match(/[\d.]+/g)?.slice(0, 3).map(Number) ?? [];
+      const toHex = (channels: number[]) => `#${channels.map(channel => Math.round(channel).toString(16).padStart(2, '0')).join('')}`;
+      const foreground = toHex(rgb(getComputedStyle(element).color));
+      const background = toHex(rgb(getComputedStyle(element.parentElement!).backgroundColor));
+      const [lighter, darker] = [luminance(foreground), luminance(background)].sort((a, b) => b - a);
+      return { opacity: getComputedStyle(element).opacity, ratio: (lighter + 0.05) / (darker + 0.05) };
+    });
+    expect(receivedMetadataContrast.opacity).toBe('1');
+    expect(receivedMetadataContrast.ratio).toBeGreaterThanOrEqual(4.5);
     await alice.waitForTimeout(300);
     await alice.screenshot({ path: testInfo.outputPath('authenticated-slate-light.png'), fullPage: false });
     await alice.keyboard.press('Tab');
