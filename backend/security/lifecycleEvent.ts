@@ -1,6 +1,9 @@
 import { createPublicKey, verify } from 'crypto';
 import type { BootstrapRequest, DeviceProofRequest, EnrollmentEvent, NetworkMembershipEvent } from '../../service/src/devices/trustProtocol';
 
+/** Same bounded tolerance as signed device-proof requests; replay/expiry checks remain authoritative. */
+export const LIFECYCLE_CLOCK_SKEW_MS = 5_000;
+
 export type LifecycleOperation = 'enroll' | 'activate' | 'revoke' | 'epoch-update';
 export type SignedLifecycleEvent = { version: 1; eventId: string; accountIdentityReference: string; issuerDeviceId: string; issuerIdentityReference: string; targetDeviceId: string; targetIdentityReference: string; operation: LifecycleOperation; previousEpoch: number; nextEpoch: number; createdAt: number; expiresAt: number; signature: string };
 
@@ -13,7 +16,7 @@ const ed25519Spki = (raw: Buffer): Buffer => Buffer.concat([Buffer.from('302a300
 
 export const verifyLifecycleEvent = (event: SignedLifecycleEvent, issuerPublicKey: string, now = Date.now()): boolean => {
   const { signature, ...unsigned } = event ?? {} as SignedLifecycleEvent;
-  if (!event || event.version !== 1 || !uuid.test(event.eventId) || !event.accountIdentityReference || !event.issuerDeviceId || !event.issuerIdentityReference || !event.targetDeviceId || !event.targetIdentityReference || !operations.has(event.operation) || !Number.isSafeInteger(event.previousEpoch) || !Number.isSafeInteger(event.nextEpoch) || event.nextEpoch !== event.previousEpoch + 1 || !Number.isSafeInteger(event.createdAt) || !Number.isSafeInteger(event.expiresAt) || event.createdAt > now || event.expiresAt < now || event.expiresAt - event.createdAt > 5 * 60_000 || !b64.test(issuerPublicKey) || !b64.test(signature)) return false;
+  if (!event || event.version !== 1 || !uuid.test(event.eventId) || !event.accountIdentityReference || !event.issuerDeviceId || !event.issuerIdentityReference || !event.targetDeviceId || !event.targetIdentityReference || !operations.has(event.operation) || !Number.isSafeInteger(event.previousEpoch) || !Number.isSafeInteger(event.nextEpoch) || event.nextEpoch !== event.previousEpoch + 1 || !Number.isSafeInteger(event.createdAt) || !Number.isSafeInteger(event.expiresAt) || event.createdAt > now + LIFECYCLE_CLOCK_SKEW_MS || event.expiresAt < now || event.expiresAt - event.createdAt > 5 * 60_000 || !b64.test(issuerPublicKey) || !b64.test(signature)) return false;
   try {
     const key = Buffer.from(issuerPublicKey, 'base64url');
     const sig = Buffer.from(signature, 'base64url');

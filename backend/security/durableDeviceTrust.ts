@@ -4,7 +4,7 @@ import type { DeviceLifecycleRecord } from './deviceTrust';
 import { randomUUID, createHmac, timingSafeEqual } from 'crypto';
 import type { BootstrapRequest, EnrollmentEvent, DeviceProofRequest, DeviceResourceContext } from '../../service/src/devices/trustProtocol';
 import type { SignedLifecycleEvent } from './lifecycleEvent';
-import { verifyBootstrapSignature, verifyDeviceControlSignature, verifyLifecycleEvent } from './lifecycleEvent';
+import { LIFECYCLE_CLOCK_SKEW_MS, verifyBootstrapSignature, verifyDeviceControlSignature, verifyLifecycleEvent } from './lifecycleEvent';
 
 const deviceOperations = new Set<import('./deviceTrust').DeviceOperation>(['relay:connect', 'relay:subscribe', 'relay:message', 'relay:signal', 'attachment:create', 'attachment:write', 'attachment:read', 'attachment:delete', 'private-network:relay', 'bridge:authorize', 'device-control']);
 const PROOF_REQUEST_CLOCK_SKEW_MS = 5_000;
@@ -50,7 +50,7 @@ export class DurableDeviceTrustAuthority {
   private sign(value: object): string { return createHmac('sha256', this.secret).update(`k3ncrypt-device-proof-v1\0${JSON.stringify(value)}`).digest('base64url'); }
   async bootstrap(request: BootstrapRequest): Promise<{ accountIdentityReference: string; deviceId: string; deviceIdentityReference: string; trustEpoch: number }> {
     const now = this.now();
-    if (request.version !== 1 || !/^[0-9a-f-]{36}$/i.test(request.requestId) || !/^[0-9a-f-]{36}$/i.test(request.deviceId) || !request.deviceIdentityReference || request.fingerprint !== request.deviceIdentityReference || !/^[A-Za-z0-9_-]{43}$/.test(request.verificationKey) || !/^[A-Za-z0-9_-]{16,128}$/.test(request.nonce) || request.createdAt > now || request.expiresAt <= now || request.expiresAt - request.createdAt > 5 * 60_000 || !verifyBootstrapSignature(request, request.verificationKey)) throw new Error('Initial device bootstrap rejected.');
+    if (request.version !== 1 || !/^[0-9a-f-]{36}$/i.test(request.requestId) || !/^[0-9a-f-]{36}$/i.test(request.deviceId) || !request.deviceIdentityReference || request.fingerprint !== request.deviceIdentityReference || !/^[A-Za-z0-9_-]{43}$/.test(request.verificationKey) || !/^[A-Za-z0-9_-]{16,128}$/.test(request.nonce) || request.createdAt > now + LIFECYCLE_CLOCK_SKEW_MS || request.expiresAt <= now || request.expiresAt - request.createdAt > 5 * 60_000 || !verifyBootstrapSignature(request, request.verificationKey)) throw new Error('Initial device bootstrap rejected.');
     if (await this.store.readAnyDevice(request.deviceId) || !await this.store.reserveDeviceId(request.deviceId, 'bootstrap-pending')) throw new Error('Initial device bootstrap rejected.');
     const accountIdentityReference = `account-${randomUUID()}`; const createdAt = now;
     const record: DeviceLifecycleRecord = { accountIdentityReference, deviceId: request.deviceId, deviceIdentityReference: request.deviceIdentityReference, verificationKeyReference: request.verificationKey, state: 'active', trustEpoch: 1, createdAt, lastTrustUpdate: createdAt };
@@ -63,7 +63,7 @@ export class DurableDeviceTrustAuthority {
     const now = this.now(); const target = await this.store.read(event.accountIdentityReference, event.targetDeviceId);
     const issuer = await this.store.read(event.accountIdentityReference, event.issuerDeviceId);
     const issuerKey = issuer?.verificationKeyReference;
-    if (target || !issuer || issuer.state !== 'active' || !issuerKey || event.expiresAt <= now || event.createdAt > now ||
+    if (target || !issuer || issuer.state !== 'active' || !issuerKey || event.expiresAt <= now || event.createdAt > now + LIFECYCLE_CLOCK_SKEW_MS ||
       event.issuerDeviceId === event.targetDeviceId || event.issuerEpoch !== issuer.trustEpoch ||
       event.issuerIdentityReference !== issuer.deviceIdentityReference || !event.targetFingerprint ||
       !verifyDeviceControlSignature(event, issuerKey)) throw new Error('Lifecycle enrollment rejected.');
