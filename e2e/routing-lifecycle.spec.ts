@@ -66,13 +66,13 @@ test.describe('persistent authenticated routing lifecycle', () => {
       await expect(alice.locator('.chat-header')).toContainText('Bob', { timeout: 30000 }); await expect(bob.locator('.chat-header')).toContainText('Alice');
       const fingerprints: string[] = [], peerFingerprints: string[] = [];
       for (const page of [alice, bob]) {
-        await page.getByRole('button', { name: 'Open settings' }).click(); await page.getByRole('button', { name: 'Security Your identity and contact verification', exact: true }).click();
+        await page.getByRole('button', { name: 'Open settings' }).click(); await page.getByRole('button', { name: 'Security Your security number and checking contacts', exact: true }).click();
         await expect(page.locator('.verification-code').first()).toHaveText(/K3 .+/);
         fingerprints.push((await page.locator('.verification-code').first().textContent()) ?? '');
         await expect(page.locator('.verification-code').last()).toHaveText(/K3 .+/);
         peerFingerprints.push((await page.locator('.verification-code').last().textContent()) ?? '');
-        await page.getByRole('button', { name: 'Compare security code', exact: true }).click(); await page.getByRole('button', { name: 'Codes match', exact: true }).click();
-        await page.getByRole('button', { name: 'Mark as verified', exact: true }).click(); await page.getByRole('button', { name: 'Back to chat', exact: true }).click();
+        await page.getByRole('button', { name: 'No', exact: true }).click(); await page.getByRole('button', { name: 'No, we’ll call', exact: true }).click(); await page.getByRole('button', { name: 'They match', exact: true }).click();
+        await page.getByRole('button', { name: 'Back to chat', exact: true }).click();
       }
       expect(peerFingerprints).toEqual([fingerprints[1], fingerprints[0]]);
       await send(alice, 'retained synthetic history'); await expect(bob.locator('#messages-area')).toContainText('retained synthetic history');
@@ -122,12 +122,12 @@ test.describe('persistent authenticated routing lifecycle', () => {
         await bob.locator('#channel-hash').fill(replacement); await bob.getByRole('button', { name: 'Continue', exact: true }).click();
         await expect(alice.locator('.chat-header')).toContainText('Bob'); await expect(bob.locator('.chat-header')).toContainText('Alice');
         for (const [i, page] of [alice, bob].entries()) {
-          await page.getByRole('button', { name: 'Open settings' }).click(); await page.getByRole('button', { name: 'Security Your identity and contact verification', exact: true }).click();
+          await page.getByRole('button', { name: 'Open settings' }).click(); await page.getByRole('button', { name: 'Security Your security number and checking contacts', exact: true }).click();
           await expect(page.locator('.verification-code').first()).toHaveText(fingerprints[i]);
           await expect(page.locator('.verification-code').last()).toHaveText(fingerprints[1 - i]);
-          await expect(page.getByRole('button', { name: 'Mark as verified', exact: true })).toBeDisabled();
-          await page.getByRole('button', { name: 'Compare security code', exact: true }).click(); await page.getByRole('button', { name: 'Codes match', exact: true }).click();
-          await page.getByRole('button', { name: 'Mark as verified', exact: true }).click(); await page.getByRole('button', { name: 'Back to chat', exact: true }).click();
+          await expect(page.getByRole('button', { name: 'They match', exact: true })).toHaveCount(0);
+          await page.getByRole('button', { name: 'No', exact: true }).click(); await page.getByRole('button', { name: 'No, we’ll call', exact: true }).click(); await page.getByRole('button', { name: 'They match', exact: true }).click();
+          await page.getByRole('button', { name: 'Back to chat', exact: true }).click();
         }
         await send(alice, 'new room explicitly verified'); await expect(bob.locator('#messages-area')).toContainText('new room explicitly verified');
         await send(bob, 'existing identity preserved'); await expect(alice.locator('#messages-area')).toContainText('existing identity preserved');
@@ -160,8 +160,8 @@ test.describe('persistent authenticated routing lifecycle', () => {
       await send(bob, 'synthetic reply after restart'); await expect(alice.locator('#messages-area')).toContainText('synthetic reply after restart');
       let i = 0;
       for (const page of [alice, bob]) {
-        await page.getByRole('button', { name: 'Open settings' }).click(); await page.getByRole('button', { name: 'Security Your identity and contact verification', exact: true }).click();
-        await expect(page.locator('.verification-view')).toContainText('Verified'); await expect(page.locator('.verification-code').first()).toHaveText(fingerprints[i++]);
+        await page.getByRole('button', { name: 'Open settings' }).click(); await page.getByRole('button', { name: 'Security Your security number and checking contacts', exact: true }).click();
+        await expect(page.locator('.verification-view')).toContainText('Checked on this device'); await expect(page.locator('.verification-code').first()).toHaveText(fingerprints[i++]);
         await page.getByRole('button', { name: 'Close settings' }).click();
       }
       await expect(bob.locator('.message.received').filter({ hasText: 'synthetic message while peer browser closed' })).toHaveCount(1);

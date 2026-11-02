@@ -44,7 +44,7 @@ test('authenticated Slate Trust app navigation, themes, messages, and narrow com
     await alice.screenshot({ path: testInfo.outputPath('authenticated-slate-dark.png'), fullPage: false });
     await alice.getByRole('button', { name: 'Back to settings' }).click();
     await alice.getByRole('button', { name: /^Security/ }).click();
-    await expect(alice.locator('.verification-view')).toContainText('Verified');
+    await expect(alice.locator('.verification-view')).toContainText('Checked on this device');
     await alice.getByRole('button', { name: 'Back to settings' }).click();
     await alice.getByRole('button', { name: /^Appearance/ }).click();
     await alice.getByRole('radio', { name: /Paper & Ink/ }).click();

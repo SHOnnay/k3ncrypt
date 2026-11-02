@@ -37,7 +37,7 @@ test('local archive is confirmed, survives unlock, preserves verified identity/h
     await alice.locator('#msg-input').fill('History stays encrypted and saved'); await alice.locator('#send-btn').click();
     await expect(bob.locator('#messages-area')).toContainText('History stays encrypted and saved');
     await alice.getByRole('button', { name: 'Contacts', exact: true }).click();
-    await expect(alice.locator('.workspace-contact').filter({ hasText: 'Bob' })).toContainText('Verified on this device');
+    await expect(alice.locator('.workspace-contact').filter({ hasText: 'Bob' })).toContainText('Checked on this device');
     const before = await protectedDigests(alice);
     await archive(alice, 'Bob', false);
     await expect(alice.locator('.workspace-contact').filter({ hasText: 'Bob' })).toHaveCount(1);
@@ -50,7 +50,7 @@ test('local archive is confirmed, survives unlock, preserves verified identity/h
     await expect(archived).toContainText('Bob');
     expect(await protectedDigests(alice)).toEqual(before);
     await archived.getByRole('button', { name: 'Restore conversation Bob', exact: true }).click();
-    await expect(alice.locator('.workspace-contact').filter({ hasText: 'Bob' })).toContainText('Verified on this device');
+    await expect(alice.locator('.workspace-contact').filter({ hasText: 'Bob' })).toContainText('Checked on this device');
     await alice.locator('.workspace-contact').filter({ hasText: 'Bob' }).click();
     await expect(alice.locator('#messages-area')).toContainText('History stays encrypted and saved');
     await bob.locator('#msg-input').fill('Messaging after local restore'); await bob.locator('#send-btn').click();

@@ -35,10 +35,9 @@ test('file selection is a local draft until explicit Send, then encrypted transf
   await expect(carol.locator('.chat-header')).toContainText('Alice', { timeout: 30000 });
   for (const page of [alice, carol]) {
     await page.getByRole('button', { name: 'Open settings' }).click();
-    await page.getByRole('button', { name: 'Security Your identity and contact verification', exact: true }).click();
-    await page.getByRole('button', { name: 'Compare security code', exact: true }).click();
-    await page.getByRole('button', { name: 'Codes match', exact: true }).click();
-    await page.getByRole('button', { name: 'Mark as verified', exact: true }).click();
+    await page.getByRole('button', { name: 'Security Your security number and checking contacts', exact: true }).click();
+    await page.getByRole('button', { name: 'No', exact: true }).click(); await page.getByRole('button', { name: 'No, we’ll call', exact: true }).click();
+    await page.getByRole('button', { name: 'They match', exact: true }).click();
     await page.getByRole('button', { name: 'Back to chat', exact: true }).click();
   }
   const file = fixtures[1];

@@ -16,13 +16,13 @@ export async function create(page: Page, name: string) {
 }
 export async function security(page: Page) {
   await page.getByRole('button', { name: 'Open settings' }).click();
-  await page.getByRole('button', { name: 'Security Your identity and contact verification', exact: true }).click();
+  await page.getByRole('button', { name: 'Security Your security number and checking contacts', exact: true }).click();
 }
 export async function ownIdentity(page: Page): Promise<string> {
   await security(page);
   await expect(page.locator('.verification-security-details')).toHaveCount(1);
   await page.locator('.verification-security-details summary').click();
-  const qr = await page.getByRole('textbox', { name: 'Your verification QR payload', exact: true }).inputValue();
+  const qr = await page.getByRole('textbox', { name: 'My code as text', exact: true }).inputValue();
   await page.getByRole('button', { name: 'Close settings' }).click();
   return JSON.parse(qr).fingerprint as string;
 }
@@ -56,9 +56,32 @@ export async function connectedPair(browser: import('@playwright/test').Browser,
   await expect(alice.locator('.chat-header')).toContainText('Bob', { timeout: 30000 });
   await expect(bob.locator('.chat-header')).toContainText('Alice', { timeout: 30000 });
   for (const page of [alice, bob]) {
-    await security(page); await page.getByRole('button', { name: 'Compare security code', exact: true }).click(); await page.getByRole('button', { name: 'Codes match', exact: true }).click();
-    await page.getByRole('button', { name: 'Mark as verified', exact: true }).click();
+    await security(page); await page.getByRole('button', { name: 'No', exact: true }).click(); await page.getByRole('button', { name: 'No, we’ll call', exact: true }).click(); await page.getByRole('button', { name: 'They match', exact: true }).click();
     await page.getByRole('button', { name: 'Back to chat', exact: true }).click();
   }
   return { a, b, alice, bob };
+}
+
+/** A connected pair where nobody has checked anybody yet (M1c). */
+export async function uncheckedPair(browser: import('@playwright/test').Browser, names: [string, string] = ['Alice', 'Bob']) {
+  const a = await browser.newContext({ permissions: ['microphone', 'camera'] });
+  const b = await browser.newContext({ permissions: ['microphone', 'camera'] });
+  const alice = await a.newPage(); const bob = await b.newPage();
+  await create(alice, names[0]); await create(bob, names[1]);
+  const link = await invite(alice);
+  await bob.locator('.new-conversation').click(); await bob.getByRole('button', { name: 'I have an invitation' }).click();
+  await bob.locator('#channel-hash').fill(link); await bob.getByRole('button', { name: 'Continue', exact: true }).click();
+  await expect(alice.locator('.chat-header')).toContainText(names[1], { timeout: 30000 });
+  await expect(bob.locator('.chat-header')).toContainText(names[0], { timeout: 30000 });
+  return { a, b, alice, bob };
+}
+
+/** Remote check: not Android, apart, numbers match. "They match" records the check. */
+export async function checkByNumbers(page: Page) {
+  await security(page);
+  await page.getByRole('button', { name: 'No', exact: true }).click();
+  await page.getByRole('button', { name: 'No, we’ll call', exact: true }).click();
+  await page.getByRole('button', { name: 'They match', exact: true }).click();
+  await expect(page.locator('.verification-summary')).toContainText('Checked on this device');
+  await page.getByRole('button', { name: 'Back to chat', exact: true }).click();
 }

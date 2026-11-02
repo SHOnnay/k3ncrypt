@@ -174,9 +174,8 @@ async function openContact(page: Page, name: string) {
 async function verify(page: Page) {
   await page.getByRole('button', { name: 'Open settings' }).click();
   await page.getByRole('button', { name: 'Security' }).click();
-  await page.getByRole('button', { name: 'Compare security code', exact: true }).click();
-  await page.getByRole('button', { name: 'Codes match', exact: true }).click();
-  await page.getByRole('button', { name: 'Mark as verified', exact: true }).click();
+  await page.getByRole('button', { name: 'No', exact: true }).click(); await page.getByRole('button', { name: 'No, we’ll call', exact: true }).click();
+  await page.getByRole('button', { name: 'They match', exact: true }).click();
   await page.getByRole('button', { name: 'Back to chat', exact: true }).click();
 }
 

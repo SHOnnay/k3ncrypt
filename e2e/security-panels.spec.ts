@@ -37,7 +37,7 @@ test('authenticated four-panel light/dark, narrow layouts, keyboard and restart 
         await expect(dialog).toBeVisible();
         await alice.emulateMedia({ reducedMotion: 'reduce' });
         expect(await dialog.evaluate(node => getComputedStyle(node).animationName)).toBe('none');
-        if (name === 'Security') await expect(dialog.locator('.verification-summary')).toContainText('Verified');
+        if (name === 'Security') await expect(dialog.locator('.verification-summary')).toContainText('Checked on this device');
         if (name === 'Devices') {
           await expect(dialog.getByRole('article', { name: 'This device', exact: true })).toHaveCount(1);
           await expect(dialog.getByRole('button', { name: 'Revoke', exact: true })).toHaveCount(0);
@@ -116,7 +116,7 @@ test('authenticated four-panel light/dark, narrow layouts, keyboard and restart 
     await restarted.locator('.conversation-row').filter({ hasText: 'Bob' }).click();
     await expect(restarted.locator('.chat-header')).toContainText('Bob');
     await expect(restarted.locator('#messages-area')).toContainText('Panel correction preserves messaging');
-    await panel(restarted, 'Security'); await expect(restarted.locator('.verification-summary')).toContainText('Verified');
+    await panel(restarted, 'Security'); await expect(restarted.locator('.verification-summary')).toContainText('Checked on this device');
     await restarted.getByRole('button', { name: 'Close settings' }).click();
     const restored = await panel(restarted, 'Privacy');
     await expect(restored.getByRole('checkbox', { name: /^Blur sensitive content/ })).toBeChecked();
@@ -132,25 +132,25 @@ test('read-only service checks distinguish HTTP readiness, failure, offline and 
     let checks = 0;
     await page.route('**/api/ready', route => { checks++; return route.fulfill({ status: 503, contentType: 'application/json', body: '{"status":"not_ready"}' }); });
     let dialog = await panel(page, 'Connection');
-    await expect(dialog).toContainText('Not ready'); expect(checks).toBe(1);
+    await expect(dialog).toContainText('K3NCRYPT server: Not reachable'); expect(checks).toBe(1);
     await page.unroute('**/api/ready');
     await page.route('**/api/ready', route => { checks++; return route.fulfill({ status: 200, contentType: 'text/html', body: '<html>Not the service</html>' }); });
-    await dialog.getByRole('button', { name: 'Check service again' }).click(); await expect(dialog).toContainText('Not ready');
+    await dialog.getByRole('button', { name: 'Check the server again' }).click(); await expect(dialog).toContainText('K3NCRYPT server: Not reachable');
     await page.unroute('**/api/ready');
     await page.route('**/api/ready', route => { checks++; return route.abort(); });
-    await dialog.getByRole('button', { name: 'Check service again' }).click(); await expect(dialog).toContainText('Unreachable');
-    await context.setOffline(true); await expect(dialog).toContainText('Browser offline');
-    await context.setOffline(false); await expect(dialog).toContainText('Unreachable');
+    await dialog.getByRole('button', { name: 'Check the server again' }).click(); await expect(dialog).toContainText('K3NCRYPT server: Not reachable');
+    await context.setOffline(true); await expect(dialog).toContainText('You’re offline');
+    await context.setOffline(false); await expect(dialog).toContainText('K3NCRYPT server: Not reachable');
     await page.unroute('**/api/ready');
-    await dialog.getByRole('button', { name: 'Check service again' }).click(); await expect(dialog).toContainText('Reachable');
+    await dialog.getByRole('button', { name: 'Check the server again' }).click(); await expect(dialog).toContainText('K3NCRYPT server: Reachable');
     // Delayed response after close must not update a reopened panel. No secret or room parameters in the request.
     await page.getByRole('button', { name: 'Close settings' }).click();
     let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; });
     await page.route('**/api/ready', async route => { await held; await route.fulfill({ status: 200, contentType: 'application/json', body: '{"status":"ready"}' }).catch(() => undefined); });
     dialog = await panel(page, 'Connection');
     await expect(dialog.getByText('Checking…', { exact: true })).toBeVisible();
-    await expect(dialog.getByText('Unreachable', { exact: true })).toBeVisible({ timeout: 8000 });
-    await expect(dialog.getByRole('button', { name: 'Check service again' })).toBeEnabled();
+    await expect(dialog.getByText('K3NCRYPT server: Not reachable', { exact: true })).toBeVisible({ timeout: 8000 });
+    await expect(dialog.getByRole('button', { name: 'Check the server again' })).toBeEnabled();
     await page.getByRole('button', { name: 'Close settings' }).click();
     release(); await page.unroute('**/api/ready');
     dialog = await panel(page, 'Connection'); await expect(dialog).toContainText('Reachable');
@@ -163,21 +163,22 @@ test('waiting identity cannot be confirmed, real unverify stays explicit', async
   try {
     await create(page, 'Disposable invitation owner');
     const waiting = await panel(page, 'Security');
-    await expect(waiting).toContainText('Waiting for authenticated identity');
-    await expect(waiting.getByRole('button', { name: 'Mark as verified' })).toHaveCount(0);
-    await expect(waiting.getByRole('heading', { name: 'Contact verification' })).toBeVisible();
+    await expect(waiting).toContainText('Waiting for them to accept');
+    await expect(waiting.getByRole('button', { name: 'They match' })).toHaveCount(0);
+    await expect(waiting.getByRole('button', { name: 'Confirm' })).toHaveCount(0);
+    await expect(waiting.getByRole('heading', { name: 'Check it’s really your contact' })).toBeVisible();
     await page.screenshot({ path: `${evidence}/after-waiting-identity.png` });
   } finally { await fresh.close(); }
   const { a, b, alice } = await connectedPair(browser);
   try {
     const dialog = await panel(alice, 'Security');
     await dialog.locator('.verification-security-details summary').click();
-    await dialog.getByRole('button', { name: 'Mark unverified', exact: true }).click();
-    await expect(dialog.locator('.verification-summary')).toContainText('Not yet verified');
-    await expect(dialog.getByRole('button', { name: 'Mark as verified', exact: true })).toBeDisabled();
-    await dialog.getByRole('button', { name: 'Compare security code', exact: true }).click();
-    await dialog.getByRole('button', { name: "They don't match", exact: true }).click();
-    await expect(dialog.getByRole('button', { name: 'Mark as verified', exact: true })).toBeDisabled();
+    await dialog.getByRole('button', { name: 'Mark as not checked', exact: true }).click();
+    await expect(dialog.locator('.verification-summary')).toContainText('Not checked yet');
+    await expect(dialog.getByRole('button', { name: 'They match', exact: true })).toHaveCount(0);
+    await dialog.getByRole('button', { name: 'No', exact: true }).click(); await dialog.getByRole('button', { name: 'No, we’ll call', exact: true }).click();
+    await dialog.getByRole('button', { name: 'They don’t match', exact: true }).click();
+    await expect(dialog.locator('.verification-summary')).toContainText('Not checked yet');
     await alice.screenshot({ path: `${evidence}/after-unverified.png` });
   } finally { await a.close(); await b.close(); }
 });

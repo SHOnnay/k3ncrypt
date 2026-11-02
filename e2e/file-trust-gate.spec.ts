@@ -6,9 +6,8 @@ import { create, invite, security } from './usabilityHelpers';
 // be able to open what arrives until he verifies her explicitly.
 const verify = async (page: Page) => {
   await security(page);
-  await page.getByRole('button', { name: 'Compare security code', exact: true }).click();
-  await page.getByRole('button', { name: 'Codes match', exact: true }).click();
-  await page.getByRole('button', { name: 'Mark as verified', exact: true }).click();
+  await page.getByRole('button', { name: 'No', exact: true }).click(); await page.getByRole('button', { name: 'No, we’ll call', exact: true }).click();
+  await page.getByRole('button', { name: 'They match', exact: true }).click();
   await page.getByRole('button', { name: 'Back to chat', exact: true }).click();
 };
 
@@ -30,7 +29,7 @@ test('an unverified recipient cannot open a received file until they verify the 
 
   const card = bob.locator('.message.received .message-file-card').last();
   await expect(card).toBeVisible({ timeout: 30_000 });
-  await expect(card).toContainText('Verify this contact to open files.');
+  await expect(card).toContainText('Check it’s really Alice to open this file.');
   await expect(bob.getByRole('button', { name: 'Download protected file', exact: true })).toHaveCount(0);
 
   await verify(bob);

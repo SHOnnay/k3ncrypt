@@ -1,31 +1,38 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { create, invite } from './usabilityHelpers';
 
 const passphrase = 'alpha-family-existing-account-2026';
+// Bug A decision: own pending invitations live only on the Invite someone screen.
+const inviteScreen = async (page: Page) => {
+  // Setup completion hides the overlay asynchronously; retry until the Invite screen is showing.
+  await expect(async () => {
+    await page.locator('.new-conversation').click();
+    await expect(page.getByRole('heading', { name: 'Invite someone' })).toBeVisible({ timeout: 1_000 });
+  }).toPass({ timeout: 20_000 });
+  return page.getByRole('region', { name: 'Your invitations' });
+};
 
-test('pending invitations can be locally dismissed and restored across refresh and unlock', async ({ page }) => {
+test('own invitations can be hidden and shown again on the Invite screen across refresh and unlock', async ({ page }) => {
   test.setTimeout(90_000);
   await create(page, 'Alice');
   await invite(page);
-  await expect(page.getByText('Pending Invitations', { exact: true })).toBeVisible();
-  const invitation = page.locator('.pending-invitation-row').filter({ has: page.getByRole('button', { name: /Dismiss on this device/ }) }).first();
-  await expect(invitation).toBeVisible();
-  await expect(invitation).toContainText(/Invitation ·/);
-  await expect(invitation).toContainText(/Expires|Expired/);
-  const visibleInvitations = page.getByRole('button', { name: 'Dismiss on this device', exact: true });
-  const beforeDismiss = await visibleInvitations.count();
-  expect(beforeDismiss).toBeGreaterThan(0);
-  await invitation.getByRole('button', { name: 'Dismiss on this device' }).click();
-  await expect(visibleInvitations).toHaveCount(beforeDismiss - 1);
-  await expect(page.getByText('Dismissed on this device (1)', { exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Conversations' })).not.toContainText('Your invitation');
+  const own = await inviteScreen(page);
+  const rows = own.locator('.own-invitation-row');
+  const before = await rows.count();
+  expect(before).toBeGreaterThan(0);
+  await expect(rows.first()).toContainText('Your invitation ·');
+  await expect(rows.first()).toContainText(/Expires/);
+  await rows.first().getByRole('button', { name: 'Hide', exact: true }).click();
+  await expect(own.getByRole('button', { name: 'Hide', exact: true })).toHaveCount(before - 1);
+  await expect(own.getByText('Hidden on this device (1)', { exact: true })).toBeVisible();
 
   await page.reload();
   await page.getByRole('button', { name: 'Unlock this device', exact: true }).click();
   await page.locator('input[type=password]').fill(passphrase);
   await page.getByRole('button', { name: 'Unlock account', exact: true }).click();
-  await expect(page.getByText('Dismissed on this device (1)', { exact: true })).toBeVisible();
-  await page.getByText('Dismissed on this device (1)', { exact: true }).click();
-  await page.getByRole('button', { name: 'Restore', exact: true }).click();
-  await expect(visibleInvitations).toHaveCount(beforeDismiss);
-  await expect(page.locator('.pending-invitation-row').filter({ hasText: /Invitation ·/ }).first()).toContainText(/Expires|Expired/);
+  const again = await inviteScreen(page);
+  await again.getByText('Hidden on this device (1)', { exact: true }).click();
+  await again.getByRole('button', { name: 'Show again', exact: true }).click();
+  await expect(again.getByRole('button', { name: 'Hide', exact: true })).toHaveCount(before);
 });

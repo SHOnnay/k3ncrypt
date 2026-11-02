@@ -89,23 +89,20 @@ test('modern private contact works after offline recipient and both browser rest
   await expect(bobReturned.locator('#messages-area')).toContainText('hello while you were away', { timeout: 20_000 });
   await bobReturned.getByRole('button', { name: 'Open settings' }).click();
   await bobReturned.getByRole('button', { name: 'Security' }).click();
-  await expect(bobReturned.locator('.verification-view')).toContainText('Verify Alice'); // f868cd5d replaced this sentence with the 'Verify <name>' heading.
-  await expect(bobReturned.locator('.verification-view')).toContainText('Not yet verified'); // f868cd5d renamed the unverified status pill.
+  await expect(bobReturned.locator('.verification-view')).toContainText('Check it’s really Alice'); // f868cd5d replaced this sentence with the 'Verify <name>' heading.
+  await expect(bobReturned.locator('.verification-view')).toContainText('Not checked yet'); // f868cd5d renamed the unverified status pill.
   const bobFingerprint = await bobReturned.locator('.verification-code').first().textContent();
   await alice.page.getByRole('button', { name: 'Open settings' }).click();
   await alice.page.getByRole('button', { name: 'Security' }).click();
   await expect(alice.page.locator('.verification-code').last()).toHaveText(bobFingerprint ?? '');
   await alice.page.getByRole('button', { name: 'Close settings' }).click();
-  const markVerified = bobReturned.getByRole('button', { name: 'Mark as verified' });
-  await expect(markVerified).toBeDisabled();
-  await bobReturned.getByRole('button', { name: 'Compare security code', exact: true }).click();
-  await bobReturned.getByRole('button', { name: 'Codes match' }).click();
-  await expect(markVerified).toBeEnabled();
-  await bobReturned.getByRole('button', { name: 'Mark as verified' }).click();
-  await expect(bobReturned.locator('.verification-view')).toContainText('Verified');
+  await expect(bobReturned.getByRole('button', { name: 'They match' })).toHaveCount(0);
+  await bobReturned.getByRole('button', { name: 'No', exact: true }).click(); await bobReturned.getByRole('button', { name: 'No, we’ll call', exact: true }).click();
+  await bobReturned.getByRole('button', { name: 'They match' }).click();
+  await expect(bobReturned.locator('.verification-view')).toContainText('Checked on this device');
   await bobReturned.getByRole('button', { name: 'Back to settings' }).click();
   await bobReturned.getByRole('button', { name: 'Security' }).click();
-  await expect(bobReturned.locator('.verification-view')).toContainText('Verified');
+  await expect(bobReturned.locator('.verification-view')).toContainText('Checked on this device');
   await bobReturned.getByRole('button', { name: 'Close settings' }).click();
   await bobReturned.locator('#msg-input').fill('I am here now');
   await bobReturned.locator('#send-btn').click();
@@ -117,7 +114,7 @@ test('modern private contact works after offline recipient and both browser rest
   const aliceAgain = await resume(alice.context, link);
   await bobAgain.getByRole('button', { name: 'Open settings' }).click();
   await bobAgain.getByRole('button', { name: 'Security' }).click();
-  await expect(bobAgain.locator('.verification-view')).toContainText('Verified');
+  await expect(bobAgain.locator('.verification-view')).toContainText('Checked on this device');
   await expect(bobAgain.locator('.verification-code').first()).toHaveText(bobFingerprint ?? '');
   await bobAgain.getByRole('button', { name: 'Close settings' }).click();
   await aliceAgain.locator('#msg-input').fill('after restart');
@@ -354,11 +351,10 @@ test('Alice can stay in Carol while Bob accepts, then accept Bob from durable ma
   const bobInvite = parseModernInviteInput(bobInvitation);
   console.log('BOOTSTRAP_INVITATION', JSON.stringify({ owner: 'Alice', peer: 'Bob', roomId: bobInvite?.roomId, invitationId: bobInvite?.version === 2 ? bobInvite.invitation.invitationId : undefined }));
   await roomLifecycle('alice-created-bob-invitation', [{ alias: 'Alice', page: alice.page }]);
-  const pendingBob = alice.page.locator('.conversation-row').filter({ hasNotText: 'Carol' });
   const stayInBobDuringAcceptance = process.env.PLAYWRIGHT_BOOTSTRAP_STAY_IN_BOB_DURING_ACCEPTANCE === 'true';
   if (stayInBobDuringAcceptance) {
-    await expect(pendingBob).toHaveCount(1);
-    await pendingBob.click();
+    await alice.page.locator('.new-conversation').click();
+    await alice.page.getByRole('region', { name: 'Your invitations' }).getByRole('button', { name: /^Open Your invitation/ }).first().click();
     await expect.poll(() => selectedRoomBinding(alice.page)).toEqual([bobInvite?.roomId, bobInvite?.roomId, bobInvite?.roomId]);
   }
   const carolRow = alice.page.locator('.conversation-row').filter({ hasText: 'Carol' });
@@ -378,8 +374,9 @@ test('Alice can stay in Carol while Bob accepts, then accept Bob from durable ma
   await expect.poll(() => selectedRoomBinding(alice.page)).toEqual([roomAliceShouldViewDuringAcceptance, roomAliceShouldViewDuringAcceptance, roomAliceShouldViewDuringAcceptance]);
   if (!stayInBobDuringAcceptance) await expect(alice.page.locator('.chat-header')).toContainText(/Carol|Contact · [A-F0-9]{4}/);
   if (!stayInBobDuringAcceptance) {
-    await expect(pendingBob).toHaveCount(1);
-    await pendingBob.click();
+    // Bug A decision: own invitations open from the Invite screen, not the sidebar.
+    await alice.page.locator('.new-conversation').click();
+    await alice.page.getByRole('region', { name: 'Your invitations' }).getByRole('button', { name: /^Open Your invitation/ }).first().click();
     await expect.poll(() => selectedRoomBinding(alice.page)).toEqual([bobInvite?.roomId, bobInvite?.roomId, bobInvite?.roomId]);
   }
   await roomLifecycle('alice-opened-bob-after-acceptance', [{ alias: 'Alice', page: alice.page }, { alias: 'Bob', page: bobPage }, { alias: 'Carol', page: carolPage }]);

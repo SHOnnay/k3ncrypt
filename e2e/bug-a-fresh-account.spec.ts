@@ -13,9 +13,11 @@ async function snapshot(page: Page, name: string) {
   await page.waitForTimeout(500);
   await page.screenshot({ path: `${out}/${name}-contacts.png`, fullPage: true });
   const contacts = await page.locator('.workspace-contact').allInnerTexts();
-  const pending = await page.getByRole('region', { name: 'Pending invitations' }).innerText().catch(() => '');
   const pendingRows = await page.locator('.workspace-record').allInnerTexts();
-  return { sidebar, contacts, pending, pendingRows };
+  // M1c / Bug A: the own invitation is listed only on the Invite someone screen.
+  await page.locator('.new-conversation').click();
+  const ownInvitations = await page.getByRole('region', { name: 'Your invitations' }).innerText({ timeout: 10_000 });
+  return { sidebar, contacts, pendingRows, ownInvitations };
 }
 
 test('same profile has one vault; a locked invitation join asks for the existing passphrase', async ({ browser }) => {
@@ -65,6 +67,8 @@ test('fresh accounts: no cross-account data, and the only entry is the own pendi
     const seen = await snapshot(page, name.split(' ')[0].toLowerCase());
     results[name] = seen;
     expect(seen.contacts, 'an unaccepted account must have no established contacts').toEqual([]);
+    expect(seen.ownInvitations).toContain('Your invitation ·');
+    expect(seen.sidebar).toContain('No contacts yet.');
     expect(JSON.stringify(seen)).not.toContain(name === 'Alpha Fresh' ? 'Bravo' : 'Alpha');
     await context.close();
   }

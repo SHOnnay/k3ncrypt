@@ -6,9 +6,8 @@ import { connectedPair, create, invite } from './usabilityHelpers';
 const verify = async (page: Page): Promise<void> => {
   await page.getByRole('button', { name: 'Open settings' }).click();
   await page.getByRole('button', { name: 'Security' }).click();
-  await page.getByRole('button', { name: 'Compare security code', exact: true }).click();
-  await page.getByRole('button', { name: 'Codes match', exact: true }).click();
-  await page.getByRole('button', { name: 'Mark as verified', exact: true }).click();
+  await page.getByRole('button', { name: 'No', exact: true }).click(); await page.getByRole('button', { name: 'No, we’ll call', exact: true }).click();
+  await page.getByRole('button', { name: 'They match', exact: true }).click();
   await page.getByRole('button', { name: 'Back to chat', exact: true }).click();
 };
 
@@ -232,7 +231,7 @@ test('three verified profiles deliver to Alice background rooms over one real mu
   await alice.getByRole('button', { name: 'Open settings' }).click();
   await alice.getByRole('button', { name: 'Security' }).click();
   await alice.locator('.verification-security-details summary').click();
-  await alice.getByRole('button', { name: 'Mark unverified', exact: true }).click();
+  await alice.getByRole('button', { name: 'Mark as not checked', exact: true }).click();
   await alice.getByRole('button', { name: 'Close settings', exact: true }).click();
   await openContact(alice, 'Bob');
   await carol.locator('.chat-footer input[type=text], .chat-footer textarea').fill('Carol after Alice revoked verification');
