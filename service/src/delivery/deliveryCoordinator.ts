@@ -28,7 +28,7 @@ export class DeliveryCoordinator {
             if (work.skip(item)) continue;
             if (item.relayId && item.sentAt && this.now() - item.sentAt < 5000) continue;
             try {
-                await work.beforeSubmit();
+                await work.beforeSubmit(item);
                 const sent = await this.submit(item.envelope, work.recipientRoutingId);
                 item.relayId = sent.id;
                 item.sentAt = this.now();

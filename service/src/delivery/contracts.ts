@@ -33,7 +33,8 @@ export interface DeliveryRetryWork<T extends PendingDeliveryEnvelope> {
     readonly pending: T[];
     readonly recipientRoutingId?: string;
     readonly skip: (item: T) => boolean;
-    readonly beforeSubmit: () => Promise<void>;
+    /** Re-checks authority for this exact item immediately before it is submitted. */
+    readonly beforeSubmit: (item: T) => Promise<void>;
     readonly persist: (pending: T[]) => Promise<void>;
     readonly onTerminalRejection?: (item: T) => void;
 }

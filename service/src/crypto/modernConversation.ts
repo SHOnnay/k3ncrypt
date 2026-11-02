@@ -138,7 +138,8 @@ const startsWithBytes = (value: Uint8Array, prefix: Uint8Array): boolean =>
 
 interface SenderOriginMetadata { version: 1; basis: 'durable-commit'; }
 const SENDER_ORIGIN: SenderOriginMetadata = Object.freeze({ version: 1, basis: 'durable-commit' });
-interface PendingEnvelope { envelope: EncryptedEnvelope; relayId?: string; sentAt?: number; clientId?: string; senderOrigin?: SenderOriginMetadata; roomMessageVersion?: 1; recipientIdentityReference?: string; terminallyRejected?: true; heldNotSentSecurely?: true; }
+/** `requiresVerifiedContact` is local outbox metadata only; it never leaves this device. */
+interface PendingEnvelope { envelope: EncryptedEnvelope; relayId?: string; sentAt?: number; clientId?: string; senderOrigin?: SenderOriginMetadata; roomMessageVersion?: 1; recipientIdentityReference?: string; terminallyRejected?: true; heldNotSentSecurely?: true; requiresVerifiedContact?: true; }
 interface PublicationMarker { version: 1; roomId: string; address?: string; routingProof?: string; }
 export interface ModernConnectionDetails {
     ownFingerprint: string;
@@ -1054,7 +1055,7 @@ export class ModernConversation {
                         }
                         const nextPending = pending.filter((item) => item.clientId !== supersedeHeldClientId);
                         if (nextPending.length >= MAX_PENDING) throw new Error('Too many messages are waiting to send.');
-                        nextPending.push({ envelope, clientId, senderOrigin: SENDER_ORIGIN, ...(roomMessageVersion ? { roomMessageVersion } : {}), recipientIdentityReference: contact.identityId });
+                        nextPending.push({ envelope, clientId, senderOrigin: SENDER_ORIGIN, ...(roomMessageVersion ? { roomMessageVersion } : {}), recipientIdentityReference: contact.identityId, ...(fileReference ? { requiresVerifiedContact: true as const } : {}) });
                         const updates: SecureRecordUpdate[] = [
                             { recordType: OUTBOX_RECORD, recordId: this.roomId!, expected: outboxBytes, next: asBytes(nextPending) },
                         ];
@@ -1250,14 +1251,17 @@ export class ModernConversation {
                     recipientRoutingId: this.remoteAddress,
                     skip: (item) => Boolean(item.terminallyRejected || item.heldNotSentSecurely) || contact?.changeStatus !== 'unchanged' || !contact.identityId ||
                         item.recipientIdentityReference !== contact.identityId ||
+                        // P1-5: a queued file reference waits until the contact is verified again; text keeps flowing.
+                        (item.requiresVerifiedContact === true && contact.verification !== 'verified') ||
                         (this.sessionHealth === 'renewal-pending' && item.clientId !== renewal?.clientId) ||
                         (this.transport.activeTransport()?.requiresRoomMessageV1 === true && item.roomMessageVersion !== 1),
-                    beforeSubmit: async () => {
+                    beforeSubmit: async (item) => {
                         await this.assertCurrentDeviceTrust();
                         const current = await this.getContact();
                         if (current?.changeStatus !== 'unchanged' || !current.identityId || current.identityId !== contact?.identityId) {
                             throw new Error('Review this contact’s changed identity before sending queued messages.');
                         }
+                        if (item.requiresVerifiedContact === true && current.verification !== 'verified') throw new Error('Verify this contact before sending queued files.');
                         const currentFloor = await readRoomMessageVersionFloor(this.storage, this.roomId!, current.identityId);
                         activeTransport?.setAuthenticatedMessageVersionFloor?.(currentFloor >= 1 ? 1 : 0);
                         testOnlyDeliveryStage('relay-dispatch');

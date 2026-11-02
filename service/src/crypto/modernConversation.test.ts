@@ -192,7 +192,7 @@ const sentHistoryUpdate = (storage: Storage, text: string) => async (id: string)
         next: new TextEncoder().encode(JSON.stringify(next)).buffer as ArrayBuffer };
 };
 
-const verifiedPeerPair = async () => {
+const verifiedPeerPair = async (aliceFailSends = 0) => {
     jest.mocked(publishVodozemacBundle)
         .mockResolvedValueOnce({ address: localAddress, renewalProof: 'r'.repeat(43) })
         .mockResolvedValueOnce({ address: remoteAddress, renewalProof: 'r'.repeat(43) });
@@ -201,7 +201,7 @@ const verifiedPeerPair = async () => {
 
     const aliceStorage = new Storage();
     const bobStorage = new Storage();
-    const aliceTransport = fakeTransport();
+    const aliceTransport = fakeTransport(false, aliceFailSends);
     const bobTransport = fakeTransport();
     const aliceMessages: string[] = [];
     const bobMessages: string[] = [];
@@ -1261,6 +1261,28 @@ it('V2 reference publication uses protected verification CAS and reset denies re
         await expect(pair.alice.sendWithReceipt(reference)).resolves.toEqual(expect.any(String));
         await pair.alice.unverifyContact(); const before = pair.aliceTransport.sent.length;
         await expect(pair.alice.sendWithReceipt(reference)).rejects.toThrow('Verified unchanged'); expect(pair.aliceTransport.sent).toHaveLength(before);
+    } finally { await pair.alice.close(); await pair.bob.close(); }
+});
+
+// P1-5. Invariant: file transfer requires a verified, unchanged identity. A file reference
+// queued while verified must not leave on retry after Mark unverified; text keeps flowing.
+it('outbox retry holds a queued file reference after verification reset and sends it only after re-verification', async () => {
+    const pair = await verifiedPeerPair(1);
+    try {
+        const { serializeFileReference, b64, FILE_LIMITS } = await import('../files/protocol');
+        const binding = await pair.alice.fileTransferBinding(true); const createdAt = Date.now();
+        const reference = serializeFileReference({ version: 2, context: { ...binding, transferId: crypto.randomUUID(), fileSize: 1, chunkSize: FILE_LIMITS.MAX_CHUNK_SIZE, chunkCount: 1 }, key: b64(new Uint8Array(32)), createdAt, expiresAt: createdAt + FILE_LIMITS.TRANSFER_EXPIRY });
+        await pair.alice.sendWithReceipt(reference).catch(() => undefined);
+        expect(pair.aliceTransport.sent).toHaveLength(0);
+        await pair.alice.unverifyContact();
+        await pair.alice.sendWithReceipt('text still flows while unverified');
+        const afterText = pair.aliceTransport.sent.length;
+        expect(afterText).toBe(1);
+        await pair.alice.retryPending();
+        expect(pair.aliceTransport.sent).toHaveLength(afterText);
+        await pair.alice.verifyContact(true);
+        await pair.alice.retryPending();
+        expect(pair.aliceTransport.sent).toHaveLength(afterText + 1);
     } finally { await pair.alice.close(); await pair.bob.close(); }
 });
 
