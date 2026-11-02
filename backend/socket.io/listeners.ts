@@ -1,3 +1,4 @@
+import { controlEventLimiter, deliveryAckLimiter } from './socketLimits';
 import { STORAGE_FULL_MESSAGE, StorageFullError } from '../db/storageCaps';
 import { onSafe, type Ack } from './safeAck';
 import { randomUUID } from 'crypto';
@@ -266,6 +267,7 @@ const connectionListener = (socket: CustomSocket, io) => {
   };
   registerLegacyMailboxWakeup(socket, requestReplay);
   onSafe(socket, "chat-join", async (data: any, ack: Ack) => {
+    if (!controlEventLimiter.consume(socket.id)) { ack({ error: 'Rate limit exceeded.' }); return; } // M3e
     if (socket.muxConnectionGeneration) { ack({ error: 'Legacy room join is unavailable on a multiplexed connection.' }); return; }
     const rejectJoin = (error: string, code: string) => ack(process.env.NODE_ENV === 'production' ? { error } : { error, code });
     const { userID, channelID, controlCapability, routingProof, deviceAuthorizationProof, proofNonce, protocolFeatures } = data || {};
@@ -371,6 +373,7 @@ const connectionListener = (socket: CustomSocket, io) => {
   });
 
   onSafe(socket, 'mailbox-replay', async (_payload: unknown, ack: Ack) => {
+    if (!controlEventLimiter.consume(socket.id)) { ack({ error: 'Rate limit exceeded.' }); return; } // M3e
     if (!currentLegacyOwner(socket) || !await activeBoundDevice(socket) || !currentLegacyOwner(socket)) {
       ack({ error: 'Mailbox replay rejected.' });
       return;
@@ -520,6 +523,7 @@ const connectionListener = (socket: CustomSocket, io) => {
   });
 
   onSafe(socket, 'recipient-rejected', async (payload: { id?: unknown; roomId?: unknown; claimId?: unknown; reasonClass?: unknown }, ack: Ack) => {
+    if (!deliveryAckLimiter.consume(socket.id)) { ack({ error: 'Rate limit exceeded.' }); return; } // M3e
     if (!payload || typeof payload !== 'object' || Array.isArray(payload) ||
         !exactKeys(payload, ['id', 'roomId', 'claimId', 'reasonClass']) ||
         !isValidRoomId(payload.id) || !isValidRoomId(payload.roomId) || !isValidRoomId(payload.claimId) ||
@@ -547,6 +551,7 @@ const connectionListener = (socket: CustomSocket, io) => {
   });
 
   onSafe(socket, "received", async (payload: { id?: unknown; claimId?: unknown }, _ack: Ack) => {
+    if (!deliveryAckLimiter.consume(socket.id)) return; // M3e: the mailbox lease retries an unacknowledged message
     if (!payload || typeof payload !== 'object' || Array.isArray(payload) ||
         !Object.keys(payload).every((key) => key === 'id' || key === 'claimId') || !isValidRoomId(payload.id) ||
         (payload.claimId !== undefined && !isValidRoomId(payload.claimId))) {
@@ -566,6 +571,7 @@ const connectionListener = (socket: CustomSocket, io) => {
     if (replayTimer) clearTimeout(replayTimer);
     replayRequested = false;
     rateLimiter.reset(socket.id);
+    controlEventLimiter.reset(socket.id); deliveryAckLimiter.reset(socket.id);
     if (!(channelID && userID)) {
       return;
     }

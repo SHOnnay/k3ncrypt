@@ -41,7 +41,12 @@ const client = async (): Promise<Socket> => {
 const settle = () => new Promise(resolve => setTimeout(resolve, 150));
 
 beforeEach(() => { rejections.length = 0; exceptions.length = 0; });
-afterEach(() => { delete process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY; });
+afterEach(async () => {
+  delete process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY;
+  // M3e caps concurrent sockets per address; release this test's sockets.
+  for (const socket of sockets.splice(0)) socket.disconnect();
+  await new Promise(resolve => setTimeout(resolve, 50));
+});
 
 describe.each([['mux off (production default)', false], ['mux on', true]])('relay acknowledgement safety, %s', (_label, mux) => {
   beforeEach(() => { if (mux) process.env.K3NCRYPT_MUX_MESSAGE_DELIVERY = 'true'; });

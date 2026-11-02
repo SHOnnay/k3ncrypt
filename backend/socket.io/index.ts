@@ -1,3 +1,4 @@
+import { admitSocket, clientAddress } from './socketLimits';
 import { Server, Socket } from "socket.io";
 import connectionListener from "./listeners";
 import { allowedCorsOrigins, socketOriginAdmission } from '../security/cors';
@@ -65,6 +66,13 @@ export const initSocket = (server) => {
     }
   });
   installMaintenanceSocketGuards(io);
+  // M3e: at most MAX_SOCKETS_PER_ADDRESS concurrent sockets per client address.
+  io.use((socket, next) => {
+    const release = admitSocket(clientAddress(socket.request));
+    if (!release) { next(new Error('Too many connections from this network.')); return; }
+    socket.once('disconnect', release);
+    next();
+  });
   markRelayReady('messaging');
   operationalLog('info', 'messaging_relay_ready');
 
