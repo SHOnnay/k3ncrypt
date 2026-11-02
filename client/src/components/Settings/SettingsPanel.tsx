@@ -27,7 +27,7 @@ import './SettingsPanel.css';
 import { classifySafeDiagnostic, logSafeFailure, type SafeDiagnosticCode } from '../../product/safeDiagnostics';
 import { SafeDiagnosticDetails } from '../common/SafeDiagnosticDetails';
 
-type SettingsView = 'settings' | 'profile' | 'devices' | 'privacy' | 'notifications' | 'calls' | 'appearance' | 'network' | 'verification';
+type SettingsView = 'settings' | 'profile' | 'devices' | 'privacy' | 'notifications' | 'calls' | 'appearance' | 'network' | 'verification' | 'about';
 
 interface SettingsPanelProps {
   isOpen: boolean;
@@ -44,6 +44,7 @@ const viewTitles: Record<SettingsView, string> = {
   calls: 'Calls',
   appearance: 'Appearance',
   network: 'Connection',
+  about: 'About security',
   verification: 'Security',
 };
 
@@ -156,7 +157,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, initialVie
                 <p className="settings-group__label">Notifications & about</p>
                 <SettingsRow icon={<BellIcon size={18} />} title="Notifications" description={privacyPreferences.notificationsEnabled ? 'Private alerts are on' : 'Notifications are off'} onClick={() => setView('notifications')} />
                 <SettingsRow icon={<MicIcon size={18} />} title="Calls" description="Ringtone and media permissions" onClick={() => setView('calls')} />
-                <SettingsRow icon={<InfoIcon size={18} />} title="About" description="K3NCRYPT · private communication" status="Private beta" />
+                <SettingsRow icon={<InfoIcon size={18} />} title="About security" description="What K3NCRYPT protects, and what it can’t" status="Private beta" onClick={() => setView('about')} />
               </section>
             </>
           )}
@@ -217,6 +218,20 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, initialVie
                 <label className="settings-row"><span className="settings-row__icon"><LockIcon size={17} /></span><span className="settings-row__copy"><strong>Message previews</strong><small>Show content only if you explicitly choose to</small></span><input type="checkbox" checked={privacyPreferences.notificationPreviews} disabled={!privacyPreferences.notificationsEnabled} onChange={(event) => updatePrivacyPreferences({ notificationPreviews: event.target.checked })} /></label>
                 {channelHash && <label className="settings-row"><span className="settings-row__icon"><BellIcon size={17} /></span><span className="settings-row__copy"><strong>Mute this conversation</strong><small>Keep this conversation out of system notifications</small></span><input type="checkbox" checked={privacyPreferences.mutedConversations.includes(channelHash)} onChange={(event) => updatePrivacyPreferences({ mutedConversations: event.target.checked ? [...privacyPreferences.mutedConversations, channelHash] : privacyPreferences.mutedConversations.filter((id) => id !== channelHash) })} /></label>}
               </div>
+            </section>
+          )}
+
+          {view === 'about' && (
+            <section className="settings-detail about-security" aria-label="About security">
+              <div className="detail-intro"><h3>About security</h3><p>Plain words about what K3NCRYPT protects, and what it can’t.</p></div>
+              <h4>What is protected</h4>
+              <p>Your messages, photos, files and calls are encrypted on your device. The K3NCRYPT server only passes along locked data it can’t read.</p>
+              <p>Checking a contact protects you from someone in the middle pretending to be them.</p>
+              <h4>What the web app can’t protect against</h4>
+              <p>On the web, the app itself is sent to your browser by the K3NCRYPT server every time you open it. If someone broke into that server, they could send a changed app that reads your messages before they are encrypted. Checking your contacts would not show this.</p>
+              <p>For the strongest protection, use the K3NCRYPT Android app. It is installed once and does not download its code every time you open it.</p>
+              <h4>What the server can see</h4>
+              <p>The server can see that two accounts talk, when, and roughly how much. It cannot see what you say or send. File details are deleted within a day of a transfer ending, and never kept longer than 7 days.</p>
             </section>
           )}
 

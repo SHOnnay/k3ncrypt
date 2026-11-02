@@ -71,3 +71,13 @@ it('does not attach another room’s failed selection to the current conversatio
   expect(render('network')).toContain('Encrypted session available');
   expect(render('network')).not.toContain('Recovery needed');
 });
+
+// M3l / P1-4: honest disclosure that the web app's code comes from the server each time.
+it('explains in plain words that a compromised server could serve a changed web app', () => {
+  mockChat.mockReturnValue(state);
+  const markup = render('about' as never).replace(/<[^>]*>/g, ' ');
+  expect(markup).toContain('If someone broke into that server, they could send a changed app that reads your messages before they are encrypted.');
+  expect(markup).toContain('Checking your contacts would not show this.');
+  expect(markup).toContain('use the K3NCRYPT Android app');
+  expect(markup).not.toMatch(/fingerprint|payload|pinned/i);
+});
