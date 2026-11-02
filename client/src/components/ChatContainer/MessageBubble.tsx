@@ -29,7 +29,10 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
   // Verified file output is moved into page memory as soon as it is ready, so the shared secure
   // disk slot is free for the next attachment and cancelling a browser save dialog loses nothing.
   const [saved, setSaved] = useState<{ filename: string; mimeType?: string }>();
-  const { retryMessage, protocolMode, channelHash, plaintextSession } = useChat();
+  const { retryMessage, protocolMode, channelHash, plaintextSession, contactIdentity } = useChat();
+  // Invariant: file transfer requires a verified, unchanged contact. The service enforces it;
+  // the UI explains it instead of offering an action that will be refused (P0-1).
+  const fileContactTrusted = contactIdentity?.verification === 'verified' && contactIdentity.changeStatus === 'unchanged';
   const instanceId = useId();
   const resourceKey = JSON.stringify([channelHash, message.id, media?.reference, instanceId]);
   const live = useRef({ mounted: false, generation: 0, key: resourceKey, scope: plaintextSession });
@@ -83,8 +86,9 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
           <strong>{fileCaption ?? 'Protected file'}</strong>
           <small>{media?.size !== undefined ? formatFileSize(media.size) : 'Encrypted attachment'} · Encrypted</small>
         </span>
-        {media?.reference && !mediaUrl && <button className="message-file-action" type="button" onClick={openMedia} disabled={isOpening} aria-label={isOpening ? 'Downloading and verifying protected file' : 'Download protected file'} title={isOpening ? 'Downloading and verifying' : 'Download protected file'}><ApprovedIcon name="download" size={17} /></button>}
-        {mediaUrl && saved && <a className="message-file-action" href={mediaUrl} download={saved.filename || 'protected-file'} aria-label={`Save ${saved.filename}`} title="Save verified file"><ApprovedIcon name="download" size={17} /></a>}
+        {media?.reference && !mediaUrl && !fileContactTrusted && <span className="message-file-blocked" role="note">{contactIdentity?.changeStatus && contactIdentity.changeStatus !== 'unchanged' ? 'Identity changed. Review it before opening files.' : 'Verify this contact to open files.'}</span>}
+        {media?.reference && !mediaUrl && fileContactTrusted && <button className="message-file-action" type="button" onClick={openMedia} disabled={isOpening} aria-label={isOpening ? 'Downloading and checking protected file' : 'Download protected file'} title={isOpening ? 'Downloading and checking' : 'Download protected file'}><ApprovedIcon name="download" size={17} /></button>}
+        {mediaUrl && saved && <a className="message-file-action" href={mediaUrl} download={saved.filename || 'protected-file'} aria-label={`Save ${saved.filename}`} title="Save file"><ApprovedIcon name="download" size={17} /></a>}
         {mediaUrl && <button className="message-file-close" type="button" onClick={closePreview} aria-label="Close file preview">Close</button>}
       </div>}
       {!isFile && media?.reference && !mediaUrl && <button className="message-media-action" type="button" onClick={openMedia} disabled={isOpening}>{isOpening ? 'Opening and verifying…' : `Open protected ${media.kind}`}</button>}

@@ -85,3 +85,30 @@ test('evicted already-produced ciphertext forces restart rather than re-encrypti
     const original = disk.get.bind(disk); jest.spyOn(disk, 'get').mockImplementation(async index => index === '0' ? undefined : original(index));
     await sender.retry(); expect(sender.state.value).toMatchObject({ phase: 'RestartRequired', retryable: false }); expect(src.read).toHaveBeenCalledTimes(1); expect(gateway.uploads).toEqual([]);
 });
+// Invariant: file transfer requires a verified, unchanged identity, in BOTH directions.
+// A pinned-but-unverified (or reset/changed) sender must not get bytes opened on this device.
+test('receive requires a verified unchanged contact before any fetch and on every chunk', async () => {
+    const gateway = new Gateway(); let reference = '';
+    const sender = new FileTransferWorkflow(gateway, async () => binding, async () => cache(), async r => { reference = r; });
+    await sender.send(source());
+    const unverified = jest.fn(async (verified: boolean) => {
+        if (verified) throw Object.assign(new Error('Verified unchanged contact required.'), { safeDiagnosticCode: 'VERIFICATION_REQUIRED' });
+        return recipient;
+    });
+    const status = jest.spyOn(gateway, 'status'); const chunk = jest.spyOn(gateway, 'chunk');
+    const receiver = new FileTransferWorkflow(gateway, unverified, async () => cache(), async () => {}); const target = output();
+    await expect(receiver.receive(reference, async () => target.out)).resolves.toBeUndefined();
+    expect(unverified.mock.calls.every(([verified]) => verified === true)).toBe(true);
+    expect(status).not.toHaveBeenCalled(); expect(chunk).not.toHaveBeenCalled(); expect(target.finished()).toBe(false);
+    expect(receiver.state.value.diagnosticCode).toBe('VERIFICATION_REQUIRED');
+
+    let checks = 0;
+    const revokedMidway = jest.fn(async (verified: boolean) => {
+        if (verified && ++checks > 2) throw Object.assign(new Error('Verified unchanged contact required.'), { safeDiagnosticCode: 'VERIFICATION_REQUIRED' });
+        return recipient;
+    });
+    const second = new FileTransferWorkflow(gateway, revokedMidway, async () => cache(), async () => {}); const partial = output();
+    await expect(second.receive(reference, async () => partial.out)).resolves.toBeUndefined();
+    expect(revokedMidway.mock.calls.every(([verified]) => verified === true)).toBe(true);
+    expect(partial.finished()).toBe(false);
+});

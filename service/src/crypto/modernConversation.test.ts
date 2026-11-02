@@ -1236,7 +1236,9 @@ it('cached call composition denies local unverify without mutating verification 
     await pair.alice.close(); await pair.bob.close();
 });
 
-it('file sender authority requires explicit unchanged verification; reset denies new files while pinned receiving remains available', async () => {
+// Invariant: calls and file transfer require a verified, unchanged identity. Receiving
+// is file transfer too, so the receive workflow asks for verified authority (P0-1).
+it('file authority requires explicit unchanged verification; reset denies new files and opening received files', async () => {
     const pair = await verifiedPeerPair();
     try {
         const binding = await pair.alice.fileTransferBinding(true);
@@ -1244,6 +1246,7 @@ it('file sender authority requires explicit unchanged verification; reset denies
         expect(binding.recipientIdentityReference).toBe((await pair.alice.getContact())!.identityId);
         await pair.alice.unverifyContact();
         await expect(pair.alice.fileTransferBinding(true)).rejects.toThrow('Verified unchanged');
+        // Pinned-only authority still exists for non-file callers, but no file path may use it.
         await expect(pair.alice.fileTransferBinding(false)).resolves.toEqual(binding);
         await pair.alice.verifyContact(true); await expect(pair.alice.fileTransferBinding(true)).resolves.toEqual(binding);
     } finally { await pair.alice.close(); await pair.bob.close(); }

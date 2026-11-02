@@ -14,7 +14,7 @@ export async function create(page: Page, name: string) {
   await expect(page.getByRole('textbox', { name: 'Private invitation' })).toHaveValue(/#(?:invite|modern)=/, { timeout: 30_000 });
   await page.getByRole('button', { name: 'Continue to your chats', exact: true }).click();
 }
-async function security(page: Page) {
+export async function security(page: Page) {
   await page.getByRole('button', { name: 'Open settings' }).click();
   await page.getByRole('button', { name: 'Security Your identity and contact verification', exact: true }).click();
 }

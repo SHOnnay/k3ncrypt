@@ -37,6 +37,8 @@
 .message.sent .message-file-action:hover:not(:disabled) { color: var(--sent-ink); background: color-mix(in srgb, white 15%, transparent); }
 .message-file-action:disabled { cursor: wait; opacity: .58; }
 .message-file-close { flex: 0 0 auto; border: 0; padding: 5px 6px; border-radius: 7px; color: inherit; background: transparent; font: inherit; font-size: .64rem; cursor: pointer; }
+.message-file-blocked { flex: 0 1 auto; max-width: 12rem; font-size: .66rem; line-height: 1.25; color: var(--muted-strong); text-align: right; }
+.message.sent .message-file-blocked { color: color-mix(in srgb, var(--sent-ink) 80%, transparent); }
 .message-file-progress { width: min(270px, 100%); display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; padding: 5px 3px 0; color: var(--muted-strong); font-size: .66rem; }
 .message-file-progress progress { width: 100%; height: 5px; accent-color: var(--brand); }
 .message-file-progress button { margin-left: auto; border: 0; padding: 4px 6px; border-radius: 6px; color: var(--brand); background: transparent; font: inherit; cursor: pointer; }

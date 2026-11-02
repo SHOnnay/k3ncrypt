@@ -103,7 +103,8 @@ export class FileTransferWorkflow {
         await this.forget(); this.controller = new AbortController(); const g = this.state.begin(0); this.running = true; let output: FileOutput<T> | undefined;
         try {
             this.failureStage = 'FILE_PREFLIGHT_FAILED';
-            const r = parseFileReference(text); const own = await this.authority(false); this.fence(g);
+            // Opening a file is file transfer: require a verified, unchanged contact (P0-1).
+            const r = parseFileReference(text); const own = await this.authority(true); this.fence(g);
             const expected: FileBinding = { conversationId: own.conversationId, senderParticipantId: own.recipientParticipantId, recipientParticipantId: own.senderParticipantId, senderIdentityReference: own.recipientIdentityReference, recipientIdentityReference: own.senderIdentityReference };
             if (!sameBinding(expected, r.context)) throw new Error('File identity binding rejected.');
             const key = unb64(r.key, 32);
@@ -120,7 +121,7 @@ export class FileTransferWorkflow {
                 output = await outputFactory(manifest.fileSize); this.fence(g);
                 let total = 0;
                 for (let i = 0; i < r.context.chunkCount; i++) {
-                    if (!sameBinding(await this.authority(false), own)) throw new Error('File contact changed.'); this.fence(g);
+                    if (!sameBinding(await this.authority(true), own)) throw new Error('File contact changed.'); this.fence(g);
                     this.failureStage = 'FILE_DOWNLOAD_FAILED';
                     const value = await this.gateway.chunk(r.context.transferId, i, this.controller.signal); this.fence(g);
                     this.state.move(g, 'Verifying', total);
