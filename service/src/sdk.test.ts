@@ -760,6 +760,19 @@ describe('startCall()', () => {
         await expect(instance.startCall()).rejects.toThrow('WebRTC is not supported');
     });
 
+    // M3h: the legacy SDK refuses calls unless a host verifier says the contact is checked.
+    it('refuses to start or accept a call without a call verifier (fail closed)', async () => {
+        (globalThis as any).RTCPeerConnection = function () {};
+        const instance = await buildInitializedInstance();
+        await instance.setChannel(ROOM_ID, SECRET, USER_ID, CONTROL_CAPABILITY);
+        jest.spyOn(instance as any, 'getUsersInChannel').mockResolvedValue([{ uuid: 'a' }, { uuid: 'b' }]);
+        await expect(instance.startCall()).rejects.toMatchObject({ safeDiagnosticCode: 'VERIFICATION_REQUIRED' });
+        (instance as any).activeCallId = 'call-1';
+        await expect(instance.acceptCall()).rejects.toMatchObject({ safeDiagnosticCode: 'VERIFICATION_REQUIRED' });
+        instance.setCallVerifier(async () => { throw new Error('contact not checked'); });
+        await expect(instance.acceptCall()).rejects.toThrow('contact not checked');
+    });
+
     it('throws when no peer is available in the channel', async () => {
         (globalThis as any).RTCPeerConnection = function () {};
         const instance = await buildInitializedInstance();

@@ -1,3 +1,4 @@
+import { checkRequired } from './utils/checkErrors';
 import { testDiagnosticsEnabled } from './utils/testDiagnostics';
 import { configContext, setConfig } from './configContext';
 import { resolveEncryptionStrategyFactory } from './crypto/registry';
@@ -353,6 +354,7 @@ class ChatE2EE implements IChatE2EE {
         if (!this.activeCallId) {
             throw new Error('Missing call identifier for incoming call.');
         }
+        await this.assertCallVerified();
         await this.sendControlSignal('call-accept');
         const call = this.callSignalRouter.acceptPendingOffer(this.activeCallId);
         if (call) {
@@ -495,6 +497,19 @@ class ChatE2EE implements IChatE2EE {
             throw new Error('No user available to accept call');
         }
         this.assertChannelReady();
+        await this.assertCallVerified();
+    }
+
+    private callVerifier?: () => Promise<void>;
+    /**
+     * M3h. Invariant: calls require a checked, unchanged contact. The SDK has no contact registry of
+     * its own, so a host must supply a verifier; without one every call is refused (fail closed).
+     * Legacy rooms have no verification authority and never get a verifier.
+     */
+    public setCallVerifier(verifier: (() => Promise<void>) | undefined): void { this.callVerifier = verifier; }
+    private async assertCallVerified(): Promise<void> {
+        if (!this.callVerifier) throw checkRequired('Calls need a checked contact.');
+        await this.callVerifier();
     }
 
     private async sendControlSignal(type: CallControlSignal['type'], reason?: CallEndReason, mediaKind?: 'audio' | 'video'): Promise<void> {

@@ -52,6 +52,7 @@ export interface IChatE2EE {
     startCall(): Promise<E2ECall>;
     startVideoCall(): Promise<E2ECall>;
     acceptCall(): Promise<void>;
+    setCallVerifier(verifier: (() => Promise<void>) | undefined): void;
     rejectCall(): Promise<void>;
     cancelCall(): Promise<void>;
     endCall(reason?: CallEndReason): Promise<void>;
