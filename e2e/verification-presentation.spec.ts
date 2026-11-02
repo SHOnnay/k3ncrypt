@@ -33,7 +33,7 @@ test('QR primary scanner rejects another identity and requires explicit confirma
   await expect(bob.getByText('That code belongs to a different identity.', { exact: true })).toBeVisible({ timeout: 30000 }); await expect(mark).toBeDisabled();
   await cameraImage(bob, aliceQr!); await bob.getByRole('button', { name: 'Scan their QR', exact: true }).click();
   await expect(bob.getByText('Identity matched. Choose Mark as verified to confirm.', { exact: true })).toBeVisible({ timeout: 30000 });
-  await expect(mark).toBeEnabled(); await expect(bob.locator('.verification-view')).toContainText('Unverified');
+  await expect(mark).toBeEnabled(); await expect(bob.locator('.verification-view')).toContainText('Not yet verified'); // f868cd5d renamed the unverified status pill.
   await mark.click(); await bob.getByRole('button', { name: 'Back to chat', exact: true }).click(); await expect(bob.locator('.chat-header')).toContainText('Verified');
   await a.close(); await b.close();
 });

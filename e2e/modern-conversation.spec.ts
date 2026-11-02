@@ -89,8 +89,8 @@ test('modern private contact works after offline recipient and both browser rest
   await expect(bobReturned.locator('#messages-area')).toContainText('hello while you were away', { timeout: 20_000 });
   await bobReturned.getByRole('button', { name: 'Open settings' }).click();
   await bobReturned.getByRole('button', { name: 'Security' }).click();
-  await expect(bobReturned.locator('.verification-view')).toContainText('Confirm you are really connected to Alice.');
-  await expect(bobReturned.locator('.verification-view')).toContainText('Unverified');
+  await expect(bobReturned.locator('.verification-view')).toContainText('Verify Alice'); // f868cd5d replaced this sentence with the 'Verify <name>' heading.
+  await expect(bobReturned.locator('.verification-view')).toContainText('Not yet verified'); // f868cd5d renamed the unverified status pill.
   const bobFingerprint = await bobReturned.locator('.verification-code').first().textContent();
   await alice.page.getByRole('button', { name: 'Open settings' }).click();
   await alice.page.getByRole('button', { name: 'Security' }).click();
