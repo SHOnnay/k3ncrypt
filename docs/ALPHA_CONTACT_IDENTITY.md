@@ -29,3 +29,9 @@ Confirmation is bound to the displayed pair and cleared when either identity cha
 The alpha Web UI hides native screen-capture protection and media auto-download toggles because neither is implemented by this Web client. Their underlying preference fields remain for future work. Working appearance, profile, encrypted-vault lock status, blur, notifications, call preferences, identity verification, device approval, and connection information remain accessible.
 
 The file limit stays 8 MiB. File-transfer internals and call-state implementations are outside this pass.
+
+## Names after a security number change (owner decision, 2026-11-02)
+
+When a contact's security number changes, the name that contact shared is hidden until the new number is checked. This is deliberate: whoever holds the new number is unknown, and showing the old shared name would lend it that person's identity at the moment an impersonator would claim "it's me, new phone". The changed-number banner then reads "Your contact's security number changed".
+
+A nickname you set yourself survives the change. It is your own label for the conversation, stored only on this device and never supplied by the contact, so it cannot be used by a new number to claim an identity. Names never grant trust either way: files and calls stay paused until the new security number is checked.
