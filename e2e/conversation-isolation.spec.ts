@@ -25,14 +25,16 @@ async function join(page: Page, link: string) {
   await page.locator('#channel-hash').fill(link); await page.getByRole('button', { name: 'Continue', exact: true }).click();
   await expect(page.locator('#channel-hash')).not.toBeVisible();
 }
+// fef99a62 (fix(ui): separate pending and unavailable conversations) moved pending invitations
+// into their own sidebar region with the same row class; count only established conversations.
 test('accepted relationships are unique; corrupt candidate does not poison another contact or sending', async ({ browser }) => {
   test.setTimeout(240000); const { a, b, alice, bob } = await connectedPair(browser);
-  await expect(alice.locator('.conversation-row')).toHaveCount(1); await expect(bob.locator('.conversation-row')).toHaveCount(1);
+  await expect(alice.getByRole('region', { name: 'Conversations' }).locator('.conversation-row')).toHaveCount(1); await expect(bob.getByRole('region', { name: 'Conversations' }).locator('.conversation-row')).toHaveCount(1);
   const c = await browser.newContext(); const cara = await c.newPage(); await create(cara, 'Cara');
   const link = await invite(alice); await join(cara, link);
   await expect(alice.locator('.chat-header')).toContainText('Cara', { timeout: 30000 });
-  await expect(alice.locator('.conversation-row')).toHaveCount(2);
-  await join(cara, link); await expect(cara.locator('.conversation-row')).toHaveCount(1);
+  await expect(alice.getByRole('region', { name: 'Conversations' }).locator('.conversation-row')).toHaveCount(2);
+  await join(cara, link); await expect(cara.getByRole('region', { name: 'Conversations' }).locator('.conversation-row')).toHaveCount(1);
   // Nickname makes the fixture selector independent of encrypted claimed profile.
   await alice.getByRole('button', { name: 'Contacts', exact: true }).click();
   alice.once('dialog', dialog => dialog.accept('Bob'));
@@ -53,7 +55,7 @@ test('accepted relationships are unique; corrupt candidate does not poison anoth
   await fixture(alice, 'malformed');
   await alice.reload(); await alice.getByRole('button', { name: 'Unlock this device', exact: true }).click();
   await alice.locator('input[type=password]').fill(passphrase); await alice.getByRole('button', { name: 'Unlock account', exact: true }).click();
-  await expect(alice.locator('.conversation-row')).toHaveCount(1); await expect(alice.locator('.chat-header')).toContainText('Cara');
+  await expect(alice.getByRole('region', { name: 'Conversations' }).locator('.conversation-row')).toHaveCount(1); await expect(alice.locator('.chat-header')).toContainText('Cara');
   await alice.getByText('Unavailable conversations', { exact: true }).click();
   await expect(alice.locator('.chat-header')).toContainText('Cara');
   await a.close(); await b.close(); await c.close();

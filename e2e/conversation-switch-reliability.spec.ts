@@ -257,7 +257,8 @@ test('three profiles preserve room ownership through 20 switch rounds, 20 KiB fi
   await alice.getByRole('button', { name: 'Unlock this device', exact: true }).click();
   await alice.locator('input[type=password]').fill(passphrase);
   await alice.getByRole('button', { name: 'Unlock account', exact: true }).click();
-  await expect(alice.locator('.conversation-row')).toHaveCount(2, { timeout: 30000 });
+  // fef99a62 split pending invitations into their own region; count established rows only.
+  await expect(alice.getByRole('region', { name: 'Conversations' }).locator('.conversation-row')).toHaveCount(2, { timeout: 30000 });
   await openContact(alice, 'Bob');
   await sendText(alice, bob, cara, 'A-to-B after refresh');
 
