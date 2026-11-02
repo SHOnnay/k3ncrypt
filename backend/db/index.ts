@@ -1,3 +1,4 @@
+import { STORAGE_CAPS, StorageFullError } from './storageCaps';
 import { Db, MongoClient, ServerApiVersion } from 'mongodb';
 import { randomInt } from 'crypto';
 
@@ -139,7 +140,7 @@ const requiredIndexes: Record<string, string[]> = {
   file_ledgers_v2: ['transfers.context.transferId_1', 'purgeAt_1'],
   [LINK_COLLECTION]: ['hash_1'],
   [PREKEY_COLLECTION]: ['expiresAt_1', 'channel_1_address_1'],
-  [OFFLINE_MESSAGE_COLLECTION]: ['expiresAt_1', 'dedupeKey_1', 'channel_1_mailbox_1_slot_1', 'channel_1_mailbox_1_claimedUntil_1_expiresAt_1'],
+  [OFFLINE_MESSAGE_COLLECTION]: ['expiresAt_1', 'dedupeKey_1', 'channel_1_mailbox_1_slot_1', 'channel_1_mailbox_1_claimedUntil_1_expiresAt_1', 'senderDevice_1_state_1'],
   attachment_metadata: ['id_1', 'expiresAt_1_status_1', 'purgeAt_1'],
   attachment_chunks: ['attachmentId_1_index_1', 'attachmentId_1_storedAt_1', 'purgeAt_1'],
   attachment_access: ['attachmentId_1', 'purgeAt_1'],
@@ -166,10 +167,15 @@ export const storeOfflineMessage = async <T extends Record<string, unknown>>(dat
     const duplicate = _findOneFromDB({ dedupeKey: data.dedupeKey }, OFFLINE_MESSAGE_COLLECTION);
     if (duplicate) return duplicate as T;
     if (_countOfflineMessages({ channel: data.channel, mailbox: data.mailbox }, OFFLINE_MESSAGE_COLLECTION) >= 64) throw new Error('MAILBOX_QUOTA');
+    if (_countOfflineMessages({}, OFFLINE_MESSAGE_COLLECTION) >= STORAGE_CAPS.offlineGlobal) throw new StorageFullError('offline-global');
+    if (typeof data.senderDevice === 'string' && _countOfflineMessages({ senderDevice: data.senderDevice }, OFFLINE_MESSAGE_COLLECTION) >= STORAGE_CAPS.offlinePerDevice) throw new StorageFullError('offline-device');
     return _insertOfflineMessage(activeData, OFFLINE_MESSAGE_COLLECTION) as T;
   }
   const existing = await db.collection(OFFLINE_MESSAGE_COLLECTION).findOne({ dedupeKey: data.dedupeKey });
   if (existing) return existing as unknown as T;
+  // P1-2: global and per-sending-device caps, checked before every new envelope.
+  if (await db.collection(OFFLINE_MESSAGE_COLLECTION).estimatedDocumentCount() >= STORAGE_CAPS.offlineGlobal) throw new StorageFullError('offline-global');
+  if (typeof data.senderDevice === 'string' && await db.collection(OFFLINE_MESSAGE_COLLECTION).countDocuments({ senderDevice: data.senderDevice, state: 'active' }, { limit: STORAGE_CAPS.offlinePerDevice }) >= STORAGE_CAPS.offlinePerDevice) throw new StorageFullError('offline-device');
   const start = randomInt(0, 64);
   for (let offset = 0; offset < 64; offset += 1) {
     const candidate = { ...activeData, slot: (start + offset) % 64 };
@@ -259,6 +265,9 @@ export const cleanupExpiredOfflineMessages = (now = Date.now()): number =>
 export const countOfflineMessages = async (condition: Record<string, unknown>): Promise<number> =>
   inMem ? _countOfflineMessages(condition, OFFLINE_MESSAGE_COLLECTION) : db.collection(OFFLINE_MESSAGE_COLLECTION).countDocuments({ ...condition, state: 'active', expiresAt: { $gt: new Date() } });
 
+/** Cheap count for global creation caps (rooms, devices). In-memory mode has no persistent growth to cap. */
+export const collectionCount = async (name: string): Promise<number> => inMem || !db ? 0 : db.collection(name).estimatedDocumentCount();
+
 export default {
   db,
   connectDb,
@@ -279,6 +288,7 @@ export default {
   recordOfflineRejection,
   cleanupExpiredOfflineMessages,
   countOfflineMessages,
+  collectionCount,
   persistentStorageReady,
   getDatabase,
   getMongoClient,

@@ -1,3 +1,4 @@
+import { STORAGE_CAPS, STORAGE_FULL_MESSAGE } from '../../db/storageCaps';
 import express from 'express';
 
 import db from '../../db';
@@ -30,6 +31,8 @@ router.post(
         !isValidControlCapabilityHash(controlCapabilityHash)) {
       return res.status(400).send({ error: 'Invalid control capability verifier' });
     }
+    // P1-2: global room cap; fail closed rather than fill the database.
+    if (await db.collectionCount(LINK_COLLECTION) >= STORAGE_CAPS.rooms) return res.status(503).send({ error: STORAGE_FULL_MESSAGE });
     const link = generateHash(controlCapabilityHash);
     await db.insertInDb(link, LINK_COLLECTION);
     const { hash, expired, deleted } = link;

@@ -1,3 +1,4 @@
+import { STORAGE_FULL_MESSAGE, StorageFullError } from '../db/storageCaps';
 import { onSafe, type Ack } from './safeAck';
 import { randomUUID } from 'crypto';
 import getClientInstance from "./clients";
@@ -132,6 +133,7 @@ const retainUndeliveredEnvelope = async (
   envelope: WireEnvelope,
   id: string,
   timestamp: number,
+  senderDevice?: string,
 ): Promise<{ id: string; timestamp: number; terminalRejection?: true }> => {
   if (process.env.NODE_ENV === 'production' && !db.persistentStorageReady()) throw new Error('OFFLINE_DELIVERY_UNAVAILABLE');
   db.cleanupExpiredOfflineMessages();
@@ -145,6 +147,7 @@ const retainUndeliveredEnvelope = async (
     state: 'active',
     timestamp,
     expiresAt: new Date(timestamp + OFFLINE_TTL_MS),
+    ...(senderDevice ? { senderDevice } : {}),
   });
   if (stored.state === 'rejected') return { id: stored.id as string, timestamp: stored.timestamp as number, terminalRejection: true };
   if (await db.countOfflineMessages({ channel, mailbox }) > MAX_OFFLINE_PER_MAILBOX) {
@@ -407,12 +410,12 @@ const connectionListener = (socket: CustomSocket, io) => {
       const mailbox = payload.recipientRoutingId;
       if (!mailbox) { ack({ error: "No receiver is in the channel." }); return; }
       try {
-        const existing = await retainUndeliveredEnvelope(socket.channelID, mailbox, socket.userID, payload.envelope, id, timestamp);
+        const existing = await retainUndeliveredEnvelope(socket.channelID, mailbox, socket.userID, payload.envelope, id, timestamp, socket.deviceId);
         traceMessageRelay('mailbox-durable', socket.channelID, existing.id, existing.terminalRejection ? 'terminal-rejection' : 'stored', { userId: socket.userID, recipientRoutingId: mailbox });
         traceDelivery('envelope-stored', true);
         ack({ id: existing.id, timestamp: existing.timestamp, stored: !existing.terminalRejection, ...(existing.terminalRejection ? { terminalRejection: true } : {}) });
         if (!existing.terminalRejection) await wakeRoomMailbox(socket.channelID, mailbox, io);
-      } catch (error) { ack({ error: error instanceof Error && error.message === 'MAILBOX_QUOTA' ? "Mailbox quota exceeded." : "Message could not be queued." }); }
+      } catch (error) { ack({ error: error instanceof StorageFullError ? STORAGE_FULL_MESSAGE : error instanceof Error && error.message === 'MAILBOX_QUOTA' ? "Mailbox quota exceeded." : "Message could not be queued." }); }
       return;
     }
 
@@ -467,13 +470,13 @@ const connectionListener = (socket: CustomSocket, io) => {
     // lost. Retain the same opaque envelope for authenticated mailbox replay.
     if (!receiverId) { ack({ error: 'Receiver is unavailable.' }); return; }
     try {
-      const stored = await retainUndeliveredEnvelope(socket.channelID, receiverId, socket.userID, payload.envelope, id, timestamp);
+      const stored = await retainUndeliveredEnvelope(socket.channelID, receiverId, socket.userID, payload.envelope, id, timestamp, socket.deviceId);
       traceMessageRelay('mailbox-durable-after-live-failure', socket.channelID, stored.id, stored.terminalRejection ? 'terminal-rejection' : 'stored', { userId: socket.userID, recipientRoutingId: receiverId });
       traceDelivery('envelope-stored', true);
       ack({ ...stored, stored: !stored.terminalRejection, ...(stored.terminalRejection ? { terminalRejection: true } : {}) });
       if (!stored.terminalRejection) await wakeRoomMailbox(socket.channelID, receiverId, io);
     } catch (error) {
-      ack({ error: error instanceof Error && error.message === 'MAILBOX_QUOTA' ? 'Mailbox quota exceeded.' : 'Message could not be queued.' });
+      ack({ error: error instanceof StorageFullError ? STORAGE_FULL_MESSAGE : error instanceof Error && error.message === 'MAILBOX_QUOTA' ? 'Mailbox quota exceeded.' : 'Message could not be queued.' });
     }
   });
 

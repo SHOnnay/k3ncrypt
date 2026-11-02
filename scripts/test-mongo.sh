@@ -35,6 +35,7 @@ run 'web lifecycle TTL' k3ncrypt_playwright_lifecycle_mongo backend/db/webLifecy
 run 'routing ownership and clock skew' k3ncrypt_playwright_routing backend/security/routingOwnership.mongo backend/security/lifecycleClockSkew.mongo
 run 'attachments' k3ncrypt_playwright_attachments backend/attachments/attachmentRevocation.mongo backend/attachments/fileRead.mongo backend/attachments/fileLedger.mongo
 run 'retention TTL' k3ncrypt_playwright_retention backend/db/retention.mongo
+run 'storage caps' k3ncrypt_playwright_caps backend/db/storageCaps.mongo
 
 [ "${1:-}" = "--keep" ] || docker rm -f "$RS" "$FILE" >/dev/null 2>&1
 exit "$status"
