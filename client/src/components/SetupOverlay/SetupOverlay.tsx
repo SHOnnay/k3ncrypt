@@ -11,7 +11,7 @@ import { JoinHashView } from './JoinHashView';
 import { InvitationQr } from './InvitationQr';
 import './SetupOverlay.css';
 import { debugError } from '../../utils/debug';
-import { setupErrorMessage } from './setupError';
+import { EXISTING_PASSPHRASE_REJECTED, setupErrorMessage } from './setupError';
 
 interface SetupOverlayProps {
   onSetupComplete: (roomId: string, secret: string, controlCapability: string) => Promise<void>;
@@ -121,6 +121,7 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onM
     if (modern) {
       const localPassphrase = accountState === 'new' ? passphrase : passphraseRef.current?.value ?? '';
       if (accountState === 'checking') return;
+      if (accountState === 'locked' && localPassphrase.length < 12) { setStatus(localPassphrase ? EXISTING_PASSPHRASE_REJECTED : 'Enter the passphrase you already use to unlock this device.'); return; }
       if (accountState === 'new' && (!displayName.trim() || localPassphrase.length < 12 || localPassphrase !== passphraseConfirmation)) { setStatus('Choose your display name and confirm a passphrase of at least 12 characters.'); return; }
       if (passphraseRef.current) passphraseRef.current.value = '';
       try {
@@ -129,7 +130,7 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onM
         await joinModernChannel(modern, localPassphrase, accountState === 'new' ? displayName : undefined);
         onModernSetupComplete();
         setStatus('');
-      } catch (error) { setStatus(setupErrorMessage(error, 'join')); }
+      } catch (error) { setStatus(setupErrorMessage(error, 'join', { existingAccount: accountState === 'locked' || accountState === 'ready' })); }
       finally { setIsLoading(false); }
       return;
     }
@@ -270,7 +271,7 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onM
               <label className="input-group">Choose a passphrase<input aria-label="Choose a passphrase" type="password" value={passphrase} onChange={(event) => setPassphrase(event.target.value)} autoComplete="new-password" /></label>
               <label className="input-group">Confirm your passphrase<input aria-label="Confirm your passphrase" type="password" value={passphraseConfirmation} onChange={(event) => setPassphraseConfirmation(event.target.value)} autoComplete="new-password" /></label>
             </>}
-            {parseModernInviteInput(joinInput) && accountState === 'locked' && <label className="input-group">Local passphrase<input ref={passphraseRef} type="password" autoComplete="current-password" minLength={12} aria-describedby="passphrase-help" /><span id="passphrase-help" className="invite-note">At least 12 characters. It unlocks this device’s encrypted data and is not shared with your contact.</span></label>}
+            {parseModernInviteInput(joinInput) && accountState === 'locked' && <label className="input-group">Your existing passphrase<input ref={passphraseRef} type="password" autoComplete="current-password" minLength={12} aria-describedby="passphrase-help" /><span id="passphrase-help" className="invite-note">At least 12 characters. It unlocks this device’s encrypted data and is not shared with your contact.</span></label>}
           </>
         )}
 

@@ -15,6 +15,16 @@ describe('safe setup error feedback', () => {
       .toContain('Wait a moment');
   });
 
+  // Bug: a locked profile accepting an invitation showed new-account rules ("Choose a passphrase
+  // with at least 12 characters") when the existing passphrase was blank, short or wrong.
+  it('asks for the existing passphrase when unlocking an existing account, never new-account rules', () => {
+    for (const error of [new Error('A passphrase or password must contain between 12 and 1024 characters.'), new Error('Invalid unlock secret'), new Error('Invalid unlock secret or corrupted secure-storage metadata.')]) {
+      const message = setupErrorMessage(error, 'join', { existingAccount: true });
+      expect(message).toBe('That passphrase did not unlock this device. Enter the passphrase you already use here.');
+      expect(message).not.toMatch(/choose|at least 12/i);
+    }
+  });
+
   it('shows passphrase guidance only for the explicit local minimum-length error', () => {
     expect(setupErrorMessage(new Error('A passphrase or password must contain between 12 and 1024 characters.'), 'contact'))
       .toContain('at least 12 characters');

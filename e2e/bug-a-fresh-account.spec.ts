@@ -18,7 +18,7 @@ async function snapshot(page: Page, name: string) {
   return { sidebar, contacts, pending, pendingRows };
 }
 
-test('same profile has one vault: no second-account path, and a locked invitation join reports a misleading passphrase error', async ({ browser }) => {
+test('same profile has one vault; a locked invitation join asks for the existing passphrase', async ({ browser }) => {
   test.setTimeout(120_000);
   const context = await browser.newContext();
   const page = await context.newPage();
@@ -26,22 +26,26 @@ test('same profile has one vault: no second-account path, and a locked invitatio
   await page.reload();
   await page.waitForTimeout(1500);
   const lockedButtons = await page.getByRole('button').allInnerTexts();
-  await page.screenshot({ path: `${out}/same-profile-locked.png`, fullPage: true });
-  const databases = await page.evaluate(async () => (await indexedDB.databases()).map(db => db.name));
+  expect(lockedButtons.join(' ')).not.toContain('Create your private account');
+  expect(await page.evaluate(async () => (await indexedDB.databases()).map(db => db.name))).toEqual(['k3ncrypt-local-vault']);
   const other = await browser.newContext();
   const otherPage = await other.newPage();
   await create(otherPage, 'Inviter');
   const link = await invite(otherPage);
-  const flow: string[] = [];
   await page.getByRole('button', { name: 'I have an invitation' }).click();
   await page.locator('#channel-hash').fill(link);
-  flow.push(`passphrase field shown: ${await page.locator('input[type=password]').count()}`);
+  const existing = page.getByLabel('Your existing passphrase');
+  const status = page.locator('.setup-overlay [role=status], .setup-overlay .status, [role=status]');
+  // Bug: these used to show the new-account rule "Choose a passphrase with at least 12 characters".
   await page.getByRole('button', { name: 'Continue', exact: true }).click();
-  await page.waitForTimeout(2000);
-  flow.push(`after continue with no passphrase: ${(await page.locator('.status, [role=alert], [role=status]').allInnerTexts()).join(' | ')}`);
-  console.log(JSON.stringify({ lockedButtons, databases, flow }, null, 1));
-  await page.screenshot({ path: `${out}/same-profile-join.png`, fullPage: true });
-  expect(lockedButtons.join(' ')).not.toContain('Create your private account');
+  await expect(status.filter({ hasText: 'Enter the passphrase you already use to unlock this device.' }).first()).toBeVisible();
+  await existing.fill('not-the-right-passphrase');
+  await page.getByRole('button', { name: 'Continue', exact: true }).click();
+  await expect(status.filter({ hasText: 'That passphrase did not unlock this device.' }).first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText('Choose a passphrase with at least 12 characters.')).toHaveCount(0);
+  await existing.fill('alpha-family-existing-account-2026');
+  await page.getByRole('button', { name: 'Continue', exact: true }).click();
+  await expect(page.locator('.chat-header')).toContainText('Inviter', { timeout: 30_000 });
   await context.close(); await other.close();
 });
 
