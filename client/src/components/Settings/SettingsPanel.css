@@ -162,3 +162,9 @@ button.settings-row:focus-visible, .settings-row input:focus-visible, .quiet-ico
 .check-show-mine { margin-top: 14px; }
 .state-card--attention { border-color: color-mix(in srgb, var(--warning) 45%, var(--border)); }
 .verification-code--large { font-size: 1rem; letter-spacing: .04em; word-break: break-word; }
+.security-number-groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
+.security-number-groups li { display: grid; grid-template-columns: auto 1fr; align-items: baseline; gap: 2px 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-raised); }
+.security-number-groups__index { font-size: .7rem; color: var(--muted-strong); }
+.security-number-groups code { font-size: 1.05rem; letter-spacing: .12em; }
+.security-number-groups small { grid-column: 2; font-size: .68rem; color: var(--muted-strong); }
+.check-read-hint { font-size: .85rem; color: var(--muted-strong); }

@@ -1,3 +1,4 @@
+import { LocalDataStatus } from './LocalDataStatus';
 import { CHECK_PILL, contactsCopy } from '../../content/checkCopy';
 import React, { useMemo, useState } from 'react';
 import { useChat } from '../../context/ChatContext';
@@ -66,25 +67,26 @@ export const WorkspaceSection: React.FC<WorkspaceSectionProps> = ({ section, onO
           <span className="workspace-contact__copy"><strong>{displayName(contact)}</strong><small>{verificationCopy[savedContactVerification[contact.roomId] ?? 'unknown']}</small>{unavailableConversations.find(item => item.roomId === contact.roomId) && <small>{conversationStateCopy(unavailableConversations.find(item => item.roomId === contact.roomId)!)}</small>}</span>
         </button>
         <button className="workspace-contact__edit" type="button" aria-label={`Edit nickname for ${contact.label}`} onClick={() => {
-          const next = window.prompt('Contact nickname (saved only on this device; helps recognition and does not verify identity)', contact.label);
+          const next = window.prompt('Contact nickname (saved only on this device; a name doesn’t show it’s really them)', contact.label);
           if (next !== null) void setContactNickname(contact.roomId, next).catch(() => window.alert('Could not save this contact nickname.'));
         }}>Edit name</button>
         <ConversationArchiveButton roomId={contact.roomId} name={displayName(contact)} />
       </div>)}</div></section> : null;
       })}</> : groups.chats.length > 0 ? <div className="workspace-empty workspace-empty--compact"><h2>No matching contact</h2><p>Try another search.</p></div> : <div className="workspace-empty workspace-empty--compact"><h2>{contactsCopy.emptyTitle}</h2><p>{contactsCopy.emptyHelp}</p></div>}
-      {groups.unavailable.length > 0 && <section className="workspace-records" aria-label="Unavailable saved conversations"><h2>Unavailable saved conversations</h2><p>Access is paused. These entries are not proof of a verified contact.</p>{groups.unavailable.map((item, index) => <div className="workspace-record" key={`${item.roomId ?? 'invalid'}-${index}`}><strong>{item.label}</strong><p>{conversationStateCopy(item)}</p>{item.roomId && item.code !== 'CONVERSATION_RECORD_INVALID' && item.code !== 'CONVERSATION_LOCAL_RECORD_INVALID' && savedConversations.some(saved => saved.roomId === item.roomId) && <ConversationArchiveButton roomId={item.roomId} name={item.label} />}{item.code && <details><summary>Technical details</summary><small>{item.code}</small></details>}</div>)}</section>}
-      {groups.archived.length > 0 && <details className="workspace-records" aria-label="Archived conversations"><summary>Archived conversations ({groups.archived.length})</summary><p>Hidden from ordinary lists on this device. History, identities and verification are retained. Restoring visibility does not restore missing server access.</p>{groups.archived.map(item => <div className="workspace-record" key={item.roomId}><strong>{displayName(item)}</strong><ConversationArchiveButton roomId={item.roomId} name={displayName(item)} restore /></div>)}</details>}
+      {groups.unavailable.length > 0 && <section className="workspace-records" aria-label="Unavailable saved conversations"><h2>Unavailable saved conversations</h2><p>Access is paused. These entries are not checked contacts.</p>{groups.unavailable.map((item, index) => <div className="workspace-record" key={`${item.roomId ?? 'invalid'}-${index}`}><strong>{item.label}</strong><p>{conversationStateCopy(item)}</p>{item.roomId && item.code !== 'CONVERSATION_RECORD_INVALID' && item.code !== 'CONVERSATION_LOCAL_RECORD_INVALID' && savedConversations.some(saved => saved.roomId === item.roomId) && <ConversationArchiveButton roomId={item.roomId} name={item.label} />}{item.code && <details><summary>Technical details</summary><small>{item.code}</small></details>}</div>)}</section>}
+      <LocalDataStatus className="conversation-recovery conversation-recovery--phone" />
+      {groups.archived.length > 0 && <details className="workspace-records" aria-label="Archived conversations"><summary>Archived conversations ({groups.archived.length})</summary><p>Hidden from ordinary lists on this device. History and checks are kept. Restoring visibility does not restore missing server access.</p>{groups.archived.map(item => <div className="workspace-record" key={item.roomId}><strong>{displayName(item)}</strong><ConversationArchiveButton roomId={item.roomId} name={displayName(item)} restore /></div>)}</details>}
     </main>;
   }
 
   return <main className="workspace-page">
     <header className="workspace-page__header"><div><span className="eyebrow">Private communication</span><h1>Calls</h1><p>Start a voice or video call from a trusted, connected conversation.</p></div></header>
     {active ? <section className="call-launch-card">
-      <div className="call-launch-card__person"><Avatar label={contactDisplayName(active.label, active.roomId, active.remoteDisplayName, active.localNickname)} size="large" /><div><strong>{contactDisplayName(active.label, active.roomId, active.remoteDisplayName, active.localNickname)}</strong><small>{activeContactVerified ? 'Verified contact · encrypted chat' : contactIdentity?.changeStatus === 'changed-pending-review' ? 'Identity changed · review required' : contactIdentity ? 'Not verified on this device' : 'Verification status unavailable'}</small></div></div>
+      <div className="call-launch-card__person"><Avatar label={contactDisplayName(active.label, active.roomId, active.remoteDisplayName, active.localNickname)} size="large" /><div><strong>{contactDisplayName(active.label, active.roomId, active.remoteDisplayName, active.localNickname)}</strong><small>{activeContactVerified ? 'Checked contact · encrypted chat' : contactIdentity?.changeStatus === 'changed-pending-review' ? 'Identity changed · review required' : contactIdentity ? 'Not checked yet' : 'Not available yet'}</small></div></div>
       <div className="call-launch-card__actions"><Button variant="secondary" disabled={Boolean(callLaunchBlockReason)} onClick={() => void launchCall('audio')} aria-label="Start audio call"><PhoneIcon size={18} /> Voice call</Button><Button variant="primary" disabled={Boolean(callLaunchBlockReason)} onClick={() => void launchCall('video')} aria-label="Start video call"><VideoIcon size={18} /> Video call</Button></div>
       {callLaunchBlockReason && <p className="workspace-call-readiness" role="status">{callLaunchBlockMessage(callLaunchBlockReason)}</p>}
       {callMessage && <p className="workspace-feedback" role="status">{callMessage}</p>}
-    </section> : <div className="workspace-empty"><span className="workspace-empty__mark"><img src="/branding/k3ncrypt-cluster-white.svg" alt="" /></span><h2>No active conversation</h2><p>Open a verified conversation to start a call.</p></div>}
+    </section> : <div className="workspace-empty"><span className="workspace-empty__mark"><img src="/branding/k3ncrypt-cluster-white.svg" alt="" /></span><h2>No active conversation</h2><p>Open a checked contact’s chat to start a call.</p></div>}
     <section className="calls-note"><span className="calls-note__dot" /><p>Call history is saved locally in this device’s encrypted conversation history. Microphone or camera access is requested only when you start or accept a call.</p></section>
   </main>;
 };

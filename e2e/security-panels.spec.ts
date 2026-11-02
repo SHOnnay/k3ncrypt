@@ -172,7 +172,7 @@ test('waiting identity cannot be confirmed, real unverify stays explicit', async
   const { a, b, alice } = await connectedPair(browser);
   try {
     const dialog = await panel(alice, 'Security');
-    await dialog.locator('.verification-security-details summary').click();
+    await dialog.locator('.verification-security-details > summary').click();
     await dialog.getByRole('button', { name: 'Mark as not checked', exact: true }).click();
     await expect(dialog.locator('.verification-summary')).toContainText('Not checked yet');
     await expect(dialog.getByRole('button', { name: 'They match', exact: true })).toHaveCount(0);

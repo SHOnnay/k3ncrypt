@@ -1,3 +1,5 @@
+import { contactsCopy } from '../../content/checkCopy';
+import { LocalDataStatus } from './LocalDataStatus';
 import React from 'react';
 import { useChat } from '../../context/ChatContext';
 import { PlusIcon } from '../common/icons';
@@ -25,7 +27,7 @@ const formatSidebarTime = (date?: Date): string => {
 };
 
 export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection, onNavigate, onNewConversation, onOpenConversation, onOpenSettings, settingsOpen = false }) => {
-  const { channelHash, messages, conversations, savedConversations = conversations, syncStatus, sessionHealth, profileDisplayName, protocolMode, unavailableConversations = [], orphanedConversationRecords, pendingConversation, conversationOpenError } = useChat();
+  const { channelHash, messages, conversations, savedConversations = conversations, syncStatus, sessionHealth, profileDisplayName, protocolMode, unavailableConversations = [], pendingConversation, conversationOpenError } = useChat();
   const latest = messages.at(-1);
   const groups = classifySidebarConversations(savedConversations, unavailableConversations);
   const displayName = (conversation: typeof conversations[number]) => contactDisplayName(conversation.label, conversation.roomId, conversation.remoteDisplayName, conversation.localNickname);
@@ -69,7 +71,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection
           </button>
         ); })}
         {groups.chats.length === 0 && (
-          <div className="conversation-placeholder"><strong>{copy.contactsEmpty.title}</strong><span>{copy.contactsEmpty.description}</span></div>
+          <div className="conversation-placeholder"><strong>{contactsCopy.chatsEmptyTitle}</strong><span>{copy.contactsEmpty.description}</span></div>
         )}
         </section>
         {/* Own pending invitations are shown only on the Invite someone screen (Bug A). */}
@@ -87,7 +89,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection
         {groups.archived.length > 0 && <button className="invitation-local-action" type="button" onClick={() => onNavigate('contacts')}>Archived conversations ({groups.archived.length}) — manage in Contacts</button>}
       </div>
 
-      {orphanedConversationRecords && <details className="conversation-recovery"><summary>Local data status</summary>{!orphanedConversationRecords.available ? <p>Record inspection is unavailable; no recovery claim can be made.</p> : <><p>{orphanedConversationRecords.roomIds.length} rooms have protocol/session records without a matching saved access descriptor. This count does not check contact identities, session usability or server availability. A missing access capability cannot be recovered automatically.</p><ul>{orphanedConversationRecords.roomIds.map(roomId => <li key={roomId}>Saved room · {roomId.slice(-8)}</li>)}</ul>{orphanedConversationRecords.truncated && <p>Inspection reached its safe limit; additional records may exist.</p>}</>}</details>}
+      <LocalDataStatus />
       <div className="sidebar-profile">
         <Avatar label={profileDisplayName} size="small" />
         <span><strong>{profileDisplayName}</strong><small>Your profile · this device</small></span>

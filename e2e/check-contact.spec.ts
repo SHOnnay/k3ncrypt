@@ -28,6 +28,7 @@ async function cameraImage(page: Page, url: string) {
 }
 async function ownCode(page: Page): Promise<string> {
   await security(page);
+  await page.locator('.verification-security-details > summary').click();
   await page.locator('.check-show-mine summary').click();
   const image = page.getByAltText('Your code for scanning', { exact: true }).first();
   await expect(image).toBeVisible();
@@ -40,7 +41,12 @@ test('new account looks empty: no contacts, own invitation only on the Invite sc
   test.setTimeout(120_000);
   const context = await browser.newContext(); const page = await context.newPage();
   await create(page, 'Fresh');
-  await expect(page.getByRole('region', { name: 'Conversations' })).toContainText('No contacts yet.');
+  await expect(page.getByRole('region', { name: 'Conversations' })).toContainText('No chats yet.');
+  const empty = page.locator('.chat-empty-page');
+  await expect(empty).toContainText('No chats yet.');
+  await expect(empty).toContainText('Invite someone to start.');
+  await expect(empty).not.toContainText('Your invitation');
+  await expect(empty.getByRole('button', { name: /Invite someone/ })).toBeVisible();
   await expect(page.getByText(/Open pending invitation/)).toHaveCount(0);
   await shoot(page, '01-new-account-chats');
   await page.getByRole('button', { name: 'Contacts', exact: true }).first().click();
@@ -77,17 +83,18 @@ test('in person: scan code, wrong code refused, Confirm records the check, then 
   await expect(bob.locator('.verification-view')).toContainText('Scan Alice’s code');
   await expect(bob.getByRole('button', { name: 'Show numbers instead', exact: true })).toBeVisible();
   const confirm = bob.getByRole('button', { name: 'Confirm', exact: true });
-  await expect(confirm).toBeDisabled();
+  await expect(confirm).toHaveCount(0); // hidden until a code is scanned
+  await expect(bob.locator('.check-flow summary')).toHaveCount(0); // Show my code lives under More options
   await shoot(bob, '07-check-scan');
 
   await cameraImage(bob, bobCode); await bob.getByRole('button', { name: 'Start camera', exact: true }).click();
   await expect(bob.getByText('This isn’t Alice’s code. Don’t confirm. Make sure you’re scanning Alice’s own phone.', { exact: true })).toBeVisible({ timeout: 30_000 });
-  await expect(confirm).toBeDisabled();
+  await expect(confirm).toHaveCount(0);
   await shoot(bob, '08-check-scan-wrong-code');
   await cameraImage(bob, aliceCode); await bob.getByRole('button', { name: 'Start camera', exact: true }).click();
   await expect(bob.getByText('That’s Alice’s code. Tap Confirm to mark Alice as checked.', { exact: true })).toBeVisible({ timeout: 30_000 });
   await expect(bob.locator('.verification-summary')).toContainText('Not checked yet');
-  await expect(confirm).toBeEnabled();
+  await expect(confirm).toBeVisible();
   await shoot(bob, '09-check-scan-matched');
   await confirm.click();
   await expect(bob.locator('.verification-summary')).toContainText('Checked on this device');
@@ -110,6 +117,10 @@ test('remote: numbers, mismatch warning, They match, and the Android path offers
   await expect(view).toContainText('Checking Bob from this side needs an update to the Android app.');
   await expect(alice.getByRole('button', { name: 'They match' })).toHaveCount(0);
   await expect(alice.getByRole('button', { name: 'Confirm' })).toHaveCount(0);
+  await expect(view).toContainText('Read each group, one character at a time.');
+  await expect(alice.getByRole('button', { name: 'Copy my security number' })).toBeVisible();
+  const groups = await alice.locator('.security-number-groups code').allInnerTexts();
+  expect(groups.length).toBeGreaterThan(8);
   await shoot(alice, '11-check-android-path');
   await alice.getByRole('button', { name: 'Back', exact: true }).click();
   await alice.getByRole('button', { name: 'No', exact: true }).click();
@@ -151,13 +162,14 @@ test('file card before and after checking, and the changed-number banner pauses 
   await expect(bob.getByRole('button', { name: 'Download protected file', exact: true })).toHaveCount(0);
   await shoot(bob, '15-file-card-before-check');
   await card.getByRole('button', { name: 'Check now', exact: true }).click();
-  await expect(bob.locator('.verification-view')).toContainText('Check it’s really Alice');
   await bob.getByRole('button', { name: 'No', exact: true }).click();
   await bob.getByRole('button', { name: 'No, we’ll call', exact: true }).click();
   await bob.getByRole('button', { name: 'They match', exact: true }).click();
   await bob.getByRole('button', { name: 'Back to chat', exact: true }).click();
   await bob.getByRole('button', { name: 'Download protected file', exact: true }).last().click();
-  await expect(bob.getByRole('link', { name: 'Save garden.txt', exact: true })).toBeVisible({ timeout: 60_000 });
+  const save = bob.getByRole('link', { name: 'Save garden.txt', exact: true });
+  await expect(save).toBeVisible({ timeout: 60_000 });
+  await expect(save).toHaveText('Save');
   await shoot(bob, '16-file-card-after-check');
 
   // Identity change, injected into Bob's own vault (a real reinstall needs a second device).
@@ -180,7 +192,7 @@ test('file card before and after checking, and the changed-number banner pauses 
   await bob.getByRole('button', { name: 'Unlock this device', exact: true }).click();
   await bob.locator('input[type=password]').fill('alpha-family-existing-account-2026');
   await bob.getByRole('button', { name: 'Unlock account', exact: true }).click();
-  // Names are tied to the old number, so the changed contact is shown by its generic label (by design).
+  // Documented rule: an identity change hides the old name claim (anti-impersonation). Owner decision pending.
   await bob.locator('.conversation-row').first().click();
   const banner = bob.locator('.check-banner--changed');
   await expect(banner).toContainText('Your contact’s security number changed. This happens if your contact reinstalled K3NCRYPT or got a new phone. It can also mean someone is trying to listen in. Files and calls are paused until you check again.', { timeout: 30_000 });

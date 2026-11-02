@@ -97,8 +97,8 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
         </span>
         {media?.reference && !mediaUrl && !fileContactTrusted && <span className="message-file-blocked" role="note">{blockedNote} {blockedAction}</span>}
         {media?.reference && !mediaUrl && fileContactTrusted && <button className="message-file-action" type="button" onClick={openMedia} disabled={isOpening} aria-label={isOpening ? 'Downloading and checking protected file' : 'Download protected file'} title={isOpening ? 'Downloading and checking' : 'Download protected file'}><ApprovedIcon name="download" size={17} /></button>}
-        {mediaUrl && saved && <a className="message-file-action" href={mediaUrl} download={saved.filename || 'protected-file'} aria-label={`Save ${saved.filename}`} title="Save file"><ApprovedIcon name="download" size={17} /></a>}
-        {mediaUrl && <button className="message-file-close" type="button" onClick={closePreview} aria-label="Close file preview">Close</button>}
+        {mediaUrl && saved && <a className="message-file-action" href={mediaUrl} download={saved.filename || 'protected-file'} aria-label={`Save ${saved.filename}`} title="Save file"><ApprovedIcon name="download" size={17} /><span className="message-file-action__label">Save</span></a>}
+        {mediaUrl && <button className="message-file-close" type="button" onClick={closePreview} aria-label="Close file preview" title="Close preview"><span aria-hidden="true">×</span></button>}
       </div>}
       {!isFile && media?.reference && !mediaUrl && !fileContactTrusted && <div className="message-media-blocked" role="note">{blockedNote} {blockedAction}</div>}
       {!isFile && media?.reference && !mediaUrl && fileContactTrusted && <button className="message-media-action" type="button" onClick={openMedia} disabled={isOpening}>{isOpening ? 'Opening and checking…' : `Open protected ${media.kind}`}</button>}

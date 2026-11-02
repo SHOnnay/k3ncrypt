@@ -31,3 +31,5 @@
   .message-input { min-height: 40px; }
 }
 #send-btn:disabled { opacity: .78; }
+/* Check banner above the composer: its button stays inside its own box. */
+.composer-feedback.check-banner--above { margin: 0 0 8px; padding: 12px 14px; }

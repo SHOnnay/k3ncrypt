@@ -19,6 +19,11 @@ interface Props {
  */
 type Step = 'android' | 'together' | 'scan' | 'numbers' | 'android-path' | 'show-mine';
 
+/** Shows the exact value in its existing 4-character groups; '-' and '_' are spelled out so they can be read aloud. Value unchanged. */
+const SecurityNumberGroups: React.FC<{ value: string }> = ({ value }) => <ol className="security-number-groups" aria-label="Your security number">
+  {value.split(' ').map((group, index) => <li key={index}><span className="security-number-groups__index" aria-hidden="true">{index + 1}</span><code>{group}</code>{/[-_]/.test(group) && <small>{[...group].map((char) => char === '-' ? 'dash' : char === '_' ? 'underscore' : char).join(' ')}</small>}</li>)}
+</ol>;
+
 export const VerificationPanel: React.FC<Props> = ({ label, ownFingerprint, contact, availability = 'waiting', sessionHealth, verify, unverify, acceptChange, renew, block, onError, onDone }) => {
   const [step, setStep] = useState<Step>('android');
   const [code, setCode] = useState('');
@@ -86,7 +91,7 @@ export const VerificationPanel: React.FC<Props> = ({ label, ownFingerprint, cont
           <p>{checkCopy.scanHelp(name)}</p>
           <LocalQrScanner onScanned={scan} startLabel="Start camera" />
           <button className="btn btn--link check-numbers-link" type="button" onClick={() => { setNotice(''); setConfirmed(''); setStep('numbers'); }}>{checkCopy.showNumbersInstead}</button>
-          <button className="btn btn--primary" type="button" disabled={confirmed !== binding} onClick={() => void confirm('show-mine')}>Confirm</button>
+          {confirmed === binding && <button className="btn btn--primary" type="button" onClick={() => void confirm('show-mine')}>Confirm</button>}
         </section>}
 
         {step === 'numbers' && <section aria-label="Compare numbers">
@@ -104,7 +109,9 @@ export const VerificationPanel: React.FC<Props> = ({ label, ownFingerprint, cont
           <h4>{checkCopy.androidTitle(name)}</h4>
           <p>{checkCopy.androidHelp(name)}</p>
           <strong>Your security number</strong>
-          <code className="verification-code verification-code--large" aria-label="Your security number">{ownFingerprint}</code>
+          <SecurityNumberGroups value={ownFingerprint} />
+          <p className="check-read-hint">{checkCopy.readEachCharacter}</p>
+          <button className="btn btn--secondary" type="button" onClick={() => void navigator.clipboard.writeText(ownFingerprint).then(() => setNotice('Copied. Send it only in a way you trust.')).catch(() => setNotice('Could not copy. Read the groups aloud instead.'))}>Copy my security number</button>
           <p className="check-limit">{checkCopy.androidLimit(name)}</p>
           <button className="btn btn--secondary" type="button" onClick={() => setStep('android')}>Back</button>
         </section>}
@@ -116,10 +123,10 @@ export const VerificationPanel: React.FC<Props> = ({ label, ownFingerprint, cont
         {step === 'show-mine' ? <LocalQrImage value={myCode} label="Your code for scanning" /> : <button className="btn btn--secondary" type="button" onClick={() => setStep('show-mine')}>Show my code</button>}
         <button type="button" className="btn btn--primary" onClick={onDone}>Back to chat</button>
       </section>}
-      {!checked && step !== 'show-mine' && <details className="check-show-mine"><summary>Show my code</summary><p>{checkCopy.askBack(name)}</p><LocalQrImage value={myCode} label="Your code for scanning" /></details>}
     </> : <button className="btn btn--secondary" type="button" onClick={onDone}>Back to chats</button>}
     {notice && <p role="status">{notice}</p>}
     <details className="verification-security-details"><summary>More options</summary>
+      {!checked && <details className="check-show-mine"><summary>Show my code</summary><p>{checkCopy.askBack(name)}</p><LocalQrImage value={myCode} label="Your code for scanning" /></details>}
       <p>Names can be copied by anyone. Only the security number shows it’s really them. Checking never happens on its own: only your tap changes it.</p>
       <strong>Your full security number</strong><code className="verification-code">{ownFingerprint}</code>
       <strong>{name === 'your contact' ? 'Their' : `${name}’s`} full security number</strong><code className="verification-code">{peer ?? 'Not available yet'}</code>

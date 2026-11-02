@@ -21,7 +21,7 @@ export async function security(page: Page) {
 export async function ownIdentity(page: Page): Promise<string> {
   await security(page);
   await expect(page.locator('.verification-security-details')).toHaveCount(1);
-  await page.locator('.verification-security-details summary').click();
+  await page.locator('.verification-security-details > summary').click();
   const qr = await page.getByRole('textbox', { name: 'My code as text', exact: true }).inputValue();
   await page.getByRole('button', { name: 'Close settings' }).click();
   return JSON.parse(qr).fingerprint as string;

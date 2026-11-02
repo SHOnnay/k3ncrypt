@@ -230,7 +230,7 @@ test('three verified profiles deliver to Alice background rooms over one real mu
   // the separately verified Bob room remains usable.
   await alice.getByRole('button', { name: 'Open settings' }).click();
   await alice.getByRole('button', { name: 'Security' }).click();
-  await alice.locator('.verification-security-details summary').click();
+  await alice.locator('.verification-security-details > summary').click();
   await alice.getByRole('button', { name: 'Mark as not checked', exact: true }).click();
   await alice.getByRole('button', { name: 'Close settings', exact: true }).click();
   await openContact(alice, 'Bob');

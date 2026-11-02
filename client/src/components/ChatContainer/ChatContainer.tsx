@@ -13,7 +13,6 @@ import './ChatContainer.css';
 import { debugError } from '../../utils/debug';
 import { Button } from '../common/Button';
 import { PlusIcon } from '../common/icons';
-import { copy } from '../../content/copy';
 import { callStartFailureMessage, terminalCallStatusMessage } from '../../calls/callLaunchReadiness';
 import { emptyStateOpenStatus } from '../../product/conversationOpenCopy';
 import { contactDisplayName } from '../../content/copy';
@@ -46,10 +45,11 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ isHidden, onNewCon
     return <main className={`chat-empty-page ${isHidden ? 'hidden' : ''}`} aria-label="Chats">
       <div className="chat-empty-card">
         <span className="chat-empty-mark" aria-hidden="true"><img src="/branding/k3ncrypt-cluster-white.svg" alt="" /></span>
-        <h1>{activeIsOwnInvitation ? contactsCopy.yourInvitationLabel : hasContacts ? 'Choose a conversation' : copy.contactsEmpty.title}</h1>
-        <p>{activeIsOwnInvitation ? contactsCopy.yourInvitationHelp : hasContacts ? 'Select a saved contact from the list to open your conversation.' : copy.contactsEmpty.description}</p>
+        {/* Bug A: an own pending invitation is never presented here; it lives on the Invite screen. */}
+        <h1>{hasContacts ? 'Choose a conversation' : contactsCopy.chatsEmptyTitle}</h1>
+        <p>{hasContacts ? 'Select a saved contact from the list to open your conversation.' : contactsCopy.emptyHelp}</p>
         {openStatus && <p className={`chat-empty-open-status chat-empty-open-status--${openStatus.kind}`} role={openStatus.kind === 'failed' ? 'alert' : 'status'} aria-live="polite">{openStatus.text}</p>}
-        {(!hasContacts || activeIsOwnInvitation) && <Button variant="primary" onClick={onNewConversation}><PlusIcon size={17} /> {contactsCopy.inviteTitle}</Button>}
+        {!hasContacts && <Button variant="primary" onClick={onNewConversation}><PlusIcon size={17} /> {contactsCopy.inviteTitle}</Button>}
       </div>
     </main>;
   }

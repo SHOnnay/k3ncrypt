@@ -17,7 +17,7 @@ async function security(page: Page) {
 async function ownIdentity(page: Page): Promise<string> {
   await security(page);
   await expect(page.locator('.verification-security-details')).toHaveCount(1);
-  await page.locator('.verification-security-details summary').click();
+  await page.locator('.verification-security-details > summary').click();
   const qr = await page.getByRole('textbox', { name: 'My code as text', exact: true }).inputValue();
   await page.getByRole('button', { name: 'Close settings' }).click();
   return JSON.parse(qr).fingerprint as string;
@@ -82,18 +82,18 @@ test('independent accounts connect, exchange claimed names, explicitly verify, a
   const bobCode = bob.getByLabel('Security number', { exact: true });
   await expect(aliceCode).toHaveText(/\d{5}( · \d{5}){5}/);
   await expect(bobCode).toHaveText(await aliceCode.textContent() ?? '');
-  await alice.locator('.verification-security-details summary').click();
-  await bob.locator('.verification-security-details summary').click();
+  await alice.locator('.verification-security-details > summary').click();
+  await bob.locator('.verification-security-details > summary').click();
   const aliceQr = await alice.getByLabel('My code as text', { exact: true }).inputValue();
   const bobQr = await bob.getByLabel('My code as text', { exact: true }).inputValue();
   const mark = bob.getByRole('button', { name: 'Confirm', exact: true });
   await bob.getByLabel('Their code as text', { exact: true }).fill(bobQr);
   await bob.getByRole('button', { name: 'Check their code' }).click();
-  await expect(mark).toBeDisabled();
+  await expect(mark).toHaveCount(0); // Confirm appears only after a matching code
   await expect(bob.locator('.verification-view')).toContainText('This isn’t Alpha Alice’s code.');
   await bob.getByLabel('Their code as text', { exact: true }).fill(aliceQr);
   await bob.getByRole('button', { name: 'Check their code' }).click();
-  await expect(mark).toBeEnabled();
+  await expect(mark).toBeVisible();
   await expect(bob.locator('.verification-summary')).toContainText('Not checked yet');
   await mark.click(); await bob.getByRole('button', { name: 'Back to chat' }).click();
   await expect(bob.locator('.chat-header')).toContainText('Checked on this device');

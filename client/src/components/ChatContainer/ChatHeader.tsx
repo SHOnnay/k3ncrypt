@@ -121,7 +121,6 @@ const handleDelete = async () => {
           </div>
         )}
         {activeConversation && <p className={`connection-status connection-status--${status}`} role="status" aria-label="Connection"><span className="connection-status__dot" aria-hidden="true" /><strong>{statusCopy.label}</strong>{statusCopy.help && <span> {statusCopy.help}</span>}</p>}
-        {activeConversation && contactCheck === 'changed' && <div className="check-banner check-banner--changed" role="alert"><p>{checkCopy.changed(checkName(contactLabel))}</p><Button variant="primary" onClick={openCheck}>{checkCopy.checkAgain}</Button></div>}
         {participantMessage && <p id="participant-info" className="participant-info" role={securityVisibility.identityChange === 'changed-pending-review' ? 'alert' : 'status'}>{participantMessage}</p>}
         {pendingConversation && <p className="participant-info" role="status">Opening {roomLabel(pendingConversation.roomId)}… The current conversation remains active until it is ready.</p>}
         {conversationOpenError && <p className="participant-info" role="status">Could not open {roomLabel(conversationOpenError.roomId)}. Your current conversation remains open.</p>}
@@ -183,6 +182,7 @@ const handleDelete = async () => {
           </div>
         </details>
       </div>
+      {activeConversation && contactCheck === 'changed' && <div className="check-banner check-banner--changed check-banner--full" role="alert"><p>{checkCopy.changed(checkName(contactLabel))}</p><Button variant="primary" onClick={openCheck}>{checkCopy.checkAgain}</Button></div>}
     </header>
   );
 };

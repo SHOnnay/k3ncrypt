@@ -68,7 +68,7 @@ test('fresh accounts: no cross-account data, and the only entry is the own pendi
     results[name] = seen;
     expect(seen.contacts, 'an unaccepted account must have no established contacts').toEqual([]);
     expect(seen.ownInvitations).toContain('Your invitation ·');
-    expect(seen.sidebar).toContain('No contacts yet.');
+    expect(seen.sidebar).toContain('No chats yet.');
     expect(JSON.stringify(seen)).not.toContain(name === 'Alpha Fresh' ? 'Bravo' : 'Alpha');
     await context.close();
   }

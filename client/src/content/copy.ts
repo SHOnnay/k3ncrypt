@@ -7,11 +7,11 @@ export const copy = {
   },
   contact: {
     title: 'Bring someone in',
-    description: 'Share an invitation, compare security codes, then start a private conversation.',
+    description: 'Share an invitation, check it’s really them, then start a private conversation.',
   },
   verification: {
     title: 'Confirm connection',
-    description: 'A contact is not trusted until you compare security codes with them using another trusted way and confirm. Names help you recognize people; they do not prove who someone is.',
+    description: 'Anyone can copy a name. Check it’s really them before sharing photos and files.',
   },
   contactsEmpty: {
     title: 'No contacts yet.',

@@ -253,6 +253,7 @@ const RoomComposer: React.FC<{ onVerifyContact: () => void; drafts: ComposerDraf
 
   return (
     <footer className="chat-footer glass">
+      {!verified && contactIdentity && contactIdentity.changeStatus === 'unchanged' && <div className="composer-feedback check-banner check-banner--above" role="note"><p>{checkCopy.banner(checkName(contactLabel))}</p><button type="button" className="btn btn--primary" onClick={onVerifyContact}>{checkCopy.checkNow}</button></div>}
       <div className="input-container">
         <input ref={attachmentInputRef} type="file" hidden onChange={handleAttachment} />
         <button className="composer-tool" type="button" onClick={() => attachmentInputRef.current?.click()} disabled={sessionHealth !== 'healthy' || isSending || busy || !verified} title="Attach a photo or file (up to 8 MiB)" aria-label="Attach a photo or file, up to 8 MiB"><PaperclipIcon size={19} /></button>
@@ -292,7 +293,6 @@ const RoomComposer: React.FC<{ onVerifyContact: () => void; drafts: ComposerDraf
         <button type="button" onClick={removeAttachment} disabled={isSending || busy} aria-label="Remove attachment">Remove</button>
       </div>}
       {transfer.phase !== 'Idle' && <div className="media-transfer-status" role="status" aria-live="polite"><span>{transferStatus.label}</span>{transferStatus.progress !== undefined && <progress max={100} value={transferStatus.progress} aria-label="File transfer progress" />}{busy && <button type="button" onClick={cancelTransfer}>Cancel</button>}{transfer.phase === 'Failed' && transfer.retryable && <button type="button" onClick={retryAttachment}>Retry</button>}</div>}
-      {!verified && contactIdentity && contactIdentity.changeStatus === 'unchanged' && <div className="composer-feedback check-banner" role="note"><p>{checkCopy.banner(checkName(contactLabel))}</p><button type="button" className="btn btn--primary" onClick={onVerifyContact}>{checkCopy.checkNow}</button></div>}
       {actionMessage && <div className="composer-feedback" role="status">{actionMessage}<SafeDiagnosticDetails code={actionDiagnostic} /></div>}
     </footer>
   );

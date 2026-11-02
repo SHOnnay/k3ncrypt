@@ -111,16 +111,21 @@
   .brand-row { padding-bottom: 20px; }
 }
 @media (max-width: 620px) {
-  .sidebar { box-shadow: 0 -8px 28px rgba(20, 20, 20, .05); }
+  /* Overrides the 900px rule above, which otherwise left the phone nav 260px wide. */
+  .sidebar { width: 100%; min-width: 100%; padding: 5px 8px calc(5px + env(safe-area-inset-bottom)); box-shadow: 0 -8px 28px rgba(20, 20, 20, .05); }
+  .primary-navigation { justify-content: space-evenly; }
   .primary-navigation button.active { color: var(--brand-strong); background: var(--brand-soft); }
 }
 
+.conversation-recovery--phone { display: none; }
 .conversation-recovery { margin: auto 6px 2px; padding: 8px 9px; border: 1px solid var(--border); border-radius: 11px; color: var(--muted); background: color-mix(in srgb, var(--surface) 80%, transparent); font-size: .66rem; }
 .conversation-recovery > summary { color: var(--muted-strong); font-weight: 600; cursor: pointer; }
 .conversation-recovery p { line-height: 1.45; }
 .conversation-recovery ul { padding-left: 16px; overflow-wrap: anywhere; }
 @media (max-width: 620px) {
-  .conversation-recovery { position: fixed; z-index: 50; right: 9px; bottom: calc(76px + env(safe-area-inset-bottom)); width: min(300px, calc(100vw - 18px)); margin: 0; padding: 0; border-radius: 10px; background: var(--surface-raised); box-shadow: var(--shadow-md); }
+  /* Phones: never float over the composer; the report lives on the Contacts page. */
+  .sidebar .conversation-recovery { display: none; }
+  .conversation-recovery--phone { display: block; position: static; margin: 16px 24px 0; padding: 8px 10px; }
   .conversation-recovery > summary { min-height: 34px; display: flex; align-items: center; padding: 0 10px; }
   .conversation-recovery[open] { padding: 8px 10px; }
 }

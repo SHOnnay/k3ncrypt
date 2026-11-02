@@ -22,3 +22,5 @@
 .check-header-button { margin-left: 4px; }
 .message-file-blocked .btn, .message-media-blocked .btn { margin-left: 6px; vertical-align: middle; }
 .check-header-button.btn--tiny { padding: 4px 10px; min-height: 0; font-size: .74rem; }
+/* Changed-number banner: its own full-width row under the header, never beside the call icons. */
+.check-banner--full { grid-column: 1 / -1; margin-top: 4px; }

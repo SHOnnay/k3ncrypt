@@ -53,3 +53,6 @@
 .message--file.sent .message-file-action { color: var(--muted-strong); }
 .message--file.sent .message-file-action:hover:not(:disabled) { color: var(--brand-strong); background: var(--brand-soft); }
 .message.received .message-meta, .message--file.sent .message-meta { opacity: 1; }
+/* Save shows its word, not just an icon; close is a quiet × so the two never read alike. */
+a.message-file-action:has(.message-file-action__label) { width: auto; flex: 0 0 auto; display: inline-flex; gap: 5px; padding: 0 9px; font-size: .72rem; font-weight: 600; }
+.message-file-close span { font-size: 1rem; line-height: 1; }
