@@ -1,3 +1,4 @@
+import { checkRequired, numberChanged } from '../utils/checkErrors';
 import type { CallIdentityVerifier, CallSession, CallSignal, CallSignalTransport } from './contracts';
 import { verifySignalDigest } from './signalBinding';
 import { MemoryReplayProtectionStore, type ReplayProtectionStore } from './replayProtection';
@@ -24,8 +25,8 @@ export class SecureCallSignaling {
     const now = Date.now();
     if (session.protocolVersion !== 2 || signal.protocolVersion !== session.protocolVersion || !validSignalSemantics(signal) || signal.callId !== session.callId || signal.conversationId !== session.conversationId || signal.identityBinding !== session.identityBinding || signal.mediaMode !== session.mediaMode || !signal.nonce || !signal.receiverIdentityId || !Number.isSafeInteger(signal.timestamp) || !Number.isSafeInteger(signal.expiresAt) || signal.timestamp < 0 || signal.expiresAt <= now || signal.expiresAt <= signal.timestamp || signal.expiresAt - signal.timestamp > CALL_SIGNAL_LIFETIME_MS || signal.timestamp > now + 30_000 || !(await verifySignalDigest(signal))) throw new Error('Invalid call signal.');
     if (!(await this.identity.isParticipant(session.conversationId, signal.sender.participantId))) throw new Error('Unauthorized call participant.');
-    if (await this.identity.getVerification(signal.sender.participantId) !== 'verified') throw new Error('Verification required for calls.');
-    if (signal.sender.verification === 'changed-pending-review') throw new Error('Call identity requires review.');
+    if (await this.identity.getVerification(signal.sender.participantId) !== 'verified') throw checkRequired('Verification required for calls.');
+    if (signal.sender.verification === 'changed-pending-review') throw numberChanged('Call identity requires review.');
     const key = replayKey(signal);
     const result = await this.replay.claim(key, signal.expiresAt, now);
     if (result !== 'accepted') throw new Error(`Call signal rejected: ${result}.`);

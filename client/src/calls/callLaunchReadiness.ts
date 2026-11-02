@@ -45,14 +45,26 @@ export const callLaunchBlockMessage = (reason: CallLaunchBlockReason): string =>
   }
 };
 
+/** M3c: classify by the error's safeDiagnosticCode first; message text is only a fallback for untagged errors. */
+export const checkFailureKind = (error: unknown): 'check-required' | 'number-changed' | undefined => {
+  const code = error && typeof error === 'object' ? (error as { safeDiagnosticCode?: unknown }).safeDiagnosticCode : undefined;
+  if (code === 'PINNED_IDENTITY_CHANGED') return 'number-changed';
+  if (code === 'VERIFICATION_REQUIRED' || code === 'RECIPIENT_AUTHORITY_CHANGED' || code === 'RECIPIENT_AUTHORITY_MISSING') return code === 'RECIPIENT_AUTHORITY_CHANGED' ? 'number-changed' : 'check-required';
+  return undefined;
+};
+export const CHECK_BEFORE_CALLING = 'Check this contact before calling.';
+export const CALLS_PAUSED_NUMBER_CHANGED = 'Calls are paused until you check the new security number.';
+
 export const callStartFailureMessage = (error: unknown, media: 'audio' | 'video'): string => {
+  const kind = checkFailureKind(error);
+  if (kind === 'number-changed') return CALLS_PAUSED_NUMBER_CHANGED;
+  if (kind === 'check-required') return CHECK_BEFORE_CALLING;
   const source = error instanceof Error ? error.message.toLowerCase() : '';
   if (source.includes('protocol') || source.includes('newer') || source.includes('incompatible')) {
     return 'Call requires a newer K3NCRYPT version.';
   }
-  if (source.includes('verification') || source.includes('identity') || source.includes('review')) {
-    return 'Check this contact before calling.';
-  }
+  // Fallback for untagged (legacy) errors only.
+  if (source.includes('verification') || source.includes('identity') || source.includes('review')) return CHECK_BEFORE_CALLING;
   if (source.includes('permission') || source.includes('denied') || source.includes('dismissed')) {
     return media === 'video'
       ? 'Camera or microphone permission was denied or dismissed. Allow the required permission and retry.'

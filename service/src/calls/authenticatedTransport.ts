@@ -1,3 +1,4 @@
+import { checkRequired } from '../utils/checkErrors';
 import { testDiagnosticsEnabled } from '../utils/testDiagnostics';
 import type { CryptoSession, EncryptedEnvelope, TransportManager } from '../core/contracts';
 import type { CallIdentityVerifier, CallParticipant, CallProtocolIssue, CallSignal, CallSignalTransport } from './contracts';
@@ -72,7 +73,7 @@ export class AuthenticatedCallSignalTransport implements CallSignalTransport {
     if (signal.sender.verification !== 'verified') { callSignalDiagnostic('sender-unverified'); throw new Error('Call signal origin rejected.'); }
     if (signal.sender.participantId !== this.remote.participantId) { callSignalDiagnostic('sender-mismatch'); throw new Error('Call signal origin rejected.'); }
     if (!(await this.identity.isParticipant(this.conversationId, signal.sender.participantId))) { callSignalDiagnostic('membership-rejected'); throw new Error('Call signal origin rejected.'); }
-    if (await this.identity.getVerification(signal.sender.participantId) !== 'verified') throw new Error('Verification required for calls.');
+    if (await this.identity.getVerification(signal.sender.participantId) !== 'verified') throw checkRequired('Verification required for calls.');
     const expectedBinding = await this.identity.identityBinding(this.conversationId, [
       { participantId: this.localParticipantId, identityId: this.localIdentityId, verification: 'verified' },
       { participantId: this.remote.participantId, identityId: this.remote.identityId, verification: 'verified' },

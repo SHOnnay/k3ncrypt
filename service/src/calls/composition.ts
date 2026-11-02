@@ -1,3 +1,4 @@
+import { checkRequired, numberChanged } from '../utils/checkErrors';
 import { testDiagnosticsEnabled } from '../utils/testDiagnostics';
 import type { CryptoSession, TransportManager } from '../core/contracts';
 import { CallAuthorization } from './authorization';
@@ -76,7 +77,7 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
   const assertVerifiedContact = async (): Promise<void> => {
     await input.deviceTrust.assertTrusted();
     for (const participant of [localParticipant, input.remoteParticipant]) {
-      if (!await input.identity.isParticipant(input.conversationId, participant.participantId) || await input.identity.getVerification(participant.participantId) !== 'verified') throw new Error('Verification required for calls.');
+      if (!await input.identity.isParticipant(input.conversationId, participant.participantId) || await input.identity.getVerification(participant.participantId) !== 'verified') throw checkRequired('Verification required for calls.');
     }
   };
   const sendEvent = async (session: CallSession, event: CallEvent, sequence: number, kind: CallSignalKind = 'control', payload?: unknown): Promise<void> => {
@@ -294,7 +295,7 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
       if (!active || checking || notified) return;
       checking = true;
       try {
-        if (!await input.identity.isParticipant(input.conversationId, input.remoteParticipant.participantId) || await input.identity.getVerification(input.remoteParticipant.participantId) !== 'verified') throw new Error('Contact verification changed.');
+        if (!await input.identity.isParticipant(input.conversationId, input.remoteParticipant.participantId) || await input.identity.getVerification(input.remoteParticipant.participantId) !== 'verified') throw numberChanged('Contact verification changed.');
       }
       catch {
         if (active && !notified) {

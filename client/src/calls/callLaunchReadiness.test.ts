@@ -56,3 +56,17 @@ describe('call launch readiness', () => {
     expect(terminalCallStatusMessage('connected')).toBeUndefined();
   });
 });
+
+// M3c: classification follows the error code, never the wording.
+describe('call failures are classified by code', () => {
+  it('maps coded errors regardless of their message text', () => {
+    const coded = (code: string) => Object.assign(new Error('wording that mentions nothing relevant'), { safeDiagnosticCode: code });
+    expect(callStartFailureMessage(coded('VERIFICATION_REQUIRED'), 'audio')).toBe('Check this contact before calling.');
+    expect(callStartFailureMessage(coded('PINNED_IDENTITY_CHANGED'), 'audio')).toBe('Calls are paused until you check the new security number.');
+    expect(callStartFailureMessage(coded('RECIPIENT_AUTHORITY_CHANGED'), 'video')).toBe('Calls are paused until you check the new security number.');
+  });
+  it('a code wins over misleading text', () => {
+    const error = Object.assign(new Error('microphone permission denied'), { safeDiagnosticCode: 'VERIFICATION_REQUIRED' });
+    expect(callStartFailureMessage(error, 'audio')).toBe('Check this contact before calling.');
+  });
+});

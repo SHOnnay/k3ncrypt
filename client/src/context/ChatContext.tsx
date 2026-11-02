@@ -18,6 +18,7 @@ import { playBeep } from '../utils/audioNotification';
 import { getRuntimeConfig } from '../config/runtimeConfig';
 import { debugError } from '../utils/debug';
 import { bindPageHideCallTermination } from '../calls/pagehideTermination';
+import { CALLS_PAUSED_NUMBER_CHANGED, CHECK_BEFORE_CALLING, checkFailureKind } from '../calls/callLaunchReadiness';
 import { loadVodozemacBindings } from '../crypto/vodozemacModule';
 import { readConversationDescriptors, removeConversationDescriptor, saveConversationDescriptor, updateConversationDescriptor, type ConversationDescriptor } from '../product/sessionStore';
 import { readProfileName, readLocalProfile, writeProfileName } from '../product/profileStore';
@@ -42,9 +43,12 @@ const MUX_STAGE1_ENABLED = (() => {
 })();
 
 const callSetupFailure = (error: unknown): { kind: 'verification-required' | 'media-denied' | 'media-failed' | 'signaling-failed'; message: string } => {
+  // M3c: code first; message text only for untagged errors.
+  const checkKind = checkFailureKind(error);
+  if (checkKind) return { kind: 'verification-required', message: checkKind === 'number-changed' ? CALLS_PAUSED_NUMBER_CHANGED : CHECK_BEFORE_CALLING };
   const source = error instanceof Error ? error.message.toLowerCase() : '';
   if (source.includes('verification') || source.includes('identity') || source.includes('review')) {
-    return { kind: 'verification-required', message: 'Verification required. Reverify this contact before calling.' };
+    return { kind: 'verification-required', message: CHECK_BEFORE_CALLING };
   }
   if (source.includes('permission') || source.includes('denied') || source.includes('dismissed')) {
     return { kind: 'media-denied', message: 'Microphone or camera permission was denied or dismissed. Allow the required permission and retry.' };
@@ -357,14 +361,14 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             localCallHistory.current.failed(session.callId);
             await negotiator.end(session.callId).catch(() => undefined);
             setCallLifecycleState(failure.kind);
-            setCallStatus(failure.kind === 'verification-required' ? 'Verification required' : failure.kind === 'signaling-failed' ? 'Call negotiation failed' : 'Call media could not start');
+            setCallStatus(failure.kind === 'verification-required' ? 'Check needed' : failure.kind === 'signaling-failed' ? 'Call negotiation failed' : 'Call media could not start');
           })).catch(async (error: unknown) => {
             const failure = callSetupFailure(error);
             setCallError(failure.message);
             localCallHistory.current.failed(session.callId);
             await negotiator.end(session.callId).catch(() => undefined);
             setCallLifecycleState(failure.kind);
-            setCallStatus(failure.kind === 'verification-required' ? 'Verification required' : failure.kind === 'signaling-failed' ? 'Call negotiation failed' : 'Call media could not start');
+            setCallStatus(failure.kind === 'verification-required' ? 'Check needed' : failure.kind === 'signaling-failed' ? 'Call negotiation failed' : 'Call media could not start');
           });
         }
       });
@@ -1371,7 +1375,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       try { await installModernCallSupport(conversation, true); }
       catch (error) { callStartDiagnostic('support', error); throw error; }
       if (selectedConversation.current !== conversation || callSupportConversation.current !== conversation || !callNegotiator.current) {
-        callStartDiagnostic('support'); throw new Error('Authenticated call media is not ready. Reverify this contact.');
+        callStartDiagnostic('support'); throw Object.assign(new Error('Calls need a checked contact. Check this contact, then try again.'), { safeDiagnosticCode: 'VERIFICATION_REQUIRED' });
       }
       let composition;
       try { composition = await conversation.createAuthenticatedCallComposition(); }
@@ -1381,7 +1385,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       catch (error) { callStartDiagnostic('invite', error); throw error; }
       return;
     }
-    throw new Error('Verification required: legacy conversations have no local contact verification authority.');
+    throw Object.assign(new Error('Calls need a checked contact. Older room invitations can’t be checked.'), { safeDiagnosticCode: 'VERIFICATION_REQUIRED' });
   }, [modern, protocolMode]);
 
   const startVideoCall = useCallback(async () => {
@@ -1393,7 +1397,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       try { await installModernCallSupport(conversation, true); }
       catch (error) { callStartDiagnostic('support', error); throw error; }
       if (selectedConversation.current !== conversation || callSupportConversation.current !== conversation || !callNegotiator.current) {
-        callStartDiagnostic('support'); throw new Error('Authenticated call media is not ready. Reverify this contact.');
+        callStartDiagnostic('support'); throw Object.assign(new Error('Calls need a checked contact. Check this contact, then try again.'), { safeDiagnosticCode: 'VERIFICATION_REQUIRED' });
       }
       let composition;
       try { composition = await conversation.createAuthenticatedCallComposition(); }
@@ -1403,7 +1407,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       catch (error) { callStartDiagnostic('invite', error); throw error; }
       return;
     }
-    throw new Error('Verification required: legacy conversations have no local contact verification authority.');
+    throw Object.assign(new Error('Calls need a checked contact. Older room invitations can’t be checked.'), { safeDiagnosticCode: 'VERIFICATION_REQUIRED' });
   }, [modern, protocolMode]);
 
   const acceptCall = useCallback(async () => {
@@ -1429,7 +1433,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         localCallHistory.current.failed(callId);
         await callNegotiator.current.end(callId).catch(() => undefined);
         setCallLifecycleState(failure.kind);
-        setCallStatus(failure.kind === 'verification-required' ? 'Verification required' : failure.kind === 'signaling-failed' ? 'Call negotiation failed' : 'Call media could not start');
+        setCallStatus(failure.kind === 'verification-required' ? 'Check needed' : failure.kind === 'signaling-failed' ? 'Call negotiation failed' : 'Call media could not start');
       }
       return;
     }
@@ -1524,7 +1528,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const callId = modernCallIdRef.current;
     const composition = modernCallCompositionRef.current;
     const termination = (async (): Promise<void> => {
-      setCallError('Verification required: this contact must be reverified before calling.');
+      setCallError(CHECK_BEFORE_CALLING);
       setCallActive(false);
       callActiveRef.current = false;
       setIsIncomingCall(false);
@@ -1545,7 +1549,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setModernCallId(undefined);
       modernCallIdRef.current = undefined;
       setCallLifecycleState('verification-required');
-      setCallStatus('Verification required');
+      setCallStatus('Check needed');
       clearCallMedia();
     })();
     verificationTerminationPending.current = termination;
@@ -1643,7 +1647,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     chatInstance.on('call-invite', () => {
       void chatInstance.rejectCall().catch(() => undefined);
-      setCallError('Verification required: legacy conversations have no local contact verification authority.');
+      setCallError('Calls need a checked contact. Older room invitations can’t be checked.');
     });
 
     chatInstance.on('call-state-changed', (update: CallLifecycleUpdate) => {
@@ -1704,7 +1708,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       connected: 'Connected',
       ending: 'Ending...',
       ended: 'Call Ended',
-      'verification-required': 'Verification Required',
+      'verification-required': 'Check needed',
       rejected: 'Call Rejected',
       'no-peer': 'No Peer Available',
       'media-denied': 'Microphone Permission Denied',

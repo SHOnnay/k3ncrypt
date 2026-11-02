@@ -1,3 +1,4 @@
+import { checkRequired, numberChanged } from '../utils/checkErrors';
 import { parseFileReference, sameBinding } from '../files/protocol';
 import { testDiagnosticsEnabled } from '../utils/testDiagnostics';
 import type { EncryptedEnvelope, InboundTransportDecision, PermanentInboundRejectionReason, SecureRecordUpdate, SecureStorage, TransportManager } from '../core/contracts';
@@ -1028,9 +1029,9 @@ export class ModernConversation {
         testOnlyDeliveryStage('send-start');
         await this.assertCurrentDeviceTrust();
         const contact = await this.getContact();
-        if (contact?.changeStatus !== 'unchanged') throw new Error('Review this contact’s changed identity before sending.');
+        if (contact?.changeStatus !== 'unchanged') throw numberChanged('Review this contact’s changed identity before sending.');
         if (this.transport.activeTransport()?.requiresRoomMessageV1 && (!contact || contact.verification !== 'verified' || !contact.identityId)) {
-            throw new Error('Verify this contact again before using multiplexed delivery.');
+            throw checkRequired('Verify this contact again before using multiplexed delivery.');
         }
         const rawPayload = encoder.encode(text);
         if (startsWithBytes(rawPayload, JOIN_INTRODUCTION_MAGIC) ||
@@ -1265,9 +1266,9 @@ export class ModernConversation {
                         await this.assertCurrentDeviceTrust();
                         const current = await this.getContact();
                         if (current?.changeStatus !== 'unchanged' || !current.identityId || current.identityId !== contact?.identityId) {
-                            throw new Error('Review this contact’s changed identity before sending queued messages.');
+                            throw numberChanged('Review this contact’s changed identity before sending queued messages.');
                         }
-                        if (item.requiresVerifiedContact === true && current.verification !== 'verified') throw new Error('Verify this contact before sending queued files.');
+                        if (item.requiresVerifiedContact === true && current.verification !== 'verified') throw checkRequired('Verify this contact before sending queued files.');
                         const currentFloor = await readRoomMessageVersionFloor(this.storage, this.roomId!, current.identityId);
                         activeTransport?.setAuthenticatedMessageVersionFloor?.(currentFloor >= 1 ? 1 : 0);
                         testOnlyDeliveryStage('relay-dispatch');
@@ -1403,9 +1404,9 @@ export class ModernConversation {
         }
         await this.assertCurrentDeviceTrust();
         const pinned = await this.registry.get(this.remoteAddress);
-        if (!pinned || pinned.verification !== 'verified' || pinned.changeStatus !== 'unchanged') throw new Error('The contact is not verified.');
+        if (!pinned || pinned.verification !== 'verified' || pinned.changeStatus !== 'unchanged') throw checkRequired('The contact is not verified.');
         const bundle = validateVodozemacPublicBundle(await fetchVodozemacBundle(this.roomId, this.capability, this.remoteAddress));
-        if (await fingerprintVodozemacIdentity(bundle.identity) !== pinned.identityId) throw new Error('The verified contact identity changed.');
+        if (await fingerprintVodozemacIdentity(bundle.identity) !== pinned.identityId) throw numberChanged('The verified contact identity changed.');
         const modeBytes = await this.storage.read('conversation-protocol', this.roomId);
         if (!modeBytes || !this.storage.compareAndSwapRecords) throw new Error('Atomic session renewal is unavailable.');
         const mode = JSON.parse(decoder.decode(modeBytes)) as Record<string, unknown>;
@@ -1438,7 +1439,7 @@ export class ModernConversation {
         await this.assertCurrentDeviceTrust();
         const contact = await this.registry.get(this.remoteAddress, false);
         if (!contact || contact.changeStatus !== 'unchanged' || contact.verification !== 'verified') {
-            throw new Error('Verify this contact before starting a call.');
+            throw checkRequired('Verify this contact before starting a call.');
         }
         if (this.callComposition && !refreshSessionBinding) return this.callComposition;
         // Calls use the established conversation session for encrypted
@@ -2283,7 +2284,7 @@ export class ModernConversation {
         });
         await this.onContactChange?.(event.current);
         if ((event.kind === 'identity-changed' || event.current.changeStatus !== 'unchanged') && !(reviewOnly && event.current.changeStatus === 'changed-pending-review')) {
-            throw new Error('This contact’s identity changed. Review it before continuing.');
+            throw numberChanged('This contact’s identity changed. Review it before continuing.');
         }
     }
 

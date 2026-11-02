@@ -108,3 +108,14 @@ describe('call signaling security', () => {
     expect(() => createAuthenticatedCallComposition({ session, transport: {} as never, conversationId: 'room', localIdentityId: 'alice-id', remoteParticipant: { participantId: 'bob', identityId: 'bob-id', verification: 'verified' }, identity, deviceTrust: { assertTrusted: async () => undefined } })).toThrow('not ready');
   });
 });
+
+// M3c: call authorization failures carry stable codes for the client.
+import { CallAuthorization as M3cCallAuthorization } from './authorization';
+describe('call authorization error codes', () => {
+  it('tags unverified and changed participants', async () => {
+    const session = { conversationId: 'c', participants: [{ participantId: 'p' }] } as never;
+    const authorization = (verification: string) => new M3cCallAuthorization({ isParticipant: async () => true, getVerification: async () => verification } as never);
+    await expect(authorization('unverified').assertParticipant(session, { participantId: 'p', verification: 'unverified' } as never)).rejects.toMatchObject({ safeDiagnosticCode: 'VERIFICATION_REQUIRED' });
+    await expect(authorization('changed-pending-review').assertParticipant(session, { participantId: 'p', verification: 'changed-pending-review' } as never)).rejects.toMatchObject({ safeDiagnosticCode: 'PINNED_IDENTITY_CHANGED' });
+  });
+});
