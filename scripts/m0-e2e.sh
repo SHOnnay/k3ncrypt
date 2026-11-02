@@ -21,11 +21,33 @@ export PLAYWRIGHT_MONGO_URI="mongodb://127.0.0.1:$PORT/?directConnection=true"
 specs=("$@")
 [ ${#specs[@]} -eq 0 ] && specs=(e2e/*.spec.ts)
 status=0
+# Specs that create many rooms exceed the production per-IP room-creation limit (20 burst,
+# 1 per 4 s) when all their tests share one server; they get a fresh server per test.
+SPLIT="${K3NCRYPT_M0_SPLIT:-file-usability}"
 for spec in "${specs[@]}"; do
   name="$(basename "$spec" .spec.ts)"
-  npx playwright test "$spec" --project="$PROJECT" --workers=1 --timeout=90000 \
-    --reporter=json --output="$OUT/artifacts/$name" >"$OUT/$name.json" 2>"$OUT/$name.err"
-  code=$?
+  # Each entry is "spec|title-regex"; an empty regex means the whole spec.
+  targets=("$spec|")
+  if [[ " $SPLIT " == *" $name "* ]]; then
+    targets=()
+    while IFS= read -r line; do targets+=("$spec|$line"); done < <(npx playwright test "$spec" --project="$PROJECT" --list 2>/dev/null \
+      | grep -E "› $name\.spec\.ts:" | sed -E 's/^.*\.spec\.ts:[0-9]+:[0-9]+ › //' | sort -u \
+      | python3 -c 'import re,sys; [print("^.*" + re.escape(l.rstrip("\n")) + "$") for l in sys.stdin]')
+  fi
+  code=0; parts=(); index=0
+  for target in "${targets[@]}"; do
+    file="${target%%|*}"; title="${target#*|}"; index=$((index + 1))
+    part="$OUT/$name.part$index.json"
+    if [ -n "$title" ]; then set -- -g "$title"; else set --; fi
+    npx playwright test "$file" "$@" --project="$PROJECT" --workers=1 --timeout=90000 \
+      --reporter=json --output="$OUT/artifacts/$name" >"$part" 2>"$OUT/$name.err" || code=1
+    parts+=("$part")
+  done
+  node -e '
+    const fs=require("fs");const [out,...parts]=process.argv.slice(1);const merged={suites:[],stats:{expected:0,unexpected:0,skipped:0,flaky:0}};
+    for(const p of parts){try{const r=JSON.parse(fs.readFileSync(p,"utf8"));merged.suites.push(...r.suites);for(const k in merged.stats)merged.stats[k]+=r.stats[k]??0}catch{}}
+    fs.writeFileSync(out,JSON.stringify(merged));
+  ' "$OUT/$name.json" "${parts[@]}"
   node -e '
     const fs=require("fs");const n=process.argv[1];let r;
     try{r=JSON.parse(fs.readFileSync(process.argv[2],"utf8"))}catch{console.log(`CRASH   ${n}`);process.exit()}

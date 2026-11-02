@@ -18,7 +18,7 @@ test('varying concrete transfer paths share one aggregate API budget', async () 
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>(resolve => server.once('listening', resolve));
   jest.spyOn(Date, 'now').mockReturnValue(1_000_000);
-  try { for (let i = 0; i < 120; i++) await request(server).get(`/attachments/id-${i}/chunks/${i}`).set('X-Forwarded-For', '192.0.2.17').expect(200);
+  try { for (let i = 0; i < 300; i++) await request(server).get(`/attachments/id-${i}/chunks/${i}`).set('X-Forwarded-For', '192.0.2.17').expect(200);
     await request(server).get('/attachments/another/chunks/0').set('X-Forwarded-For', '192.0.2.17').expect(429);
   } finally {
     jest.restoreAllMocks();
