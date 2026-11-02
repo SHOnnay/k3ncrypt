@@ -50,3 +50,12 @@ Alternative, if you don't want `main` moved yet: push only the hotfix branch, te
 
 ## 5. Rollback
 Set maintenance on, deploy `f868cd5`, confirm health and ready, set maintenance off and redeploy `f868cd5`. No data to undo. Never roll back to `871fa99`.
+
+## Deployment record
+- **2026-11-02:** owner deployed `f927941` to Render (branch `main`) with the maintenance-mode cutover. `origin/main` = `f927941c`.
+- **Health check, read-only, 2026-11-02 12:27 UTC** [production]:
+  - `GET /api/health` → 200 `{"status":"ok"}`.
+  - `GET /api/ready` → 200 `{"status":"ready","dependencies":{"database":"ready","messagingRelay":"ready","syncRelay":"ready","privateNetworkRelay":"ready"}}`.
+  - The running build's SHA is not exposed by any response; the deployed SHA is owner-confirmed only.
+  - Headers seen: `content-security-policy`, `x-content-type-options: nosniff`, `x-frame-options: DENY`. No `strict-transport-security` (tracked in M3).
+- **Owner smoke test: pending.** Still to do: a message both ways between two devices, and setting up a new Android device.
