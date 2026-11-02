@@ -49,3 +49,28 @@ it('does not retry quota, unavailable, authorization, or long-delay failures aut
     } finally { fetchMock.mockRestore(); }
   }
 });
+
+// M2 (physical report: sends stuck on "Sending"): a request the server never answers must fail
+// as a retryable network error after a bounded time, while a user cancel still reads as cancel.
+it('times out a request that never answers and reports it as retryable network failure', async () => {
+  jest.useRealTimers();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = jest.fn((_url: unknown, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+    // Like real fetch: an already-aborted signal rejects at once.
+    if (init?.signal?.aborted) { reject(new DOMException('aborted', 'AbortError')); return; }
+    init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+  })) as typeof fetch;
+  try {
+    const gateway = new HttpFileGateway('http://relay.test', async () => ({}), 50);
+    await expect(gateway.status('id', new AbortController().signal)).rejects.toThrow('Network unavailable.');
+    const user = new AbortController();
+    const pending = gateway.status('id', user.signal); user.abort();
+    await expect(pending).rejects.toThrow('File canceled.');
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+it('also bounds a device-proof header request that never answers', async () => {
+  jest.useRealTimers();
+  const gateway = new HttpFileGateway('http://relay.test', () => new Promise(() => undefined), 50);
+  await expect(gateway.status('id', new AbortController().signal)).rejects.toThrow('Network unavailable.');
+});
