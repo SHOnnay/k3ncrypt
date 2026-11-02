@@ -86,6 +86,27 @@ describe('authenticated bidirectional call flow', () => {
       expect(sendEnvelope).toHaveBeenCalledTimes(1);
     } finally { jest.useRealTimers(); }
   });
+  // M3i: a device whose own trust is revoked mid-call must end the call within one watch interval.
+  it('terminates when this device loses trust during the call', async () => {
+    jest.useFakeTimers();
+    try {
+      let trusted = true;
+      const revocable = { assertTrusted: async () => { if (!trusted) throw new Error('Device trust revoked.'); } };
+      const authority = { isParticipant: async (_conversation: string, id: string) => id === 'alice' || id === 'bob', getVerification: async () => 'verified' as const, identityBinding };
+      const sendEnvelope = jest.fn(async () => ({}));
+      const transport: TransportManager = { start: async () => undefined, stop: async () => undefined, join: () => undefined, sendEnvelope, activeTransport: () => undefined };
+      const caller = createAuthenticatedCallComposition({ session: session(), transport, conversationId, localIdentityId: 'alice-id', localParticipantId: 'alice', remoteParticipant: participant('bob', 'bob-id'), identity: authority, deviceTrust: revocable });
+      const call = await caller.invite();
+      const invalid = jest.fn(async () => { await caller.terminateLocally(call.callId); });
+      const stop = caller.watchVerification(invalid, 100);
+      await jest.advanceTimersByTimeAsync(0);
+      expect(invalid).not.toHaveBeenCalled();
+      trusted = false;
+      await jest.advanceTimersByTimeAsync(100);
+      stop();
+      expect(invalid).toHaveBeenCalledTimes(1);
+    } finally { jest.useRealTimers(); }
+  });
   it('terminates after the pinned identity changes even when the call snapshot claims the peer is verified', async () => {
     jest.useFakeTimers();
     try {

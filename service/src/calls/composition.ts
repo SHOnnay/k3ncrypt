@@ -295,6 +295,8 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
       if (!active || checking || notified) return;
       checking = true;
       try {
+        // M3i: this device's own trust is re-checked too, not only the contact.
+        await input.deviceTrust.assertTrusted();
         if (!await input.identity.isParticipant(input.conversationId, input.remoteParticipant.participantId) || await input.identity.getVerification(input.remoteParticipant.participantId) !== 'verified') throw numberChanged('Contact verification changed.');
       }
       catch {
