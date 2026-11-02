@@ -11,6 +11,9 @@ export const validateProductionConfig = (env: NodeJS.ProcessEnv = process.env): 
     if (isPlaceholderHost(origin.hostname)) throw new Error('Production allowed origin is invalid.');
   }
   if (env.K3NCRYPT_TRUST_PROXY !== 'true') throw new Error('Production requires explicit trusted proxy configuration.');
+  // P1-3: without durable routing the relay accepts client-chosen mailboxes. Require an explicit
+  // choice; 'false' is reserved for the documented maintenance cutover bridge.
+  if (env.K3NCRYPT_DURABLE_ROUTING !== 'true' && env.K3NCRYPT_DURABLE_ROUTING !== 'false') throw new Error('Production requires an explicit durable routing setting (true).');
   const instances = Number(env.K3NCRYPT_INSTANCE_COUNT || '1');
   if (!Number.isInteger(instances) || instances < 1) throw new Error('Production instance count is invalid.');
   if (instances > 1) throw new Error('Multiple production instances are unsupported until a reviewed Socket.IO adapter is configured.');
