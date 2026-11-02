@@ -1,0 +1,13 @@
+{
+  "fixtureVersion": 1,
+  "note": "Web 'Show my code' QR text for checking a contact in person. Android has no consumer yet: until a Kotlin test parses this file and Android can show and scan it, the web flow sends Android contacts to the Android path, never to QR.",
+  "accepted": {
+    "fingerprint": "K3 HQIO A1J9 DNVI TEHH JHLB EA8F S3_9 HP6_ GVJM OUBY NLG",
+    "qrText": "{\"version\":1,\"algorithm\":\"vodozemac\",\"fingerprint\":\"K3 HQIO A1J9 DNVI TEHH JHLB EA8F S3_9 HP6_ GVJM OUBY NLG\"}"
+  },
+  "rejected": [
+    { "case": "extra key", "qrText": "{\"version\":1,\"algorithm\":\"vodozemac\",\"fingerprint\":\"K3 HQIO A1J9 DNVI TEHH JHLB EA8F S3_9 HP6_ GVJM OUBY NLG\",\"name\":\"Mum\"}" },
+    { "case": "wrong version", "qrText": "{\"version\":2,\"algorithm\":\"vodozemac\",\"fingerprint\":\"K3 HQIO A1J9 DNVI TEHH JHLB EA8F S3_9 HP6_ GVJM OUBY NLG\"}" },
+    { "case": "invitation link instead of check code", "qrText": "https://example.invalid/#invite=abc" }
+  ]
+}

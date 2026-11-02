@@ -1,4 +1,6 @@
-import { decodeVerificationQrPayload, encodeVerificationQrPayload, verificationStateForContact } from './verificationFoundation';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
+import { decodeVerificationQrPayload, encodeVerificationQrPayload, verificationQrMatches, verificationStateForContact } from './verificationFoundation';
 
 describe('verification foundation', () => {
   const fingerprint = 'K3 ABCD EFGH_IJKL';
@@ -40,4 +42,21 @@ describe('human comparison and QR match', () => {
     expect(verificationQrMatches(encodeVerificationQrPayload('K3 OTHER IDENTITY'), peer)).toBe(false);
     expect(verificationQrMatches('{"version":2}', peer)).toBe(false);
   });
+});
+
+// M1c gate: the in-person check QR must be byte-identical across platforms. Android has no
+// consumer yet (protocol-fixtures/v1/verification-qr.json), so Android contacts skip QR.
+describe('verification QR protocol fixture', () => {
+    const fixture = JSON.parse(readFileSync(resolve(__dirname, '../../../protocol-fixtures/v1/verification-qr.json'), 'utf8'));
+    it('web encodes exactly the fixture text and matches only that fingerprint', () => {
+        expect(encodeVerificationQrPayload(fixture.accepted.fingerprint)).toBe(fixture.accepted.qrText);
+        expect(verificationQrMatches(fixture.accepted.qrText, fixture.accepted.fingerprint)).toBe(true);
+    });
+    it.each(fixture.rejected.map((item: { case: string; qrText: string }) => [item.case, item.qrText]))('rejects %s', (_case, qrText) => {
+        expect(verificationQrMatches(qrText as string, fixture.accepted.fingerprint)).toBe(false);
+    });
+    it('uses the same fingerprint as the shared identity fixture', () => {
+        const identity = JSON.parse(readFileSync(resolve(__dirname, '../../../protocol-fixtures/v1/identity-fingerprints.json'), 'utf8'));
+        expect(fixture.accepted.fingerprint).toBe(identity.accepted.fingerprint);
+    });
 });
