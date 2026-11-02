@@ -11,6 +11,11 @@ const PORT = process.env.PORT || 3001;
 const BIND_HOST = process.env.K3NCRYPT_BIND_HOST;
 
 validateProductionConfig();
+// Last-resort guard: a stray rejection fails only the request that caused it.
+// Request handlers fail closed on their own; nothing about the payload is logged.
+process.on('unhandledRejection', (reason: unknown) => {
+  operationalLog('error', 'unhandled_rejection', { errorType: reason instanceof Error ? reason.name : typeof reason });
+});
 void (async () => {
   await db.connectDb();
   const onListening = () => operationalLog('info', 'server_listening', { port: Number(PORT) });

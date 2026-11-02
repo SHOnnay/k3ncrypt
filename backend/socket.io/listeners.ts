@@ -1,3 +1,4 @@
+import { onSafe, type Ack } from './safeAck';
 import { randomUUID } from 'crypto';
 import getClientInstance from "./clients";
 import channelValid from "../api/chatHash/utils/validateChannel";
@@ -27,8 +28,6 @@ const LIVE_DELIVERY_ACK_MS = 5 * 1000;
 const rateLimiter = new RateLimiter({ capacity: 40, refillPerSecond: 10 });
 const SUPPORTED_PROTOCOL_FEATURES = new Set(['join-introduction-v1', 'room-message-v1', 'room-call-signal-v2']);
 
-type Ack = (response: Record<string, unknown>) => void;
-const noop: Ack = () => undefined;
 type RecipientOutcome = { accepted?: unknown; outcome?: unknown; reasonClass?: unknown };
 const permanentReason = (value: unknown): value is OfflineRejectionReason =>
   value === 'authenticated-invalid' || value === 'unsupported-message' || value === 'identity-changed';
@@ -263,7 +262,7 @@ const connectionListener = (socket: CustomSocket, io) => {
     })();
   };
   registerLegacyMailboxWakeup(socket, requestReplay);
-  socket.on("chat-join", async (data, ack: Ack = noop) => {
+  onSafe(socket, "chat-join", async (data: any, ack: Ack) => {
     if (socket.muxConnectionGeneration) { ack({ error: 'Legacy room join is unavailable on a multiplexed connection.' }); return; }
     const rejectJoin = (error: string, code: string) => ack(process.env.NODE_ENV === 'production' ? { error } : { error, code });
     const { userID, channelID, controlCapability, routingProof, deviceAuthorizationProof, proofNonce, protocolFeatures } = data || {};
@@ -368,7 +367,7 @@ const connectionListener = (socket: CustomSocket, io) => {
     ack({ status: 'accepted', peerFeatures });
   });
 
-  socket.on('mailbox-replay', async (_payload: unknown, ack: Ack = noop) => {
+  onSafe(socket, 'mailbox-replay', async (_payload: unknown, ack: Ack) => {
     if (!currentLegacyOwner(socket) || !await activeBoundDevice(socket) || !currentLegacyOwner(socket)) {
       ack({ error: 'Mailbox replay rejected.' });
       return;
@@ -386,7 +385,7 @@ const connectionListener = (socket: CustomSocket, io) => {
     }
   });
 
-  socket.on("chat-message", async (payload: { envelope: WireEnvelope; recipientRoutingId?: string } & ProofCarrier, ack: Ack = noop) => {
+  onSafe(socket, "chat-message", async (payload: { envelope: WireEnvelope; recipientRoutingId?: string } & ProofCarrier, ack: Ack) => {
     if (!socket.userID || !socket.channelID) {
       ack({ error: "Join a channel before sending messages." });
       return;
@@ -478,7 +477,7 @@ const connectionListener = (socket: CustomSocket, io) => {
     }
   });
 
-  socket.on("webrtc-signal", async (payload: { envelope: WireEnvelope } & ProofCarrier, ack: Ack = noop) => {
+  onSafe(socket, "webrtc-signal", async (payload: { envelope: WireEnvelope } & ProofCarrier, ack: Ack) => {
     traceCallRelay('signal-received', true);
     if (!socket.userID || !socket.channelID) {
       ack({ error: "Join a channel before signaling." });
@@ -517,7 +516,7 @@ const connectionListener = (socket: CustomSocket, io) => {
     ack({ status: "ok" });
   });
 
-  socket.on('recipient-rejected', async (payload: { id?: unknown; roomId?: unknown; claimId?: unknown; reasonClass?: unknown }, ack: Ack = noop) => {
+  onSafe(socket, 'recipient-rejected', async (payload: { id?: unknown; roomId?: unknown; claimId?: unknown; reasonClass?: unknown }, ack: Ack) => {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload) ||
         !exactKeys(payload, ['id', 'roomId', 'claimId', 'reasonClass']) ||
         !isValidRoomId(payload.id) || !isValidRoomId(payload.roomId) || !isValidRoomId(payload.claimId) ||
@@ -544,7 +543,7 @@ const connectionListener = (socket: CustomSocket, io) => {
     }
   });
 
-  socket.on("received", async (payload: { id?: unknown; claimId?: unknown }) => {
+  onSafe(socket, "received", async (payload: { id?: unknown; claimId?: unknown }, _ack: Ack) => {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload) ||
         !Object.keys(payload).every((key) => key === 'id' || key === 'claimId') || !isValidRoomId(payload.id) ||
         (payload.claimId !== undefined && !isValidRoomId(payload.claimId))) {
