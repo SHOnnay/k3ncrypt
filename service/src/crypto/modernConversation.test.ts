@@ -1142,7 +1142,9 @@ it('does not republish possibly claimed one-time keys after an uncertain publica
     expect(publishVodozemacBundle).toHaveBeenCalledTimes(1);
 });
 
-it('blocks a restored session when its pinned contact identity changes', async () => {
+// Updated deliberately for M1c review mode (owner decision): a changed key no longer stops the
+// chat from opening, but it is recorded as pending, verification is cleared and content is blocked.
+it('opens a restored session in review mode when its pinned contact identity changes', async () => {
     jest.mocked(publishVodozemacBundle).mockResolvedValue({ address: localAddress, renewalProof: 'r'.repeat(43) });
     jest.mocked(fetchVodozemacBundle).mockResolvedValue(bundle);
     jest.mocked(claimVodozemacOneTimeKey).mockResolvedValue(bundle.oneTimeKeys[0]);
@@ -1155,7 +1157,13 @@ it('blocks a restored session when its pinned contact identity changes', async (
         ...bundle, identity: { ...bundle.identity, curve25519: key(8) },
     });
     const restored = new ModernConversation(storage, loader, fakeTransport().transport);
-    await expect(restored.connect(room, key(9), remoteAddress, await remoteCommitment())).rejects.toThrow('identity changed');
+    const details = await restored.connect(room, key(9), remoteAddress, await remoteCommitment());
+    expect(details.contact).toEqual(expect.objectContaining({ changeStatus: 'changed-pending-review', verification: 'unverified' }));
+    expect(details.contact?.pendingIdentity?.identityId).not.toBe(details.contact?.identityId);
+    await expect(restored.sendWithReceipt('blocked while the number change is pending')).rejects.toThrow();
+    await expect(restored.fileTransferBinding(true)).rejects.toThrow();
+    await expect(restored.createAuthenticatedCallComposition()).rejects.toThrow();
+    await restored.close(false);
 });
 
 it('keeps a fallback tab lease for the conversation lifetime and releases it on close', async () => {
@@ -1753,6 +1761,35 @@ it('rejects an established-session wrapper claiming another K3 identity before a
     expect(await storage.read('modern-seen-room-message-v1', room)).toEqual(replayBefore);
     expect(delivered).toHaveBeenCalledTimes(1);
     await conversation.close();
+});
+
+// M1c review mode. Invariant: an identity change invalidates verification and pauses
+// content, but the person must still be able to open the chat to check the new number.
+it('opens a conversation in review mode when a number change is pending; content stays blocked until an explicit check', async () => {
+    const pair = await verifiedPeerPair();
+    try {
+        const pinned = JSON.parse(new TextDecoder().decode((await pair.aliceStorage.read('contact-identity', remoteAddress))!)) as Record<string, unknown>;
+        const changed = { ...pinned, verification: 'unverified', changeStatus: 'changed-pending-review', identityChangedAt: Date.now(),
+            pendingIdentity: { identityId: pinned.identityId, algorithm: pinned.algorithm, publicKey: pinned.publicKey } };
+        delete (changed as Record<string, unknown>).verifiedAt;
+        await pair.aliceStorage.write('contact-identity', remoteAddress, new TextEncoder().encode(JSON.stringify(changed)).buffer as ArrayBuffer);
+        await pair.alice.close(false);
+        const reopened = new ModernConversation(pair.aliceStorage, loader, fakeTransport().transport);
+        try {
+            await expect(reopened.connect(room, key(9), remoteAddress, await remoteCommitment())).resolves.toEqual(expect.objectContaining({ ownFingerprint: expect.any(String) }));
+            expect((await reopened.getContact())?.changeStatus).toBe('changed-pending-review');
+            await expect(reopened.sendWithReceipt('must not send')).rejects.toThrow();
+            await expect(reopened.fileTransferBinding(true)).rejects.toThrow();
+            await expect(reopened.fileTransferBinding(false)).rejects.toThrow();
+            await expect(reopened.createAuthenticatedCallComposition()).rejects.toThrow();
+            await expect(reopened.verifyContact(true)).rejects.toThrow();
+            await reopened.acceptChangedIdentity();
+            const accepted = await reopened.getContact();
+            expect(accepted).toEqual(expect.objectContaining({ changeStatus: 'unchanged', verification: 'unverified' }));
+            await reopened.verifyContact(true);
+            expect((await reopened.getContact())?.verification).toBe('verified');
+        } finally { await reopened.close(false); }
+    } finally { await pair.bob.close(); }
 });
 
 it('rejects first-session and established-session delivery while contact identity review is pending', async () => {

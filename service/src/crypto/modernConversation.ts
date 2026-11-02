@@ -697,7 +697,7 @@ export class ModernConversation {
                         pinned.identityId === remoteIdentityCommitment && pinned.identityId === await fingerprintVodozemacIdentity(contactBundle.identity);
                     await this.verifyModernInvitation(options.invitation, contactBundle.identity, roomId, capability, this.remoteAddress!, remoteIdentityCommitment, established);
                 }
-                await this.observe(this.remoteAddress, contactBundle.identity, remoteIdentityCommitment); }
+                await this.observe(this.remoteAddress, contactBundle.identity, remoteIdentityCommitment, false, true); }
             catch (error) { this.lastConnectionFailureCategory = 'sender-identity-mismatch'; throw error; }
         }
 
@@ -711,7 +711,7 @@ export class ModernConversation {
             try { contact = validateVodozemacPublicBundle(await fetchVodozemacBundle(roomId, capability, this.remoteAddress)); }
             catch (error) { this.lastConnectionFailureCategory = 'prekey-session-lookup-failure'; throw error; }
             try { if (options?.invitation) await this.verifyModernInvitation(options.invitation, contact.identity, roomId, capability, this.remoteAddress!, remoteIdentityCommitment);
-                await this.observe(this.remoteAddress, contact.identity, remoteIdentityCommitment); }
+                await this.observe(this.remoteAddress, contact.identity, remoteIdentityCommitment, false, true); }
             catch (error) { this.lastConnectionFailureCategory = 'sender-identity-mismatch'; throw error; }
         }
         this.prepareDeviceControl();
@@ -2259,7 +2259,12 @@ export class ModernConversation {
         }
     }
 
-    private async observe(address: string, identity: VodozemacPublicIdentity, expectedCommitment?: string, authenticatedInboundFirstContact = false): Promise<void> {
+    /**
+     * `reviewOnly` is used only while opening a conversation: a pending number change must not
+     * prevent the person from opening the chat to check the new number. Every content path
+     * (send, receive, retry, calls, files, verify) still enforces an unchanged identity itself.
+     */
+    private async observe(address: string, identity: VodozemacPublicIdentity, expectedCommitment?: string, authenticatedInboundFirstContact = false, reviewOnly = false): Promise<void> {
         const fingerprint = await fingerprintVodozemacIdentity(identity);
         const known = await this.registry.get(address);
         if (!known && !authenticatedInboundFirstContact && (!expectedCommitment || fingerprint !== expectedCommitment)) {
@@ -2271,7 +2276,7 @@ export class ModernConversation {
             algorithm: 'Olm-Curve25519+Ed25519', verification: 'unverified',
         });
         await this.onContactChange?.(event.current);
-        if (event.kind === 'identity-changed' || event.current.changeStatus !== 'unchanged') {
+        if ((event.kind === 'identity-changed' || event.current.changeStatus !== 'unchanged') && !(reviewOnly && event.current.changeStatus === 'changed-pending-review')) {
             throw new Error('This contact’s identity changed. Review it before continuing.');
         }
     }
