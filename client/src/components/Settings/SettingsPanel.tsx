@@ -1,3 +1,4 @@
+import { serverCopy } from '../../content/checkCopy';
 import React, { useEffect, useRef, useState } from 'react';
 import { useModalKeyboard } from '../../hooks/useModalKeyboard';
 import { VerificationPanel } from './VerificationPanel';
@@ -97,7 +98,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, initialVie
     : currentConversationError ? 'This saved conversation could not be reopened. Use its saved entry to retry. A service check cannot restore missing authorization.'
     : conversationReady ? 'A local encrypted session is available. This does not measure a live socket or remote presence.'
     : 'An accepted encrypted introduction is needed before this conversation is ready.';
-  const serviceLabel = { unchecked: 'Not checked', checking: 'Checking…', reachable: 'Reachable', 'not-ready': 'Not ready', unavailable: 'Unreachable', offline: 'Browser offline' }[service.status];
+  const serviceLabel = { unchecked: 'Not checked', checking: serverCopy.checking, reachable: serverCopy.reachable, 'not-ready': serverCopy.notReachable, unavailable: serverCopy.notReachable, offline: 'You’re offline' }[service.status];
 
   useEffect(() => {
     setProfileNameDraft(profileDisplayName);
@@ -146,10 +147,10 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, initialVie
               </section>
               <section className="settings-group" aria-label="Security and devices">
                 <p className="settings-group__label">Security & devices</p>
-                <SettingsRow icon={<ShieldIcon size={18} />} title="Security" description="Your identity and contact verification" onClick={() => setView('verification')} />
+                <SettingsRow icon={<ShieldIcon size={18} />} title="Security" description="Your security number and checking contacts" onClick={() => setView('verification')} />
                 <SettingsRow icon={<LockIcon size={18} />} title="Devices" description="Review and approve devices" onClick={() => setView('devices')} />
                 <SettingsRow icon={<ShieldIcon size={18} />} title="Privacy" description="Conversation and device privacy" onClick={() => setView('privacy')} />
-                <SettingsRow icon={<NetworkIcon size={18} />} title="Connection" description="Connection status for this conversation" onClick={() => setView('network')} />
+                <SettingsRow icon={<NetworkIcon size={18} />} title="Connection" description="K3NCRYPT server and this conversation" onClick={() => setView('network')} />
               </section>
               <section className="settings-group" aria-label="Notifications and about">
                 <p className="settings-group__label">Notifications & about</p>
@@ -226,8 +227,8 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, initialVie
           {view === 'network' && (
             <section className="settings-detail">
               <div className="detail-intro"><h3>Connection and readiness</h3><p>The service, encrypted session and device authorization are different checks. None of them proves your contact is online.</p></div>
-              <div className="network-status" role="status"><span className={`network-pulse ${service.status === 'reachable' ? 'online' : ''}`} /><div><strong>Service reachability</strong><p>{service.status === 'reachable' ? 'The service answered this panel’s latest readiness check.' : service.status === 'checking' ? 'Checking the configured service, for up to five seconds.' : service.status === 'not-ready' ? 'The service responded but did not report ready. Try again shortly.' : service.status === 'offline' ? 'Your browser reports no network connection.' : 'No successful current readiness check. Check your connection and retry.'}</p><StatusPill tone={service.status === 'reachable' ? 'positive' : 'quiet'}>{serviceLabel}</StatusPill></div></div>
-              <button className="btn btn--secondary" type="button" disabled={service.status === 'checking'} onClick={service.check}>Check service again</button>
+              <div className="network-status" role="status"><span className={`network-pulse ${service.status === 'reachable' ? 'online' : ''}`} /><div><strong>{serverCopy.title}: {serviceLabel}</strong><p>{service.status === 'reachable' ? 'The service answered this panel’s latest readiness check.' : service.status === 'checking' ? 'Checking the configured service, for up to five seconds.' : service.status === 'not-ready' ? 'The service responded but did not report ready. Try again shortly.' : service.status === 'offline' ? 'Your browser reports no network connection.' : 'No successful current readiness check. Check your connection and retry.'}</p><StatusPill tone={service.status === 'reachable' ? 'positive' : 'quiet'}>{serviceLabel}</StatusPill></div></div>
+              <button className="btn btn--secondary" type="button" disabled={service.status === 'checking'} onClick={service.check}>Check the server again</button>
               <div className="network-status"><span className={`network-pulse ${!unavailable && conversationReady && !opening ? 'online' : ''}`} /><div><strong>Current conversation</strong><p>{conversationExplanation}</p><StatusPill tone={!unavailable && conversationReady && !opening ? 'positive' : 'quiet'}>{readiness}</StatusPill></div></div>
               {protocolMode === 'modern' && <div className="network-status"><span className={`network-pulse ${syncStatus === 'ready' && accountState === 'ready' ? 'online' : ''}`} /><div><strong>Last device authorization check</strong><p>{syncStatus === 'ready' && accountState === 'ready' ? 'The selected session’s last device-trust check passed. Operations still recheck authorization.' : syncStatus === 'recovering' ? 'Session authorization is recovering. Completion is not yet confirmed.' : 'The last session check did not confirm device authorization. Each operation checks current authorization again; this is not a service outage or a new revocation decision.'}</p><StatusPill tone={syncStatus === 'ready' && accountState === 'ready' ? 'positive' : 'quiet'}>{accountState !== 'ready' ? 'Unlock required' : syncStatus === 'ready' ? 'Confirmed' : syncStatus === 'recovering' ? 'Recovering' : 'Not confirmed'}</StatusPill></div></div>}
               <div className="state-card"><div><strong>Sending and delivery</strong><p>{!unavailable && conversationReady && !opening ? 'You can try sending in this conversation; the operation must still pass authorization and service checks.' : 'Resolve the conversation’s readiness state before retrying. A connection check cannot authorize it.'} Sent means the relay accepted an encrypted message. Delivered requires the recipient’s authenticated acknowledgment. A contact can be offline while a message waits at the relay within its retention limits.</p></div></div>

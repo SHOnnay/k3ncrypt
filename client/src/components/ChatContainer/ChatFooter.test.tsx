@@ -25,7 +25,7 @@ describe('Web chat composer', () => {
     mockUseChat.mockReturnValue({ sendMessage: jest.fn(), sessionHealth: 'healthy', contactIdentity: { verification: 'unverified', changeStatus: 'unchanged' } });
     mockUseFiles.mockReturnValue({ transfer: { phase: 'RestartRequired', bytes: 0, total: 0 }, sendFile: jest.fn(), retry: jest.fn(), cancel: jest.fn(), receive: jest.fn() });
     const markup = renderToStaticMarkup(createElement(ChatFooter, { onVerifyContact: () => undefined }));
-    expect(markup).toContain('Invitation accepted');
-    expect(markup).toContain('Verify Contact');
+    expect(markup).toContain('Before sharing photos and files, check it’s really your contact. It takes a minute.');
+    expect(markup).toContain('>Check now</button>');
   });
 });

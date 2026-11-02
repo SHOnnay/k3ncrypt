@@ -115,3 +115,8 @@
 .workspace-record { padding: 12px 0; overflow-wrap: anywhere; }
 .workspace-record details { color: var(--muted); font-size: .75rem; }
 @media (max-width: 620px) { .workspace-records, .workspace-page > .workspace-feedback { margin-inline: 18px; } }
+
+/* M1c: contacts grouped by check state */
+.workspace-contact-group { display: grid; gap: 10px; margin-top: 16px; }
+.workspace-contact-group__title { margin: 0; font-size: .8rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted-strong); }
+.workspace-contact-group__title span { font-weight: 500; }

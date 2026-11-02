@@ -2,29 +2,28 @@
  * Main SetupOverlay component
  */
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { OwnInvitations } from './OwnInvitations';
+import { contactsCopy } from '../../content/checkCopy';
+import React, { useState, useEffect, useRef } from 'react';
 import { useChat } from '../../context/ChatContext';
-import { parseInviteInput, parseModernInviteInput } from '../../utils/urlHash';
+import { parseModernInviteInput } from '../../utils/urlHash';
 import { InitialActions } from './InitialActions';
-import { CreateHashView } from './CreateHashView';
 import { JoinHashView } from './JoinHashView';
 import { InvitationQr } from './InvitationQr';
 import './SetupOverlay.css';
-import { debugError } from '../../utils/debug';
 import { EXISTING_PASSPHRASE_REJECTED, setupErrorMessage } from './setupError';
 
 interface SetupOverlayProps {
-  onSetupComplete: (roomId: string, secret: string, controlCapability: string) => Promise<void>;
   isHidden: boolean;
   onModernSetupComplete: () => void;
+  onOpenInvitation?: (roomId: string) => void;
 }
 
 type ViewType = 'initial' | 'create' | 'join' | 'modern' | 'restore' | 'deleted';
 
-export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onModernSetupComplete, isHidden }) => {
-  const { createNewChannel, createModernChannel, joinModernChannel, restoreSession, accountState } = useChat();
+export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onModernSetupComplete, isHidden, onOpenInvitation }) => {
+  const { createModernChannel, joinModernChannel, restoreSession, accountState } = useChat();
   const [view, setView] = useState<ViewType>('initial');
-  const [invite, setInvite] = useState<{ roomId: string; secret: string; controlCapability: string; link: string } | null>(null);
   const [joinInput, setJoinInput] = useState<string>('');
   const [status, setStatus] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -38,7 +37,7 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onM
 
   useEffect(() => {
     if (!isHidden) return;
-    setView('initial'); setInvite(null); setModernInvite(''); setJoinInput('');
+    setView('initial'); setModernInvite(''); setJoinInput('');
     setStatus(''); setPassphrase(''); setPassphraseConfirmation(''); setDisplayName('');
   }, [isHidden]);
 
@@ -47,36 +46,11 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onM
     const timer = window.setTimeout(() => setStartupSlow(true), 8000);
     return () => window.clearTimeout(timer);
   }, [accountState]);
-  // Generate the invitation (room id from the server + a locally generated secret) when entering create view
-  const generateInvite = useCallback(async () => {
-    try {
-      setIsLoading(true);
-      setStatus('Generating a secure invitation...');
-      const created = await createNewChannel();
-      setInvite({ roomId: created.roomId, secret: created.secret, controlCapability: created.controlCapability, link: created.absoluteLink || created.link });
-      setStatus('');
-    } catch (err) {
-      setStatus(setupErrorMessage(err, 'invitation'));
-    } finally {
-      setIsLoading(false);
-    }
-  }, [createNewChannel]);
-
-  useEffect(() => {
-    if (view === 'create' && !invite) {
-      generateInvite();
-    }
-  }, [view, invite, generateInvite]);
-
   useEffect(() => {
     if (view === 'join' && !joinInput && parseModernInviteInput(window.location.hash)) {
       setJoinInput(window.location.hash);
     }
   }, [view, joinInput]);
-
-  const handleCreateClick = () => {
-    setView('create');
-  };
 
   const handleJoinClick = () => {
     setView('join');
@@ -84,36 +58,12 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onM
 
   const handleBack = () => {
     setView('initial');
-    setInvite(null);
     setJoinInput('');
     setStatus('');
     setModernInvite('');
     setPassphrase('');
     setPassphraseConfirmation('');
     setShowPassphrase(false);
-  };
-
-  const handleCopyHash = () => {
-    if (invite) {
-      navigator.clipboard.writeText(invite.link);
-    }
-  };
-
-  const handleCreateNext = async () => {
-    if (!invite) {
-      setStatus('Please generate an invitation first.');
-      return;
-    }
-    try {
-      setIsLoading(true);
-      setStatus('Connecting...');
-      await onSetupComplete(invite.roomId, invite.secret, invite.controlCapability);
-    } catch (err) {
-      setStatus('Failed to connect. Please try again.');
-      debugError('Conversation setup failed', err);
-    } finally {
-      setIsLoading(false);
-    }
   };
 
   const handleJoinNext = async () => {
@@ -134,26 +84,8 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onM
       finally { setIsLoading(false); }
       return;
     }
-    const parsed = parseInviteInput(joinInput);
-    if (!parsed) {
-      setStatus('Please enter a valid invitation link.');
-      return;
-    }
-    try {
-      setIsLoading(true);
-      setStatus('Connecting...');
-      await onSetupComplete(parsed.roomId, parsed.secret, parsed.controlCapability);
-    } catch (err: any) {
-      if (err.message === 'CHANNEL_DELETED') {
-        setView('deleted');
-        setStatus('');
-      } else {
-        setStatus('Failed to join channel. Please check the invitation link and try again.');
-      }
-      debugError('Conversation join failed', err);
-    } finally {
-      setIsLoading(false);
-    }
+    // Legacy room invitations stopped connecting in 6558b5e3 (device proofs); they are no longer offered.
+    setStatus('This is an older invitation that no longer works. Ask them to send you a new one.');
   };
 
   const handleModernCreate = async () => {
@@ -197,7 +129,7 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onM
     finally { setIsLoading(false); }
   };
 
-  const heading = view === 'initial' ? accountState === 'ready' ? 'Add someone you trust' : 'Private conversations with your people' : view === 'create' ? 'Create an invitation' : view === 'join' ? 'Join someone you trust' : view === 'modern' ? accountState === 'ready' ? 'Add a private contact' : 'Create your account' : view === 'restore' ? 'Welcome back' : 'Conversation closed';
+  const heading = view === 'initial' ? accountState === 'ready' ? contactsCopy.inviteTitle : 'Private conversations with your people' : view === 'create' ? 'Create an invitation' : view === 'join' ? 'Join someone you trust' : view === 'modern' ? accountState === 'ready' ? 'Add a private contact' : 'Create your account' : view === 'restore' ? 'Welcome back' : 'Conversation closed';
   const description = view === 'initial'
     ? accountState === 'ready' ? 'Share a private invitation with one person. Compare the security code with them before marking the contact verified.' : accountState === 'checking' ? 'Preparing your private space on this device.' : 'Create an account on this device, then invite someone you trust. Compare security codes before you mark a contact verified.'
     : view === 'create'
@@ -244,22 +176,10 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onSetupComplete, onM
           </div> : accountState === 'locked' ? <><button className="btn btn--primary" type="button" onClick={() => setView('restore')}>Unlock this device</button><button id="show-join-hash" className="btn btn--secondary" type="button" onClick={handleJoinClick}>{typeof window !== 'undefined' && parseModernInviteInput(window.location.hash) ? 'Unlock and accept invitation' : 'I have an invitation'}</button></> : <InitialActions
             mode={accountState === 'ready' ? 'ready' : 'new'}
             onCreateAccountClick={() => setView('modern')}
-            onCreateClick={handleCreateClick}
             onJoinClick={handleJoinClick}
           />
         )}
-
-        {view === 'create' && (
-          <CreateHashView
-            inviteLink={invite?.link || ''}
-            onCopyClick={handleCopyHash}
-            onShareClick={() => invite && void shareInvitation(invite.link, async () => { await navigator.clipboard.writeText(invite.link); })}
-            isLoading={isLoading}
-            onBack={handleBack}
-            onNext={handleCreateNext}
-            onRetry={generateInvite}
-          />
-        )}
+        {view === 'initial' && accountState === 'ready' && <OwnInvitations onOpen={onOpenInvitation} />}
 
         {view === 'join' && (
           <>

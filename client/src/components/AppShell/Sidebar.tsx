@@ -25,19 +25,10 @@ const formatSidebarTime = (date?: Date): string => {
 };
 
 export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection, onNavigate, onNewConversation, onOpenConversation, onOpenSettings, settingsOpen = false }) => {
-  const { channelHash, messages, conversations, savedConversations = conversations, syncStatus, sessionHealth, profileDisplayName, protocolMode, accountState, unavailableConversations = [], orphanedConversationRecords, setPendingInvitationDismissed, pendingConversation, conversationOpenError } = useChat();
+  const { channelHash, messages, conversations, savedConversations = conversations, syncStatus, sessionHealth, profileDisplayName, protocolMode, unavailableConversations = [], orphanedConversationRecords, pendingConversation, conversationOpenError } = useChat();
   const latest = messages.at(-1);
   const groups = classifySidebarConversations(savedConversations, unavailableConversations);
   const displayName = (conversation: typeof conversations[number]) => contactDisplayName(conversation.label, conversation.roomId, conversation.remoteDisplayName, conversation.localNickname);
-  const invitationName = (conversation: typeof conversations[number]) => conversation.localNickname ?? (conversation.label !== 'Private contact' ? conversation.label : `Invitation · ${conversation.roomId.slice(-4).toUpperCase()}`);
-  const invitationExpiry = (conversation: typeof conversations[number]) => {
-    const expiresAt = conversation.pendingInvitationExpiresAt ?? conversation.signedInvitation?.expiresAt;
-    if (!Number.isSafeInteger(expiresAt) || (expiresAt as number) < 0) return 'Expiry unavailable — reconnect to check';
-    const date = new Date(expiresAt as number);
-    if (!Number.isFinite(date.getTime())) return 'Expiry unavailable';
-    const formatted = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
-    return (expiresAt as number) <= Date.now() ? `Expired ${formatted}` : `Expires ${formatted}`;
-  };
 
   return (
     <aside className="sidebar" aria-label="K3ncrypt navigation">
@@ -81,19 +72,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection
           <div className="conversation-placeholder"><strong>{copy.contactsEmpty.title}</strong><span>{copy.contactsEmpty.description}</span></div>
         )}
         </section>
-        {groups.pendingInvitations.length > 0 && <section className="sidebar-record-group" aria-labelledby="sidebar-pending-heading">
-          <p className="section-label" id="sidebar-pending-heading">Pending Invitations</p>
-          {groups.pendingInvitations.filter(invitation => !invitation.locallyDismissed).length === 0 ? <p className="sidebar-group-empty">No pending invitations</p> : groups.pendingInvitations.filter(invitation => !invitation.locallyDismissed).map(invitation => (
-            <div className="pending-invitation-row" key={invitation.roomId}>
-              <button className="conversation-row" type="button" onClick={() => onOpenConversation(invitation.roomId)} aria-label={`Open pending invitation ${invitationName(invitation)}`}>
-                <Avatar label={invitationName(invitation)} size="medium" />
-                <span className="conversation-copy"><span className="conversation-name">{invitationName(invitation)}</span><span className="conversation-preview">{invitationExpiry(invitation)}</span></span>
-              </button>
-              <button className="invitation-local-action" type="button" disabled={accountState !== 'ready'} onClick={() => void setPendingInvitationDismissed(invitation.roomId, true).catch(() => window.alert('Could not dismiss this invitation locally. No invitation data was removed.'))}>Dismiss on this device</button>
-            </div>
-          ))}
-          {groups.pendingInvitations.some(invitation => invitation.locallyDismissed) && <details className="dismissed-invitations"><summary>Dismissed on this device ({groups.pendingInvitations.filter(invitation => invitation.locallyDismissed).length})</summary>{groups.pendingInvitations.filter(invitation => invitation.locallyDismissed).map(invitation => <div className="pending-invitation-row" key={invitation.roomId}><span className="conversation-copy"><strong className="conversation-name">{invitationName(invitation)}</strong><span className="conversation-preview">{invitationExpiry(invitation)}</span></span><button className="invitation-local-action" type="button" disabled={accountState !== 'ready'} onClick={() => void setPendingInvitationDismissed(invitation.roomId, false).catch(() => window.alert('Could not restore this invitation. Its saved data remains unchanged.'))}>Restore</button></div>)}</details>}
-        </section>}
+        {/* Own pending invitations are shown only on the Invite someone screen (Bug A). */}
         {groups.unavailable.length > 0 && <section className="sidebar-record-group" aria-labelledby="sidebar-unavailable-heading">
           <p className="section-label" id="sidebar-unavailable-heading">Unavailable Conversations</p>
           {groups.unavailable.length === 0 ? <p className="sidebar-group-empty">No unavailable conversations</p> : <ul className="unavailable-list">{groups.unavailable.map((item, index) => {

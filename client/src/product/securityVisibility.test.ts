@@ -3,22 +3,22 @@ import { deriveMessageDeliveryVisibility, deriveSecurityVisibility } from './sec
 describe('deriveSecurityVisibility', () => {
   it('shows verified only for an explicitly verified unchanged contact', () => {
     expect(deriveSecurityVisibility({ contact: { verification: 'verified', changeStatus: 'unchanged' }, protocol: 'modern' }))
-      .toMatchObject({ verification: 'verified', identityChange: 'unchanged', badgeLabel: 'Verified', transport: 'relay' });
+      .toMatchObject({ verification: 'verified', identityChange: 'unchanged', badgeLabel: 'Checked on this device', transport: 'relay' });
   });
 
   it('keeps an unchanged unverified contact unverified', () => {
     expect(deriveSecurityVisibility({ contact: { verification: 'unverified', changeStatus: 'unchanged' }, protocol: 'modern' }))
-      .toMatchObject({ verification: 'unverified', badgeLabel: 'Unverified' });
+      .toMatchObject({ verification: 'unverified', badgeLabel: 'Not checked yet' });
   });
 
   it('makes an identity change a review state even if stale data says verified', () => {
     expect(deriveSecurityVisibility({ contact: { verification: 'verified', changeStatus: 'changed-pending-review' }, protocol: 'modern' }))
-      .toMatchObject({ verification: 'unverified', identityChange: 'changed-pending-review', badgeLabel: 'Identity changed · review required' });
+      .toMatchObject({ verification: 'unverified', identityChange: 'changed-pending-review', badgeLabel: 'Security number changed' });
   });
 
   it('does not infer verification or session health from absent state', () => {
     expect(deriveSecurityVisibility({ protocol: 'legacy' }))
-      .toMatchObject({ verification: 'unknown', identityChange: 'unknown', session: 'unknown', badgeLabel: 'Verification status unavailable' });
+      .toMatchObject({ verification: 'unknown', identityChange: 'unknown', session: 'unknown', badgeLabel: 'Not available yet' });
   });
 });
 

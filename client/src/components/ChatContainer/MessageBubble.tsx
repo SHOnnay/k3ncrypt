@@ -11,6 +11,9 @@ import { Message } from '../../types/index';
 import { formatMessageTime } from '../../utils/messageHandling';
 import { useMedia } from '../../context/MediaContext';
 import { useChat } from '../../context/ChatContext';
+import { useOpenCheck } from '../../context/CheckContactContext';
+import { checkCopy, checkName } from '../../content/checkCopy';
+import { contactDisplayName } from '../../content/copy';
 import { deriveMessageDeliveryVisibility } from '../../product/securityVisibility';
 import { ApprovedIcon } from '../common/ApprovedIcon';
 import { fileDownloadForReference, fileTransferCopy } from '../../product/fileTransferCopy';
@@ -29,7 +32,13 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
   // Verified file output is moved into page memory as soon as it is ready, so the shared secure
   // disk slot is free for the next attachment and cancelling a browser save dialog loses nothing.
   const [saved, setSaved] = useState<{ filename: string; mimeType?: string }>();
-  const { retryMessage, protocolMode, channelHash, plaintextSession, contactIdentity } = useChat();
+  const { retryMessage, protocolMode, channelHash, plaintextSession, contactIdentity, conversations = [] } = useChat();
+  const openCheck = useOpenCheck();
+  const activeContact = conversations.find((item) => item.roomId === channelHash);
+  const contactName = checkName(contactDisplayName(activeContact?.label, activeContact?.roomId, activeContact?.remoteDisplayName, activeContact?.localNickname));
+  const identityChanged = !!contactIdentity?.changeStatus && contactIdentity.changeStatus !== 'unchanged';
+  const blockedNote = identityChanged ? checkCopy.fileBlockedChanged(contactName) : checkCopy.fileBlocked(contactName);
+  const blockedAction = <button type="button" className="btn btn--secondary btn--tiny" onClick={openCheck}>{identityChanged ? checkCopy.checkAgain : checkCopy.checkNow}</button>;
   // Invariant: file transfer requires a verified, unchanged contact. The service enforces it;
   // the UI explains it instead of offering an action that will be refused (P0-1).
   const fileContactTrusted = contactIdentity?.verification === 'verified' && contactIdentity.changeStatus === 'unchanged';
@@ -86,12 +95,12 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
           <strong>{fileCaption ?? 'Protected file'}</strong>
           <small>{media?.size !== undefined ? formatFileSize(media.size) : 'Encrypted attachment'} · Encrypted</small>
         </span>
-        {media?.reference && !mediaUrl && !fileContactTrusted && <span className="message-file-blocked" role="note">{contactIdentity?.changeStatus && contactIdentity.changeStatus !== 'unchanged' ? 'Identity changed. Review it before opening files.' : 'Verify this contact to open files.'}</span>}
+        {media?.reference && !mediaUrl && !fileContactTrusted && <span className="message-file-blocked" role="note">{blockedNote} {blockedAction}</span>}
         {media?.reference && !mediaUrl && fileContactTrusted && <button className="message-file-action" type="button" onClick={openMedia} disabled={isOpening} aria-label={isOpening ? 'Downloading and checking protected file' : 'Download protected file'} title={isOpening ? 'Downloading and checking' : 'Download protected file'}><ApprovedIcon name="download" size={17} /></button>}
         {mediaUrl && saved && <a className="message-file-action" href={mediaUrl} download={saved.filename || 'protected-file'} aria-label={`Save ${saved.filename}`} title="Save file"><ApprovedIcon name="download" size={17} /></a>}
         {mediaUrl && <button className="message-file-close" type="button" onClick={closePreview} aria-label="Close file preview">Close</button>}
       </div>}
-      {!isFile && media?.reference && !mediaUrl && !fileContactTrusted && <div className="message-media-blocked" role="note">{contactIdentity?.changeStatus && contactIdentity.changeStatus !== 'unchanged' ? 'Identity changed. Review it before opening media.' : 'Verify this contact to open media.'}</div>}
+      {!isFile && media?.reference && !mediaUrl && !fileContactTrusted && <div className="message-media-blocked" role="note">{blockedNote} {blockedAction}</div>}
       {!isFile && media?.reference && !mediaUrl && fileContactTrusted && <button className="message-media-action" type="button" onClick={openMedia} disabled={isOpening}>{isOpening ? 'Opening and checking…' : `Open protected ${media.kind}`}</button>}
       {!isFile && mediaUrl && <button className="message-file-close" type="button" onClick={closePreview}>Close</button>}
       {!isFile && mediaUrl && media && media.kind !== 'image' && media.kind !== 'voice' && media.kind !== 'video' && <a className="message-media-action" href={mediaUrl} download="protected-file">Save protected file</a>}

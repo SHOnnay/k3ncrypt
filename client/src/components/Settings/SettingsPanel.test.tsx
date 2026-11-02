@@ -55,8 +55,8 @@ it('does not equate an open invitation with an established encrypted conversatio
 });
 it('explains missing identity for an established saved conversation as unavailable, not a fresh invitation', () => {
   mockChat.mockReturnValue({ ...state, ownFingerprint: 'K3 AAAA CCCC_DDDD', conversations: [{ roomId: 'room', label: 'Saved peer', relationship: 'accepted' }] });
-  expect(render('verification')).toContain('Temporarily unavailable');
-  expect(render('verification')).not.toContain('Mark as verified');
+  expect(render('verification')).toContain('Not available right now');
+  expect(render('verification')).not.toContain('They match');
 });
 
 it('hides cached identity comparison and device metadata when the vault is locked', () => {

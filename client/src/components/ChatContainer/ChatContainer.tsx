@@ -2,8 +2,10 @@
  * Main chat container component
  */
 
+import { contactsCopy } from '../../content/checkCopy';
 import React, { useState } from 'react';
 import { useChat } from '../../context/ChatContext';
+import { CheckContactProvider } from '../../context/CheckContactContext';
 import { ChatHeader } from './ChatHeader';
 import { MessagesArea } from './MessagesArea';
 import { ChatFooter } from './ChatFooter';
@@ -27,12 +29,16 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ isHidden, onNewCon
   const [isStartingCall, setIsStartingCall] = useState<boolean>(false);
   const [callError, setCallError] = useState('');
   const isCallBusy = ['initiating', 'ringing', 'incoming', 'connecting', 'connected', 'ending'].includes(callLifecycleState);
-  const hasActiveConversation = conversations.some((conversation) => conversation.roomId === channelHash)
+  const activeDescriptor = conversations.find((conversation) => conversation.roomId === channelHash);
+  // Bug A: your own unaccepted invitation is not a chat. Its room stays connected underneath so
+  // the first introduction can arrive; the chat area shows the empty state until someone accepts.
+  const activeIsOwnInvitation = activeDescriptor?.relationship === 'invitation' && !activeDescriptor.remoteAddress;
+  const hasActiveConversation = (Boolean(activeDescriptor) && !activeIsOwnInvitation)
     || (protocolMode === 'legacy' && Boolean(channelHash));
   const terminalCallMessage = terminalCallStatusMessage(callLifecycleState);
 
   if (!hasActiveConversation) {
-    const hasContacts = conversations.length > 0;
+    const hasContacts = conversations.some((conversation) => !(conversation.relationship === 'invitation' && !conversation.remoteAddress));
     const openStatus = emptyStateOpenStatus({ pending: pendingConversation, error: conversationOpenError }, (roomId) => {
       const item = conversations.find((conversation) => conversation.roomId === roomId);
       return contactDisplayName(item?.label, roomId, item?.remoteDisplayName, item?.localNickname);
@@ -40,10 +46,10 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ isHidden, onNewCon
     return <main className={`chat-empty-page ${isHidden ? 'hidden' : ''}`} aria-label="Chats">
       <div className="chat-empty-card">
         <span className="chat-empty-mark" aria-hidden="true"><img src="/branding/k3ncrypt-cluster-white.svg" alt="" /></span>
-        <h1>{hasContacts ? 'Choose a conversation' : copy.contactsEmpty.title}</h1>
-        <p>{hasContacts ? 'Select a saved contact from the list to open your conversation.' : copy.contactsEmpty.description}</p>
+        <h1>{activeIsOwnInvitation ? contactsCopy.yourInvitationLabel : hasContacts ? 'Choose a conversation' : copy.contactsEmpty.title}</h1>
+        <p>{activeIsOwnInvitation ? contactsCopy.yourInvitationHelp : hasContacts ? 'Select a saved contact from the list to open your conversation.' : copy.contactsEmpty.description}</p>
         {openStatus && <p className={`chat-empty-open-status chat-empty-open-status--${openStatus.kind}`} role={openStatus.kind === 'failed' ? 'alert' : 'status'} aria-live="polite">{openStatus.text}</p>}
-        {!hasContacts && <Button variant="primary" onClick={onNewConversation}><PlusIcon size={17} /> Create or join an invitation</Button>}
+        {(!hasContacts || activeIsOwnInvitation) && <Button variant="primary" onClick={onNewConversation}><PlusIcon size={17} /> {contactsCopy.inviteTitle}</Button>}
       </div>
     </main>;
   }
@@ -76,6 +82,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ isHidden, onNewCon
 
   return (
     <>
+      <CheckContactProvider value={onVerifyContact}>
       <div id="chat-container" className={`chat-container ${isHidden ? 'hidden' : ''}`}>
         <ChatHeader onStartCall={handleStartCall} onStartVideoCall={handleStartVideoCall} disableStartCall={isCallBusy || isStartingCall} />
         {(callError || remoteCallError) && <div className="chat-call-error" role="alert">{remoteCallError || callError}</div>}
@@ -83,6 +90,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ isHidden, onNewCon
         <MessagesArea />
         <ChatFooter onVerifyContact={onVerifyContact} />
       </div>
+      </CheckContactProvider>
     </>
   );
 };

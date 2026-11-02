@@ -43,8 +43,10 @@ it('separates actual verified contacts from invitations, unavailable and archive
   mockUseChat.mockReturnValue({ ...verifiedState, accountState: 'ready', conversations: [saved, pending, unknown, archived], savedContactVerification: { [saved.roomId]: 'verified' }, unavailableConversations: [conversationDiagnostic(unknown, 'CONTACT_REGISTRY_MISSING'), { label: 'Invalid saved entry', state: 'local-incomplete', code: 'CONVERSATION_RECORD_INVALID' }] });
   const html = renderToStaticMarkup(React.createElement(WorkspaceSection, { section: 'contacts', onOpenConversation: () => undefined, onNewConversation: () => undefined }));
   expect((html.match(/class="workspace-contact"/g) ?? [])).toHaveLength(1);
-  expect(html).toContain('Verified on this device');
-  expect(html).toContain('These are invitations, not established contacts.');
+  expect(html).toContain('Checked on this device');
+  expect(html).toContain('aria-label="Checked"');
+  // Bug A: own pending invitations live only on the Invite someone screen.
+  expect(html).not.toContain('Unaccepted invitation');
   expect(html).toContain('matching local contact identity is unavailable');
   expect(html).toContain('<summary>Technical details</summary><small>CONTACT_REGISTRY_MISSING');
   expect(html).toContain('Archived conversations (1)');
@@ -69,11 +71,11 @@ describe('Calls workspace launch controls', () => {
 
   it('blocks unverified, changed, unhealthy, disconnected, and incompatible contacts', () => {
     const states: Array<[Record<string, unknown>, string]> = [
-      [{ contactIdentity: { verification: 'unverified', changeStatus: 'unchanged' } }, 'Verify this contact before calling.'],
-      [{ contactIdentity: { verification: 'verified', changeStatus: 'changed-pending-review' } }, 'identity changed'],
-      [{ contactIdentity: undefined }, 'K3NCRYPT could not check this contact’s verification'],
-      [{ isConnected: false }, 'Reconnect to this verified contact'],
-      [{ sessionHealth: 'renewal-pending' }, 'Reconnect to this verified contact'],
+      [{ contactIdentity: { verification: 'unverified', changeStatus: 'unchanged' } }, 'Check this contact before calling.'],
+      [{ contactIdentity: { verification: 'verified', changeStatus: 'changed-pending-review' } }, 'calls are paused until you check the new security number'],
+      [{ contactIdentity: undefined }, 'couldn’t confirm the check right now'],
+      [{ isConnected: false }, 'Waiting to connect. Try the call again in a moment'],
+      [{ sessionHealth: 'renewal-pending' }, 'Waiting to connect. Try the call again in a moment'],
       [{ protocolMode: 'legacy' }, 'newer K3NCRYPT version'],
       [{ callLifecycleState: 'connected', callActive: true }, 'already in progress'],
     ];

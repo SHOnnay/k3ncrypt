@@ -3,6 +3,7 @@ import { deriveHumanVerificationCode, encodeVerificationQrPayload, verificationQ
 import { LocalQrImage, LocalQrScanner } from '../common/LocalQr';
 import { StatusPill } from '../common/StatusPill';
 import { verificationPresentation } from './panelPresentation';
+import { checkCopy, CHECK_PILL, checkName, checkState } from '../../content/checkCopy';
 
 interface Props {
   label: string; ownFingerprint: string; contact?: StoredContactIdentity; availability?: 'waiting' | 'unavailable';
@@ -11,69 +12,126 @@ interface Props {
   onError(error: unknown): void; onDone(): void;
 }
 
+/**
+ * M1c check flow (Option B). Scanning or comparing numbers only *enables* the explicit
+ * Confirm / "They match" tap; nothing changes trust silently. Android contacts go to the
+ * Android path because Android has no verification QR and no shared 30-digit number yet.
+ */
+type Step = 'android' | 'together' | 'scan' | 'numbers' | 'android-path' | 'show-mine';
+
 export const VerificationPanel: React.FC<Props> = ({ label, ownFingerprint, contact, availability = 'waiting', sessionHealth, verify, unverify, acceptChange, renew, block, onError, onDone }) => {
-  const [showQr, setShowQr] = useState(false);
-  const [showRemote, setShowRemote] = useState(false);
+  const [step, setStep] = useState<Step>('android');
   const [code, setCode] = useState('');
   const [confirmed, setConfirmed] = useState('');
   const [notice, setNotice] = useState('');
+  const [mismatch, setMismatch] = useState(false);
   const [qrInput, setQrInput] = useState('');
   const [renewalConfirmed, setRenewalConfirmed] = useState(false);
   const changed = contact?.changeStatus === 'changed-pending-review';
   const peer = changed ? contact?.pendingIdentity?.identityId : contact?.identityId;
   const binding = JSON.stringify([ownFingerprint, peer]);
   const presentation = verificationPresentation(contact, availability);
-  const verified = presentation.state === 'verified';
-  const displayLabel = /^Contact(?: · [A-Z0-9]+)?$/.test(label) ? 'this contact' : label;
+  const state = checkState(contact);
+  const checked = state === 'checked';
+  const name = checkName(label);
+  const myCode = encodeVerificationQrPayload(ownFingerprint);
   useEffect(() => {
-    let active = true; setCode(''); setConfirmed(''); setShowQr(false); setShowRemote(false); setNotice(''); setRenewalConfirmed(false);
+    let active = true; setCode(''); setConfirmed(''); setStep('android'); setNotice(''); setMismatch(false); setRenewalConfirmed(false);
     if (peer) void deriveHumanVerificationCode(ownFingerprint, peer).then((value) => { if (active) setCode(value); }).catch(onError);
     return () => { active = false; };
   }, [ownFingerprint, peer]);
+
   const scan = (text: string) => {
-    if (!peer || !verificationQrMatches(text, peer)) { setConfirmed(''); setNotice('That code belongs to a different identity.'); return; }
-    setConfirmed(binding); setNotice('Identity matched. Choose Mark as verified to confirm.');
+    setMismatch(false);
+    if (!peer || !verificationQrMatches(text, peer)) { setConfirmed(''); setNotice(checkCopy.scanWrong(name)); return; }
+    setConfirmed(binding); setNotice(checkCopy.scanMatched(name));
   };
+  // A changed identity is accepted only by the same explicit tap that confirms the new number.
+  const confirm = async (next: Step | 'done') => {
+    try {
+      if (changed) await acceptChange();
+      await verify();
+      setConfirmed(''); setNotice(`${checkCopy.checked(name)} ${checkCopy.askBack(name)}`);
+      if (next !== 'done') setStep(next);
+    } catch (error) { onError(error); }
+  };
+  const tone = checked ? 'positive' : 'quiet';
+
   return <>
-    <div className="detail-intro"><h3>{displayLabel === 'this contact' ? 'Contact verification' : verified ? displayLabel : `Verify ${displayLabel}`}</h3><p>Names help you recognize people. Security codes confirm identity.</p></div>
-    <div className={`verification-summary state-card ${verified ? 'state-card--positive' : ''}`}>
-      <div><StatusPill tone={verified ? 'positive' : 'quiet'}>{presentation.title}</StatusPill><p>{presentation.description}</p></div>
+    <div className="detail-intro"><h3>{checkCopy.title(name)}</h3></div>
+    <div className={`verification-summary state-card ${checked ? 'state-card--positive' : ''} ${state === 'changed' ? 'state-card--attention' : ''}`}>
+      <div><StatusPill tone={tone}>{state === 'unavailable' ? presentation.title : CHECK_PILL[state]}</StatusPill>{state === 'unavailable' && <p>{presentation.description}</p>}</div>
     </div>
     {peer ? <>
-      {changed && <p role="alert">This contact’s identity changed. Compare the new code using another trusted way before accepting it. They will still need explicit verification.</p>}
-      {!verified && <>
-        <h4>Together?</h4>
-        <LocalQrScanner onScanned={scan} />
-        <button className="btn btn--secondary" type="button" aria-expanded={showQr} onClick={() => setShowQr(value => !value)}>Show my QR</button>
-        {showQr && <LocalQrImage value={encodeVerificationQrPayload(ownFingerprint)} label="Your verification QR" />}
-        <h4>Not together?</h4>
-        <button className="btn btn--secondary" type="button" aria-expanded={showRemote} onClick={() => setShowRemote(value => !value)}>Compare security code</button>
-        {showRemote && <>
-          <p>Compare this code with {displayLabel} using a channel you already trust. Sending it in this unverified chat does not independently confirm identity.</p>
-          <code className="human-verification-code" aria-label="Comparison security code">{code || 'Preparing code…'}</code>
-          <button className="btn btn--secondary" type="button" disabled={!code} onClick={() => void navigator.clipboard.writeText(code).catch(() => setNotice('Could not copy. You can read the grouped code aloud.'))}>Copy security code</button>
-          <div className="verification-actions"><button className="btn btn--secondary" type="button" disabled={!code} onClick={() => { setConfirmed(binding); setNotice('You chose to confirm comparison. Choose Mark as verified to change local trust.'); }}>Codes match</button><button className="btn btn--secondary" type="button" onClick={() => { setConfirmed(''); setNotice('Do not verify. Compare again using another trusted way.'); }}>They don&apos;t match</button></div>
-        </>}
-        {changed ? <button className="btn btn--secondary" type="button" disabled={confirmed !== binding} onClick={() => acceptChange().then(() => setConfirmed('')).catch(onError)}>Accept new identity after review</button> : <button className="btn btn--primary" type="button" disabled={confirmed !== binding} onClick={() => verify().then(() => { setConfirmed(''); setNotice('Verified on this device.'); }).catch(onError)}>Mark as verified</button>}
-      </>}
-      {verified && <><p>You verified this contact on this device.</p><button type="button" className="btn btn--primary" onClick={onDone}>Back to chat</button></>}
+      {changed && <p className="check-changed" role="alert">{checkCopy.changed(name)}</p>}
+      {!checked && <div className="check-flow">
+        {step === 'android' && <section aria-label="Step 1">
+          <h4>{checkCopy.androidQuestion(name)}</h4>
+          <div className="verification-actions">
+            <button className="btn btn--secondary" type="button" onClick={() => setStep('android-path')}>Yes, Android</button>
+            <button className="btn btn--primary" type="button" onClick={() => setStep('together')}>No</button>
+          </div>
+        </section>}
+
+        {step === 'together' && <section aria-label="Step 2">
+          <h4>{checkCopy.togetherQuestion(name)}</h4>
+          <div className="verification-actions">
+            <button className="btn btn--primary" type="button" onClick={() => { setNotice(''); setStep('scan'); }}>Yes, we’re together</button>
+            <button className="btn btn--secondary" type="button" onClick={() => { setNotice(''); setStep('numbers'); }}>No, we’ll call</button>
+          </div>
+        </section>}
+
+        {step === 'scan' && <section aria-label="Scan their code">
+          <h4>{checkCopy.scanTitle(name)}</h4>
+          <p>{checkCopy.scanHelp(name)}</p>
+          <LocalQrScanner onScanned={scan} startLabel="Start camera" />
+          <button className="btn btn--link check-numbers-link" type="button" onClick={() => { setNotice(''); setConfirmed(''); setStep('numbers'); }}>{checkCopy.showNumbersInstead}</button>
+          <button className="btn btn--primary" type="button" disabled={confirmed !== binding} onClick={() => void confirm('show-mine')}>Confirm</button>
+        </section>}
+
+        {step === 'numbers' && <section aria-label="Compare numbers">
+          <p>{checkCopy.callFirst(name)}</p>
+          <p>{checkCopy.numbersHelp(name)}</p>
+          <code className="human-verification-code" aria-label="Security number">{code || 'Preparing…'}</code>
+          <div className="verification-actions">
+            <button className="btn btn--primary" type="button" disabled={!code} onClick={() => { setMismatch(false); setConfirmed(binding); void confirm('done'); }}>They match</button>
+            <button className="btn btn--secondary" type="button" onClick={() => { setConfirmed(''); setMismatch(true); }}>They don’t match</button>
+          </div>
+          {mismatch && <p className="check-mismatch" role="alert">{checkCopy.numbersMismatch}</p>}
+        </section>}
+
+        {step === 'android-path' && <section aria-label="Android contact">
+          <h4>{checkCopy.androidTitle(name)}</h4>
+          <p>{checkCopy.androidHelp(name)}</p>
+          <strong>Your security number</strong>
+          <code className="verification-code verification-code--large" aria-label="Your security number">{ownFingerprint}</code>
+          <p className="check-limit">{checkCopy.androidLimit(name)}</p>
+          <button className="btn btn--secondary" type="button" onClick={() => setStep('android')}>Back</button>
+        </section>}
+      </div>}
+
+      {(checked || step === 'show-mine') && <section className="check-done" aria-label="Checked">
+        {step === 'show-mine' && <h4>{checkCopy.showMyCodeTitle(name)}</h4>}
+        {step !== 'show-mine' && <p>{checkCopy.checked(name)} {checkCopy.askBack(name)}</p>}
+        {step === 'show-mine' ? <LocalQrImage value={myCode} label="Your code for scanning" /> : <button className="btn btn--secondary" type="button" onClick={() => setStep('show-mine')}>Show my code</button>}
+        <button type="button" className="btn btn--primary" onClick={onDone}>Back to chat</button>
+      </section>}
+      {!checked && step !== 'show-mine' && <details className="check-show-mine"><summary>Show my code</summary><p>{checkCopy.askBack(name)}</p><LocalQrImage value={myCode} label="Your code for scanning" /></details>}
     </> : <button className="btn btn--secondary" type="button" onClick={onDone}>Back to chats</button>}
-    <details><summary>Why verify?</summary><p>Names do not prove identity. Compare in person or through a channel you already trust. A scan or comparison enables your explicit confirmation; it does not silently change trust.</p></details>
     {notice && <p role="status">{notice}</p>}
-    <details className="verification-security-details"><summary>Advanced security details</summary>
-      <p>Names are claims, not identity proof. QR compares the complete pinned fingerprint. The grouped code is derived from both complete identities. Compare using a trusted channel; only your explicit action changes verification.</p>
-      <strong>Saved conversation label</strong><p>{label}</p>
-      <strong>Your security code</strong><code className="verification-code">{ownFingerprint}</code>
-      <strong>Contact security code</strong><code className="verification-code">{peer ?? 'Unavailable'}</code>
-      {changed && <><strong>Previous security code</strong><code className="verification-code">{contact?.identityId}</code></>}
-      <textarea aria-label="Your verification QR payload" readOnly value={encodeVerificationQrPayload(ownFingerprint)} />
-      <button className="btn btn--secondary" type="button" onClick={() => void navigator.clipboard.writeText(encodeVerificationQrPayload(ownFingerprint))}>Copy verification QR payload</button>
-      <label>Paste a shared QR payload (camera alternative)<textarea aria-label="Contact verification QR payload" value={qrInput} onChange={(event) => setQrInput(event.target.value)} /></label>
-      <button className="btn btn--secondary" type="button" disabled={!peer} onClick={() => scan(qrInput)}>Check shared QR payload</button>
+    <details className="verification-security-details"><summary>More options</summary>
+      <p>Names can be copied by anyone. Only the security number shows it’s really them. Checking never happens on its own: only your tap changes it.</p>
+      <strong>Your full security number</strong><code className="verification-code">{ownFingerprint}</code>
+      <strong>{name === 'your contact' ? 'Their' : `${name}’s`} full security number</strong><code className="verification-code">{peer ?? 'Not available yet'}</code>
+      {changed && <><strong>Previous security number</strong><code className="verification-code">{contact?.identityId}</code></>}
+      <label>My code as text<textarea aria-label="My code as text" readOnly value={myCode} /></label>
+      <button className="btn btn--secondary" type="button" onClick={() => void navigator.clipboard.writeText(myCode)}>Copy my code as text</button>
+      <label>Their code as text (if the camera doesn’t work)<textarea aria-label="Their code as text" value={qrInput} onChange={(event) => setQrInput(event.target.value)} /></label>
+      <button className="btn btn--secondary" type="button" disabled={!peer} onClick={() => { scan(qrInput); setStep('scan'); }}>Check their code</button>
       {changed && <button type="button" className="btn btn--danger" onClick={() => block().catch(onError)}>Block conversation</button>}
-      {verified && <button className="btn btn--secondary" type="button" onClick={() => unverify().catch(onError)}>Mark unverified</button>}
-      {verified && sessionHealth === 'unhealthy' && <><p>This saved encrypted session needs a verified renewal. Your identity and history are preserved.</p><label><input type="checkbox" checked={renewalConfirmed} onChange={(event) => setRenewalConfirmed(event.target.checked)} /> I compared the contact security code again using a trusted channel</label><button className="btn btn--secondary" disabled={!renewalConfirmed} type="button" onClick={() => renew().catch(onError)}>Prepare verified session renewal</button></>}
-      {sessionHealth === 'renewal-pending' && <p>Ask your contact to prepare verified renewal, then send a text message. Calls stay paused until accepted.</p>}
+      {checked && <button className="btn btn--secondary" type="button" onClick={() => unverify().catch(onError)}>Mark as not checked</button>}
+      {checked && sessionHealth === 'unhealthy' && <><p>This saved encrypted session needs a checked renewal. Your history is kept.</p><label><input type="checkbox" checked={renewalConfirmed} onChange={(event) => setRenewalConfirmed(event.target.checked)} /> I compared the security number again on a call I trust</label><button className="btn btn--secondary" disabled={!renewalConfirmed} type="button" onClick={() => renew().catch(onError)}>Prepare renewal</button></>}
+      {sessionHealth === 'renewal-pending' && <p>Ask your contact to prepare the renewal, then send a text message. Calls stay paused until it’s accepted.</p>}
     </details>
   </>;
 };

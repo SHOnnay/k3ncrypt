@@ -9,3 +9,15 @@
 .message-delivery-details { position: relative; }
 .message-delivery-details summary { cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px; }
 .message-delivery-details p { max-width: 280px; margin: 6px 0 0; color: var(--muted); font-size: .72rem; line-height: 1.45; text-align: left; }
+
+/* M1c: single connection status and check banners (existing tokens only). */
+.connection-status { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 4px 0 0; font-size: .74rem; color: var(--muted-strong); }
+.connection-status strong { font-weight: 600; }
+.connection-status__dot { width: 8px; height: 8px; border-radius: var(--radius-round); background: var(--warning); flex: 0 0 auto; }
+.connection-status--connected .connection-status__dot { background: var(--success); }
+.connection-status--offline .connection-status__dot { background: var(--muted-strong); }
+.check-banner { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; margin-top: 10px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--brand-soft); color: var(--ink); }
+.check-banner p { flex: 1 1 260px; margin: 0; font-size: .82rem; line-height: 1.4; }
+.check-banner--changed { background: color-mix(in srgb, var(--warning) 14%, var(--surface-raised)); border-color: color-mix(in srgb, var(--warning) 45%, var(--border)); }
+.check-header-button { margin-left: 4px; }
+.message-file-blocked .btn, .message-media-blocked .btn { margin-left: 6px; vertical-align: middle; }

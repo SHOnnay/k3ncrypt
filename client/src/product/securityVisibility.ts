@@ -53,9 +53,9 @@ export const deriveSecurityVisibility = (input: {
     transport: 'relay',
     relayAvailability: 'not-exposed',
     session,
-    badgeLabel: identityChange === 'changed-pending-review' ? 'Identity changed · review required'
-      : verification === 'verified' ? 'Verified'
-        : verification === 'unverified' ? 'Unverified' : 'Verification status unavailable',
+    badgeLabel: identityChange === 'changed-pending-review' ? 'Security number changed'
+      : verification === 'verified' ? 'Checked on this device'
+        : verification === 'unverified' ? 'Not checked yet' : 'Not available yet',
   };
 };
 

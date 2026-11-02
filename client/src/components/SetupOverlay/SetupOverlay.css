@@ -21,3 +21,10 @@
 .overlay-content > p { max-width: 340px; margin: 14px auto 26px; }
 .welcome-wordmark { width: 58px; height: 58px; margin-bottom: 20px; }
 @media (max-width: 620px) { .overlay-content { padding: 26px 20px; } }
+
+/* M1c / Bug A: own invitations live only on the Invite someone screen */
+.own-invitations { display: grid; gap: 8px; width: 100%; margin-top: 18px; text-align: left; }
+.own-invitations h2 { margin: 0; font-size: .82rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted-strong); }
+.own-invitation-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-raised); }
+.own-invitation-open { flex: 1 1 auto; display: grid; gap: 2px; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.own-invitation-open span { font-size: .78rem; color: var(--muted-strong); }

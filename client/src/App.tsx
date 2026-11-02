@@ -8,7 +8,6 @@ import { MediaMessageWorkflow } from '@chat-e2ee/service';
 import { useChat } from './context/ChatContext';
 import { SetupOverlay } from './components/SetupOverlay/SetupOverlay';
 import { ChatContainer } from './components/ChatContainer/ChatContainer';
-import { updateUrlInvite } from './utils/urlHash';
 import { Sidebar } from './components/AppShell/Sidebar';
 import { SettingsPanel } from './components/Settings/SettingsPanel';
 import './styles/global.css';
@@ -22,7 +21,7 @@ import { classifySafeDiagnostic, logSafeFailure, safeFailureCopy, type SafeDiagn
 import { SafeDiagnosticDetails } from './components/common/SafeDiagnosticDetails';
 
 const AppContent: React.FC = () => {
-  const { initializeChat, joinChannel, openConversation, attachmentRequestHeaders, privacyPreferences } = useChat();
+  const { initializeChat, openConversation, attachmentRequestHeaders, privacyPreferences } = useChat();
   const [showSetup, setShowSetup] = useState(true);
   const [error, setError] = useState<string>('');
   const [initializationError, setInitializationError] = useState<string>('');
@@ -68,18 +67,6 @@ const AppContent: React.FC = () => {
     return () => document.removeEventListener('visibilitychange', update);
   }, []);
 
-  const handleSetupComplete = async (roomId: string, secret: string, controlCapability: string) => {
-    try {
-      setError('');
-      await joinChannel(roomId, secret, controlCapability);
-      updateUrlInvite(roomId, secret, controlCapability);
-      setShowSetup(false);
-    } catch (err) {
-      setError('Could not open this conversation. Check the invitation and connection, then retry.');
-      debugError('Setup failed', err);
-    }
-  };
-
   return (
     <div className={`app-shell ${privacyPreferences.blurSensitiveContent && backgrounded ? 'app-shell--privacy-blur' : ''}`}>
       <Sidebar
@@ -96,7 +83,7 @@ const AppContent: React.FC = () => {
         settingsOpen={showSettings}
       />
       <section className="conversation-workspace" aria-label="Conversation workspace">
-        <SetupOverlay onSetupComplete={handleSetupComplete} onModernSetupComplete={() => {
+        <SetupOverlay onOpenInvitation={(roomId) => { setActiveSection('chats'); setShowSetup(false); beginConversationOpen(roomId); }} onModernSetupComplete={() => {
           // Invitation fragments contain bearer authorization material. Once
           // setup or restore succeeds, keep them out of the active app URL.
           window.history.replaceState(null, '', window.location.pathname);

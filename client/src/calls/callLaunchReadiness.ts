@@ -35,12 +35,12 @@ export const getCallLaunchBlockReason = (input: CallLaunchReadinessInput): CallL
 
 export const callLaunchBlockMessage = (reason: CallLaunchBlockReason): string => {
   switch (reason) {
-    case 'no-conversation': return 'Open a verified conversation to call.';
+    case 'no-conversation': return 'Open a checked contact’s chat to call.';
     case 'upgrade-required': return 'Call requires a newer K3NCRYPT version.';
-    case 'identity-change-pending-review': return 'Identity changed. K3NCRYPT can’t confirm this is the same person or device anymore. Review the new security code before calling.';
-    case 'verification-unavailable': return 'K3NCRYPT could not check this contact’s verification. Review the contact before calling.';
-    case 'verification-required': return 'Verify this contact before calling.';
-    case 'connection-unavailable': return 'Reconnect to this verified contact before calling.';
+    case 'identity-change-pending-review': return 'Calls are paused until you check the new security number.';
+    case 'verification-unavailable': return 'Open this chat again to call. K3NCRYPT couldn’t confirm the check right now.';
+    case 'verification-required': return 'Check this contact before calling.';
+    case 'connection-unavailable': return 'Waiting to connect. Try the call again in a moment.';
     case 'call-in-progress': return 'A call is already in progress.';
   }
 };
@@ -51,7 +51,7 @@ export const callStartFailureMessage = (error: unknown, media: 'audio' | 'video'
     return 'Call requires a newer K3NCRYPT version.';
   }
   if (source.includes('verification') || source.includes('identity') || source.includes('review')) {
-    return 'Verify this contact before calling. Review its security code if it changed.';
+    return 'Check this contact before calling.';
   }
   if (source.includes('permission') || source.includes('denied') || source.includes('dismissed')) {
     return media === 'video'
@@ -63,7 +63,7 @@ export const callStartFailureMessage = (error: unknown, media: 'audio' | 'video'
   if (source.includes('media') || source.includes('capture') || source.includes('device')) {
     return 'Call media is unavailable. Check the required device and retry.';
   }
-  return 'Call could not start. Check the verified connection and retry.';
+  return 'Call could not start. Check your connection and try again.';
 };
 
 export const terminalCallStatusMessage = (state: CallLifecycleState): string | undefined => {

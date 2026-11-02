@@ -15,6 +15,10 @@ import './SecurityVisibility.css';
 import './ChatHeader.css';
 import { debugError } from '../../utils/debug';
 import { contactDisplayName } from '../../content/copy';
+import { checkCopy, checkName, checkState } from '../../content/checkCopy';
+import { useOpenCheck } from '../../context/CheckContactContext';
+import { useBrowserOnline } from '../../hooks/useBrowserOnline';
+import { connectionStatus, connectionStatusCopy } from '../../product/connectionStatus';
 
 interface ChatHeaderProps {
   onStartCall: () => void;
@@ -25,6 +29,10 @@ interface ChatHeaderProps {
 export const ChatHeader: React.FC<ChatHeaderProps> = ({ onStartCall, onStartVideoCall, disableStartCall = false }) => {
   const { isConnected, channelHash, deleteChannel, protocolMode, sessionHealth, conversations, contactIdentity, pendingConversation, conversationOpenError } = useChat();
   const [hashCopied, setHashCopied] = useState(false);
+  const openCheck = useOpenCheck();
+  const browserOnline = useBrowserOnline();
+  const status = connectionStatus(browserOnline, isConnected);
+  const statusCopy = connectionStatusCopy(status);
   const activeConversation = conversations.find((conversation) => conversation.roomId === channelHash)
     ?? (protocolMode === 'legacy' && channelHash ? { roomId: channelHash, label: 'Private conversation', remoteDisplayName: undefined, localNickname: undefined } : undefined);
   const contactLabel = contactDisplayName(activeConversation?.label, activeConversation?.roomId, activeConversation?.remoteDisplayName, activeConversation?.localNickname);
@@ -37,8 +45,9 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({ onStartCall, onStartVide
     sessionHealth: protocolMode === 'modern' ? sessionHealth : undefined,
     protocol: protocolMode,
   });
+  const contactCheck = protocolMode === 'modern' && contactIdentity ? checkState(contactIdentity) : undefined;
   const participantMessage = securityVisibility.identityChange === 'changed-pending-review'
-    ? 'Identity changed. K3NCRYPT can’t confirm this is the same person or device anymore. Compare the new security code before verifying again.'
+    ? undefined
     : activeConversation && protocolMode === 'modern' && sessionHealth === 'unhealthy'
       ? 'Review the security update for this conversation before continuing.'
       : activeConversation && protocolMode === 'modern' && sessionHealth === 'renewal-pending'
@@ -94,6 +103,7 @@ const handleDelete = async () => {
           <h2 className="channel-title">{contactLabel}</h2>
           {activeConversation && <StatusPill tone="neutral">{protocolMode === 'modern' ? 'Encrypted chat' : 'Private chat'}</StatusPill>}
           {activeConversation && <StatusPill tone={securityVisibility.verification === 'verified' ? 'positive' : 'quiet'}>{securityVisibility.badgeLabel}</StatusPill>}
+          {activeConversation && contactCheck === 'unchecked' && <Button className="btn--tiny check-header-button" variant="secondary" onClick={openCheck}>Check</Button>}
         </div>
         {activeConversation && protocolMode === 'legacy' && (
           <div className="hash-badge-container">
@@ -110,6 +120,8 @@ const handleDelete = async () => {
             {hashCopied && <span className="copy-feedback-small">Copied!</span>}
           </div>
         )}
+        {activeConversation && <p className={`connection-status connection-status--${status}`} role="status" aria-label="Connection"><span className="connection-status__dot" aria-hidden="true" /><strong>{statusCopy.label}</strong>{statusCopy.help && <span> {statusCopy.help}</span>}</p>}
+        {activeConversation && contactCheck === 'changed' && <div className="check-banner check-banner--changed" role="alert"><p>{checkCopy.changed(checkName(contactLabel))}</p><Button variant="primary" onClick={openCheck}>{checkCopy.checkAgain}</Button></div>}
         {participantMessage && <p id="participant-info" className="participant-info" role={securityVisibility.identityChange === 'changed-pending-review' ? 'alert' : 'status'}>{participantMessage}</p>}
         {pendingConversation && <p className="participant-info" role="status">Opening {roomLabel(pendingConversation.roomId)}… The current conversation remains active until it is ready.</p>}
         {conversationOpenError && <p className="participant-info" role="status">Could not open {roomLabel(conversationOpenError.roomId)}. Your current conversation remains open.</p>}
@@ -117,8 +129,8 @@ const handleDelete = async () => {
         {activeConversation && <details className="conversation-security-details">
           <summary>Security details</summary>
           <dl>
-            <div><dt>Verification</dt><dd>{securityVisibility.verification === 'verified' ? 'Verified' : securityVisibility.verification === 'unverified' ? 'Unverified' : 'Not available'}</dd></div>
-            <div><dt>Identity change</dt><dd>{securityVisibility.identityChange === 'unchanged' ? 'No change reported' : securityVisibility.identityChange === 'changed-pending-review' ? 'Changed · review required' : 'Not available'}</dd></div>
+            <div><dt>Check</dt><dd>{securityVisibility.badgeLabel}</dd></div>
+            <div><dt>Security number</dt><dd>{securityVisibility.identityChange === 'unchanged' ? 'No change' : securityVisibility.identityChange === 'changed-pending-review' ? 'Changed' : 'Not available'}</dd></div>
             <div><dt>Message path</dt><dd>{securityVisibility.transport === 'relay' ? 'Relay' : 'Not available'}</dd></div>
             <div><dt>Relay connection</dt><dd>{securityVisibility.relayAvailability === 'not-exposed' ? 'Not exposed in this view' : 'Unknown'}</dd></div>
             <div><dt>Session</dt><dd>{securityVisibility.session === 'healthy' ? 'Healthy' : securityVisibility.session === 'unhealthy' ? 'Unavailable' : securityVisibility.session === 'renewal-pending' ? 'Renewal pending' : 'Not available'}</dd></div>

@@ -150,3 +150,15 @@ button.settings-row:focus-visible, .settings-row input:focus-visible, .quiet-ico
 /* Small, panel-only contrast corrections; retain Slate Trust gradients and semantic hues. */
 .settings-panel .btn--danger { color: color-mix(in srgb, var(--danger) 80%, var(--ink)); }
 [data-theme="slate"] .settings-panel .btn--primary { background: linear-gradient(155deg, #6DA9E4 0%, #4982B9 100%); }
+
+/* M1c check flow */
+.check-flow section { display: grid; gap: 10px; margin-top: 14px; }
+.check-flow h4, .check-done h4 { margin: 0; font-size: 1rem; }
+.check-flow .verification-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.check-numbers-link { justify-self: start; padding: 0; border: 0; background: none; color: var(--brand); font: inherit; font-weight: 600; text-decoration: underline; cursor: pointer; }
+.check-mismatch, .check-changed { padding: 12px 14px; border-radius: var(--radius-md); background: color-mix(in srgb, var(--warning) 14%, var(--surface-raised)); border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--border)); }
+.check-limit { color: var(--muted-strong); font-size: .85rem; }
+.check-done { display: grid; gap: 12px; justify-items: start; margin-top: 14px; }
+.check-show-mine { margin-top: 14px; }
+.state-card--attention { border-color: color-mix(in srgb, var(--warning) 45%, var(--border)); }
+.verification-code--large { font-size: 1rem; letter-spacing: .04em; word-break: break-word; }

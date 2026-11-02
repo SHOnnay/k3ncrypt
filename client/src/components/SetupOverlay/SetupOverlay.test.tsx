@@ -5,7 +5,6 @@ import { SetupOverlay } from './SetupOverlay';
 const mockUseChat = jest.fn();
 jest.mock('../../context/ChatContext', () => ({ useChat: () => mockUseChat() }));
 jest.mock('./SetupOverlay.css', () => ({}));
-jest.mock('./CreateHashView.css', () => ({}));
 jest.mock('./JoinHashView.css', () => ({}));
 jest.mock('./InitialActions.css', () => ({}));
 jest.mock('../common/Button.css', () => ({}));
@@ -16,7 +15,7 @@ const renderSetup = (accountState: 'checking' | 'new' | 'locked' | 'ready'): str
     createNewChannel: jest.fn(), createModernChannel: jest.fn(), joinModernChannel: jest.fn(),
     restoreSession: jest.fn(), accountState,
   });
-  return renderToStaticMarkup(createElement(SetupOverlay, { isHidden: false, onSetupComplete: async () => undefined, onModernSetupComplete: () => undefined }));
+  return renderToStaticMarkup(createElement(SetupOverlay, { isHidden: false, onModernSetupComplete: () => undefined }));
 };
 
 describe('first-run and returning-account setup', () => {
