@@ -135,13 +135,14 @@ export const ping = async (): Promise<void> => {
   await db.command({ ping: 1 });
 };
 const requiredIndexes: Record<string, string[]> = {
-  file_ledgers_v2: ['transfers.context.transferId_1'],
+  // P0-2: readiness fails closed until the retention TTL indexes (purgeAt_1) exist; run `npm run migrate`.
+  file_ledgers_v2: ['transfers.context.transferId_1', 'purgeAt_1'],
   [LINK_COLLECTION]: ['hash_1'],
   [PREKEY_COLLECTION]: ['expiresAt_1', 'channel_1_address_1'],
   [OFFLINE_MESSAGE_COLLECTION]: ['expiresAt_1', 'dedupeKey_1', 'channel_1_mailbox_1_slot_1', 'channel_1_mailbox_1_claimedUntil_1_expiresAt_1'],
-  attachment_metadata: ['id_1', 'expiresAt_1_status_1'],
-  attachment_chunks: ['attachmentId_1_index_1', 'attachmentId_1_storedAt_1'],
-  attachment_access: ['attachmentId_1'],
+  attachment_metadata: ['id_1', 'expiresAt_1_status_1', 'purgeAt_1'],
+  attachment_chunks: ['attachmentId_1_index_1', 'attachmentId_1_storedAt_1', 'purgeAt_1'],
+  attachment_access: ['attachmentId_1', 'purgeAt_1'],
   device_lifecycle: ['accountIdentityReference_1_deviceId_1'],
   device_identity_registry: ['deviceId_1'],
   device_proof_nonces: ['proofId_1_deviceId_1', 'expiresAt_1'],

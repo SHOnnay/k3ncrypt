@@ -4,6 +4,7 @@ import type { Collection } from 'mongodb';
 import { PersistentAttachmentDeliveryStore } from '../../../service/src/attachments';
 import db from '../../db';
 import { PREKEY_COLLECTION } from '../../db/const';
+import { unclaimedPurgeAt } from '../../db/retention';
 import { MongoAttachmentPersistence } from '../../attachments';
 import { authorizeRoomControl, isValidControlCapability, isValidRoomId } from '../../security/controlCapability';
 import { createProductionAuthenticatedAttachmentService } from '../../security/productionAttachmentComposition';
@@ -18,10 +19,10 @@ const ADDRESS = /^[0-9a-f-]{36}$/i;
 const PROOF = /^[A-Za-z0-9_-]{43}$/;
 const UUID = /^[0-9a-f-]{36}$/i;
 
-interface AccessDocument extends AttachmentAccessRecord { attachmentId: string; }
+interface AccessDocument extends AttachmentAccessRecord { attachmentId: string; purgeAt?: Date; }
 class MongoAttachmentAccessStore implements AttachmentAccessStore {
   constructor(private readonly records: Collection<AccessDocument>) {}
-  async register(attachmentId: string, record: AttachmentAccessRecord): Promise<void> { await this.records.insertOne({ attachmentId, ...record }); }
+  async register(attachmentId: string, record: AttachmentAccessRecord): Promise<void> { await this.records.insertOne({ attachmentId, ...record, purgeAt: unclaimedPurgeAt() }); }
   async lookup(attachmentId: string): Promise<AttachmentAccessRecord | undefined> {
     const record = await this.records.findOne({ attachmentId });
     return record ? { conversationId: record.conversationId, ownerParticipantId: record.ownerParticipantId, recipientParticipantId: record.recipientParticipantId, senderIdentityReference: record.senderIdentityReference, recipientIdentityReference: record.recipientIdentityReference } : undefined;

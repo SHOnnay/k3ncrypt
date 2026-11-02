@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import type { Db } from 'mongodb';
 import { FILE_LIMITS as L, exact, reservationBytes, sealed, validateFileContext, type FileBinding, type FileStatus, type WireObject } from '../../service/src/files/protocol';
 import type { AuthenticatedContext } from '../security/authorizationContext';
+import { ledgerPurgeAt } from '../db/retention';
 export interface StoredFile extends FileStatus { reserved: number; chunks: Record<string, { nonce: string; bytes: number }>; }
 export interface FileObjectWrite { transferId: string; index: number; value: WireObject; }
 export interface FileLedger { _id: string; revision: number; transfers: StoredFile[]; }
@@ -119,7 +120,7 @@ export class FileLedgerService {
     cancel(auth: AuthenticatedContext, id: string): Promise<FileStatus> { return this.access(auth, id, 'attachment:delete', f => { if (f.state !== 'expired') f.state = 'canceled'; f.reserved = 0; f.chunks = {}; delete f.manifest; return view(f); }); }
     async cleanup(): Promise<void> { for await (const account of this.persistence.accounts()) await this.atomic(account, () => undefined); }
 }
-interface MongoLedger extends FileLedger { objects?: Record<string, Record<string, WireObject>>; }
+interface MongoLedger extends FileLedger { objects?: Record<string, Record<string, WireObject>>; purgeAt?: Date; }
 export class MongoFileLedgerPersistence implements FileLedgerPersistence {
     private readonly collection;
     constructor(database: Db) { this.collection = database.collection<MongoLedger>('file_ledgers_v2'); }
@@ -132,14 +133,15 @@ export class MongoFileLedgerPersistence implements FileLedgerPersistence {
     }
     async replace(before: FileLedger | undefined, after: FileLedger, object?: FileObjectWrite): Promise<boolean> {
         if (before) {
-            const set: Record<string, unknown> = { revision: after.revision, transfers: after.transfers };
+            // P0-2: a TTL index on purgeAt hard-deletes the account ledger once its last transfer has aged out.
+            const set: Record<string, unknown> = { revision: after.revision, transfers: after.transfers, purgeAt: ledgerPurgeAt(after.transfers) };
             if (object) set[`objects.${object.transferId}.chunk-${object.index}`] = object.value;
             const unset: Record<string, ''> = {};
             for (const old of before.transfers) if (old.reserved > 0 && !after.transfers.some(f => f.context.transferId === old.context.transferId && f.reserved > 0)) unset[`objects.${old.context.transferId}`] = '';
             // The same single-document CAS commits ciphertext, geometry, quota and cleanup. Only one chunk crosses the application boundary.
             return (await this.collection.updateOne({ _id: before._id, revision: before.revision }, { $set: set, ...(Object.keys(unset).length ? { $unset: unset } : {}) }, { writeConcern: { w: 'majority', j: true }, maxTimeMS: 5000 })).modifiedCount === 1;
         }
-        try { await this.collection.insertOne(after, { writeConcern: { w: 'majority', j: true } }); return true; } catch (e) { if (e && typeof e === 'object' && 'code' in e && e.code === 11000) return false; throw e; }
+        try { await this.collection.insertOne({ ...after, purgeAt: ledgerPurgeAt(after.transfers) }, { writeConcern: { w: 'majority', j: true } }); return true; } catch (e) { if (e && typeof e === 'object' && 'code' in e && e.code === 11000) return false; throw e; }
     }
     async *accounts(): AsyncIterable<string> { for await (const v of this.collection.find({}, { projection: { _id: 1 } })) yield v._id; }
 }

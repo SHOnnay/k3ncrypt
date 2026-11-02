@@ -1,9 +1,10 @@
 import { Binary, type Collection, type Db } from 'mongodb';
 import type { EncryptedAttachmentChunk } from '../../service/src/attachments/contracts';
+import { attachmentPurgeAt, unclaimedPurgeAt } from '../db/retention';
 import type { AttachmentChunkPersistence, AttachmentMetadataPersistence, PersistentAttachmentPersistence, PersistentAttachmentRecord } from '../../service/src/attachments/persistentDelivery';
 
-type MetadataDocument = Omit<PersistentAttachmentRecord, 'encryptedMetadata'> & { encryptedMetadata: { nonce: Buffer | Binary; ciphertext: Buffer | Binary } };
-type ChunkDocument = Omit<EncryptedAttachmentChunk, 'nonce' | 'ciphertext'> & { nonce: Buffer | Binary; ciphertext: Buffer | Binary; storedAt: number };
+type MetadataDocument = Omit<PersistentAttachmentRecord, 'encryptedMetadata'> & { encryptedMetadata: { nonce: Buffer | Binary; ciphertext: Buffer | Binary }; purgeAt?: Date };
+type ChunkDocument = Omit<EncryptedAttachmentChunk, 'nonce' | 'ciphertext'> & { nonce: Buffer | Binary; ciphertext: Buffer | Binary; storedAt: number; purgeAt?: Date };
 /** The driver returns BSON Binary by default (promoteBuffers is false).
  * Copy only logical bytes, never a Binary object's spare backing capacity.
  * Unexpected persisted representations fail closed instead of becoming empty bytes.
@@ -17,8 +18,9 @@ const bytes = (value: Buffer | Binary): Uint8Array => {
     throw new Error('Attachment binary storage unavailable.');
 };
 const metadataDocument = (record: PersistentAttachmentRecord): MetadataDocument => ({ ...record, encryptedMetadata: { nonce: Buffer.from(record.encryptedMetadata.nonce), ciphertext: Buffer.from(record.encryptedMetadata.ciphertext) } });
-const metadataRecord = (document: MetadataDocument): PersistentAttachmentRecord => ({ ...document, encryptedMetadata: { nonce: bytes(document.encryptedMetadata.nonce), ciphertext: bytes(document.encryptedMetadata.ciphertext) } });
-const chunkDocument = (chunk: EncryptedAttachmentChunk): ChunkDocument => ({ ...chunk, nonce: Buffer.from(chunk.nonce), ciphertext: Buffer.from(chunk.ciphertext), storedAt: Date.now() });
+// purgeAt is storage-only retention state; it never leaves the persistence layer.
+const metadataRecord = ({ purgeAt: _purgeAt, ...document }: MetadataDocument): PersistentAttachmentRecord => ({ ...document, encryptedMetadata: { nonce: bytes(document.encryptedMetadata.nonce), ciphertext: bytes(document.encryptedMetadata.ciphertext) } });
+const chunkDocument = (chunk: EncryptedAttachmentChunk): ChunkDocument => { const storedAt = Date.now(); return { ...chunk, nonce: Buffer.from(chunk.nonce), ciphertext: Buffer.from(chunk.ciphertext), storedAt, purgeAt: unclaimedPurgeAt(storedAt) }; };
 const chunkRecord = (document: ChunkDocument): EncryptedAttachmentChunk => ({ attachmentId: document.attachmentId, index: document.index, total: document.total, nonce: bytes(document.nonce), ciphertext: bytes(document.ciphertext) });
 
 /** Mongo persistence only; it never decrypts or interprets ciphertext. */
@@ -33,7 +35,7 @@ export class MongoAttachmentPersistence implements PersistentAttachmentPersisten
         this.chunkCollection = db.collection<ChunkDocument>(chunkName);
         this.metadata = {
             find: async (id) => { const document = await this.metadataCollection.findOne({ id }); return document ? metadataRecord(document) : undefined; },
-            insert: async (record) => { await this.metadataCollection.insertOne(metadataDocument(record)); },
+            insert: async (record) => { await this.metadataCollection.insertOne({ ...metadataDocument(record), purgeAt: attachmentPurgeAt(record) }); },
             updateStatus: async (id, status) => { await this.metadataCollection.updateOne({ id }, { $set: { status } }); },
             expired: async (now) => (await this.metadataCollection.find({ expiresAt: { $lte: now }, status: { $nin: ['expired', 'deleted'] } }).toArray()).map(metadataRecord),
         };

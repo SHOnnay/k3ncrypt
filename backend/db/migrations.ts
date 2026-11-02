@@ -1,5 +1,6 @@
 import type { Db } from 'mongodb';
 import { LINK_COLLECTION, OFFLINE_MESSAGE_COLLECTION, PREKEY_COLLECTION } from './const';
+import { DAY_MS, MAX_UNCLAIMED_MS, RETENTION_COLLECTIONS } from './retention';
 
 /** Additive, idempotent schema setup. Invoke explicitly before a production rollout. */
 export const applyMigrations = async (database: Db): Promise<void> => {
@@ -28,4 +29,27 @@ export const applyMigrations = async (database: Db): Promise<void> => {
   await database.collection('device_proof_nonces').createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
   await database.collection('private_network_members').createIndex({ networkId: 1, deviceId: 1 }, { unique: true });
   await database.collection('private_network_membership_events').createIndex({ eventId: 1 }, { unique: true });
+  await applyRetention(database);
+};
+
+/**
+ * P0-2 retention. Backfills purgeAt on rows written before retention existed, then adds
+ * TTL indexes. Rows whose purgeAt is already past are deleted by Mongo shortly afterwards:
+ * this migration is the moment old transfer metadata goes away. Idempotent.
+ */
+export const applyRetention = async (database: Db): Promise<void> => {
+  const now = { $toLong: '$$NOW' };
+  const capped = (value: unknown) => ({ $toDate: { $min: [value, { $add: [now, MAX_UNCLAIMED_MS] }] } });
+  await database.collection('file_ledgers_v2').updateMany({ purgeAt: { $exists: false } }, [{ $set: { purgeAt: { $cond: [
+    { $gt: [{ $size: { $ifNull: ['$transfers', []] } }, 0] },
+    capped({ $add: [{ $max: '$transfers.expiresAt' }, DAY_MS] }),
+    '$$NOW',
+  ] } } }]);
+  await database.collection('attachment_metadata').updateMany({ purgeAt: { $exists: false } }, [{ $set: { purgeAt: { $toDate: { $min: [
+    { $add: [{ $ifNull: ['$expiresAt', { $toLong: '$$NOW' }] }, DAY_MS] },
+    { $add: [{ $ifNull: ['$createdAt', { $toLong: '$$NOW' }] }, MAX_UNCLAIMED_MS] },
+  ] } } } }]);
+  await database.collection('attachment_chunks').updateMany({ purgeAt: { $exists: false } }, [{ $set: { purgeAt: { $toDate: { $add: [{ $ifNull: ['$storedAt', { $toLong: '$$NOW' }] }, MAX_UNCLAIMED_MS] } } } }]);
+  await database.collection('attachment_access').updateMany({ purgeAt: { $exists: false } }, [{ $set: { purgeAt: { $toDate: { $add: [{ $toLong: '$$NOW' }, MAX_UNCLAIMED_MS] } } } }]);
+  for (const name of RETENTION_COLLECTIONS) await database.collection(name).createIndex({ purgeAt: 1 }, { expireAfterSeconds: 0 });
 };
