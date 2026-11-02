@@ -129,7 +129,7 @@ export interface ChatContextType {
   fileTransferBinding: (verified: boolean) => Promise<import('@chat-e2ee/service').FileBinding>;
   attachmentRequestHeaders: (operation?: 'attachment:create' | 'attachment:read' | 'attachment:write' | 'attachment:delete') => Promise<Record<string, string>>;
   sendMessageForRoom: (roomId: string, text: string) => Promise<void>;
-  fileTransferBindingForRoom: (roomId: string, verified: boolean) => Promise<import('@chat-e2ee/service').FileBinding>;
+  fileTransferBindingForRoom: (roomId: string, verified: boolean, refresh?: boolean) => Promise<import('@chat-e2ee/service').FileBinding>;
   attachmentRequestHeadersForRoom: (roomId: string, operation?: 'attachment:create' | 'attachment:read' | 'attachment:write' | 'attachment:delete') => Promise<Record<string, string>>;
 }
 

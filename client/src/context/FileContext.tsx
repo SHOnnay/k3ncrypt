@@ -27,13 +27,13 @@ export const FileProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             if (!current() || !channelHash) throw new Error('Protected file transfer requires an open room.');
             return attachmentRequestHeadersForRoom(channelHash, operation);
         }),
-        verified => {
+        (verified, refresh) => {
             if (!current() || !channelHash) throw new Error('Protected file transfer requires an open room.');
-            return fileTransferBindingForRoom(channelHash, verified);
+            return fileTransferBindingForRoom(channelHash, verified, refresh);
         },
         createSealedCache,
         async (reference, binding) => {
-            if (!current() || !channelHash || !sameBinding(await fileTransferBindingForRoom(channelHash, true), binding)) throw new Error('File contact identity changed.');
+            if (!current() || !channelHash || !sameBinding(await fileTransferBindingForRoom(channelHash, true, false), binding)) throw new Error('File contact identity changed.');
             await sendMessageForRoom(channelHash, reference);
         },
         progress => { if (!current() || currentRoom.current !== channelHash) return; if (progress.phase === 'Failed') logSafeFailure(activeDownload.current ? 'file_download_failed' : 'file_send_failed', classifySafeDiagnostic('file-send', { safeDiagnosticCode: progress.diagnosticCode })); if (activeDownload.current) setDownload({ reference: activeDownload.current, transfer: progress }); else changed(progress); },

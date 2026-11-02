@@ -27,7 +27,7 @@ export class FileTransferWorkflow {
     private controller?: AbortController;
     private running = false;
     private failureStage = 'FILE_PREFLIGHT_FAILED';
-    constructor(private readonly gateway: FileGateway, private readonly authority: (verified: boolean) => Promise<FileBinding>, private readonly cacheFactory: () => Promise<SealedFileCache>, private readonly publish: (reference: string, binding: FileBinding) => Promise<void>, changed: (progress: FileProgress) => void = () => {}) { this.state = new FileTransferState(changed); }
+    constructor(private readonly gateway: FileGateway, private readonly authority: (verified: boolean, refresh?: boolean) => Promise<FileBinding>, private readonly cacheFactory: () => Promise<SealedFileCache>, private readonly publish: (reference: string, binding: FileBinding) => Promise<void>, changed: (progress: FileProgress) => void = () => {}) { this.state = new FileTransferState(changed); }
     private fence(g: number): void { if (!this.state.live(g) || this.controller?.signal.aborted) throw new Error('File canceled.'); }
     async send(source: FileSource): Promise<void> {
         if (this.running) throw new Error('Another file operation is active.');
@@ -37,7 +37,7 @@ export class FileTransferWorkflow {
         let allocatedCache: SealedFileCache | undefined; let createdId: string | undefined;
         try {
             if (!Number.isSafeInteger(source.size) || source.size < 1 || source.size > L.MAX_FILE_SIZE) throw new Error('File must be between 1 byte and 8 MiB.');
-            const binding = await this.authority(true); this.fence(g);
+            const binding = await this.authority(true, true); this.fence(g); // fresh from the server once per transfer
             const cache = await this.cacheFactory(); allocatedCache = cache; this.fence(g);
             this.failureStage = 'FILE_CREATE_FAILED';
             const created = await this.gateway.create(binding, source.size, this.controller.signal); createdId = created.context?.transferId; this.fence(g);
@@ -64,8 +64,9 @@ export class FileTransferWorkflow {
     }
     private async upload(g: number): Promise<void> {
         const p = this.pending!; const r = p.reference; const signal = this.controller!.signal;
-        const authorize = async (): Promise<void> => { if (!sameBinding(await this.authority(true), r.context)) throw new Error('File contact identity changed.'); this.fence(g); };
-        await authorize(); let status = await this.gateway.status(r.context.transferId, signal); this.fence(g); checkStatus(r, status);
+        // M3a: the server bundle is fetched once per transfer; per-chunk checks read the local contact record.
+        const authorize = async (refresh = false): Promise<void> => { if (!sameBinding(await this.authority(true, refresh), r.context)) throw new Error('File contact identity changed.'); this.fence(g); };
+        await authorize(true); let status = await this.gateway.status(r.context.transferId, signal); this.fence(g); checkStatus(r, status);
         this.state.move(g, 'Encrypting');
         const manifest = await p.cache.get('manifest'); if (!manifest) throw new Error('File cache unavailable; restart required.');
         this.state.move(g, 'Uploading');
@@ -104,7 +105,7 @@ export class FileTransferWorkflow {
         try {
             this.failureStage = 'FILE_PREFLIGHT_FAILED';
             // Opening a file is file transfer: require a verified, unchanged contact (P0-1).
-            const r = parseFileReference(text); const own = await this.authority(true); this.fence(g);
+            const r = parseFileReference(text); const own = await this.authority(true, true); this.fence(g);
             const expected: FileBinding = { conversationId: own.conversationId, senderParticipantId: own.recipientParticipantId, recipientParticipantId: own.senderParticipantId, senderIdentityReference: own.recipientIdentityReference, recipientIdentityReference: own.senderIdentityReference };
             if (!sameBinding(expected, r.context)) throw new Error('File identity binding rejected.');
             const key = unb64(r.key, 32);
@@ -121,7 +122,7 @@ export class FileTransferWorkflow {
                 output = await outputFactory(manifest.fileSize); this.fence(g);
                 let total = 0;
                 for (let i = 0; i < r.context.chunkCount; i++) {
-                    if (!sameBinding(await this.authority(true), own)) throw new Error('File contact changed.'); this.fence(g);
+                    if (!sameBinding(await this.authority(true, false), own)) throw new Error('File contact changed.'); this.fence(g);
                     this.failureStage = 'FILE_DOWNLOAD_FAILED';
                     const value = await this.gateway.chunk(r.context.transferId, i, this.controller.signal); this.fence(g);
                     this.state.move(g, 'Verifying', total);

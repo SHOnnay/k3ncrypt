@@ -1287,8 +1287,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return roomConversation(roomId).attachmentAuthorizationHeaders(operation);
   }, []);
 
-  const fileTransferBindingForRoom = useCallback(async (roomId: string, verified: boolean) => {
-    return roomConversation(roomId).fileTransferBinding(verified);
+  const fileTransferBindingForRoom = useCallback(async (roomId: string, verified: boolean, refresh = true) => {
+    return roomConversation(roomId).fileTransferBinding(verified, refresh);
   }, []);
 
   const fileTransferBinding = useCallback(async (verified: boolean) => {

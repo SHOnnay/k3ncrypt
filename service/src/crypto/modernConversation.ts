@@ -872,11 +872,17 @@ export class ModernConversation {
     }
 
     /** File authority uses the same protected canonical contact record as explicit verification. */
-    public async fileTransferBinding(requireVerified: boolean): Promise<import('../files/protocol').FileBinding> {
+    /**
+     * refreshFromServer=false (M3a) re-checks only the local contact record: used for per-chunk
+     * checks inside a transfer whose start already fetched and observed the server bundle.
+     */
+    public async fileTransferBinding(requireVerified: boolean, refreshFromServer = true): Promise<import('../files/protocol').FileBinding> {
         await this.assertCurrentDeviceTrust();
         if (!this.roomId || !this.capability || !this.localAddress || !this.localIdentityId || !this.remoteAddress) throw new Error('File contact unavailable.');
-        const bundle = await this.fetchPinnedPeerBundle(this.remoteAddress);
-        await this.observe(this.remoteAddress, bundle.identity, this.remoteIdentityCommitment);
+        if (refreshFromServer) {
+            const bundle = await this.fetchPinnedPeerBundle(this.remoteAddress);
+            await this.observe(this.remoteAddress, bundle.identity, this.remoteIdentityCommitment);
+        }
         const contact = await this.registry.get(this.remoteAddress);
         if (!contact) throw Object.assign(new Error('Verified unchanged contact required.'), { safeDiagnosticCode: 'RECIPIENT_AUTHORITY_MISSING' });
         if (contact.changeStatus !== 'unchanged') throw Object.assign(new Error('Verified unchanged contact required.'), { safeDiagnosticCode: 'RECIPIENT_AUTHORITY_CHANGED' });

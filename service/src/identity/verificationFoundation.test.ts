@@ -52,8 +52,9 @@ describe('verification QR protocol fixture', () => {
         expect(encodeVerificationQrPayload(fixture.accepted.fingerprint)).toBe(fixture.accepted.qrText);
         expect(verificationQrMatches(fixture.accepted.qrText, fixture.accepted.fingerprint)).toBe(true);
     });
-    it.each(fixture.rejected.map((item: { case: string; qrText: string }) => [item.case, item.qrText]))('rejects %s', (_case, qrText) => {
-        expect(verificationQrMatches(qrText as string, fixture.accepted.fingerprint)).toBe(false);
+    const rejected: [string, string][] = fixture.rejected.map((item: { case: string; qrText: string }) => [item.case, item.qrText]);
+    it.each(rejected)('rejects %s', (_case, qrText) => {
+        expect(verificationQrMatches(qrText, fixture.accepted.fingerprint)).toBe(false);
     });
     it('uses the same fingerprint as the shared identity fixture', () => {
         const identity = JSON.parse(readFileSync(resolve(__dirname, '../../../protocol-fixtures/v1/identity-fingerprints.json'), 'utf8'));

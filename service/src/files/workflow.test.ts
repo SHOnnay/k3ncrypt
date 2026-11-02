@@ -112,3 +112,16 @@ test('receive requires a verified unchanged contact before any fetch and on ever
     expect(revokedMidway.mock.calls.every(([verified]) => verified === true)).toBe(true);
     expect(partial.finished()).toBe(false);
 });
+
+// M3a: the server bundle is fetched once per transfer; every per-chunk re-check is local only.
+test('receive refreshes contact authority from the server once, then checks locally per chunk', async () => {
+    const gateway = new Gateway(); let reference = '';
+    const sender = new FileTransferWorkflow(gateway, async () => binding, async () => cache(), async r => { reference = r; });
+    await sender.send(source(3 * L.MAX_CHUNK_SIZE));
+    const authority = jest.fn(async (_verified: boolean, _refresh?: boolean) => recipient);
+    const receiver = new FileTransferWorkflow(gateway, authority, async () => cache(), async () => {}); const target = output();
+    await expect(receiver.receive(reference, async () => target.out)).resolves.toBeDefined();
+    expect(authority.mock.calls.filter(([, refresh]) => refresh === true)).toHaveLength(1);
+    expect(authority.mock.calls.filter(([, refresh]) => refresh === false).length).toBeGreaterThanOrEqual(3);
+    expect(authority.mock.calls.every(([verified]) => verified === true)).toBe(true);
+});

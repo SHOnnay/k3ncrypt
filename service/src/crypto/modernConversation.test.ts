@@ -1260,6 +1260,18 @@ it('file authority requires explicit unchanged verification; reset denies new fi
     } finally { await pair.alice.close(); await pair.bob.close(); }
 });
 
+// M3a: a local re-check never calls the server, and still refuses an unchecked contact.
+it('file authority without refresh reads only the local contact record', async () => {
+    const pair = await verifiedPeerPair();
+    try {
+        const calls = jest.mocked(fetchVodozemacBundle).mock.calls.length;
+        await expect(pair.alice.fileTransferBinding(true, false)).resolves.toEqual(expect.objectContaining({ recipientParticipantId: remoteAddress }));
+        expect(jest.mocked(fetchVodozemacBundle).mock.calls.length).toBe(calls);
+        await pair.alice.unverifyContact();
+        await expect(pair.alice.fileTransferBinding(true, false)).rejects.toThrow('Verified unchanged');
+    } finally { await pair.alice.close(); await pair.bob.close(); }
+});
+
 it('V2 reference publication uses protected verification CAS and reset denies re-publication', async () => {
     const pair = await verifiedPeerPair();
     try {
