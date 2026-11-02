@@ -133,7 +133,8 @@ async function fileTransfer(sender: Page, recipient: Page, file: Buffer, output:
   // 1238e7cf (fix(files): require explicit send for attachments): selection is only a draft until Send file.
   await sender.getByRole('button', { name: 'Send file', exact: true }).click();
   const status = sender.locator('.media-transfer-status');
-  await expect(status).toContainText('Sending', { timeout: 180000 });
+  // After M3a (one bundle check per transfer) a 20 KiB send can finish before 'Sending' is observed.
+  await expect(status).toContainText(/Sending|Sent/, { timeout: 180000 });
   console.log('MUX_TIMING', `file-preparation elapsedMs=${Date.now() - preparationStartedAt}`);
   const uploadStartedAt = Date.now();
   await expect(status).toContainText('Sent', { timeout: 180000 });
@@ -176,7 +177,7 @@ async function openContact(page: Page, name: string) {
 
 async function verify(page: Page) {
   await page.getByRole('button', { name: 'Open settings' }).click();
-  await page.getByRole('button', { name: 'Security' }).click();
+  await page.getByRole('button', { name: /^Security Your security number/ }).click();
   await page.getByRole('button', { name: 'No', exact: true }).click(); await page.getByRole('button', { name: 'No, we’ll call', exact: true }).click();
   await page.getByRole('button', { name: 'They match', exact: true }).click();
   await page.getByRole('button', { name: 'Back to chat', exact: true }).click();

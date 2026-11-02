@@ -88,12 +88,12 @@ test('modern private contact works after offline recipient and both browser rest
   await alice.page.locator('#send-btn').click();
   await expect(bobReturned.locator('#messages-area')).toContainText('hello while you were away', { timeout: 20_000 });
   await bobReturned.getByRole('button', { name: 'Open settings' }).click();
-  await bobReturned.getByRole('button', { name: 'Security' }).click();
+  await bobReturned.getByRole('button', { name: /^Security Your security number/ }).click();
   await expect(bobReturned.locator('.verification-view')).toContainText('Check it’s really Alice'); // f868cd5d replaced this sentence with the 'Verify <name>' heading.
   await expect(bobReturned.locator('.verification-view')).toContainText('Not checked yet'); // f868cd5d renamed the unverified status pill.
   const bobFingerprint = await bobReturned.locator('.verification-code').first().textContent();
   await alice.page.getByRole('button', { name: 'Open settings' }).click();
-  await alice.page.getByRole('button', { name: 'Security' }).click();
+  await alice.page.getByRole('button', { name: /^Security Your security number/ }).click();
   await expect(alice.page.locator('.verification-code').last()).toHaveText(bobFingerprint ?? '');
   await alice.page.getByRole('button', { name: 'Close settings' }).click();
   await expect(bobReturned.getByRole('button', { name: 'They match' })).toHaveCount(0);
@@ -101,7 +101,7 @@ test('modern private contact works after offline recipient and both browser rest
   await bobReturned.getByRole('button', { name: 'They match' }).click();
   await expect(bobReturned.locator('.verification-view')).toContainText('Checked on this device');
   await bobReturned.getByRole('button', { name: 'Back to settings' }).click();
-  await bobReturned.getByRole('button', { name: 'Security' }).click();
+  await bobReturned.getByRole('button', { name: /^Security Your security number/ }).click();
   await expect(bobReturned.locator('.verification-view')).toContainText('Checked on this device');
   await bobReturned.getByRole('button', { name: 'Close settings' }).click();
   await bobReturned.locator('#msg-input').fill('I am here now');
@@ -113,7 +113,7 @@ test('modern private contact works after offline recipient and both browser rest
   const bobAgain = await resume(bob.context, link);
   const aliceAgain = await resume(alice.context, link);
   await bobAgain.getByRole('button', { name: 'Open settings' }).click();
-  await bobAgain.getByRole('button', { name: 'Security' }).click();
+  await bobAgain.getByRole('button', { name: /^Security Your security number/ }).click();
   await expect(bobAgain.locator('.verification-view')).toContainText('Checked on this device');
   await expect(bobAgain.locator('.verification-code').first()).toHaveText(bobFingerprint ?? '');
   await bobAgain.getByRole('button', { name: 'Close settings' }).click();

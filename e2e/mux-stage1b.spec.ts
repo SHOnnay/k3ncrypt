@@ -5,7 +5,7 @@ import { connectedPair, create, invite } from './usabilityHelpers';
 
 const verify = async (page: Page): Promise<void> => {
   await page.getByRole('button', { name: 'Open settings' }).click();
-  await page.getByRole('button', { name: 'Security' }).click();
+  await page.getByRole('button', { name: /^Security Your security number/ }).click();
   await page.getByRole('button', { name: 'No', exact: true }).click(); await page.getByRole('button', { name: 'No, we’ll call', exact: true }).click();
   await page.getByRole('button', { name: 'They match', exact: true }).click();
   await page.getByRole('button', { name: 'Back to chat', exact: true }).click();
@@ -234,7 +234,7 @@ test('three verified profiles deliver to Alice background rooms over one real mu
   // Revoking verification in Carol's room terminally rejects that room while
   // the separately verified Bob room remains usable.
   await alice.getByRole('button', { name: 'Open settings' }).click();
-  await alice.getByRole('button', { name: 'Security' }).click();
+  await alice.getByRole('button', { name: /^Security Your security number/ }).click();
   await alice.locator('.verification-security-details > summary').click();
   await alice.getByRole('button', { name: 'Mark as not checked', exact: true }).click();
   await alice.getByRole('button', { name: 'Close settings', exact: true }).click();

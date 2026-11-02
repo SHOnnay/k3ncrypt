@@ -12,7 +12,7 @@ async function create(page: Page, name: string) {
 }
 async function security(page: Page) {
   await page.getByRole('button', { name: 'Open settings' }).click();
-  await page.getByRole('button', { name: 'Security' }).click();
+  await page.getByRole('button', { name: /^Security Your security number/ }).click();
 }
 async function ownIdentity(page: Page): Promise<string> {
   await security(page);

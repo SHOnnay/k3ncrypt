@@ -94,7 +94,7 @@ test('real Socket.IO/Mongo Mux ACK and claim attacks cannot mutate unrelated del
     await expect(carol.locator('.chat-header')).toContainText('Alice', { timeout: 30_000 });
     for (const page of [alice, carol]) {
       await page.getByRole('button', { name: 'Open settings' }).click();
-      await page.getByRole('button', { name: 'Security' }).click();
+      await page.getByRole('button', { name: /^Security Your security number/ }).click();
       await page.getByRole('button', { name: 'No', exact: true }).click(); await page.getByRole('button', { name: 'No, we’ll call', exact: true }).click();
       await page.getByRole('button', { name: 'They match', exact: true }).click();
       await page.getByRole('button', { name: 'Back to chat', exact: true }).click();

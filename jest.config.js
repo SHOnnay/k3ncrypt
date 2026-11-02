@@ -10,6 +10,6 @@ module.exports = {
   // e2e/*.spec.ts are Playwright specs (run via `npx playwright test`), not
   // Jest tests — they use Playwright's own `test`/`expect` globals and are
   // incompatible with Jest's test runner.
-  testPathIgnorePatterns: ['/node_modules/', '<rootDir>/e2e/'],
+  testPathIgnorePatterns: ['/node_modules/', '<rootDir>/e2e/', '<rootDir>/e2e-prod-stage/'],
   testRegex: '(/__tests__/.*|(\\.|/)(test|spec))\\.(tsx?)$',
 };

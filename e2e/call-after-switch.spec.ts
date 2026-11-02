@@ -5,7 +5,7 @@ test.use({ launchOptions: { args: ['--use-fake-device-for-media-stream', '--use-
 
 const verify = async (page: Page) => {
   await page.getByRole('button', { name: 'Open settings' }).click();
-  await page.getByRole('button', { name: 'Security' }).click();
+  await page.getByRole('button', { name: /^Security Your security number/ }).click();
   await page.getByRole('button', { name: 'No', exact: true }).click(); await page.getByRole('button', { name: 'No, we’ll call', exact: true }).click();
   await page.getByRole('button', { name: 'They match', exact: true }).click();
   await page.getByRole('button', { name: 'Back to chat', exact: true }).click();
