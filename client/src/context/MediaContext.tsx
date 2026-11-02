@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useState, type ReactNode } from 'react';
 import type { MediaKind, MediaMessageWorkflow, MediaReceiveResult, MediaSendResult } from '@chat-e2ee/service';
 import { useChat } from './ChatContext';
+import { receiveLegacyMediaFromVerifiedContact } from '../product/mediaTrust';
 
 export type MediaTransferState = 'idle' | 'uploading' | 'downloading' | 'ready' | 'failed';
 export interface MediaTransfer { state: MediaTransferState; error?: string; result?: MediaSendResult | MediaReceiveResult; }
@@ -16,7 +17,7 @@ interface MediaContextValue {
 const MediaContext = createContext<MediaContextValue | undefined>(undefined);
 
 export const MediaProvider: React.FC<{ children: ReactNode; workflow?: MediaMessageWorkflow }> = ({ children, workflow }) => {
-  const { channelHash, userId, protocolMode } = useChat();
+  const { channelHash, userId, protocolMode, fileTransferBindingForRoom } = useChat();
   const [transfer, setTransfer] = useState<MediaTransfer>({ state: 'idle' });
   const context = { conversationId: channelHash, participantId: userId };
 
@@ -29,14 +30,15 @@ export const MediaProvider: React.FC<{ children: ReactNode; workflow?: MediaMess
     }
     setTransfer({ state: 'downloading' });
     try {
-      const result = await workflow.receive(context, serialized);
+      const roomId = context.conversationId;
+      const result = await receiveLegacyMediaFromVerifiedContact(() => fileTransferBindingForRoom(roomId, true), () => workflow.receive(context, serialized));
       setTransfer({ state: 'ready', result });
       return result;
     } catch {
       setTransfer({ state: 'failed', error: 'The protected media could not be opened.' });
       return undefined;
     }
-  }, [workflow, protocolMode, context.conversationId, context.participantId]);
+  }, [workflow, protocolMode, context.conversationId, context.participantId, fileTransferBindingForRoom]);
 
   const sendVoice = useCallback(async (_bytes: Uint8Array, _durationMs: number) => { throw new Error('Legacy attachment writes disabled.'); }, []);
 

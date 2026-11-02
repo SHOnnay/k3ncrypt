@@ -91,7 +91,8 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
         {mediaUrl && saved && <a className="message-file-action" href={mediaUrl} download={saved.filename || 'protected-file'} aria-label={`Save ${saved.filename}`} title="Save file"><ApprovedIcon name="download" size={17} /></a>}
         {mediaUrl && <button className="message-file-close" type="button" onClick={closePreview} aria-label="Close file preview">Close</button>}
       </div>}
-      {!isFile && media?.reference && !mediaUrl && <button className="message-media-action" type="button" onClick={openMedia} disabled={isOpening}>{isOpening ? 'Opening and verifying…' : `Open protected ${media.kind}`}</button>}
+      {!isFile && media?.reference && !mediaUrl && !fileContactTrusted && <div className="message-media-blocked" role="note">{contactIdentity?.changeStatus && contactIdentity.changeStatus !== 'unchanged' ? 'Identity changed. Review it before opening media.' : 'Verify this contact to open media.'}</div>}
+      {!isFile && media?.reference && !mediaUrl && fileContactTrusted && <button className="message-media-action" type="button" onClick={openMedia} disabled={isOpening}>{isOpening ? 'Opening and checking…' : `Open protected ${media.kind}`}</button>}
       {!isFile && mediaUrl && <button className="message-file-close" type="button" onClick={closePreview}>Close</button>}
       {!isFile && mediaUrl && media && media.kind !== 'image' && media.kind !== 'voice' && media.kind !== 'video' && <a className="message-media-action" href={mediaUrl} download="protected-file">Save protected file</a>}
       {isFile && isOpening && fileProgress?.active && <div className="message-file-progress" role="status" aria-live="polite"><span>{fileProgress.label}</span>{fileProgress.progress !== undefined && <progress max={100} value={fileProgress.progress} aria-label="File download progress" />} <button type="button" onClick={files.cancel}>Cancel</button></div>}
