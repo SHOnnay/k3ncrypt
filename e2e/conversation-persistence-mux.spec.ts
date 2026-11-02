@@ -11,7 +11,7 @@ const send = async (sender: Page, recipient: Page, text: string) => {
   await sender.getByRole('textbox', { name: 'Write a message', exact: true }).fill(text);
   await sender.getByRole('button', { name: 'Send message', exact: true }).click();
   await expect(recipient.locator('.message-text').filter({ hasText: text })).toBeVisible({ timeout: 30000 });
-  await expect(sender.locator('.message.sent').filter({ hasText: text }).locator('.message-delivery-details summary')).toHaveText('Sent', { timeout: 30000 });
+  await expect(sender.locator('.message.sent').filter({ hasText: text }).locator('.message-delivery-details summary')).toHaveText(/^(Sent|Delivered)$/, { timeout: 30_000 }); // b5bb816c: Sent = relay-stored, Delivered = recipient accepted; either proves the send.
 };
 const transport = (page: Page) => page.evaluate(() => {
   const hook = (globalThis as typeof globalThis & { __K3NCRYPT_ACTIVE_ROOM_TRANSPORT__?: () => string }).__K3NCRYPT_ACTIVE_ROOM_TRANSPORT__;

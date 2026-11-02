@@ -31,7 +31,7 @@ const send = async (sender: Page, text: string): Promise<void> => {
   await sender.locator('.chat-footer input[type=text], .chat-footer textarea').fill(text);
   await sender.locator('.chat-footer').getByRole('button', { name: 'Send message' }).click();
   const sent = sender.locator('.message.sent').filter({ hasText: text }).locator('.message-delivery-details summary');
-  await expect(sent).toHaveText('Sent', { timeout: 30_000 });
+  await expect(sent).toHaveText(/^(Sent|Delivered)$/, { timeout: 30_000 }); // b5bb816c: Sent = relay-stored, Delivered = recipient accepted; either proves the send.
 };
 
 const queueWhileRecipientOffline = async (sender: Page, text: string): Promise<void> => {
