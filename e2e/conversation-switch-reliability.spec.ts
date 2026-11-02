@@ -130,6 +130,8 @@ async function fileTransfer(sender: Page, recipient: Page, file: Buffer, output:
   const before = await recipient.getByRole('button', { name: 'Download protected file', exact: true }).count();
   const preparationStartedAt = Date.now();
   await sender.locator('input[type=file]').setInputFiles({ name: filename, mimeType: 'image/jpeg', buffer: file });
+  // 1238e7cf (fix(files): require explicit send for attachments): selection is only a draft until Send file.
+  await sender.getByRole('button', { name: 'Send file', exact: true }).click();
   const status = sender.locator('.media-transfer-status');
   await expect(status).toContainText('Sending', { timeout: 180000 });
   console.log('MUX_TIMING', `file-preparation elapsedMs=${Date.now() - preparationStartedAt}`);

@@ -107,7 +107,9 @@ test('Alice/Bob/Carol descriptors survive switching, 503, timeout, offline refre
       await route.abort().catch((error: Error) => { if (!error.message.includes('Route is already handled')) throw error; });
     });
     await alice.locator('.conversation-row, .unavailable-conversation-action').filter({ hasText: 'Carol' }).click();
-    await expect(alice.locator('.conversation-row, .unavailable-conversation-action').filter({ hasText: 'Carol' })).toContainText('Disconnected', { timeout: 15000 });
+    // c3a299e2 (decouple local contact loading and bound readiness requests): a stalled status
+    // lookup no longer blocks a saved chat from opening.
+    await expect(alice.locator('.conversation-row, .unavailable-conversation-action').filter({ hasText: 'Carol' })).toContainText('Conversation open', { timeout: 15000 });
     await alice.unroute('**/api/chat-link/status/**'); await open(alice, 'Carol');
     // Match HTTP API paths only: a broad glob also blocks Vite's service/src/api imports.
     const apiOnly = (url: URL) => url.pathname.startsWith('/api/');
@@ -129,7 +131,8 @@ test('Alice/Bob/Carol descriptors survive switching, 503, timeout, offline refre
       await vault.delete('vodozemac-session', carol.roomId);
     }, { storageModule, persistenceModule, sessionModule, passphrase });
     await alice.reload(); await unlock(alice);
-    await expect(alice.locator('.unavailable-conversation-action').filter({ hasText: 'Carol' })).toContainText('Local records incomplete');
+    // f6b9f3a1 (classify saved contacts) reworded the missing-session state.
+    await expect(alice.locator('.unavailable-conversation-action').filter({ hasText: 'Carol' })).toContainText('encrypted session needs recovery');
     await open(alice, 'Bob');
     await expect(alice.locator('.message-text').filter({ hasText: 'Persistence acceptance fixture' })).toBeVisible();
     await expect(alice.locator('.conversation-row, .unavailable-conversation-action').filter({ hasText: 'Carol' })).toBeVisible();

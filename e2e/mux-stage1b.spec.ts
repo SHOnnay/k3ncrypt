@@ -52,6 +52,8 @@ const activeTransport = (page: Page) => page.evaluate(() => {
 
 const sendMuxFile = async (sender: Page, name: string, bytes: Buffer): Promise<void> => {
   await sender.locator('input[type=file]').setInputFiles({ name, mimeType: 'application/octet-stream', buffer: bytes });
+  // 1238e7cf (fix(files): require explicit send for attachments): selection is only a draft until Send file.
+  await sender.getByRole('button', { name: 'Send file', exact: true }).click();
   await expect(sender.locator('.media-transfer-status')).toContainText(name, { timeout: 30_000 });
   const status = sender.locator('.media-transfer-status');
   try { await expect(status).toContainText('Sent', { timeout: 30_000 }); }

@@ -94,7 +94,8 @@ test('late downloads cannot attach to another room/message; previews survive Sav
   await page.getByRole('button',{name:'Download protected file',exact:true}).click();
   await page.evaluate(() => (window as any).__ui.downloads.shift()());
   await expect(save).toHaveCount(2);
-  await page.getByRole('button',{name:'Close',exact:true}).first().click(); await expect(save).toHaveCount(1);
+  // a444e77e (Slate restyle) named the close control 'Close file preview'.
+  await page.getByRole('button',{name:'Close file preview',exact:true}).first().click(); await expect(save).toHaveCount(1);
   await page.evaluate(() => (window as any).__ui.update({plaintextSession:undefined,accountState:'locked'}));
   await expect(save).toHaveCount(0);
   expect(await page.evaluate(() => (window as any).__urls.created.length)).toBe(2);

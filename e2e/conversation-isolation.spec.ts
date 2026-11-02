@@ -38,7 +38,8 @@ test('accepted relationships are unique; corrupt candidate does not poison anoth
   // Nickname makes the fixture selector independent of encrypted claimed profile.
   await alice.getByRole('button', { name: 'Contacts', exact: true }).click();
   alice.once('dialog', dialog => dialog.accept('Bob'));
-  await alice.getByRole('button', { name: 'Edit nickname for Private contact' }).last().click();
+  // c09631b9 (M1c) groups contacts Checked / Not checked yet; the original, checked Bob is in Checked.
+  await alice.locator('.workspace-contact-shell').filter({ hasText: 'Bob' }).getByRole('button', { name: /^Edit nickname for / }).click();
   await alice.getByRole('button', { name: 'Chats', exact: true }).click();
   await alice.route('**/api/chat-link/*/prekeys/*', route => route.abort('failed'));
   await alice.locator('.conversation-row').filter({ hasText: 'Bob' }).click();
@@ -56,7 +57,8 @@ test('accepted relationships are unique; corrupt candidate does not poison anoth
   await alice.reload(); await alice.getByRole('button', { name: 'Unlock this device', exact: true }).click();
   await alice.locator('input[type=password]').fill(passphrase); await alice.getByRole('button', { name: 'Unlock account', exact: true }).click();
   await expect(alice.getByRole('region', { name: 'Conversations' }).locator('.conversation-row')).toHaveCount(1); await expect(alice.locator('.chat-header')).toContainText('Cara');
-  await alice.getByText('Unavailable conversations', { exact: true }).click();
+  // fef99a62 (separate pending and unavailable conversations) capitalised the section heading.
+  await alice.getByText(/^Unavailable conversations$/i).click();
   await expect(alice.locator('.chat-header')).toContainText('Cara');
   await a.close(); await b.close(); await c.close();
 });
