@@ -21,3 +21,4 @@
 .check-banner--changed { background: color-mix(in srgb, var(--warning) 14%, var(--surface-raised)); border-color: color-mix(in srgb, var(--warning) 45%, var(--border)); }
 .check-header-button { margin-left: 4px; }
 .message-file-blocked .btn, .message-media-blocked .btn { margin-left: 6px; vertical-align: middle; }
+.check-header-button.btn--tiny { padding: 4px 10px; min-height: 0; font-size: .74rem; }
