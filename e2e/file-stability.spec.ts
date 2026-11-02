@@ -91,7 +91,7 @@ test('opt-in authenticated file stage benchmark', async ({ browser }, testInfo) 
         const event = bob.waitForEvent('download'); await save.click(); const download = await event; const output = testInfo.outputPath(`verified-${repeat}-${bytes}`); await download.saveAs(output);
         expect(createHash('sha256').update(await readFile(output)).digest('hex')).toBe(createHash('sha256').update(source).digest('hex'));
         row.integrity = 'PASS';
-        await save.locator('..').getByRole('button', { name: 'Close', exact: true }).click();
+        await save.locator('..').getByRole('button', { name: 'Close file preview', exact: true }).click(); // a444e77e
       } catch (error) {
         row.integrity = 'INCOMPLETE'; row.elapsedMs = Date.now() - origin;
         row.terminal = 'bounded expectation failed';

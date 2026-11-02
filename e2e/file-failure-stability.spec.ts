@@ -13,7 +13,8 @@ async function verifyDownload(page: Page, output: string) {
   await expect(save).toBeVisible({ timeout: 90000 });
   const pending = page.waitForEvent('download'); await save.click(); const download = await pending; await download.saveAs(output);
   expect(createHash('sha256').update(await readFile(output)).digest('hex')).toBe(createHash('sha256').update(file.buffer).digest('hex'));
-  await save.locator('..').getByRole('button', { name: 'Close', exact: true }).click();
+  // a444e77e (Slate restyle) named the close control 'Close file preview'.
+  await save.locator('..').getByRole('button', { name: 'Close file preview', exact: true }).click();
 }
 
 test('pre-allocation 429 terminates with honest feedback after bounded retries, then a new transfer works', async ({ browser }, info) => {

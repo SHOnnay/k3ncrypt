@@ -37,7 +37,9 @@ const queueWhileRecipientOffline = async (sender: Page, text: string): Promise<v
   await sender.locator('.chat-footer input[type=text], .chat-footer textarea').fill(text);
   await sender.locator('.chat-footer').getByRole('button', { name: 'Send message' }).click();
   const sending = sender.locator('.message.sent').filter({ hasText: text }).locator('.message-delivery-details summary');
-  await expect(sending).toHaveText('Sending…', { timeout: 10_000 });
+  // Mux stores in the mailbox first, so 'Sending…' can already be 'Sent' (relay-stored, b5bb816c).
+  // Delivery to the recipient is asserted separately after reconnect.
+  await expect(sending).toHaveText(/^(Sending…|Sent)$/, { timeout: 10_000 });
 };
 
 const muxSnapshot = (page: Page) => page.evaluate(() => {
@@ -74,7 +76,8 @@ const downloadMuxFile = async (recipient: Page, name: string, bytes: Buffer, out
   await expect(save).toBeVisible({ timeout: 30_000 });
   const download = recipient.waitForEvent('download'); await save.click(); const artifact = await download; await artifact.saveAs(output);
   expect(createHash('sha256').update(await readFile(output)).digest('hex')).toBe(createHash('sha256').update(bytes).digest('hex'));
-  await recipient.getByRole('button', { name: 'Discard verified output', exact: true }).click();
+  // ea9715d7 removed 'Discard verified output'; closing the preview releases it.
+  await recipient.getByRole('button', { name: 'Close file preview', exact: true }).last().click();
 };
 
 test('three verified profiles deliver to Alice background rooms over one real mux socket', async ({ browser }, testInfo) => {
@@ -221,8 +224,8 @@ test('three verified profiles deliver to Alice background rooms over one real mu
   await queueWhileRecipientOffline(bob, 'Bob queued during Alice reconnect');
   await queueWhileRecipientOffline(carol, 'Carol queued during Alice reconnect');
   await reloadUnlocked(alice);
-  await expect(bob.locator('.message.sent').filter({ hasText: 'Bob queued during Alice reconnect' }).locator('.message-delivery-details summary')).toHaveText('Sent', { timeout: 30_000 });
-  await expect(carol.locator('.message.sent').filter({ hasText: 'Carol queued during Alice reconnect' }).locator('.message-delivery-details summary')).toHaveText('Sent', { timeout: 30_000 });
+  await expect(bob.locator('.message.sent').filter({ hasText: 'Bob queued during Alice reconnect' }).locator('.message-delivery-details summary')).toHaveText(/^(Sent|Delivered)$/, { timeout: 30_000 }); // b5bb816c
+  await expect(carol.locator('.message.sent').filter({ hasText: 'Carol queued during Alice reconnect' }).locator('.message-delivery-details summary')).toHaveText(/^(Sent|Delivered)$/, { timeout: 30_000 }); // b5bb816c
   await openContact(alice, 'Bob');
   await expect(alice.locator('.message-text').filter({ hasText: 'Bob queued during Alice reconnect' })).toHaveCount(1);
   await openContact(alice, 'Carol');

@@ -174,7 +174,7 @@ test.describe('persistent authenticated routing lifecycle', () => {
         const save = bob.getByRole('link', { name: `Save ${name}`, exact: true }); await expect(save).toBeVisible({ timeout: 30000 });
         const hash = await save.evaluate(async element => { const data = await (await fetch((element as HTMLAnchorElement).href)).arrayBuffer(); return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', data)), n => n.toString(16).padStart(2, '0')).join(''); });
         expect(hash).toBe(createHash('sha256').update(bytes).digest('hex'));
-        await bob.getByRole('button', { name: 'Close', exact: true }).click();
+        await bob.getByRole('button', { name: 'Close file preview', exact: true }).last().click(); // a444e77e
       }
       console.log(JSON.stringify({ fixture: 'durable-routing', mixedAdoption, deniedBeforePeerAdoption, transport: process.env.K3NCRYPT_ROUTING_TEST_MUX === 'true' ? 'mux' : 'legacy', days, actualTtlDeleted: days >= 7, persistentProcessRestart: true, backendRestart: true, retainedVerifiedHistory: true, offlineReplay: true }));
     } finally {
