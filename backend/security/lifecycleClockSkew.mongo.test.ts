@@ -19,7 +19,7 @@ suite('disposable Mongo lifecycle clock boundary', () => {
           fingerprint: identity, createdAt: now + offset, expiresAt: now + offset + 30000, nonce: randomBytes(24).toString('base64url') };
         return { ...value, signature: sign(null, Buffer.from(JSON.stringify(value)), pair.privateKey).toString('base64url') };
       }
-      for (const offset of [0, 1, 4, 4999, 5000]) expect((await authority.bootstrap(await request(offset))).trustEpoch).toBe(1);
+      for (const offset of [0, 1, 4, 1000, 2000, 3000, 4000, 4999, 5000]) expect((await authority.bootstrap(await request(offset))).trustEpoch).toBe(1);
       await expect(authority.bootstrap(await request(5001))).rejects.toThrow();
       await expect(authority.bootstrap(await request(-30001))).rejects.toThrow();
       const tampered = await request(1); tampered.verificationKey = randomBytes(32).toString('base64url');
