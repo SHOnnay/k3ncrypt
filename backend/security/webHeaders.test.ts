@@ -30,3 +30,10 @@ describe('production Web policy', () => {
     expect(html).not.toContain('<style>'); expect(html).toContain('/startup.css');
   });
 });
+
+// M3j: HSTS and an opener policy on every production response.
+it('sends HSTS and a same-origin opener policy', () => {
+  const headers = webSecurityHeaders('');
+  expect(headers['Strict-Transport-Security']).toBe('max-age=31536000; includeSubDomains');
+  expect(headers['Cross-Origin-Opener-Policy']).toBe('same-origin');
+});

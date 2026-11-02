@@ -14,6 +14,9 @@ export const webSecurityHeaders = (apiOrigin = process.env.CHATE2EE_API_URL || p
     'X-Content-Type-Options': 'nosniff',
     'Referrer-Policy': 'no-referrer',
     'Permissions-Policy': 'camera=(self), microphone=(self), geolocation=(), payment=(), usb=()',
+    // M3j: HTTPS only for a year (no preload list entry, so it stays reversible).
+    'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
+    'Cross-Origin-Opener-Policy': 'same-origin',
   };
 };
 
