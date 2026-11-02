@@ -148,7 +148,8 @@ async function fileTransfer(sender: Page, recipient: Page, file: Buffer, output:
   const artifact = await download; await artifact.saveAs(output);
   expect(createHash('sha256').update(await readFile(output)).digest('hex'))
     .toBe(createHash('sha256').update(file).digest('hex'));
-  await recipient.getByRole('button', { name: 'Discard verified output', exact: true }).click();
+  // ea9715d7 (fence drafts downloads ... by session) removed 'Discard verified output'; closing the preview releases it.
+  await recipient.getByRole('button', { name: 'Close file preview', exact: true }).last().click();
   });
 }
 
