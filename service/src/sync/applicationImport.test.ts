@@ -29,3 +29,33 @@ it('imports all authenticated application record kinds in the replay transaction
     await expect(store.transaction('account-sync', undefined, async (tx) => { await tx.claim('account-sync', 'rollback-claim'); await tx.importRecords?.('account-sync', checkpoint, invalid); })).rejects.toThrow();
     await store.transaction('account-sync', undefined, async (tx) => { expect(await tx.claim('account-sync', 'rollback-claim')).toBe(true); });
 });
+
+// M3g. Invariants: checking is explicit and per device; a number change is never cleared silently.
+it('sync import never marks a contact checked, never clears a pending number change, never writes a different number', async () => {
+    const vault = new BrowserSecureStorage(new MemoryVaultPersistence()); await vault.initializeWithPassphrase('test-only-sync-trust');
+    const store = new SecureSyncPersistence(vault);
+    const list = createDeviceList({ version: 1, identityReference: 'account-sync', epoch: 0, previousCommitment: null, devices: [createDeviceEntry({ deviceId: 'device-a', publicIdentityReference: 'identity-a', algorithm: 'v1', state: 'active', createdAt: 1 })] });
+    const checkpoint = { epoch: 0, commitment: await deviceListCommitment(list) };
+    const base = { version: 1 as const, scope: 'account-sync', epoch: 0, commitment: checkpoint.commitment };
+    const key = Buffer.alloc(32, 7).toString('base64url');
+    let n = 0;
+    const contact = (contactId: string, identityId: string, verification: string) => ({ ...base, recordId: `contact${String(++n).padStart(9, '0')}`, kind: 'contact' as const,
+        payload: { contactId, identityId, algorithm: 'v1', publicKey: key, verification, changeStatus: 'unchanged' } });
+    const importOne = (record: ReturnType<typeof contact>) => store.transaction('account-sync', undefined, async (tx) => { await tx.claim('account-sync', `claim-${record.recordId}`); await tx.importRecords?.('account-sync', checkpoint, [record]); });
+    const write = (id: string, value: unknown) => vault.write('contact-identity', id, new TextEncoder().encode(JSON.stringify(value)).buffer as ArrayBuffer);
+
+    await importOne(contact('new-contact', 'identity-new', 'verified'));
+    expect(decode(await vault.read('contact-identity', 'new-contact'))).toMatchObject({ identityId: 'identity-new', verification: 'unverified', changeStatus: 'unchanged' });
+
+    const pending = { contactId: 'changed', identityId: 'identity-old', algorithm: 'v1', publicKey: key, verification: 'unverified', changeStatus: 'changed-pending-review', pendingIdentity: { identityId: 'identity-new', algorithm: 'v1', publicKey: key } };
+    await write('changed', pending);
+    await importOne(contact('changed', 'identity-old', 'verified'));
+    expect(decode(await vault.read('contact-identity', 'changed'))).toEqual(pending);
+
+    const checked = { contactId: 'checked', identityId: 'identity-a1', algorithm: 'v1', publicKey: key, verification: 'verified', changeStatus: 'unchanged' };
+    await write('checked', checked);
+    await importOne(contact('checked', 'identity-other', 'verified'));
+    expect(decode(await vault.read('contact-identity', 'checked'))).toEqual(checked);
+    await importOne(contact('checked', 'identity-a1', 'unverified'));
+    expect(decode(await vault.read('contact-identity', 'checked'))).toMatchObject({ identityId: 'identity-a1', verification: 'unverified' });
+});

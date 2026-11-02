@@ -104,9 +104,17 @@ export class SecureSyncPersistence implements SyncPersistence {
             return [{ recordType: 'conversation-protocol', recordId, expected: await this.storage.read('conversation-protocol', recordId), next: encode(next) }];
         }
         if (record.kind === 'contact') {
+            // M3g. Checking is explicit and per device: sync may lower a check, never raise one.
+            // A pending number change is never cleared and a different number is never written.
             const recordId = payload.contactId as string;
-            const next = { contactId: recordId, identityId: payload.identityId, algorithm: payload.algorithm, publicKey: payload.publicKey, verification: payload.verification, changeStatus: 'unchanged' };
-            return [{ recordType: 'contact-identity', recordId, expected: await this.storage.read('contact-identity', recordId), next: encode(next) }];
+            const expected = await this.storage.read('contact-identity', recordId);
+            let current: { identityId?: unknown; changeStatus?: unknown; verification?: unknown } | undefined;
+            try { current = expected?.byteLength ? JSON.parse(new TextDecoder().decode(expected)) : undefined; } catch { return []; }
+            if (current && (current.identityId !== payload.identityId || current.changeStatus !== 'unchanged')) return [];
+            const verification = current?.verification === 'verified' && payload.verification === 'verified' ? 'verified' : 'unverified';
+            const next = { ...(current ?? {}), contactId: recordId, identityId: payload.identityId, algorithm: payload.algorithm, publicKey: payload.publicKey, verification, changeStatus: 'unchanged' };
+            if (verification !== 'verified') delete (next as { verifiedAt?: unknown }).verifiedAt;
+            return [{ recordType: 'contact-identity', recordId, expected, next: encode(next) }];
         }
         if (record.kind === 'settings') {
             const next = { version: 1, theme: payload.theme, privacy: { analytics: false, backgroundCapture: false, externalMedia: false, minimizeMetadata: payload.minimizeMetadata !== false } };
