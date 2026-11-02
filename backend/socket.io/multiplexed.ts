@@ -1,3 +1,4 @@
+import { onSafe, type Ack } from './safeAck';
 import { authorizeCurrentRouting, bindVerifiedRouting, boundRoutingDevice, currentRoutingIdentity, durableRoutingEnabled } from '../security/routingOwnership';
 import { randomUUID } from 'crypto';
 import type { Server } from 'socket.io';
@@ -492,7 +493,7 @@ const scheduleSubscriptionExpiry = (socket: CustomSocket, subscription: MuxRoomS
 export const registerMultiplexedRelay = (socket: CustomSocket, io: MuxServer): void => {
   relayServers.set(socket, io);
   if (!muxRelayEnabled()) return;
-  socket.on('mux-authenticate', (payload: unknown, ack: (response: Record<string, unknown>) => void = () => undefined) => enqueue(socket, async () => {
+  onSafe(socket, 'mux-authenticate', (payload: unknown, ack: Ack) => enqueue(socket, async () => {
     const body = payload as Record<string, unknown> | null;
     const generation = socket.id;
     if (!body || typeof body !== 'object' || Array.isArray(body) || !exactKeys(body, ['connectionGeneration', 'deviceAuthorizationProof', 'proofNonce', 'proofOperation']) ||
@@ -515,7 +516,7 @@ export const registerMultiplexedRelay = (socket: CustomSocket, io: MuxServer): v
     ack({ version: MUX_PROTOCOL_VERSION, status: 'authenticated', connectionGeneration: generation });
   }, ack, 'Relay authentication rejected.'));
 
-  socket.on('mux-subscribe', (payload: unknown, ack: (response: Record<string, unknown>) => void = () => undefined) => enqueue(socket, async () => {
+  onSafe(socket, 'mux-subscribe', (payload: unknown, ack: Ack) => enqueue(socket, async () => {
     const body = payload as Record<string, unknown> | null;
     const generation = socket.muxConnectionGeneration;
     const roomId = body?.roomId;
@@ -613,7 +614,7 @@ export const registerMultiplexedRelay = (socket: CustomSocket, io: MuxServer): v
       subscriptionNonce: admission.next.nonce, expiresAt: admission.next.expiresAt, peerFeatures });
   }, ack, 'Room subscription rejected.'));
 
-  socket.on('mux-unsubscribe', (payload: unknown, ack: (response: Record<string, unknown>) => void = () => undefined) => enqueue(socket, async () => {
+  onSafe(socket, 'mux-unsubscribe', (payload: unknown, ack: Ack) => enqueue(socket, async () => {
     const body = payload as Record<string, unknown> | null;
     const roomId = body?.roomId;
     const subscription = typeof roomId === 'string' ? socket.muxSubscriptions?.get(roomId) : undefined;
@@ -627,7 +628,7 @@ export const registerMultiplexedRelay = (socket: CustomSocket, io: MuxServer): v
     ack({ status: 'unsubscribed', roomId, connectionGeneration: socket.id });
   }, ack, 'Room unsubscribe rejected.'));
 
-  socket.on('mux-send-message', (payload: unknown, ack: (response: Record<string, unknown>) => void = () => undefined) => enqueue(socket, async () => {
+  onSafe(socket, 'mux-send-message', (payload: unknown, ack: Ack) => enqueue(socket, async () => {
     const body = payload as Record<string, unknown> | null;
     const roomId = body?.roomId;
     const subscription = typeof roomId === 'string' ? await currentSubscription(socket, roomId) : undefined;
@@ -679,7 +680,7 @@ export const registerMultiplexedRelay = (socket: CustomSocket, io: MuxServer): v
     }
   }, ack, 'Multiplexed message rejected.'));
 
-  socket.on('mux-send-signal', (payload: unknown, ack: (response: Record<string, unknown>) => void = () => undefined) => enqueue(socket, async () => {
+  onSafe(socket, 'mux-send-signal', (payload: unknown, ack: Ack) => enqueue(socket, async () => {
     const body = payload as Record<string, unknown> | null;
     const roomId = body?.roomId;
     const subscription = typeof roomId === 'string' ? await currentSubscription(socket, roomId) : undefined;
@@ -709,7 +710,7 @@ export const registerMultiplexedRelay = (socket: CustomSocket, io: MuxServer): v
     ack({ version: MUX_PROTOCOL_VERSION, status: 'routed', roomId: subscription.roomId });
   }, ack, 'Multiplexed call signal rejected.'));
 
-  socket.on('mux-mailbox-replay', (payload: unknown, ack: (response: Record<string, unknown>) => void = () => undefined) => enqueue(socket, async () => {
+  onSafe(socket, 'mux-mailbox-replay', (payload: unknown, ack: Ack) => enqueue(socket, async () => {
     const body = payload as Record<string, unknown> | null;
     const roomId = body?.roomId;
     const subscription = typeof roomId === 'string' ? await currentSubscription(socket, roomId) : undefined;
