@@ -93,7 +93,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, initialVie
   const currentConversationError = conversationOpenError?.roomId === channelHash ? conversationOpenError : undefined;
   const unavailable = accountState !== 'ready' || !!currentConversationError || sessionHealth !== 'healthy' || contactIdentity?.changeStatus === 'changed-pending-review';
   const conversationReady = isConnected && (protocolMode !== 'modern' || (!!contactIdentity?.identityId && (!descriptor?.bootstrapState || descriptor.bootstrapState === 'ESTABLISHED')));
-  const readiness = accountState !== 'ready' ? 'Unlock required' : opening ? 'Opening conversation' : !channelHash ? 'Choose a conversation' : unavailable ? 'Recovery needed' : conversationReady ? 'Encrypted session available' : 'Waiting for acceptance';
+  const readiness = accountState !== 'ready' ? 'Unlock required' : opening ? 'Opening conversation' : !channelHash ? 'Choose a conversation' : unavailable ? 'Recovery needed' : conversationReady ? 'Secure connection ready' : 'Waiting for acceptance';
   const conversationExplanation = accountState !== 'ready' ? 'Unlock this device to use this chat. Its messages are still saved.'
     : opening ? 'Opening this chat…'
     : !channelHash ? 'Open a chat to see how it’s connected.'
@@ -101,7 +101,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, initialVie
     : sessionHealth === 'renewal-pending' ? 'Waiting for your contact to confirm the secure connection update. Sending and calls are paused until then.'
     : sessionHealth === 'unhealthy' ? 'This chat’s secure connection needs renewing. Open Security to renew it; your messages are kept.'
     : currentConversationError ? 'This chat couldn’t reopen. Open it from your chat list to try again.'
-    : conversationReady ? 'A local encrypted session is available. This does not measure a live socket or remote presence.'
+    : conversationReady ? 'This chat’s secure connection is ready on this device. It doesn’t show whether your contact is online.'
     : 'An accepted encrypted introduction is needed before this conversation is ready.';
   const serviceLabel = { unchecked: 'Not checked', checking: serverCopy.checking, reachable: serverCopy.reachable, 'not-ready': serverCopy.notReachable, unavailable: serverCopy.notReachable, offline: 'You’re offline' }[service.status];
 
@@ -270,7 +270,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, initialVie
               <button className="btn btn--secondary" type="button" disabled={service.status === 'checking'} onClick={service.check}>Check the server again</button>
               <div className="network-status"><span className={`network-pulse ${!unavailable && conversationReady && !opening ? 'online' : ''}`} /><div><strong>Current conversation</strong><p>{conversationExplanation}</p><StatusPill tone={!unavailable && conversationReady && !opening ? 'positive' : 'quiet'}>{readiness}</StatusPill></div></div>
               {protocolMode === 'modern' && <div className="network-status"><span className={`network-pulse ${syncStatus === 'ready' && accountState === 'ready' ? 'online' : ''}`} /><div><strong>This device’s approval</strong><p>{syncStatus === 'ready' && accountState === 'ready' ? 'This device is approved for this chat.' : syncStatus === 'recovering' ? 'Checking this device’s approval…' : 'This device’s approval couldn’t be confirmed just now. Each send checks again; this isn’t an outage.'}</p><StatusPill tone={syncStatus === 'ready' && accountState === 'ready' ? 'positive' : 'quiet'}>{accountState !== 'ready' ? 'Unlock required' : syncStatus === 'ready' ? 'Confirmed' : syncStatus === 'recovering' ? 'Recovering' : 'Not confirmed'}</StatusPill></div></div>}
-              <div className="state-card"><div><strong>Sending and delivery</strong><p>{!unavailable && conversationReady && !opening ? 'You can send in this chat.' : 'This chat isn’t ready to send yet. See the note above.'} Sent means the relay accepted an encrypted message. Delivered requires the recipient’s authenticated acknowledgment. A contact can be offline while a message waits at the relay within its retention limits.</p></div></div>
+              <div className="state-card"><div><strong>Sending and delivery</strong><p>{!unavailable && conversationReady && !opening ? 'You can send in this chat.' : 'This chat isn’t ready to send yet. See the note above.'} Sent means the server has your encrypted message. Delivered means your contact’s device confirmed it. If your contact is offline, the message waits on the server for a limited time.</p></div></div>
               <details className="panel-details"><summary>Advanced details</summary><p>Service reachability is a read-only HTTP readiness check, not a persistent socket monitor. Conversation readiness comes from local session establishment; device authorization comes from the selected session’s trust/recovery state. Remote presence and mailbox delivery are not inferred.</p></details>
             </section>
           )}

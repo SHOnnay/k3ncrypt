@@ -132,7 +132,7 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onModernSetupComplet
 
   const heading = view === 'initial' ? accountState === 'ready' ? contactsCopy.inviteTitle : 'Private conversations with your people' : view === 'create' ? 'Create an invitation' : view === 'join' ? 'Join someone you trust' : view === 'modern' ? accountState === 'ready' ? 'Add a private contact' : 'Create your account' : view === 'restore' ? 'Welcome back' : 'Conversation closed';
   const description = view === 'initial'
-    ? accountState === 'ready' ? 'Share a private invitation with one person. Check it’s really them before sharing files.' : accountState === 'checking' ? 'Preparing your private space on this device.' : 'Create an account on this device, then invite someone you trust. Check it’s really them before sharing files.'
+    ? accountState === 'ready' ? 'Share a private invitation with one person. Check it’s really them before sharing files.' : accountState === 'checking' ? 'Preparing your private space on this device.' : (accountState === 'locked' ? 'Unlock with your passphrase to see your chats and contacts on this device.' : 'Create an account on this device, then invite someone you trust. Check it’s really them before sharing files.')
     : view === 'create'
       ? 'Share this invitation with one person you trust.'
       : view === 'join'

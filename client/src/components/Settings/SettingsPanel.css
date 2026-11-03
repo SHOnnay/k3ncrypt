@@ -168,3 +168,13 @@ button.settings-row:focus-visible, .settings-row input:focus-visible, .quiet-ico
 .security-number-groups code { font-size: 1.05rem; letter-spacing: .12em; }
 .security-number-groups small { grid-column: 2; font-size: .68rem; color: var(--muted-strong); }
 .check-read-hint { font-size: .85rem; color: var(--muted-strong); }
+
+/* Audit: Settings → Advanced reads like the other detail views. */
+.settings-detail[aria-label="Advanced"] h4 { margin: 18px 0 8px; font-size: .85rem; }
+.settings-detail[aria-label="Advanced"] > p, .advanced-security-details + p { color: var(--muted); font-size: .78rem; line-height: 1.5; }
+.advanced-security-details { display: grid; gap: 8px; margin: 0; }
+.advanced-security-details div { display: flex; justify-content: space-between; gap: 12px; padding: 8px 10px; border-radius: var(--radius-md); background: var(--surface); }
+.advanced-security-details dt { font-size: .78rem; font-weight: 600; }
+.advanced-security-details dd { margin: 0; font: inherit; font-size: .78rem; color: var(--muted); }
+.advanced-diagnostics { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: .78rem; }
+.conversation-recovery--advanced { margin: 10px 0 0; }

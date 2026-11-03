@@ -1,3 +1,4 @@
+import { callRowSummary } from '../../product/callHistory';
 import { contactsCopy } from '../../content/checkCopy';
 import React from 'react';
 import { useChat } from '../../context/ChatContext';
@@ -68,7 +69,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection
             <Avatar label={displayName(conversation)} size="medium" />
             <span className="conversation-copy">
               <span className="conversation-name-row"><span className="conversation-name">{displayName(conversation)}</span><time>{channelHash === conversation.roomId ? formatSidebarTime(latest?.timestamp) : ''}</time></span>
-              <span className="conversation-preview">{openStatus ?? (diagnostic ? conversationStateCopy(diagnostic) : conversation.bootstrapState === 'PENDING_REMOTE' || conversation.bootstrapState === 'PENDING_LOCAL' || conversation.relationship === 'invitation' && !conversation.remoteAddress ? 'Waiting for contact to accept' : conversation.bootstrapState === 'FAILED_OR_UNSUPPORTED' ? 'Invitation needs a compatible link' : channelHash === conversation.roomId && protocolMode === 'modern' && sessionHealth === 'unhealthy' ? 'Secure connection needs renewing' : channelHash === conversation.roomId && protocolMode === 'modern' && sessionHealth === 'renewal-pending' ? 'Waiting for your contact to confirm' : channelHash === conversation.roomId && latest?.text ? latest.text : channelHash === conversation.roomId ? 'Conversation open' : 'Saved on this device')}</span>
+              <span className="conversation-preview">{openStatus ?? (diagnostic ? conversationStateCopy(diagnostic) : conversation.bootstrapState === 'PENDING_REMOTE' || conversation.bootstrapState === 'PENDING_LOCAL' || conversation.relationship === 'invitation' && !conversation.remoteAddress ? 'Waiting for contact to accept' : conversation.bootstrapState === 'FAILED_OR_UNSUPPORTED' ? 'Invitation needs a compatible link' : channelHash === conversation.roomId && protocolMode === 'modern' && sessionHealth === 'unhealthy' ? 'Secure connection needs renewing' : channelHash === conversation.roomId && protocolMode === 'modern' && sessionHealth === 'renewal-pending' ? 'Waiting for your contact to confirm' : channelHash === conversation.roomId && latest?.callEvent ? callRowSummary(latest.callEvent).title : channelHash === conversation.roomId && latest?.text ? latest.text : channelHash === conversation.roomId ? 'Conversation open' : 'Saved on this device')}</span>
             </span>
           </button>
         ); })}

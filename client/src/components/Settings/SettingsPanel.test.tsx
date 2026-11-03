@@ -24,7 +24,7 @@ it('never calls an HTTP service connection ready solely because device trust is 
   mockChat.mockReturnValue({ ...state, isConnected: true, contactIdentity: { identityId: 'authenticated-peer', verification: 'unverified', changeStatus: 'unchanged' } });
   const markup = render('network');
   expect(markup).toContain('Service reachability'); expect(markup).toContain('Not checked');
-  expect(markup).toContain('Encrypted session available'); expect(markup).toContain('This device’s approval');
+  expect(markup).toContain('Secure connection ready'); expect(markup).toContain('This device’s approval');
   expect(markup).not.toContain('Secure conversation connected'); expect(markup).not.toContain('>Online<');
 });
 it('identifies this device by full identity instead of a routing address and never offers self-revoke', () => {
@@ -51,7 +51,7 @@ it('does not imply an unopened vault has working verification', () => {
 it('does not equate an open invitation with an established encrypted conversation', () => {
   mockChat.mockReturnValue({ ...state, isConnected: true });
   expect(render('network')).toContain('Waiting for acceptance');
-  expect(render('network')).not.toContain('Encrypted session available');
+  expect(render('network')).not.toContain('Secure connection ready');
 });
 it('explains missing identity for an established saved conversation as unavailable, not a fresh invitation', () => {
   mockChat.mockReturnValue({ ...state, ownFingerprint: 'K3 AAAA CCCC_DDDD', conversations: [{ roomId: 'room', label: 'Saved peer', relationship: 'accepted' }] });
@@ -68,7 +68,7 @@ it('hides cached identity comparison and device metadata when the vault is locke
 
 it('does not attach another room’s failed selection to the current conversation readiness', () => {
   mockChat.mockReturnValue({ ...state, isConnected: true, contactIdentity: { identityId: 'authenticated-peer', verification: 'unverified', changeStatus: 'unchanged' }, conversationOpenError: { roomId: 'other-room', code: 'CONVERSATION_ROOM_REMOVED' } });
-  expect(render('network')).toContain('Encrypted session available');
+  expect(render('network')).toContain('Secure connection ready');
   expect(render('network')).not.toContain('Recovery needed');
 });
 

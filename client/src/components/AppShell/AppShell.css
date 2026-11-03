@@ -129,3 +129,7 @@
   .conversation-recovery > summary { min-height: 34px; display: flex; align-items: center; padding: 0 10px; }
   .conversation-recovery[open] { padding: 8px 10px; }
 }
+
+/* Audit: the locked navigation looks unavailable (it is disabled until unlock). */
+.sidebar--locked button:disabled { opacity: .45; cursor: not-allowed; }
+.sidebar--locked .primary-navigation button:disabled:hover { color: inherit; background: transparent; }
