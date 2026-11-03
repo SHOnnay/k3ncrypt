@@ -4,13 +4,14 @@ Scope: web client + Socket.IO relay. Android only where shared protocol is affec
 Evidence labels: [read code] [unit test] [integration test] [local browser run] [two-browser E2E] [production].
 
 ## Production
-- Render, branch `main`, live on **`f927941`** = `f868cd5` + relay-crash fix + device clock tolerance. Deployed by the owner with the maintenance-mode cutover.
-- `K3NCRYPT_DURABLE_ROUTING=true` (owner-confirmed).
-- Read-only check 2026-11-02 12:27 UTC [production]: `/api/health` 200, `/api/ready` 200 (database and all relays ready). No build SHA exposed. No HSTS yet (fixed in M3, not deployed).
-- **Owner smoke test pending:** message both ways between two devices; set up a new Android device.
+- Render, branch `main`, live on **`b16c92f8`** (RC1 = M0–M3 + RC1), deployed 2026-11-03 06:27 UTC (`dep-dbknsrm7bikc73fe0f1g`). Previous: `f927941` (rollback target).
+- `K3NCRYPT_DURABLE_ROUTING=true`, `K3NCRYPT_TRUST_PROXY=true`, `K3NCRYPT_MAINTENANCE_MODE=false`. Auto-Deploy off, 1 instance (free).
+- Deploy record [production]: backup `~/k3ncrypt-backups/k3ncrypt-20261103T061112Z.archive.gz` (339 docs, sha256 `864c101f…`, verified by local restore with matching counts); `npm run migrate` ok in 3.3 s, all required indexes present, TTL removed 8 empty `file_ledgers_v2` rows (10 → 2), all other counts unchanged; `main` fast-forwarded `f927941` → `b16c92f8`; deployed under maintenance, then maintenance off. After: `/api/health` 200, `/api/ready` 200, HSTS + COOP + CSP present, served WASM sha256 `acd138dd…`.
+- Render's Build Command order (`build:backend` first) is equivalent to the runbook's: byte-identical output for `b16c92f8`.
+- **Owner smoke tests on real devices pending.**
 
 ## Release candidate 1 (`m3/hardening`)
-- **Status: ready for the owner to deploy, not deployed.** Nothing pushed, migrated or deployed by an agent.
+- **Status: deployed 2026-11-03** (see Production). Smoke tests pending.
 - Runbook: [`docs/releases/RELEASE_CANDIDATE_1.md`](releases/RELEASE_CANDIDATE_1.md) — backup (mongo:8 `mongodump`, URI only via env), verified local restore, rehearsed migration, deploy under maintenance mode, smoke tests, rollback to `f927941`. Every Docker/migrate command in it was rehearsed against a throwaway local `mongo:8`; not against Atlas.
 - Contains M0, M1a, M1c, M1b, M2, M3, plus the RC1 changes below. `f927941` is an ancestor: `main` fast-forwards.
 
