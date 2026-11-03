@@ -1,5 +1,4 @@
 export class PreviewCapacityError extends Error {}
-export class FileOperationBusyError extends Error {}
 
 /** Transient verified output only. No persistence, and no authorization decisions. */
 export class PreviewResources {
@@ -21,9 +20,21 @@ export class PreviewResources {
   clear(): void { for (const key of this.urls.keys()) this.release(key); }
 }
 
-/** Serializes acquisition before the workflow's first asynchronous authorization boundary. */
+/** Serializes file operations before the workflow's first asynchronous authorization boundary.
+ * UX A2: later operations wait in FIFO order (enqueue) instead of failing. */
 export class FileOperationGate {
   private active?: object;
+  private readonly queue: ((ticket: object) => void)[] = [];
+  get waiting(): number { return this.queue.length; }
   acquire(): object | undefined { if (this.active) return undefined; return this.active = {}; }
-  release(ticket: object): void { if (this.active === ticket) this.active = undefined; }
+  enqueue(): Promise<object> {
+    const ticket = this.acquire();
+    return ticket ? Promise.resolve(ticket) : new Promise((resolve) => { this.queue.push(resolve); });
+  }
+  release(ticket: object): void {
+    if (this.active !== ticket) return;
+    this.active = undefined;
+    const next = this.queue.shift();
+    if (next) next(this.active = {});
+  }
 }

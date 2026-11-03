@@ -6,7 +6,8 @@ import type { Message } from '../../types/index';
 
 const mockUseChat = jest.fn();
 jest.mock('../../context/ChatContext', () => ({ useChat: () => mockUseChat() }));
-jest.mock('../../context/FileContext', () => ({ useFiles: () => ({ download: undefined, previews: { release: jest.fn(), add: jest.fn() }, receive: jest.fn(), cancel: jest.fn() }) }));
+const mockFiles: { queued: string[] } = { queued: [] };
+jest.mock('../../context/FileContext', () => ({ useFiles: () => ({ download: undefined, queued: mockFiles.queued, previews: { release: jest.fn(), add: jest.fn() }, receive: jest.fn(), cancel: jest.fn() }) }));
 jest.mock('../../context/MediaContext', () => ({ useMedia: () => ({ receive: jest.fn() }) }));
 jest.mock('./MessageBubble.css', () => ({}));
 jest.mock('./SecurityVisibility.css', () => ({}));
@@ -39,4 +40,15 @@ describe('received file and media trust presentation', () => {
     expect(render(v1Media, contact)).toContain('Open protected image');
     expect(render(v2File, contact)).not.toContain('Check it’s really');
   });
+});
+
+// UX A2: a queued download shows that it is waiting, never a raw error.
+it('shows a queued file as Waiting with its action disabled', () => {
+  mockFiles.queued = [`${FILE_PREFIX}opaque`];
+  try {
+    const markup = render(v2File, { verification: 'verified', changeStatus: 'unchanged' });
+    expect(markup).toContain('Waiting…');
+    expect(markup).toMatch(/<button[^>]*disabled[^>]*aria-label="Waiting for another file to finish"/);
+    expect(markup).not.toContain('Another file operation');
+  } finally { mockFiles.queued = []; }
 });

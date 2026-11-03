@@ -1,12 +1,12 @@
 import React, { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { FileTransferWorkflow, sameBinding, type FileProgress } from '@chat-e2ee/service';
 import { classifySafeDiagnostic, logSafeFailure } from '../product/safeDiagnostics';
-import { PreviewResources, FileOperationGate, FileOperationBusyError } from '../product/previewResources';
+import { PreviewResources, FileOperationGate } from '../product/previewResources';
 import { useChat } from './ChatContext';
 import { getRuntimeConfig } from '../config/runtimeConfig';
 import { HttpFileGateway } from '../media/HttpFileGateway';
 import { clearFileDisk, createFileOutput, createSealedCache, type SavedFile } from '../media/fileDisk';
-interface FileContextValue { previews: PreviewResources; transfer: FileProgress; download?: { reference: string; transfer: FileProgress }; sendFile(file: File): Promise<void>; retry(): Promise<void>; cancel(): void; receive(text: string): Promise<SavedFile | undefined>; }
+interface FileContextValue { previews: PreviewResources; transfer: FileProgress; /** References waiting for an earlier file operation (UX A2). */ queued: string[]; sendWaiting: boolean; download?: { reference: string; transfer: FileProgress }; sendFile(file: File): Promise<void>; retry(): Promise<void>; cancel(): void; receive(text: string): Promise<SavedFile | undefined>; }
 const Context = createContext<FileContextValue | undefined>(undefined);
 export const FileProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
     const { fileTransferBindingForRoom, attachmentRequestHeadersForRoom, sendMessageForRoom, channelHash, plaintextSession } = useChat();
@@ -22,6 +22,16 @@ export const FileProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const [transfer, changed] = useState<FileProgress>({ phase: 'Idle', bytes: 0, total: 0 });
     const activeDownload = useRef<string>();
     const [download, setDownload] = useState<FileContextValue['download']>();
+    const [queued, setQueued] = useState<string[]>([]);
+    const [sendWaiting, setSendWaiting] = useState(false);
+    /** Waits for the previous file operation instead of refusing (UX A2); marks the wait so the UI can say "Waiting…". */
+    const waitTurn = async (reference?: string): Promise<object> => {
+        const immediate = operation.current.acquire();
+        if (immediate) return immediate;
+        if (reference) setQueued(list => [...list, reference]); else setSendWaiting(true);
+        try { return await operation.current.enqueue(); }
+        finally { if (reference) setQueued(list => list.filter(item => item !== reference)); else setSendWaiting(false); }
+    };
     const workflow = useMemo(() => new FileTransferWorkflow(
         new HttpFileGateway(getRuntimeConfig().baseUrl ?? '', operation => {
             if (!current() || !channelHash) throw new Error('Protected file transfer requires an open room.');
@@ -58,18 +68,20 @@ export const FileProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }, [workflow, previews]);
     const runExclusive = async (run: () => Promise<void>) => {
         if (!current()) throw new Error('Unlock and open the intended conversation.');
-        const ticket = operation.current.acquire();
-        if (!ticket) throw new FileOperationBusyError('Another file operation is still active.');
-        try { await run(); } finally { operation.current.release(ticket); }
+        const ticket = await waitTurn();
+        try {
+            if (!current()) throw new Error('Unlock and open the intended conversation.');
+            await run();
+        } finally { operation.current.release(ticket); }
     };
-    return <Context.Provider value={{ previews, transfer, download,
+    return <Context.Provider value={{ previews, transfer, download, queued, sendWaiting,
         sendFile: file => runExclusive(async () => {
             if (!diskReady) throw new Error('Secure disk workspace unavailable or in use by another tab.');
             await workflow.send({ size: file.size, name: file.name, type: file.type, read: async (at, count) => new Uint8Array(await file.slice(at, at + count).arrayBuffer()) });
         }), retry: () => runExclusive(() => workflow.retry()), cancel: () => workflow.cancel(), receive: async text => {
         if (!current() || !diskReady) throw new Error('Secure file workspace unavailable.');
-        const ticket = operation.current.acquire();
-        if (!ticket) throw new FileOperationBusyError('Another file operation is still active.');
+        const ticket = await waitTurn(text);
+        if (!current()) { operation.current.release(ticket); return undefined; }
         activeDownload.current = text;
         setDownload(undefined);
         let result: SavedFile | undefined;

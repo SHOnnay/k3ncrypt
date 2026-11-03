@@ -30,3 +30,14 @@ it('zeroes the transient copy while preserving the independent verified Blob', a
   expect([...new Uint8Array(await out.blob.arrayBuffer())]).toEqual([1,2,3]);
   expect(dispose).toHaveBeenCalledTimes(1);
 });
+// UX A2: a second file operation waits its turn (FIFO) instead of failing with "Another file operation is still active".
+it('queues file operations in order and hands over on release', async () => {
+  const gate = new FileOperationGate(); const order: string[] = [];
+  const first = await gate.enqueue(); order.push('first');
+  const second = gate.enqueue().then((ticket) => { order.push('second'); return ticket; });
+  const third = gate.enqueue().then((ticket) => { order.push('third'); return ticket; });
+  await Promise.resolve(); expect(order).toEqual(['first']); expect(gate.waiting).toBe(2);
+  gate.release(first); const t2 = await second; expect(order).toEqual(['first', 'second']);
+  gate.release(first); await Promise.resolve(); expect(order).toEqual(['first', 'second']);
+  gate.release(t2); gate.release(await third); expect(order).toEqual(['first', 'second', 'third']); expect(gate.waiting).toBe(0);
+});

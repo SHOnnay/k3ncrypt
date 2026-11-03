@@ -34,7 +34,7 @@ export const ChatFooter: React.FC<{ onVerifyContact: () => void }> = (props) => 
 
 const RoomComposer: React.FC<{ onVerifyContact: () => void; drafts: ComposerDrafts; scope?: { readonly isCurrent: () => boolean } }> = ({ onVerifyContact, drafts, scope }) => {
   const { sendMessage, sessionHealth, contactIdentity, conversations, channelHash, plaintextSession } = useChat();
-  const { sendFile, retry, transfer, cancel: cancelTransfer } = useFiles();
+  const { sendFile, retry, transfer, cancel: cancelTransfer, sendWaiting } = useFiles();
   const activeContact = conversations?.find((item) => item.roomId === channelHash);
   const contactLabel = contactDisplayName(activeContact?.label, activeContact?.roomId, activeContact?.remoteDisplayName, activeContact?.localNickname);
   const transferStatus = fileTransferCopy(transfer);
@@ -189,7 +189,7 @@ const RoomComposer: React.FC<{ onVerifyContact: () => void; drafts: ComposerDraf
   const retryAttachment = async () => {
     if (!current()) return;
     try { await retry(); }
-    catch { if (current()) setActionMessage('Another file operation may still be active. Wait for it to finish or cancel it, then retry.'); }
+    catch { if (current()) setActionMessage('This file couldn’t be sent yet. Try again in a moment.'); }
   };
 
   const toggleRecording = async () => {
@@ -292,6 +292,7 @@ const RoomComposer: React.FC<{ onVerifyContact: () => void; drafts: ComposerDraf
         <div className="attachment-draft-details"><strong>{attachmentDraft.file.name}</strong><span>{(attachmentDraft.file.size / 1024).toLocaleString(undefined, { maximumFractionDigits: 1 })} KiB</span></div>
         <button type="button" onClick={removeAttachment} disabled={isSending || busy} aria-label="Remove attachment">Remove</button>
       </div>}
+      {sendWaiting && <div className="media-transfer-status" role="status" aria-live="polite"><span>Waiting for the current file to finish…</span></div>}
       {transfer.phase !== 'Idle' && <div className="media-transfer-status" role="status" aria-live="polite"><span>{transferStatus.label}</span>{transferStatus.progress !== undefined && <progress max={100} value={transferStatus.progress} aria-label="File transfer progress" />}{busy && <button type="button" onClick={cancelTransfer}>Cancel</button>}{transfer.phase === 'Failed' && transfer.retryable && <button type="button" onClick={retryAttachment}>Retry</button>}</div>}
       {actionMessage && <div className="composer-feedback" role="status">{actionMessage}<SafeDiagnosticDetails code={actionDiagnostic} /></div>}
     </footer>

@@ -6,7 +6,7 @@ import React, { useId, useLayoutEffect, useRef, useState } from 'react';
 import { FILE_PREFIX } from '@chat-e2ee/service';
 import { useFiles } from '../../context/FileContext';
 import { detachVerifiedOutput, previewableImageType } from '../../product/verifiedOutput';
-import { PreviewCapacityError, FileOperationBusyError } from '../../product/previewResources';
+import { PreviewCapacityError } from '../../product/previewResources';
 import { Message } from '../../types/index';
 import { formatMessageTime } from '../../utils/messageHandling';
 import { useMedia } from '../../context/MediaContext';
@@ -53,6 +53,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
   const deliveryVisibility = deriveMessageDeliveryVisibility(message.delivery, protocolMode, message.relayAccepted);
   const downloadTransfer = fileDownloadForReference(files.download, media?.reference);
   const fileProgress = downloadTransfer ? fileTransferCopy(downloadTransfer) : undefined;
+  const queued = Boolean(media?.reference && files.queued?.includes(media.reference));
   useLayoutEffect(() => {
     live.current.mounted = true;
     setMediaUrl(undefined); setSaved(undefined); setIsOpening(false); opening.current = false;
@@ -80,7 +81,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
         try { if (current()) setMediaUrl(files.previews.add(resourceKey, new Blob([result.bytes], { type: result.mimeType }))); }
         finally { result.bytes.fill(0); }
       } else if (current()) setMediaError('Couldn’t open this file. Check your connection or ask your contact to send it again.');
-    } catch (error) { if (current()) setMediaError(error instanceof PreviewCapacityError ? 'Close an open preview before downloading another file.' : error instanceof FileOperationBusyError ? 'Another file operation is still active. Wait for it to finish or cancel it, then retry.' : 'Couldn’t open this file. Check your connection or ask your contact to send it again.'); }
+    } catch (error) { if (current()) setMediaError(error instanceof PreviewCapacityError ? 'Close an open preview before downloading another file.' : 'Couldn’t open this file. Check your connection or ask your contact to send it again.'); }
     finally { if (current()) { opening.current = false; setIsOpening(false); } }
   };
   const closePreview = () => { live.current.generation++; files.previews.release(resourceKey); setSaved(undefined); setMediaUrl(undefined); };
@@ -96,7 +97,9 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
           <small>{media?.size !== undefined ? formatFileSize(media.size) : 'Encrypted attachment'} · Encrypted</small>
         </span>
         {media?.reference && !mediaUrl && !fileContactTrusted && <span className="message-file-blocked" role="note">{blockedNote} {blockedAction}</span>}
-        {media?.reference && !mediaUrl && fileContactTrusted && <button className="message-file-action" type="button" onClick={openMedia} disabled={isOpening} aria-label={isOpening ? 'Downloading and checking protected file' : 'Download protected file'} title={isOpening ? 'Downloading and checking' : 'Download protected file'}><ApprovedIcon name="download" size={17} /></button>}
+        {media?.reference && !mediaUrl && fileContactTrusted && (queued
+          ? <button className="message-file-action" type="button" disabled aria-label="Waiting for another file to finish" title="Waiting for another file to finish"><span className="message-file-action__label">Waiting…</span></button>
+          : <button className="message-file-action" type="button" onClick={openMedia} disabled={isOpening} aria-label={isOpening ? 'Downloading and checking protected file' : 'Download protected file'} title={isOpening ? 'Downloading and checking' : 'Download protected file'}><ApprovedIcon name="download" size={17} /></button>)}
         {mediaUrl && saved && <a className="message-file-action" href={mediaUrl} download={saved.filename || 'protected-file'} aria-label={`Save ${saved.filename}`} title="Save file"><ApprovedIcon name="download" size={17} /><span className="message-file-action__label">Save</span></a>}
         {mediaUrl && <button className="message-file-close" type="button" onClick={closePreview} aria-label="Close file preview" title="Close preview"><span aria-hidden="true">×</span></button>}
       </div>}
