@@ -15,6 +15,36 @@ Evidence labels: [read code] [unit test] [integration test] [local browser run] 
 - Runbook: [`docs/releases/RELEASE_CANDIDATE_1.md`](releases/RELEASE_CANDIDATE_1.md) — backup (mongo:8 `mongodump`, URI only via env), verified local restore, rehearsed migration, deploy under maintenance mode, smoke tests, rollback to `f927941`. Every Docker/migrate command in it was rehearsed against a throwaway local `mongo:8`; not against Atlas.
 - Contains M0, M1a, M1c, M1b, M2, M3, plus the RC1 changes below. `f927941` is an ancestor: `main` fast-forwards.
 
+## UX milestone Part A (branch `ux/part-a`, not pushed, not deployed)
+Based on `243e9faf` (production code). One commit per item; evidence in each commit message.
+
+| Item | Commit | What |
+|---|---|---|
+| A4 privacy check | `f1341b5b` | Not a leak: names render only after `vault.unlock()`; no plaintext contact data in browser storage. Locked sidebar is neutral ("Unlock to see your chats"), nothing clickable. |
+| A1 camera | `fa237969` | Camera can be turned back on (video `srcObject` re-attached when the element remounts). E2E toggles twice. |
+| A3 progress | `a4daf444` | Download % follows bytes as they stream (was per 256 KiB chunk). |
+| A2 file queue | `b3c6d649`, `ceae84fb` | File operations queue FIFO with a visible "Waiting…" instead of a raw error. |
+| A5 sidebar | `a0307e51`, `a0ca011a`, `d3e1b5ba` | "Review connection" only for the open chat that needs renewing, with one Review action; "Needs attention" list in plain words with Remove (still openable); diagnostics in Settings → Advanced. |
+| A6 header | `a2385abb` | Misleading share icon removed; Security details moved to Settings → Advanced. |
+| A7 call rows | `3c9860f8` | One-line call rows: direction, duration, time. |
+| A8 Calls page | `ea40fd0e` | Recent calls across contacts from local encrypted history, Call back. |
+| A9 file cards | `b889a8ec` | Name + type badge (recipient after download, remembered locally), sending card, Retry. |
+| A10 attach gate | `0a13b34c` | "Check <name> first to send files" + Check now. |
+| A11 unlock | `e93e50e0` | Three-step unlock progress. Measured: Argon2id ≈30 ms; the 5–6 s is ~10 sequential network requests. Proposal `docs/ux/UNLOCK_TIMING_PROPOSAL.md` — no KDF change. |
+| A12 copy | `51cedc5b` | Plain words on unlock, invite, Settings, Devices. |
+| A13 QR scanner | `29325db4` | BarcodeDetector → zbar-wasm (LGPL, separate file) → "Show numbers instead" after 15 s. 1,000/1,000 codes decode; check-contact 5/5. |
+| A14 composer | `fc2b6883` | One composer across room switches, focused after switch; per-room fencing kept. composer-persistence passes. |
+| Audit | `25738c9b`, `b562d92a` | Locked phone nav looks disabled, lock-screen text, call preview, Connection copy, unlock form layout. |
+| Part B | `ba803a44` | Three visual directions + motion ideas (`docs/ux/part-b/VISUAL_DIRECTIONS.md`); opt-in specs `UX_AUDIT=true`, `UX_DIRECTIONS=true`. |
+
+Verification on the branch head: unit 1236 passed [unit test]; lint and type checks clean; full E2E 62 passed, 2 failed (the two known mux specs), 24 skipped (opt-in) [two-browser E2E]. Mongo suites not re-run (backend unchanged).
+
+Decisions waiting for the owner:
+1. Part B: pick direction A, B or C (or a named mix).
+2. Unlock (A11): approve "unlock waits only for local work" and the round-trip cuts; keep Argon2id parameters (recommended).
+3. zbar-wasm is LGPL-2.1+: approve shipping it as a separate replaceable module with its license notice (`/licenses/zbar-wasm-LGPL-2.1.txt`).
+4. Review and merge `ux/part-a`, then a release with the RC1 runbook.
+
 ## Where things are
 Repo `SHOnnay/k3ncrypt` (public). Nothing below is pushed except `main`.
 
