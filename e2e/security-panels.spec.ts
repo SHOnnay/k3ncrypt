@@ -50,7 +50,7 @@ test('authenticated four-panel light/dark, narrow layouts, keyboard and restart 
           await expect(dialog.getByRole('button', { name: 'Back to settings', exact: true })).toBeFocused();
           await alice.keyboard.press('Shift+Tab');
           await expect(dialog.locator('.device-advanced-details summary')).toBeFocused();
-          await expect(dialog).toContainText('Guided device setup is not available');
+          await expect(dialog).toContainText('Adding another device isn’t available');
         }
         if (name === 'Connection') await expect(dialog).toContainText('Reachable');
         const contrast = await dialog.evaluate(root => {
@@ -199,7 +199,7 @@ test('real independent-account enrollment fails closed and cancellation makes no
     await expect(devices.locator('.device-card')).toHaveCount(1);
     alice.once('dialog', dialog => dialog.accept());
     await devices.getByRole('button', { name: 'Request device approval', exact: true }).click();
-    await expect(devices.getByRole('alert')).toContainText('Could not confirm the device approval request');
+    await expect(devices.getByRole('alert')).toContainText('Couldn’t send the approval request');
     await expect(devices.locator('.device-card')).toHaveCount(1);
     await expect(devices.getByRole('button', { name: 'Request device approval', exact: true })).toBeEnabled();
     await expect(devices).not.toContainText('This independent device is now active');

@@ -12,7 +12,7 @@ export const InvitationQr: React.FC<{ invitation: string }> = ({ invitation }) =
     })).then((url) => { if (active) setImage(url); }).catch(() => setImage(''));
     return () => { active = false; };
   }, [invitation]);
-  return image ? <div className="invitation-qr"><img src={image} alt="Private invitation QR code" /><p>Show this only to the person you want to invite. Compare identities separately before trusting the contact.</p></div> : null;
+  return image ? <div className="invitation-qr"><img src={image} alt="Private invitation QR code" /><p>Show this only to the person you want to invite. After they join, check it’s really them before sharing files.</p></div> : null;
 };
 
 export const InvitationQrScanner: React.FC<{ onScanned: (invitation: string) => void }> = ({ onScanned }) => {

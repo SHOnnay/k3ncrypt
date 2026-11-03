@@ -35,7 +35,7 @@ export const setupErrorMessage = (error: unknown, action: SetupAction, context: 
     return 'Choose a passphrase with at least 12 characters.';
   }
   if (value.name === 'QuotaExceededError') return 'This browser is out of secure storage space. Free local space, then retry.';
-  if (unlockRejected) return 'The local passphrase did not unlock this device.';
+  if (unlockRejected) return 'That passphrase didn’t unlock this device.';
   if (status === 410) {
     return action === 'join'
       ? 'This invitation has expired. Ask your contact to create a new one.'

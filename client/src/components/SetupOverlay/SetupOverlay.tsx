@@ -124,8 +124,8 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onModernSetupComplet
       const category = error && typeof error === 'object' && 'restoreFailureCategory' in error
         ? (error as { restoreFailureCategory?: unknown }).restoreFailureCategory : undefined;
       setStatus(category === 'session-record-missing'
-        ? 'The vault unlocked, but this conversation’s saved encrypted session is missing. Keep this device’s data intact while you check for an encrypted backup.'
-        : 'Could not unlock this account. Check the local passphrase and try again.');
+        ? 'Your private space opened, but one chat’s saved connection is missing. Don’t clear this browser’s data; your messages are still saved.'
+        : 'That passphrase didn’t unlock this device. Try again.');
     }
     finally { setIsLoading(false); setUnlockPhase(undefined); }
   };
@@ -136,11 +136,11 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onModernSetupComplet
     : view === 'create'
       ? 'Share this invitation with one person you trust.'
       : view === 'join'
-      ? 'Paste the private invitation they shared with you. You’ll compare identities before the conversation is trusted.'
+      ? 'Paste the private invitation they shared with you. After you connect, check it’s really them before sharing files.'
       : view === 'modern'
           ? accountState === 'ready' ? 'Create an invitation using your unlocked account. Share it privately with one person; it expires for new connections after 24 hours.' : 'Your account and encrypted data are stored on this device. Choose a passphrase you can remember; it is never shared with contacts.'
         : view === 'restore'
-            ? 'Enter the local passphrase to unlock this device’s encrypted vault and restore its identity and saved conversations.'
+            ? 'Enter your passphrase to open your private space on this device.'
         : 'This invitation is no longer available.';
 
   const shareInvitation = async (link: string, fallback: () => Promise<void>) => {
@@ -213,7 +213,7 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onModernSetupComplet
         </div>}
 
         {view === 'restore' && <div className="create-hash-view">
-          <label className="input-group">Local passphrase<input ref={passphraseRef} type="password" autoComplete="current-password" minLength={12} /></label>
+          <label className="input-group">Passphrase<input ref={passphraseRef} type="password" autoComplete="current-password" minLength={12} /></label>
           <p className="invite-note">Your passphrase unlocks the encrypted data on this device. It is never shared with your contacts.</p>
           {isLoading && unlockPhase && (() => { const progress = unlockProgressCopy(unlockPhase);
             return <div className="unlock-progress" role="status" aria-live="polite"><span>{progress.label}</span><progress max={progress.of} value={progress.step} aria-label={`Step ${progress.step} of ${progress.of}`} /></div>; })()}

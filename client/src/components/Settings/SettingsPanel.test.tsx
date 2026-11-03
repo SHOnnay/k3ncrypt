@@ -18,13 +18,13 @@ it('separates implemented preferences from fixed properties and permission repor
   expect(markup).not.toContain('voice-note action');
   expect(markup).toContain('Not reported'); expect(markup).toContain('Blocked');
   expect((markup.match(/type="checkbox"/g) ?? []).length).toBe(3);
-  expect(markup).toContain('does not lock the vault or prevent screenshots');
+  expect(markup).toContain('doesn’t lock the app or prevent screenshots');
 });
 it('never calls an HTTP service connection ready solely because device trust is ready', () => {
   mockChat.mockReturnValue({ ...state, isConnected: true, contactIdentity: { identityId: 'authenticated-peer', verification: 'unverified', changeStatus: 'unchanged' } });
   const markup = render('network');
   expect(markup).toContain('Service reachability'); expect(markup).toContain('Not checked');
-  expect(markup).toContain('Encrypted session available'); expect(markup).toContain('Last device authorization check');
+  expect(markup).toContain('Encrypted session available'); expect(markup).toContain('This device’s approval');
   expect(markup).not.toContain('Secure conversation connected'); expect(markup).not.toContain('>Online<');
 });
 it('identifies this device by full identity instead of a routing address and never offers self-revoke', () => {
@@ -34,17 +34,17 @@ it('identifies this device by full identity instead of a routing address and nev
     { deviceId: 'device-pending', publicIdentityReference: 'pending-identity', state: 'approved_pending_confirmation' },
   ] } } });
   const markup = render('devices');
-  expect(markup).toContain('This device'); expect(markup).toContain('Self-revocation is not offered here');
+  expect(markup).toContain('This device'); expect(markup).toContain('You can’t remove the device you’re using from here');
   expect(markup).not.toContain('Approved device'); expect(markup).toContain('Revoked'); expect(markup).toContain('confirmation needed');
   expect((markup.match(/>Revoke<\/button>/g) ?? []).length).toBe(1);
-  expect(markup).toContain('Guided device setup is not available');
+  expect(markup).toContain('Adding another device isn’t available');
 });
 it('does not invent an empty device list on read failure', () => {
   expect(render('devices')).toContain('Device list unavailable');
 });
 it('does not imply an unopened vault has working verification', () => {
   mockChat.mockReturnValue({ ...state, ownFingerprint: undefined, accountState: 'locked' });
-  expect(render('verification')).toContain('Unlock your vault');
+  expect(render('verification')).toContain('Unlock this device');
   expect(render('verification')).not.toContain('Mark as verified');
 });
 
