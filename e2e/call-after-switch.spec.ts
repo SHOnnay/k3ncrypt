@@ -160,7 +160,7 @@ test('audio call support follows the selected contact and decline permits a call
   await enableSafeCallDiagnostics(bob, callDiagnostics);
   await enableSafeCallDiagnostics(cara, callDiagnostics);
   await openContact(alice, 'Bob');
-  const completedBobCallsBefore = await alice.getByLabel('Local call history').filter({ hasText: /^Voice call/ }).count();
+  const completedBobCallsBefore = await alice.getByLabel('Local call history').filter({ hasText: /^(Outgoing|Incoming) voice call/ }).count();
   await alice.getByRole('button', { name: 'Calls', exact: true }).click();
   const callSetupStartedAt = Date.now();
   await alice.getByRole('button', { name: 'Start audio call', exact: true }).click();
@@ -185,7 +185,7 @@ test('audio call support follows the selected contact and decline permits a call
   await openContact(alice, 'Cara');
   await expect(alice.getByLabel('Local call history')).toHaveCount(0);
   await openContact(alice, 'Bob');
-  await expect(alice.getByLabel('Local call history').filter({ hasText: /^Voice call/ })).toHaveCount(completedBobCallsBefore + 1);
+  await expect(alice.getByLabel('Local call history').filter({ hasText: /^(Outgoing|Incoming) voice call/ })).toHaveCount(completedBobCallsBefore + 1);
   await openContact(alice, 'Cara');
   if (muxEnabled) await expect.poll(() => activeTransport(alice), { timeout: 30_000 }).toBe('multiplexed');
   await startAndDecline(alice, cara);
@@ -199,7 +199,7 @@ test('audio call support follows the selected contact and decline permits a call
   await expect(alice.locator('.call-info')).not.toBeVisible();
   await expect(cara.locator('.call-info')).not.toBeVisible();
   await openContact(alice, 'Cara');
-  await expect(alice.getByLabel('Local call history').filter({ hasText: /^Voice call/ })).toHaveCount(1);
+  await expect(alice.getByLabel('Local call history').filter({ hasText: /^(Outgoing|Incoming) voice call/ })).toHaveCount(1);
   const observed = async (receiver: Page) => {
     try { await startAndDecline(alice, receiver); }
     catch (error) { console.log('SAFE_CALL_DIAGNOSTICS', callDiagnostics.sort().join(',')); throw error; }

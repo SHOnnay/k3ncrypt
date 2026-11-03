@@ -64,7 +64,7 @@ test('both participants restore exactly one completed call from encrypted histor
     for (const page of [alice, bob]) {
       await expect(page.locator('.call-info')).not.toBeVisible();
       await expect(page.getByLabel('Local call history')).toHaveCount(1);
-      await expect(page.getByLabel('Local call history')).toContainText('Voice call');
+      await expect(page.getByLabel('Local call history')).toContainText(/(Outgoing|Incoming) voice call/);
     }
     // The panel update must preserve real preferences across process restart.
     for (const page of [alice, bob]) {
@@ -80,7 +80,7 @@ test('both participants restore exactly one completed call from encrypted histor
     const restartedBob = await unlock(await launch('bob'), 'Alice');
     for (const page of [restartedAlice, restartedBob]) {
       await expect(page.getByLabel('Local call history')).toHaveCount(1);
-      await expect(page.getByLabel('Local call history')).toContainText('Voice call');
+      await expect(page.getByLabel('Local call history')).toContainText(/(Outgoing|Incoming) voice call/);
       await page.getByRole('button', { name: 'Open settings' }).click();
       await page.getByRole('button', { name: /^Security / }).click();
       await expect(page.locator('.verification-summary')).toContainText('Checked on this device');

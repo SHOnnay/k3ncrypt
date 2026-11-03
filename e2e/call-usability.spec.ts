@@ -74,7 +74,7 @@ test('voice/video both directions, terminal cleanup, immediate second calls and 
     for (const page of [caller, receiver]) {
       await openCallHistory(page, page === alice ? 'Bob' : 'Alice');
       await expect(page.getByLabel('Local call history')).toHaveCount(completedCalls);
-      await expect(page.getByLabel('Local call history').filter({ hasText: mode === 'video' ? 'Video call' : 'Voice call' })).not.toHaveCount(0);
+      await expect(page.getByLabel('Local call history').filter({ hasText: mode === 'video' ? /(Outgoing|Incoming) video call/ : /(Outgoing|Incoming) voice call/ })).not.toHaveCount(0);
     }
   }
   for (const [caller, receiver, mode, direction] of [[alice, bob, 'audio', 'A-to-B'], [bob, alice, 'video', 'B-to-A']] as const) {
@@ -89,13 +89,13 @@ test('voice/video both directions, terminal cleanup, immediate second calls and 
   console.log('CALL_CASE', 'A-to-B:audio:media-denied');
   await launch(alice, 'audio'); await acceptIncoming(bob, alice, 'A-to-B:audio:media-denied');
   await idle(alice); await idle(bob);
-  await openCallHistory(bob, 'Alice'); await expect(bob.getByLabel('Local call history').filter({ hasText: 'Failed call' })).not.toHaveCount(0);
+  await openCallHistory(bob, 'Alice'); await expect(bob.getByLabel('Local call history').filter({ hasText: /Failed (voice|video) call/ })).not.toHaveCount(0);
   await bob.evaluate(() => { (window as Window & { restoreTestCapture?: () => void }).restoreTestCapture?.(); });
   console.log('CALL_CASE', 'B-to-A:audio:second-call');
   await launch(bob, 'audio'); await acceptIncoming(alice, bob, 'B-to-A:audio:second-call');
   await expect(bob.locator('#call-status')).toHaveText('Connected', { timeout: 20000 }); await bob.getByRole('button', { name: 'End call', exact: true }).click();
   await idle(alice); await idle(bob);
-  for (const page of [alice, bob]) { await openCallHistory(page, page === alice ? 'Bob' : 'Alice'); await expect(page.getByLabel('Local call history').filter({ hasText: 'Declined call' })).not.toHaveCount(0); await expect(page.getByLabel('Local call history').filter({ hasText: 'Canceled call' })).not.toHaveCount(0); }
+  for (const page of [alice, bob]) { await openCallHistory(page, page === alice ? 'Bob' : 'Alice'); await expect(page.getByLabel('Local call history').filter({ hasText: /Declined (voice|video) call/ })).not.toHaveCount(0); await expect(page.getByLabel('Local call history').filter({ hasText: /Canceled (voice|video) call/ })).not.toHaveCount(0); }
   await expect(alice.getByLabel('Local call history').filter({ hasText: 'Missed video call' })).not.toHaveCount(0);
   await expect(bob.getByLabel('Local call history').filter({ hasText: 'Missed voice call' })).not.toHaveCount(0);
   await bob.reload(); await bob.getByRole('button', { name: 'Unlock this device', exact: true }).click();

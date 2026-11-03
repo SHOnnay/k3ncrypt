@@ -5,6 +5,16 @@ export const callEventLabel = (event: LocalCallEvent): string => {
   const kind = event.mode === 'video' ? 'Video call' : 'Voice call';
   return event.outcome === 'completed' ? kind : event.outcome === 'missed' ? `Missed ${kind.toLowerCase()}` : event.outcome === 'declined' ? 'Declined call' : event.outcome === 'canceled' ? 'Canceled call' : 'Failed call';
 };
+/** UX A7/A8: one-line row text. Shown from the stored event, so older saved history uses it too. */
+export type CallRowTone = 'outgoing' | 'incoming' | 'missed' | 'declined' | 'failed';
+export const formatCallDuration = (seconds: number): string => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+export const callRowSummary = (event: LocalCallEvent): { title: string; duration?: string; tone: CallRowTone } => {
+  const kind = event.mode === 'video' ? 'video call' : 'voice call';
+  const lead = event.outcome === 'missed' ? 'Missed' : event.outcome === 'declined' ? 'Declined' : event.outcome === 'canceled' ? 'Canceled'
+    : event.outcome === 'failed' ? 'Failed' : event.direction === 'incoming' ? 'Incoming' : 'Outgoing';
+  const tone: CallRowTone = event.outcome === 'missed' ? 'missed' : event.outcome === 'declined' ? 'declined' : event.outcome === 'failed' ? 'failed' : event.direction;
+  return { title: `${lead} ${kind}`, duration: event.outcome === 'completed' && event.durationSeconds !== undefined ? formatCallDuration(event.durationSeconds) : undefined, tone };
+};
 export const validLocalCallEvent = (value: unknown): value is LocalCallEvent => {
   if (!value || typeof value !== 'object') return false;
   const e = value as Record<string, unknown>;

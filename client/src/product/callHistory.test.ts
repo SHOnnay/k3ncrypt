@@ -1,4 +1,4 @@
-import { LocalCallHistory, validLocalCallEvent } from './callHistory';
+import { LocalCallHistory, callRowSummary, validLocalCallEvent } from './callHistory';
 import type { CallSession } from '@chat-e2ee/service';
 import { BrowserSecureStorage } from '../../../service/src/storage/secureVault';
 import { MemoryVaultPersistence } from '../../../service/src/storage/persistence';
@@ -60,4 +60,16 @@ it('deduplicates encrypted room history, restores it after vault restart, and is
   await otherIdentity.initializeWithPassphrase(passphrase);
   expect(await readMessages(otherIdentity, 'room')).toEqual([]);
   restarted.lock(); otherIdentity.lock();
+});
+
+// UX A7/A8: compact one-line call rows with direction, duration and time.
+it.each([
+  [{ mode: 'audio', outcome: 'completed', direction: 'outgoing', durationSeconds: 125 }, 'Outgoing voice call', '2:05', 'outgoing'],
+  [{ mode: 'video', outcome: 'completed', direction: 'incoming', durationSeconds: 7 }, 'Incoming video call', '0:07', 'incoming'],
+  [{ mode: 'video', outcome: 'missed', direction: 'incoming' }, 'Missed video call', undefined, 'missed'],
+  [{ mode: 'audio', outcome: 'declined', direction: 'incoming' }, 'Declined voice call', undefined, 'declined'],
+  [{ mode: 'audio', outcome: 'canceled', direction: 'outgoing' }, 'Canceled voice call', undefined, 'outgoing'],
+  [{ mode: 'video', outcome: 'failed', direction: 'outgoing' }, 'Failed video call', undefined, 'failed'],
+] as const)('summarizes %j as one line', (event, title, duration, tone) => {
+  expect(callRowSummary(event)).toEqual({ title, duration, tone });
 });

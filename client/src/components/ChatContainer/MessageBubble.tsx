@@ -1,3 +1,4 @@
+import { callRowSummary } from '../../product/callHistory';
 /**
  * Message bubble component
  */
@@ -85,7 +86,15 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
     finally { if (current()) { opening.current = false; setIsOpening(false); } }
   };
   const closePreview = () => { live.current.generation++; files.previews.release(resourceKey); setSaved(undefined); setMediaUrl(undefined); };
-  if (message.callEvent) return <div className="message call-history-event" aria-label="Local call history"><strong>{message.text}</strong><div className="message-meta">{message.callEvent.durationSeconds !== undefined && <span>{Math.floor(message.callEvent.durationSeconds / 60)} min {message.callEvent.durationSeconds % 60} sec · </span>}{formatMessageTime(message.timestamp)} · On this device</div></div>;
+  if (message.callEvent) {
+    const row = callRowSummary(message.callEvent);
+    return <div className={`message call-row call-row--${row.tone}`} aria-label="Local call history">
+      <span className="call-row__icon" aria-hidden="true"><ApprovedIcon name={message.callEvent.mode === 'video' ? 'video' : 'call'} size={15} /></span>
+      <span className="call-row__title">{row.title}</span>
+      {row.duration && <span className="call-row__duration">{row.duration}</span>}
+      <time className="call-row__time">{formatMessageTime(message.timestamp)}</time>
+    </div>;
+  }
   const fileCaption = isFile && message.text !== 'Protected file' && !message.text.startsWith(FILE_PREFIX) ? message.text : undefined;
   return (
     <div className={`message ${message.type}${isFile ? ' message--file' : ''}`}>

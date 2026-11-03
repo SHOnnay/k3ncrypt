@@ -52,3 +52,13 @@ it('shows a queued file as Waiting with its action disabled', () => {
     expect(markup).not.toContain('Another file operation');
   } finally { mockFiles.queued = []; }
 });
+
+it('renders a call as one compact row with direction, duration and time, without "On this device"', () => {
+  const call: Message = { id: 'local-call:1', sender: 'local-call-history', type: 'received', text: 'Voice call', timestamp: new Date(Date.UTC(2026, 10, 3, 9, 5)),
+    callEvent: { mode: 'audio', outcome: 'completed', direction: 'outgoing', durationSeconds: 125 } };
+  const markup = render(call, undefined);
+  expect(markup).toContain('aria-label="Local call history"');
+  expect(markup).toContain('call-row call-row--outgoing');
+  expect(markup).toContain('Outgoing voice call'); expect(markup).toContain('2:05');
+  expect(markup).not.toContain('On this device'); expect(markup).not.toContain(' min ');
+});
