@@ -229,7 +229,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, initialVie
           {view === 'advanced' && (
             <section className="settings-detail" aria-label="Advanced">
               <div className="detail-intro"><h3>Advanced</h3><p>Technical details for troubleshooting. Nothing here changes your chats or checks.</p></div>
-              <h4>Chats that can’t be opened</h4>
+              <h4>Chats that need attention</h4>
               {unavailableConversations.length === 0 ? <p>None.</p> : <ul className="advanced-diagnostics">{unavailableConversations.map((item, index) =>
                 <li key={`${item.roomId ?? 'entry'}-${index}`}><strong>{item.label}</strong> <code>{item.code ?? item.state}</code><p>{conversationStateCopy(item)}</p></li>)}</ul>}
               <LocalDataStatus className="conversation-recovery conversation-recovery--advanced" />

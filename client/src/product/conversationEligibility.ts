@@ -55,7 +55,8 @@ export const plainConversationState = (diagnostic: ConversationDiagnostic): stri
   switch (diagnostic.code) {
     case 'CONVERSATION_INVITATION_EXPIRED': return 'The invitation expired before it was accepted.';
     case 'CONVERSATION_IN_USE': return 'Open in another tab. Close that tab, then try again.';
-    case 'CONTACT_REGISTRY_MISSING': case 'CONVERSATION_SESSION_MISSING': case 'CONVERSATION_RECORD_INVALID': case 'CONVERSATION_LOCAL_RECORD_INVALID':
+    case 'CONVERSATION_SESSION_MISSING': return 'This chat’s secure connection needs renewing. Open it to renew.';
+    case 'CONTACT_REGISTRY_MISSING': case 'CONVERSATION_RECORD_INVALID': case 'CONVERSATION_LOCAL_RECORD_INVALID':
       return 'Part of this chat’s saved data is missing, so it can’t open.';
     default: break;
   }

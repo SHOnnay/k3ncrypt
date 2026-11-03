@@ -78,11 +78,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection
         </section>
         {/* Own pending invitations are shown only on the Invite someone screen (Bug A). */}
         {groups.unavailable.length > 0 && <section className="sidebar-record-group" aria-labelledby="sidebar-unavailable-heading">
-          <p className="section-label" id="sidebar-unavailable-heading">Can’t be opened</p>
+          <p className="section-label" id="sidebar-unavailable-heading">Needs attention</p>
           <ul className="unavailable-list">{groups.unavailable.map((item, index) => {
             const saved = item.roomId ? savedConversations.find(conversation => conversation.roomId === item.roomId) : undefined;
             return <li key={`${item.roomId ?? 'entry'}-${index}`}>
-              <strong>{item.label}</strong><span className="conversation-preview">{plainConversationState(item)}</span>
+              {saved ? <button className="unavailable-conversation-action" type="button" onClick={() => onOpenConversation(saved.roomId)}><strong>{item.label}</strong><span className="conversation-preview">{plainConversationState(item)}</span></button>
+                : <><strong>{item.label}</strong><span className="conversation-preview">{plainConversationState(item)}</span></>}
               {saved && item.code !== 'CONVERSATION_RECORD_INVALID' && item.code !== 'CONVERSATION_LOCAL_RECORD_INVALID' && <ConversationArchiveButton roomId={saved.roomId} name={item.label} verb="Remove" className="invitation-local-action" />}
             </li>;
           })}</ul>

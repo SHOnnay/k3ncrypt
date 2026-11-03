@@ -29,7 +29,7 @@ test('expired pending invitation stays quarantined on restore', async ({ browser
   await page.reload(); await page.getByRole('button', { name: 'Unlock this device', exact: true }).click();
   await page.locator('input[type=password]').fill('alpha-family-existing-account-2026'); await page.getByRole('button', { name: 'Unlock account', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Conversations' }).locator('.conversation-row')).toHaveCount(0);
-  const unavailable = page.getByRole('region', { name: 'Can’t be opened' });
+  const unavailable = page.getByRole('region', { name: 'Needs attention' });
   await expect(unavailable).toContainText('The invitation expired before it was accepted.');
   await expect(unavailable).not.toContainText('CONVERSATION_INVITATION_EXPIRED');
   // UX A5: the code stays available, behind Settings → Advanced.

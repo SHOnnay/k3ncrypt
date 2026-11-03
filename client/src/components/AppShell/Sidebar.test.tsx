@@ -30,7 +30,8 @@ it('retains a saved row during temporary network failure without reporting conne
 // UX A5: an entry that can't open is explained in plain words with one action (Remove); codes live in Settings → Advanced.
 it('lists a chat that cannot open in plain words with Remove, without codes or technical details', () => {
   const html = render('CONTACT_REGISTRY_MISSING');
-  expect(html).toContain('Can’t be opened');
+  expect(html).toContain('Needs attention');
+  expect(html).toContain('unavailable-conversation-action');
   expect(html).toContain('Part of this chat’s saved data is missing, so it can’t open.');
   expect(html).toContain('aria-label="Remove conversation Saved friend"');
   expect(html).not.toContain('CONTACT_REGISTRY_MISSING');

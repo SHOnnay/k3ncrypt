@@ -57,8 +57,8 @@ test('accepted relationships are unique; corrupt candidate does not poison anoth
   await alice.reload(); await alice.getByRole('button', { name: 'Unlock this device', exact: true }).click();
   await alice.locator('input[type=password]').fill(passphrase); await alice.getByRole('button', { name: 'Unlock account', exact: true }).click();
   await expect(alice.getByRole('region', { name: 'Conversations' }).locator('.conversation-row')).toHaveCount(1); await expect(alice.locator('.chat-header')).toContainText('Cara');
-  // UX A5 renamed the section "Can’t be opened" (was "Unavailable conversations").
-  await alice.getByRole('region', { name: 'Can’t be opened' }).getByText('Can’t be opened', { exact: true }).click();
+  // UX A5 renamed the section "Needs attention" (was "Unavailable conversations").
+  await alice.getByRole('region', { name: 'Needs attention' }).getByText('Needs attention', { exact: true }).click();
   await expect(alice.locator('.chat-header')).toContainText('Cara');
   await a.close(); await b.close(); await c.close();
 });

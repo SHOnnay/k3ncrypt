@@ -132,7 +132,7 @@ test('Alice/Bob/Carol descriptors survive switching, 503, timeout, offline refre
     }, { storageModule, persistenceModule, sessionModule, passphrase });
     await alice.reload(); await unlock(alice);
     // f6b9f3a1 (classify saved contacts) reworded the missing-session state.
-    await expect(alice.locator('.unavailable-conversation-action').filter({ hasText: 'Carol' })).toContainText('encrypted session needs recovery');
+    await expect(alice.locator('.unavailable-conversation-action').filter({ hasText: 'Carol' })).toContainText('secure connection needs renewing');
     await open(alice, 'Bob');
     await expect(alice.locator('.message-text').filter({ hasText: 'Persistence acceptance fixture' })).toBeVisible();
     await expect(alice.locator('.conversation-row, .unavailable-conversation-action').filter({ hasText: 'Carol' })).toBeVisible();

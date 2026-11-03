@@ -85,7 +85,7 @@ test('expired, deleted, unknown and invalid disposable records stay separate and
     await alice.route(`**/api/chat-link/status/${deletedRoom}`, route => route.fulfill({ status: 404, contentType: 'application/json', body: '{"state":"DELETED"}' }));
     await unlock(alice);
     await expect(alice.locator('.workspace-contact')).toHaveCount(0);
-    const unavailable = alice.getByRole('region', { name: 'Chats that can’t be opened' });
+    const unavailable = alice.getByRole('region', { name: 'Chats that need attention' });
     await expect(unavailable).toContainText('This chat was closed on the server.');
     await expect(unavailable).toContainText('Part of this chat’s saved data is missing, so it can’t open.');
     await expect(unavailable).not.toContainText('CONTACT_REGISTRY_MISSING');
