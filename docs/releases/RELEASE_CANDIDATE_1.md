@@ -39,11 +39,28 @@ Run on 2026-11-03 against `0a15b9f9` (the WASM replacement; this document adds n
 
 | Spec | Full pass | Re-run alone | Verdict |
 |---|---|---|---|
-| `call-after-switch`, `call-history`, `call-usability` | fail: caller stays "Ringing..." after accept (20 s timeout) | pass | Flaky under a long sequential run. `first-call` and the production-stage call passed in the same session. Not a release blocker, but not understood yet. |
-| `check-contact` | fail: wrong-code warning not shown in the scan test | pass (4/4) | Flaky. Same caveat. |
+| `call-after-switch`, `call-history`, `call-usability` | fail: caller stays "Ringing..." after accept (20 s timeout) | pass | See the 5× comparison below: 5/5 on both m3 and production code. Pre-existing or environmental, not an m3 regression. |
+| `check-contact` | fail: wrong-code warning not shown in the scan test | pass (4/4) | Root cause found (below): QR decoder fails on some payloads. Not a timing flake. |
 | `composer-persistence` | fail | fail | Known and accepted (remount; UX milestone). |
 | `conversation-persistence-mux` | fail | pass with `PLAYWRIGHT_MUX_STAGE1=true` | Needs the mux flag; the default runner does not set it. Mux is off in production. |
 | `mux-stage1b` | fail | fail, also with the mux flag ("Download protected file" missing in Carol's room) | Known gap, recorded in `docs/CONVERSATION_PERSISTENCE_REPAIR_ACCEPTANCE.md`. Mux is off in production. |
+
+### Flaky specs: 5 runs each, m3 against production code
+
+Each spec run 5 times on its own with `scripts/m0-e2e.sh`, on `m3/hardening` (`df8b4562`) and on `f927941` (production code, its own spec versions, in a separate worktree) [two-browser E2E]:
+
+| Spec | m3 | `f927941` |
+|---|---|---|
+| `call-after-switch` | 5/5 | 5/5 |
+| `call-history` | 5/5 | 5/5 |
+| `call-usability` | 5/5 | 5/5 |
+| `check-contact` | **3/5** | does not exist (M1c) |
+
+**Calls:** the "Ringing..." failure did not reproduce in 15 isolated runs on either side. It appeared only in the 35-spec sequential pass, so it is environmental or order-dependent and not specific to m3. Not a release blocker.
+
+**`check-contact` root cause [unit test, local browser run]:** the web scanner's decoder, `@zxing/library` 0.21.3 (via `@zxing/browser` 0.1.5), fails to decode 5–12% of valid QR codes carrying this payload. The failure is deterministic per payload. It reproduces on static images in Node with no browser, camera or timing: 462/500 random fingerprints decode as the app renders them (`qrcode` 1.5.4, width 280, margin 2). Changing the render does not fix it: whole-number scale with a 4-module border 472/500, a single byte segment 432/500, error correction L 476/500 or Q 442/500, `TRY_HARDER` and the other binarizer give the same rate, and ZXing's own encoder decoded by ZXing gives 445/500. In the browser, the failing run showed a live 280×280 video whose frames ZXing never decoded, while passing runs decoded the first frame. The test creates fresh identities on every run and scans two codes, so about 10–20% of runs fail.
+
+**Impact:** this is new M1c functionality, not a regression of anything production runs today. The QR encodes only the user's own fingerprint, so a user whose code falls in the failing set cannot be scanned by the web scanner at all, consistently. "Show numbers instead" still works for them. With a real phone camera the frames vary from one to the next, which may let some of these codes decode; that has not been measured. A fix needs a decision (a second decoder such as the browser's `BarcodeDetector` where available, or a different scanning library) and is not part of RC1.
 
 The 22 skips are opt-in suites the default runner does not enable: `routing-lifecycle` 9, `phase37-staging` 3, `phase4b-staging` 3, `file-timing` 3, `file-stability` 1, `phase4c-file-feedback` 1, `mux-stage1b-ack-security` 1, `security-panels` 1.
 
