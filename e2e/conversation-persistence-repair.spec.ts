@@ -99,8 +99,7 @@ test('Alice/Bob/Carol descriptors survive switching, 503, timeout, offline refre
     await alice.reload(); await unlock(alice);
     await expect(alice.locator('.conversation-row, .unavailable-conversation-action').filter({ hasText: 'Bob' })).toBeVisible();
     await expect(alice.locator('.conversation-row, .unavailable-conversation-action').filter({ hasText: 'Carol' })).toBeVisible();
-    // UX A11: startup opens the first chat without the status probe, so a 503 there doesn't block it.
-    await expect(alice.locator('.chat-header')).toContainText(/Bob|Carol/, { timeout: 30000 });
+    await expect.poll(() => alice.locator('.conversation-preview').filter({ hasText: 'Disconnected' }).count()).toBeGreaterThan(0);
     await alice.unroute('**/api/chat-link/status/**'); await open(alice, 'Bob');
     await expect(alice.locator('.message-text').filter({ hasText: 'Persistence acceptance fixture' })).toBeVisible();
     await alice.route('**/api/chat-link/status/**', async route => {

@@ -994,7 +994,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const index = await refreshConversations(secureVault);
     setOrphanedConversationRecords(await diagnoseOrphanedConversationRecords(secureVault).catch(() => ({ roomIds: [], truncated: false, available: false })));
     // UX A11: the unlock screen waits only for local work. The first saved conversation connects in the
-    // background like a selected one, so a click on another conversation supersedes it.
+    // background, and a click on another conversation supersedes it.
     setAccountState('ready');
     void reconnectFirstConversation(secureVault, index.conversations);
   }, [modern]);
@@ -1007,8 +1007,9 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (!current()) return;
       setPendingConversation({ roomId: descriptor.roomId, operationId });
       try {
-        // Local eligibility only; the room status is observed off this path, only if admission fails.
-        const failure = await conversationEligibility(secureVault, descriptor);
+        // Startup keeps the room-status probe so server-side expiry or deletion is reported at unlock;
+        // it runs after the unlock screen has closed.
+        const failure = await conversationEligibility(secureVault, descriptor, probeConversationRoom);
         if (failure) throw conversationFailure(failure);
         await connectModern(secureVault, descriptor, false, operationId);
         if (current()) setPendingConversation(undefined);
@@ -1020,12 +1021,6 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         setUnavailableConversations(items => [...items.filter(item => item.roomId !== descriptor.roomId), conversationDiagnostic(descriptor, code)]);
         setRoomState(descriptor.roomId, { connection: authoritativeTerminal(code) ? 'failed' : 'disconnected' });
         if (authoritativeTerminal(code)) setConversations(items => items.filter(item => item.roomId !== descriptor.roomId));
-        else void observeAuthoritativeRoomState(descriptor, probeConversationRoom, (terminal) => {
-          if (!current()) return;
-          setUnavailableConversations(items => [...items.filter(item => item.roomId !== descriptor.roomId), conversationDiagnostic(descriptor, terminal)]);
-          setRoomState(descriptor.roomId, { connection: 'failed' });
-          setConversations(items => items.filter(item => item.roomId !== descriptor.roomId));
-        }, current);
         if (code === 'NETWORK_FAILURE' || code === 'SERVICE_NOT_READY') break;
       }
     }

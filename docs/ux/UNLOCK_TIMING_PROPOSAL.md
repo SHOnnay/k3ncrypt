@@ -54,10 +54,10 @@ Owner decision: keep the Argon2id parameters, do B, and cut the sequential round
 
 What changed:
 - **B.** `restoreSession` returns once the vault is open and the chat list is read. The first saved chat then connects in the background, the same way a selected chat opens: its row shows as opening, and a click on another chat supersedes it. The unlock progress is now two steps (unlocking, opening chats).
-- **C, status probe.** The startup path no longer asks for the room status before connecting. Local eligibility decides; the status is read only if admission fails, to report expiry or deletion. This is the rule `openConversation` already followed.
 - **C, transport.** Socket.IO opens over WebSocket first (`RELAY_SOCKET_OPTIONS`), with polling as the fallback (`tryAllTransports`). This removes the three polling handshake requests.
 
 Not changed, with reasons:
+- **Room status probe at startup.** Kept, so a chat that expired or was deleted on the server is reported at unlock. It now runs after the unlock screen has closed, so it no longer delays it.
 - **Two device proofs.** Both are `relay:message`: one for the channel join, one for the first protected send after it. They are separate operations, and proofs are single-use by design, so they stay separate.
 - **Prekey requests.** The three are: read own key bundle, renew it (only when fewer than 10 one-time keys remain), read the contact's bundle. They are not a re-read of the same thing. Combining them needs a new relay endpoint that Android would share; left for the relay performance task.
 
@@ -65,9 +65,9 @@ Measured with the opt-in spec `e2e/unlock-timing.spec.ts` (`UNLOCK_TIMING=true`)
 
 | | Before (`6948f4a6`) | After |
 |---|---|---|
-| Unlock screen open after clicking Unlock | 885–947 ms | 133–137 ms |
+| Unlock screen open after clicking Unlock | 885–947 ms | 131–134 ms |
 | HTTP requests while the unlock screen waits | 9 | 1 |
-| HTTP requests until the chat is connected | 9 | 5 |
-| Chat connected and ready to send | 894–954 ms | 1006–1008 ms |
+| HTTP requests until the chat is connected | 9 | 6 |
+| Chat connected and ready to send | 894–954 ms | 998–1002 ms |
 
-Time until the chat is connected is about the same locally. The network chain is shorter by four requests, but the app now renders while the connection finishes, which adds about 100 ms of main-thread work on this stack. On production, each removed request is about 110–220 ms, so the connected time should drop by roughly 0.4–0.9 s there; this is unconfirmed until measured after release.
+Time until the chat is connected is about the same locally. The network chain is shorter by three requests (the polling handshake), but the app now renders while the connection finishes, which adds about 100 ms of main-thread work on this stack. On production, each removed request is about 110–220 ms, so the connected time should drop by roughly 0.3–0.7 s there; this is unconfirmed until measured after release.
