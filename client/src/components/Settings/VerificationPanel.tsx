@@ -89,7 +89,7 @@ export const VerificationPanel: React.FC<Props> = ({ label, ownFingerprint, cont
         {step === 'scan' && <section aria-label="Scan their code">
           <h4>{checkCopy.scanTitle(name)}</h4>
           <p>{checkCopy.scanHelp(name)}</p>
-          <LocalQrScanner onScanned={scan} startLabel="Start camera" />
+          <LocalQrScanner onScanned={scan} startLabel="Start camera" onFallback={() => { setNotice(''); setConfirmed(''); setStep('numbers'); }} fallbackLabel={checkCopy.showNumbersInstead} />
           <button className="btn btn--link check-numbers-link" type="button" onClick={() => { setNotice(''); setConfirmed(''); setStep('numbers'); }}>{checkCopy.showNumbersInstead}</button>
           {confirmed === binding && <button className="btn btn--primary" type="button" onClick={() => void confirm('show-mine')}>Confirm</button>}
         </section>}

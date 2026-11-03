@@ -1,3 +1,4 @@
+import { useQrCameraScan } from '../../media/useQrCameraScan';
 import React, { useEffect, useRef, useState } from 'react';
 import { parseInviteInput, parseModernInviteInput } from '../../utils/urlHash';
 
@@ -17,35 +18,20 @@ export const InvitationQr: React.FC<{ invitation: string }> = ({ invitation }) =
 
 export const InvitationQrScanner: React.FC<{ onScanned: (invitation: string) => void }> = ({ onScanned }) => {
   const video = useRef<HTMLVideoElement>(null);
-  const onScannedRef = useRef(onScanned);
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState('');
-  useEffect(() => { onScannedRef.current = onScanned; }, [onScanned]);
-  useEffect(() => {
-    if (!scanning) return;
-    let cancelled = false;
-    let stop: (() => void) | undefined;
-    void import('@zxing/browser').then(async ({ BrowserQRCodeReader }) => {
-      if (!video.current || cancelled) return;
-      const controls = await new BrowserQRCodeReader().decodeFromVideoDevice(undefined, video.current, (result) => {
-        if (!result || cancelled) return;
-        const value = result.getText();
-        if (!parseModernInviteInput(value) && !parseInviteInput(value)) {
-          setError('This QR code is not a valid K3NCRYPT invitation.');
-          return;
-        }
-        stop?.();
-        setScanning(false);
-        onScannedRef.current(value);
-      });
-      if (cancelled) controls.stop(); else stop = () => controls.stop();
-    }).catch(() => { if (!cancelled) { setError('Camera unavailable. Paste the invitation instead.'); setScanning(false); } });
-    return () => { cancelled = true; stop?.(); };
-  }, [scanning]);
+  // UX A13: same decoder as the check scanner (built-in detector, then zbar); keeps scanning past codes that aren't invitations.
+  const { timedOut } = useQrCameraScan({ active: scanning, video,
+    onText: (value) => {
+      if (!parseModernInviteInput(value) && !parseInviteInput(value)) { setError('This QR code is not a valid K3NCRYPT invitation.'); return 'continue'; }
+      setError(''); setScanning(false); onScanned(value); return undefined;
+    },
+    onError: () => { setError('Camera unavailable. Paste the invitation instead.'); setScanning(false); } });
   return <div className="invitation-scanner">
     {!scanning ? <button type="button" className="btn btn--secondary" onClick={() => { setError(''); setScanning(true); }}>Scan invitation QR</button> : <>
       <video ref={video} muted playsInline autoPlay aria-label="Invitation QR camera preview" />
       <button type="button" className="btn btn--secondary" onClick={() => setScanning(false)}>Stop camera</button>
+      {timedOut && <p className="scan-fallback" role="status">Can’t read the code? Paste the invitation instead.</p>}
     </>}
     {error && <p role="alert">{error}</p>}
   </div>;

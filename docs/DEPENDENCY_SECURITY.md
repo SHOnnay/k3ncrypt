@@ -34,3 +34,10 @@ No general-purpose third-party vodozemac JavaScript binding was added. `low-leve
 ## Operational policy
 
 CI should run both `npm audit --omit=dev` (release gate) and full `npm audit` (toolchain visibility), review lockfile diffs, and test upgrades before release. Overrides are temporary compatibility controls and should be removed when direct dependency ranges naturally select the fixed versions.
+
+## QR scanning: zbar-wasm (UX A13, 2026-11-03)
+
+- `@undecaf/zbar-wasm` 0.11.0, pinned exactly in `client/package.json`. Replaces `@zxing/browser` / `@zxing/library`, which failed to decode 5–12% of valid check codes for this payload (see `docs/releases/RELEASE_CANDIDATE_1.md`).
+- Order: the browser's built-in `BarcodeDetector` when it supports QR codes, then zbar for any frame it can't read (`client/src/media/qrDecoder.ts`). Unit test: 1,000 generated check codes, rendered exactly as the app renders them, all decode.
+- No CDN: the `.wasm` is a same-origin asset (`assets/zbar-*.wasm`) passed to zbar explicitly; production CSP already allows it (`connect-src 'self'`, `'wasm-unsafe-eval'`).
+- **License: LGPL-2.1-or-later** (project is Apache-2.0). It is loaded as a separate, replaceable WebAssembly file, not compiled into our code. Its license text ships at `/licenses/zbar-wasm-LGPL-2.1.txt` with the source location. Owner sign-off on this arrangement is pending.
