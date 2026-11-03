@@ -1,4 +1,4 @@
-import { controlEventLimiter, deliveryAckLimiter } from './socketLimits';
+import { admitDeviceSocket, controlEventLimiter, deliveryAckLimiter } from './socketLimits';
 import { STORAGE_FULL_MESSAGE, StorageFullError } from '../db/storageCaps';
 import { onSafe, type Ack } from './safeAck';
 import { randomUUID } from 'crypto';
@@ -219,6 +219,7 @@ const connectionListener = (socket: CustomSocket, io) => {
   let replayRunning = false;
   let replayRequested = false;
   let replayTimer: ReturnType<typeof setTimeout> | undefined;
+  let releaseDeviceSlot: (() => void) | undefined;
   let replayFailureCount = 0;
   const scheduleReplay = (delayMs: number): void => {
     if (replayTimer || socket.connected === false || !currentLegacyOwner(socket)) return;
@@ -298,6 +299,15 @@ const connectionListener = (socket: CustomSocket, io) => {
       rejectJoin('Device authorization rejected.', 'device-proof');
       socket.disconnect();
       return;
+    }
+    // RC1: concurrent sockets are bounded per proven device; the slot is held until disconnect.
+    if (!releaseDeviceSlot && socket.deviceId) {
+      releaseDeviceSlot = admitDeviceSocket(socket.deviceId);
+      if (!releaseDeviceSlot) {
+        rejectJoin('Too many connections from this device.', 'device-socket-limit');
+        socket.disconnect(true);
+        return;
+      }
     }
     const { valid } = await channelValid(channelID);
     if (!valid) {
@@ -572,6 +582,7 @@ const connectionListener = (socket: CustomSocket, io) => {
     replayRequested = false;
     rateLimiter.reset(socket.id);
     controlEventLimiter.reset(socket.id); deliveryAckLimiter.reset(socket.id);
+    releaseDeviceSlot?.(); releaseDeviceSlot = undefined;
     if (!(channelID && userID)) {
       return;
     }

@@ -19,7 +19,7 @@ git -C ~/Documents/ChatGPT/chatapp-phase0 rev-parse m3/hardening
 | M1c | Plain-language contact check (scan / compare numbers / Android path). One connection status. Contacts grouped. Own invitations only on the Invite screen. Chats open in review mode after a number change. |
 | M1b | Transfer metadata expires (Mongo TTL on `purgeAt`). |
 | M2 | File requests time out after 60 s (no stuck "Sending"). |
-| M3 | Rate limits (API 300 per 5 min; socket join/replay/ack limits; 20 sockets per IP). Storage caps with a "full" message. Start-up fails closed without `K3NCRYPT_DURABLE_ROUTING`. Calls end when this device loses trust. HSTS and COOP headers. Host-trust disclosure in Settings → About security. Crypto WASM rebuilt reproducibly. |
+| M3 | Rate limits (API 300 per 5 min; socket join/replay/ack limits; 10 sockets per device and 64 per IP). Storage caps with a "full" message. Start-up fails closed without `K3NCRYPT_DURABLE_ROUTING`. Calls end when this device loses trust. HSTS and COOP headers. Host-trust disclosure in Settings → About security. Crypto WASM rebuilt reproducibly. |
 
 No wire-format change between `f927941` and this candidate. No new required environment variable: `K3NCRYPT_DURABLE_ROUTING=true` and `K3NCRYPT_TRUST_PROXY=true` are already required by `f927941`.
 
@@ -343,11 +343,11 @@ Use two accounts you control. Tick each item:
 - [ ] Existing Android contact: message each way.
 - [ ] Set up a new Android device (pending from the hotfix): bootstrap succeeds.
 - [ ] Android ↔ web call, if you use calls on Android.
-- [ ] Leave the Android app open for 5 minutes with several conversations: nothing shows "Too many connections from this network." or "Rate limit exceeded."
+- [ ] Leave the Android app open for 5 minutes with several conversations: nothing shows "Too many connections from this device.", "Too many connections from this network." or "Rate limit exceeded."
 
 **Logs (Render, first hour)**
 - [ ] No `startup_failed`, `unhandled_rejection` or restart loop.
-- [ ] No repeated "Too many connections from this network." Each occurrence means one IP was holding 20 sockets.
+- [ ] No repeated "Too many connections from this network." (one IP holding 64 sockets) or `device-socket-limit` join rejections (one device holding 10).
 - [ ] No "K3NCRYPT is full right now."
 
 Any failure in messaging, contact checks or start-up: roll back (below). For a failure that only affects files or calls, decide between rolling back and fixing forward.
@@ -370,9 +370,10 @@ There is no wire-format change; older Android builds talk to this relay as befor
 
 | Limit | Value | What an Android user sees when hit |
 |---|---|---|
-| Concurrent sockets per client IP | 20 (`MAX_SOCKETS_PER_ADDRESS`) | Connection refused with `Too many connections from this network.` The Socket.IO JS client does not retry a server-middleware refusal on its own; the Android Java client's behaviour here has not been tested, so that conversation may stay offline until the app reconnects it. |
+| Concurrent sockets per proven device | 10 (`MAX_SOCKETS_PER_DEVICE`), checked at `chat-join` after the device proof is verified; the slot is freed on disconnect | Join refused with `{"error":"Too many connections from this device."}` and the socket is closed. Android records it as `join-rejected`. A phone uses at most 8. |
+| Concurrent sockets per client IP | 64 (`MAX_SOCKETS_PER_ADDRESS`), checked at connect | Connection refused with `Too many connections from this network.` The Socket.IO JS client does not retry a server-middleware refusal on its own; the Android Java client's behaviour here has not been tested, so that conversation may stay offline until the app reconnects it. |
 | `chat-join`, `mailbox-replay` | 10 burst, 1 per second, per socket | Ack `{"error":"Rate limit exceeded."}` with no `status`. Android treats the join as rejected (`join-rejected`) or the replay as not accepted, and retries on its own schedule. |
 | `received`, `recipient-rejected` (delivery acks) | 128 burst, 20 per second, per socket | A 64-message replay fits. Android sends `received` without an ack callback, so a limited ack is dropped silently and the server delivers the message again on the next replay. |
 | Storage caps | 4,000 waiting envelopes in total; 256 per sending device; 10,000 rooms; 2,000 devices | Send fails with `K3NCRYPT is full right now. Try again later.` Older builds show their generic send-failed state. |
 
-**Socket math to watch.** The newest Android code (`codex/android-beta23-stabilization`) opens one Socket.IO connection for the open conversation and up to 7 more for background conversations: up to 8 per phone. Two such phones on one home Wi-Fi use 16 of the 20, before any web tabs. Mobile carriers that put many users behind one IP (CGNAT) share the cap across strangers. The cap counts the client IP from `X-Forwarded-For` with one trusted proxy (`K3NCRYPT_TRUST_PROXY=true`), the same rule the HTTP rate limiter already uses in production. If "Too many connections" shows up in the logs during smoke tests, raise `MAX_SOCKETS_PER_ADDRESS` in a follow-up release; do not disable the cap.
+**Socket math.** The newest Android code (`codex/android-beta23-stabilization`) opens one Socket.IO connection for the open conversation and up to 7 more for background conversations: up to 8 per phone, under the per-device cap of 10. A web tab holds one live conversation socket and opens background conversations one at a time. Three phones on one home Wi-Fi use 24 of the 64 per-IP ceiling; `backend/socket.io/deviceSocketLimit.test.ts` admits exactly that (3 devices × 8 room sockets from one IP) and refuses a device its 11th [integration test]. Mobile carriers that put many users behind one IP (CGNAT) share the 64 across strangers. The per-IP count uses the client IP from `X-Forwarded-For` with one trusted proxy (`K3NCRYPT_TRUST_PROXY=true`), the same rule the HTTP rate limiter already uses in production. Sockets on the multiplexed path (off in production) bind their device elsewhere and are bounded only by the per-IP ceiling. If either refusal shows up in the logs during smoke tests, raise the cap in a follow-up release; do not disable it.
