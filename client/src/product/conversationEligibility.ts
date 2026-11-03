@@ -50,6 +50,19 @@ export const conversationStateCopy = (diagnostic: ConversationDiagnostic): strin
   terminal: 'Room expired or removed', 'local-incomplete': 'Local records incomplete — access paused',
   'review-required': 'Identity or room binding needs review', deferred: 'More saved entries retained on this device',
 })[diagnostic.state];
+/** UX A5: plain words for a saved chat that can't open. Technical codes stay in Settings → Advanced. */
+export const plainConversationState = (diagnostic: ConversationDiagnostic): string => {
+  switch (diagnostic.code) {
+    case 'CONVERSATION_INVITATION_EXPIRED': return 'The invitation expired before it was accepted.';
+    case 'CONVERSATION_IN_USE': return 'Open in another tab. Close that tab, then try again.';
+    case 'CONTACT_REGISTRY_MISSING': case 'CONVERSATION_SESSION_MISSING': case 'CONVERSATION_RECORD_INVALID': case 'CONVERSATION_LOCAL_RECORD_INVALID':
+      return 'Part of this chat’s saved data is missing, so it can’t open.';
+    default: break;
+  }
+  return ({ saved: 'Saved on this device', pending: 'Waiting for your contact to accept', retryable: 'Couldn’t connect. It will try again.',
+    terminal: 'This chat was closed on the server.', 'local-incomplete': 'Part of this chat’s saved data is missing, so it can’t open.',
+    'review-required': 'Check this contact again to continue.', deferred: 'More saved chats are kept on this device.' })[diagnostic.state];
+};
 export interface ConversationIndex { conversations: ConversationDescriptor[]; unavailable: ConversationDiagnostic[]; }
 export interface SidebarConversationGroups { chats: ConversationDescriptor[]; pendingInvitations: ConversationDescriptor[]; unavailable: ConversationDiagnostic[]; archived: ConversationDescriptor[]; }
 

@@ -12,9 +12,9 @@ async function unlock(page: Page) {
   await page.getByRole('button', { name: 'Unlock account', exact: true }).click();
   await page.getByRole('button', { name: 'Contacts', exact: true }).click();
 }
-async function archive(page: Page, name: string, accept = true) {
+async function archive(page: Page, name: string, accept = true, verb: 'Archive' | 'Remove' = 'Archive') {
   page.once('dialog', dialog => accept ? dialog.accept() : dialog.dismiss());
-  await page.getByRole('button', { name: `Archive conversation ${name}`, exact: true }).last().click();
+  await page.getByRole('button', { name: `${verb} conversation ${name}`, exact: true }).last().click();
 }
 async function protectedDigests(page: Page) {
   return page.evaluate(async ({ storageModule, persistenceModule, passphrase }) => {
@@ -85,22 +85,22 @@ test('expired, deleted, unknown and invalid disposable records stay separate and
     await alice.route(`**/api/chat-link/status/${deletedRoom}`, route => route.fulfill({ status: 404, contentType: 'application/json', body: '{"state":"DELETED"}' }));
     await unlock(alice);
     await expect(alice.locator('.workspace-contact')).toHaveCount(0);
-    const unavailable = alice.getByRole('region', { name: 'Unavailable saved conversations' });
-    await expect(unavailable).toContainText('Room expired or removed');
-    await expect(unavailable).toContainText('matching local contact identity is unavailable');
-    await expect(unavailable.getByText('CONTACT_REGISTRY_MISSING', { exact: true })).not.toBeVisible();
-    await expect(unavailable).toContainText('Invitation expired');
+    const unavailable = alice.getByRole('region', { name: 'Chats that can’t be opened' });
+    await expect(unavailable).toContainText('This chat was closed on the server.');
+    await expect(unavailable).toContainText('Part of this chat’s saved data is missing, so it can’t open.');
+    await expect(unavailable).not.toContainText('CONTACT_REGISTRY_MISSING');
+    await expect(unavailable).toContainText('The invitation expired before it was accepted.');
     const invalid = unavailable.locator('.workspace-record').filter({ hasText: 'Invalid saved entry' });
-    await expect(invalid.getByRole('button', { name: /^Archive conversation/ })).toHaveCount(0);
-    await archive(alice, 'Bob');
+    await expect(invalid.getByRole('button', { name: /^(Archive|Remove) conversation/ })).toHaveCount(0);
+    await archive(alice, 'Bob', true, 'Remove'); // UX A5: an entry that can't open offers Remove (local archive)
     const archived = alice.locator('details[aria-label="Archived conversations"]'); await archived.locator('summary').click();
     await archived.getByRole('button', { name: 'Restore conversation Bob', exact: true }).click();
-    await expect(unavailable).toContainText('Bob'); await expect(unavailable).toContainText('Room expired or removed');
-    const unknown = unavailable.locator('.workspace-record').filter({ hasText: 'matching local contact identity is unavailable' });
-    alice.once('dialog', dialog => dialog.accept()); await unknown.getByRole('button', { name: /^Archive conversation/ }).click();
+    await expect(unavailable).toContainText('Bob'); await expect(unavailable).toContainText('This chat was closed on the server.');
+    const unknown = unavailable.locator('.workspace-record').filter({ hasText: 'saved data is missing' }).filter({ has: alice.getByRole('button', { name: /^Remove conversation/ }) });
+    alice.once('dialog', dialog => dialog.accept()); await unknown.getByRole('button', { name: /^Remove conversation/ }).click();
     await archived.locator('summary').click();
     await archived.getByRole('button', { name: /^Restore conversation Contact/ }).click();
-    await expect(unavailable).toContainText('matching local contact identity is unavailable');
+    await expect(unavailable).toContainText('Part of this chat’s saved data is missing, so it can’t open.');
     const intact = await alice.evaluate(async ({ storageModule, persistenceModule, passphrase }) => {
       const { BrowserSecureStorage } = await import(/* @vite-ignore */ storageModule);
       const { IndexedDbVaultPersistence } = await import(/* @vite-ignore */ persistenceModule);

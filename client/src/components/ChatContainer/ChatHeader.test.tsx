@@ -83,3 +83,10 @@ describe('ChatHeader call launch controls', () => {
     expect(failed).toContain('Could not open Bob. Your current conversation remains open.');
   });
 });
+
+// UX A5: a connection that needs renewing gets one plain action.
+it('offers one Review action when the secure connection needs renewing', () => {
+  const markup = renderHeader({ sessionHealth: 'unhealthy' });
+  expect(markup).toContain('Your secure connection with your contact needs renewing.');
+  expect(markup).toMatch(/<button[^>]*>Review<\/button>/);
+});

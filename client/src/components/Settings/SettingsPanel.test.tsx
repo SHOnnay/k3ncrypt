@@ -9,7 +9,7 @@ jest.mock('../common/Avatar.css', () => ({}));
 jest.mock('../common/StatusPill.css', () => ({}));
 jest.mock('../common/ThemeSwitcher.css', () => ({}));
 const state = { channelHash: 'room', profileDisplayName: 'Alice', protocolMode: 'modern', ownFingerprint: 'local-identity', accountState: 'ready', conversations: [], syncStatus: 'ready', sessionHealth: 'healthy', permissionStatus: { microphone: 'unknown', camera: 'denied' }, privacyPreferences: { notificationsEnabled: true, notificationPreviews: false, blurSensitiveContent: false, mutedConversations: [] } };
-const render = (initialView: 'privacy' | 'devices' | 'network' | 'verification') => renderToStaticMarkup(createElement(SettingsPanel, { isOpen: true, initialView, onClose: () => undefined }));
+const render = (initialView: 'privacy' | 'devices' | 'network' | 'verification' | 'advanced') => renderToStaticMarkup(createElement(SettingsPanel, { isOpen: true, initialView, onClose: () => undefined }));
 beforeEach(() => mockChat.mockReturnValue(state));
 it('separates implemented preferences from fixed properties and permission reports', () => {
   const markup = render('privacy');
@@ -80,4 +80,13 @@ it('explains in plain words that a compromised server could serve a changed web 
   expect(markup).toContain('Checking your contacts would not show this.');
   expect(markup).toContain('use the K3NCRYPT Android app');
   expect(markup).not.toMatch(/fingerprint|payload|pinned/i);
+});
+// UX A5: diagnostics live behind Settings → Advanced, not in the sidebar.
+it('shows local data status and conversation codes under Advanced', () => {
+  mockChat.mockReturnValue({ ...state, unavailableConversations: [{ roomId: 'r1', label: 'Old friend', code: 'CONTACT_REGISTRY_MISSING', state: 'local-incomplete' }],
+    orphanedConversationRecords: { available: true, roomIds: ['orphan-1'] } });
+  const markup = render('advanced');
+  expect(markup).toContain('Advanced');
+  expect(markup).toContain('Old friend'); expect(markup).toContain('CONTACT_REGISTRY_MISSING');
+  expect(markup).toContain('Local data status');
 });

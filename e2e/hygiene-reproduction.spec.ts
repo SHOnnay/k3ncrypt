@@ -29,8 +29,11 @@ test('expired pending invitation stays quarantined on restore', async ({ browser
   await page.reload(); await page.getByRole('button', { name: 'Unlock this device', exact: true }).click();
   await page.locator('input[type=password]').fill('alpha-family-existing-account-2026'); await page.getByRole('button', { name: 'Unlock account', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Conversations' }).locator('.conversation-row')).toHaveCount(0);
-  const unavailable = page.getByRole('region', { name: 'Unavailable Conversations' });
-  await expect(unavailable).toContainText('Invitation expired');
-  await unavailable.getByText('Technical details', { exact: true }).click();
-  await expect(unavailable).toContainText('CONVERSATION_INVITATION_EXPIRED'); await context.close();
+  const unavailable = page.getByRole('region', { name: 'Can’t be opened' });
+  await expect(unavailable).toContainText('The invitation expired before it was accepted.');
+  await expect(unavailable).not.toContainText('CONVERSATION_INVITATION_EXPIRED');
+  // UX A5: the code stays available, behind Settings → Advanced.
+  await page.getByRole('button', { name: 'Open settings', exact: true }).click();
+  await page.getByRole('button', { name: /^Advanced/ }).click();
+  await expect(page.getByRole('dialog', { name: 'Advanced' })).toContainText('CONVERSATION_INVITATION_EXPIRED'); await context.close();
 });

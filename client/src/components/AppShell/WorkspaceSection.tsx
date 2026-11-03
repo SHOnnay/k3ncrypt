@@ -1,4 +1,3 @@
-import { LocalDataStatus } from './LocalDataStatus';
 import { CHECK_PILL, contactsCopy } from '../../content/checkCopy';
 import React, { useMemo, useState } from 'react';
 import { useChat } from '../../context/ChatContext';
@@ -7,7 +6,7 @@ import { Button } from '../common/Button';
 import { PhoneIcon, PlusIcon, SearchIcon, VideoIcon } from '../common/icons';
 import { contactDisplayName } from '../../content/copy';
 import { callLaunchBlockMessage, callStartFailureMessage, getCallLaunchBlockReason } from '../../calls/callLaunchReadiness';
-import { classifySidebarConversations, conversationStateCopy } from '../../product/conversationEligibility';
+import { classifySidebarConversations, conversationStateCopy, plainConversationState } from '../../product/conversationEligibility';
 import { ConversationArchiveButton } from './ConversationArchiveButton';
 import './WorkspaceSection.css';
 
@@ -73,8 +72,7 @@ export const WorkspaceSection: React.FC<WorkspaceSectionProps> = ({ section, onO
         <ConversationArchiveButton roomId={contact.roomId} name={displayName(contact)} />
       </div>)}</div></section> : null;
       })}</> : groups.chats.length > 0 ? <div className="workspace-empty workspace-empty--compact"><h2>No matching contact</h2><p>Try another search.</p></div> : <div className="workspace-empty workspace-empty--compact"><h2>{contactsCopy.emptyTitle}</h2><p>{contactsCopy.emptyHelp}</p></div>}
-      {groups.unavailable.length > 0 && <section className="workspace-records" aria-label="Unavailable saved conversations"><h2>Unavailable saved conversations</h2><p>Access is paused. These entries are not checked contacts.</p>{groups.unavailable.map((item, index) => <div className="workspace-record" key={`${item.roomId ?? 'invalid'}-${index}`}><strong>{item.label}</strong><p>{conversationStateCopy(item)}</p>{item.roomId && item.code !== 'CONVERSATION_RECORD_INVALID' && item.code !== 'CONVERSATION_LOCAL_RECORD_INVALID' && savedConversations.some(saved => saved.roomId === item.roomId) && <ConversationArchiveButton roomId={item.roomId} name={item.label} />}{item.code && <details><summary>Technical details</summary><small>{item.code}</small></details>}</div>)}</section>}
-      <LocalDataStatus className="conversation-recovery conversation-recovery--phone" />
+      {groups.unavailable.length > 0 && <section className="workspace-records" aria-label="Chats that can’t be opened"><h2>Can’t be opened</h2><p>These chats are kept on this device but can’t open right now. Remove hides one from your lists; its history stays saved.</p>{groups.unavailable.map((item, index) => <div className="workspace-record" key={`${item.roomId ?? 'invalid'}-${index}`}><strong>{item.label}</strong><p>{plainConversationState(item)}</p>{item.roomId && item.code !== 'CONVERSATION_RECORD_INVALID' && item.code !== 'CONVERSATION_LOCAL_RECORD_INVALID' && savedConversations.some(saved => saved.roomId === item.roomId) && <ConversationArchiveButton roomId={item.roomId} name={item.label} verb="Remove" />}</div>)}</section>}
       {groups.archived.length > 0 && <details className="workspace-records" aria-label="Archived conversations"><summary>Archived conversations ({groups.archived.length})</summary><p>Hidden from ordinary lists on this device. History and checks are kept. Restoring visibility does not restore missing server access.</p>{groups.archived.map(item => <div className="workspace-record" key={item.roomId}><strong>{displayName(item)}</strong><ConversationArchiveButton roomId={item.roomId} name={displayName(item)} restore /></div>)}</details>}
     </main>;
   }

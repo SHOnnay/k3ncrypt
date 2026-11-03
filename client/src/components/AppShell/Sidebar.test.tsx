@@ -27,13 +27,33 @@ it('retains a saved row during temporary network failure without reporting conne
   const html = render('NETWORK_FAILURE');
   expect(html).toContain('Disconnected — retry opening'); expect(html).not.toContain('No trusted contacts yet');
 });
-it('does not hide a genuine missing registry diagnosis or present it as a usable chat', () => {
+// UX A5: an entry that can't open is explained in plain words with one action (Remove); codes live in Settings → Advanced.
+it('lists a chat that cannot open in plain words with Remove, without codes or technical details', () => {
   const html = render('CONTACT_REGISTRY_MISSING');
-  expect(html).toContain('unavailable-conversation-action');
-  expect(html).toContain('CONTACT_REGISTRY_MISSING');
-  expect(html).toContain('<summary>Technical details</summary><small>CONTACT_REGISTRY_MISSING');
-  expect(html).toContain('matching local contact identity is unavailable');
+  expect(html).toContain('Can’t be opened');
+  expect(html).toContain('Part of this chat’s saved data is missing, so it can’t open.');
+  expect(html).toContain('aria-label="Remove conversation Saved friend"');
+  expect(html).not.toContain('CONTACT_REGISTRY_MISSING');
+  expect(html).not.toContain('Technical details');
+  expect(html).not.toContain('Unavailable Conversations');
+  expect(html).not.toContain('Local data status');
   expect(html).not.toContain('Contact saved · reconnection paused');
+});
+it('does not say Review connection for saved chats just because device sync is blocked', () => {
+  mockUseChat.mockReturnValue({ conversations: [descriptor], unavailableConversations: [], messages: [], accountState: 'ready',
+    profileDisplayName: 'Synthetic owner', syncStatus: 'blocked', protocolMode: 'modern', sessionHealth: 'healthy', channelHash: 'another-room' });
+  const html = renderToStaticMarkup(React.createElement(Sidebar, { isWelcomeActive: true, activeSection: 'chats', onNavigate: () => undefined,
+    onNewConversation: () => undefined, onOpenConversation: () => undefined, onOpenSettings: () => undefined }));
+  expect(html).toContain('Saved friend');
+  expect(html).not.toContain('Review connection');
+});
+it('explains an open chat whose secure connection needs renewing', () => {
+  mockUseChat.mockReturnValue({ conversations: [descriptor], unavailableConversations: [], messages: [], accountState: 'ready',
+    profileDisplayName: 'Synthetic owner', syncStatus: 'ready', protocolMode: 'modern', sessionHealth: 'unhealthy', channelHash: descriptor.roomId });
+  const html = renderToStaticMarkup(React.createElement(Sidebar, { isWelcomeActive: false, activeSection: 'chats', onNavigate: () => undefined,
+    onNewConversation: () => undefined, onOpenConversation: () => undefined, onOpenSettings: () => undefined }));
+  expect(html).toContain('Secure connection needs renewing');
+  expect(html).not.toContain('Review connection');
 });
 
 // Item 4: nothing about contacts while locked; contact data present in state must still not render before ready.

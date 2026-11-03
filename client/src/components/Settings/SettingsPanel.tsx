@@ -1,3 +1,5 @@
+import { LocalDataStatus } from '../AppShell/LocalDataStatus';
+import { conversationStateCopy } from '../../product/conversationEligibility';
 import { serverCopy } from '../../content/checkCopy';
 import React, { useEffect, useRef, useState } from 'react';
 import { useModalKeyboard } from '../../hooks/useModalKeyboard';
@@ -27,7 +29,7 @@ import './SettingsPanel.css';
 import { classifySafeDiagnostic, logSafeFailure, type SafeDiagnosticCode } from '../../product/safeDiagnostics';
 import { SafeDiagnosticDetails } from '../common/SafeDiagnosticDetails';
 
-type SettingsView = 'settings' | 'profile' | 'devices' | 'privacy' | 'notifications' | 'calls' | 'appearance' | 'network' | 'verification' | 'about';
+type SettingsView = 'settings' | 'profile' | 'devices' | 'privacy' | 'notifications' | 'calls' | 'appearance' | 'network' | 'verification' | 'about' | 'advanced';
 
 interface SettingsPanelProps {
   isOpen: boolean;
@@ -37,6 +39,7 @@ interface SettingsPanelProps {
 
 const viewTitles: Record<SettingsView, string> = {
   settings: 'Settings',
+  advanced: 'Advanced',
   profile: 'Profile',
   devices: 'Devices',
   privacy: 'Privacy',
@@ -50,7 +53,7 @@ const viewTitles: Record<SettingsView, string> = {
 
 export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, initialView = 'settings', onClose }) => {
   const [view, setView] = useState<SettingsView>(initialView);
-  const { channelHash, isConnected, protocolMode, ownFingerprint, contactIdentity, conversations, verifyContact, unverifyContact, acceptChangedIdentity, prepareVerifiedSessionRenewal, sessionHealth, deleteChannel, deviceLifecycleState, pendingDeviceEnrollment, pendingDeviceApproval, requestDeviceEnrollment, approveDeviceEnrollment, rejectDeviceEnrollment, confirmDeviceEnrollment, revokeDevice, privacyPreferences, updatePrivacyPreferences, permissionStatus, refreshPermissionStatus, syncStatus, profileDisplayName, updateProfileDisplayName, accountState, pendingConversation, conversationOpenError } = useChat();
+  const { channelHash, isConnected, protocolMode, ownFingerprint, contactIdentity, conversations, verifyContact, unverifyContact, acceptChangedIdentity, prepareVerifiedSessionRenewal, sessionHealth, deleteChannel, deviceLifecycleState, pendingDeviceEnrollment, pendingDeviceApproval, requestDeviceEnrollment, approveDeviceEnrollment, rejectDeviceEnrollment, confirmDeviceEnrollment, revokeDevice, privacyPreferences, updatePrivacyPreferences, permissionStatus, refreshPermissionStatus, syncStatus, profileDisplayName, updateProfileDisplayName, accountState, pendingConversation, conversationOpenError, unavailableConversations = [] } = useChat();
   const [verificationError, setVerificationError] = useState('');
   const [verificationDiagnostic, setVerificationDiagnostic] = useState<SafeDiagnosticCode>();
   useEffect(() => { if (isOpen) setView(initialView); }, [initialView, isOpen]);
@@ -158,6 +161,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, initialVie
                 <SettingsRow icon={<BellIcon size={18} />} title="Notifications" description={privacyPreferences.notificationsEnabled ? 'Private alerts are on' : 'Notifications are off'} onClick={() => setView('notifications')} />
                 <SettingsRow icon={<MicIcon size={18} />} title="Calls" description="Ringtone and media permissions" onClick={() => setView('calls')} />
                 <SettingsRow icon={<InfoIcon size={18} />} title="About security" description="What K3NCRYPT protects, and what it can’t" status="Private beta" onClick={() => setView('about')} />
+                <SettingsRow icon={<InfoIcon size={18} />} title="Advanced" description="Technical details for troubleshooting" onClick={() => setView('advanced')} />
               </section>
             </>
           )}
@@ -218,6 +222,16 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, initialVie
                 <label className="settings-row"><span className="settings-row__icon"><LockIcon size={17} /></span><span className="settings-row__copy"><strong>Message previews</strong><small>Show content only if you explicitly choose to</small></span><input type="checkbox" checked={privacyPreferences.notificationPreviews} disabled={!privacyPreferences.notificationsEnabled} onChange={(event) => updatePrivacyPreferences({ notificationPreviews: event.target.checked })} /></label>
                 {channelHash && <label className="settings-row"><span className="settings-row__icon"><BellIcon size={17} /></span><span className="settings-row__copy"><strong>Mute this conversation</strong><small>Keep this conversation out of system notifications</small></span><input type="checkbox" checked={privacyPreferences.mutedConversations.includes(channelHash)} onChange={(event) => updatePrivacyPreferences({ mutedConversations: event.target.checked ? [...privacyPreferences.mutedConversations, channelHash] : privacyPreferences.mutedConversations.filter((id) => id !== channelHash) })} /></label>}
               </div>
+            </section>
+          )}
+
+          {view === 'advanced' && (
+            <section className="settings-detail" aria-label="Advanced">
+              <div className="detail-intro"><h3>Advanced</h3><p>Technical details for troubleshooting. Nothing here changes your chats or checks.</p></div>
+              <h4>Chats that can’t be opened</h4>
+              {unavailableConversations.length === 0 ? <p>None.</p> : <ul className="advanced-diagnostics">{unavailableConversations.map((item, index) =>
+                <li key={`${item.roomId ?? 'entry'}-${index}`}><strong>{item.label}</strong> <code>{item.code ?? item.state}</code><p>{conversationStateCopy(item)}</p></li>)}</ul>}
+              <LocalDataStatus className="conversation-recovery conversation-recovery--advanced" />
             </section>
           )}
 

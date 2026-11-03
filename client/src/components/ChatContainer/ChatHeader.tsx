@@ -49,7 +49,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({ onStartCall, onStartVide
   const participantMessage = securityVisibility.identityChange === 'changed-pending-review'
     ? undefined
     : activeConversation && protocolMode === 'modern' && sessionHealth === 'unhealthy'
-      ? 'Review the security update for this conversation before continuing.'
+      ? `Your secure connection with ${checkName(contactLabel)} needs renewing.`
       : activeConversation && protocolMode === 'modern' && sessionHealth === 'renewal-pending'
         ? 'Waiting for your contact to review the connection update.'
         : undefined;
@@ -121,7 +121,7 @@ const handleDelete = async () => {
           </div>
         )}
         {activeConversation && <p className={`connection-status connection-status--${status}`} role="status" aria-label="Connection"><span className="connection-status__dot" aria-hidden="true" /><strong>{statusCopy.label}</strong>{statusCopy.help && <span> {statusCopy.help}</span>}</p>}
-        {participantMessage && <p id="participant-info" className="participant-info" role={securityVisibility.identityChange === 'changed-pending-review' ? 'alert' : 'status'}>{participantMessage}</p>}
+        {participantMessage && <p id="participant-info" className="participant-info" role={securityVisibility.identityChange === 'changed-pending-review' ? 'alert' : 'status'}>{participantMessage}{sessionHealth === 'unhealthy' && <> <Button className="btn--tiny" variant="secondary" onClick={openCheck}>Review</Button></>}</p>}
         {pendingConversation && <p className="participant-info" role="status">Opening {roomLabel(pendingConversation.roomId)}… The current conversation remains active until it is ready.</p>}
         {conversationOpenError && <p className="participant-info" role="status">Could not open {roomLabel(conversationOpenError.roomId)}. Your current conversation remains open.</p>}
         {callLaunchBlockReason && <p id="call-launch-reason" className="call-launch-reason" role="status">{callLaunchBlockMessage(callLaunchBlockReason)}</p>}

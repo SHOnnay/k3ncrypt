@@ -47,11 +47,14 @@ it('separates actual verified contacts from invitations, unavailable and archive
   expect(html).toContain('aria-label="Checked"');
   // Bug A: own pending invitations live only on the Invite someone screen.
   expect(html).not.toContain('Unaccepted invitation');
-  expect(html).toContain('matching local contact identity is unavailable');
-  expect(html).toContain('<summary>Technical details</summary><small>CONTACT_REGISTRY_MISSING');
+  // UX A5: plain words and one action; codes live in Settings → Advanced.
+  expect(html).toContain('Part of this chat’s saved data is missing, so it can’t open.');
+  expect(html).toContain('Remove conversation Unknown saved label');
+  expect(html).not.toContain('CONTACT_REGISTRY_MISSING'); expect(html).not.toContain('Technical details');
   expect(html).toContain('Archived conversations (1)');
   expect(html).toContain('Restore conversation Archived test');
   expect(html).not.toContain('Archive conversation Invalid saved entry');
+  expect(html).not.toContain('Remove conversation Invalid saved entry');
 });
 
 describe('Calls workspace launch controls', () => {
