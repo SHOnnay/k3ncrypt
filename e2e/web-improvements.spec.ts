@@ -36,15 +36,16 @@ async function fixture(page: Page) {
     export const useChat=()=>window.__ui.snapshot();
   `}));
   await page.route('**/src/context/FileContext.tsx*', route => route.fulfill({contentType:'text/javascript',body:`
-    import {PreviewResources,FileOperationGate,FileOperationBusyError} from '/src/product/previewResources.ts';
-    const previews=new PreviewResources(),gate=new FileOperationGate();
-    const files={previews,transfer:{phase:'Idle',bytes:0,total:0},sendFile:async()=>{},retry:async()=>{},cancel:()=>{},
+    import {PreviewResources,FileOperationGate} from '/src/product/previewResources.ts';
+    const previews=new PreviewResources(),gate=new FileOperationGate();let queued=[];
+    const files={previews,transfer:{phase:'Idle',bytes:0,total:0},sendWaiting:false,sendFile:async()=>{},retry:async()=>{},cancel:()=>{},
       receive:async reference=>{
-        const ticket=gate.acquire();if(!ticket)throw new FileOperationBusyError('busy');
+        let ticket=gate.acquire();
+        if(!ticket){queued=[...queued,reference];window.__ui.update({});ticket=await gate.enqueue();queued=queued.filter(item=>item!==reference);window.__ui.update({});}
         return new Promise(resolve=>window.__ui.downloads.push(()=>resolve({file:new File(['test'],'test.bin'),filename:'test.bin',
           dispose:async()=>{window.__ui.disposed++;gate.release(ticket);}})));
       }};
-    export const useFiles=()=>files;
+    export const useFiles=()=>({...files,queued});
   `}));
   await page.route('**/src/context/MediaContext.tsx*', route => route.fulfill({contentType:'text/javascript',body:'export const useMedia=()=>({receive:async()=>undefined});'}));
   const path = resolve('e2e/fixtures/web-improvements-harness.tsx');
@@ -118,15 +119,17 @@ test('settings traps keyboard focus and returns it to its opener', async ({page}
   await expect(page.locator('#settings-opener')).toBeFocused();
 });
 
-test('concurrent file clicks cannot acquire a second operation while the first is active', async ({page}) => {
+// UX A2: a second click waits its turn visibly and starts by itself; only one operation runs at a time.
+test('concurrent file clicks queue the second operation visibly until the first finishes', async ({page}) => {
   await fixture(page); await update(page,{messages:[message('first'),message('second')]});
   const buttons=page.getByRole('button',{name:'Download protected file',exact:true});
   await buttons.first().click(); await buttons.last().click();
-  await expect(page.getByRole('status').filter({hasText:'Another file operation is still active'})).toBeVisible();
+  await expect(page.getByRole('button',{name:'Waiting for another file to finish',exact:true})).toBeVisible();
+  await expect(page.getByText(/Another file operation/)).toHaveCount(0);
   expect(await page.evaluate(() => (window as any).__ui.downloads.length)).toBe(1);
   await page.evaluate(() => (window as any).__ui.downloads.shift()());
   await expect(page.getByRole('link',{name:'Save test.bin'})).toHaveCount(1);
-  await page.getByRole('button',{name:'Download protected file',exact:true}).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__ui.downloads.length)).toBe(1);
   await page.evaluate(() => (window as any).__ui.downloads.shift()());
   await expect(page.getByRole('link',{name:'Save test.bin'})).toHaveCount(2);
 });
