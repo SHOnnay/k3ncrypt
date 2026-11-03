@@ -4,7 +4,7 @@ import { ConversationSelection, commitPreparedSelection } from '../product/conve
 import { authoritativeTerminal, conversationDiagnostic, conversationEligibility, conversationFailure, diagnoseOrphanedConversationRecords, observeAuthoritativeRoomState, readConversationIndex, roomObservationCurrent, type ConversationDiagnostic } from '../product/conversationEligibility';
 import { classifySafeDiagnostic, type SafeDiagnosticCode } from '../product/safeDiagnostics';
 import { LocalCallHistory, buildCallHistory, type CallHistoryEntry } from '../product/callHistory';
-import { contactDisplayName } from '../content/copy';
+import { contactDisplayName, type UnlockPhase } from '../content/copy';
 import { readFileDetails, rememberFileDetails, type FileDetails } from '../product/fileDetails';
 import { parseFileReference } from '@chat-e2ee/service';
 /**
@@ -986,11 +986,14 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     await refreshConversations(vault);
   }, [vault]);
 
-  const restoreSession = useCallback(async (passphrase: string): Promise<void> => {
+  const restoreSession = useCallback(async (passphrase: string, onProgress?: (phase: UnlockPhase) => void): Promise<void> => {
+    onProgress?.('unlocking');
     const secureVault = await openModernVault(passphrase);
+    onProgress?.('opening');
     // Local eligibility first. Probe only rooms actually opened, avoiding hundreds of cold-start requests.
     const index = await refreshConversations(secureVault);
     setOrphanedConversationRecords(await diagnoseOrphanedConversationRecords(secureVault).catch(() => ({ roomIds: [], truncated: false, available: false })));
+    onProgress?.('connecting');
     for (const descriptor of index.conversations) {
       if (descriptor.locallyArchived) continue;
       try {

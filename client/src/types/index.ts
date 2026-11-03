@@ -98,7 +98,8 @@ export interface ChatContextType {
 
   // Methods
   initializeChat: () => Promise<void>;
-  restoreSession: (passphrase: string) => Promise<void>;
+  /** onProgress reports the unlock phase for the unlock screen (UX A11). */
+  restoreSession: (passphrase: string, onProgress?: (phase: import('../content/copy').UnlockPhase) => void) => Promise<void>;
   openConversation: (roomId: string) => Promise<void>;
   createNewChannel: () => Promise<InviteInfo>;
   createModernChannel: (passphrase: string, displayName?: string) => Promise<string>;

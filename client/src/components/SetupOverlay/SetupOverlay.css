@@ -28,3 +28,9 @@
 .own-invitation-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-raised); }
 .own-invitation-open { flex: 1 1 auto; display: grid; gap: 2px; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .own-invitation-open span { font-size: .78rem; color: var(--muted-strong); }
+
+/* UX A11: unlock progress, three plain steps. */
+.unlock-progress { display: grid; gap: 6px; margin: 4px 0 10px; color: var(--muted-strong, inherit); font-size: .85rem; text-align: center; }
+.unlock-progress progress { width: 100%; height: 6px; accent-color: var(--brand); }
+@media (prefers-reduced-motion: no-preference) { .unlock-progress span { animation: unlock-pulse 1.4s ease-in-out infinite; } }
+@keyframes unlock-pulse { 50% { opacity: .55; } }

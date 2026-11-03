@@ -1,3 +1,4 @@
+import { unlockProgressCopy, type UnlockPhase } from '../../content/copy';
 /**
  * Main SetupOverlay component
  */
@@ -27,6 +28,7 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onModernSetupComplet
   const [joinInput, setJoinInput] = useState<string>('');
   const [status, setStatus] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [unlockPhase, setUnlockPhase] = useState<UnlockPhase>();
   const passphraseRef = useRef<HTMLInputElement>(null);
   const [passphrase, setPassphrase] = useState('');
   const [passphraseConfirmation, setPassphraseConfirmation] = useState('');
@@ -115,8 +117,7 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onModernSetupComplet
     if (passphraseRef.current) passphraseRef.current.value = '';
     try {
       setIsLoading(true);
-      setStatus('Unlocking your encrypted account…');
-      await restoreSession(passphrase);
+      await restoreSession(passphrase, (phase) => setUnlockPhase(phase));
       setStatus('');
       onModernSetupComplete();
     } catch (error) {
@@ -126,7 +127,7 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onModernSetupComplet
         ? 'The vault unlocked, but this conversation’s saved encrypted session is missing. Keep this device’s data intact while you check for an encrypted backup.'
         : 'Could not unlock this account. Check the local passphrase and try again.');
     }
-    finally { setIsLoading(false); }
+    finally { setIsLoading(false); setUnlockPhase(undefined); }
   };
 
   const heading = view === 'initial' ? accountState === 'ready' ? contactsCopy.inviteTitle : 'Private conversations with your people' : view === 'create' ? 'Create an invitation' : view === 'join' ? 'Join someone you trust' : view === 'modern' ? accountState === 'ready' ? 'Add a private contact' : 'Create your account' : view === 'restore' ? 'Welcome back' : 'Conversation closed';
@@ -214,6 +215,8 @@ export const SetupOverlay: React.FC<SetupOverlayProps> = ({ onModernSetupComplet
         {view === 'restore' && <div className="create-hash-view">
           <label className="input-group">Local passphrase<input ref={passphraseRef} type="password" autoComplete="current-password" minLength={12} /></label>
           <p className="invite-note">Your passphrase unlocks the encrypted data on this device. It is never shared with your contacts.</p>
+          {isLoading && unlockPhase && (() => { const progress = unlockProgressCopy(unlockPhase);
+            return <div className="unlock-progress" role="status" aria-live="polite"><span>{progress.label}</span><progress max={progress.of} value={progress.step} aria-label={`Step ${progress.step} of ${progress.of}`} /></div>; })()}
           <button className="btn btn--primary" type="button" disabled={isLoading} onClick={handleRestore}>{isLoading ? 'Unlocking…' : 'Unlock account'}</button>
           <button className="btn btn--secondary" type="button" onClick={handleBack}>Back</button>
         </div>}

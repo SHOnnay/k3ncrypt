@@ -33,3 +33,11 @@ export const contactDisplayName = (label?: string | null, roomId?: string, remot
   const shortId = roomId?.replace(/[^a-z0-9]/gi, '').slice(-4).toLocaleUpperCase();
   return shortId ? `Contact · ${shortId}` : 'Contact';
 };
+
+/** UX A11: the unlock screen's progress. Phases follow restoreSession: key derivation, local reads, network. */
+export type UnlockPhase = 'unlocking' | 'opening' | 'connecting';
+export const unlockProgressCopy = (phase: UnlockPhase): { label: string; step: number; of: number } => ({
+  unlocking: { label: 'Unlocking your private space…', step: 1, of: 3 },
+  opening: { label: 'Opening your chats…', step: 2, of: 3 },
+  connecting: { label: 'Connecting securely…', step: 3, of: 3 },
+})[phase];
