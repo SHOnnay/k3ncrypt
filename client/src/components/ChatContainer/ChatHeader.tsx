@@ -5,7 +5,7 @@
 import React, { useState } from 'react';
 import { useChat } from '../../context/ChatContext';
 import { Button } from '../common/Button';
-import { CopyIcon, ShareIcon, PhoneIcon, TrashIcon, VideoIcon } from '../common/icons';
+import { CopyIcon, PhoneIcon, TrashIcon, VideoIcon } from '../common/icons';
 import { ApprovedIcon } from '../common/ApprovedIcon';
 import { Avatar } from '../common/Avatar';
 import { StatusPill } from '../common/StatusPill';
@@ -69,20 +69,6 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({ onStartCall, onStartVide
     setTimeout(() => setHashCopied(false), 2000);
   };
 
-  const handleShare = () => {
-    if ('share' in navigator) {
-      navigator
-        .share({
-          title: 'K3ncrypt invitation',
-          text: 'Join my private conversation',
-          url: window.location.href,
-        })
-        .catch(() => {
-          /* user cancelled */
-        });
-    }
-  };
-
 const handleDelete = async () => {
   if (!window.confirm('Are you sure you want to delete this secure channel? This cannot be undone.')) return;
 
@@ -125,29 +111,8 @@ const handleDelete = async () => {
         {pendingConversation && <p className="participant-info" role="status">Opening {roomLabel(pendingConversation.roomId)}… The current conversation remains active until it is ready.</p>}
         {conversationOpenError && <p className="participant-info" role="status">Could not open {roomLabel(conversationOpenError.roomId)}. Your current conversation remains open.</p>}
         {callLaunchBlockReason && <p id="call-launch-reason" className="call-launch-reason" role="status">{callLaunchBlockMessage(callLaunchBlockReason)}</p>}
-        {activeConversation && <details className="conversation-security-details">
-          <summary>Security details</summary>
-          <dl>
-            <div><dt>Check</dt><dd>{securityVisibility.badgeLabel}</dd></div>
-            <div><dt>Security number</dt><dd>{securityVisibility.identityChange === 'unchanged' ? 'No change' : securityVisibility.identityChange === 'changed-pending-review' ? 'Changed' : 'Not available'}</dd></div>
-            <div><dt>Message path</dt><dd>{securityVisibility.transport === 'relay' ? 'Relay' : 'Not available'}</dd></div>
-            <div><dt>Relay connection</dt><dd>{securityVisibility.relayAvailability === 'not-exposed' ? 'Not exposed in this view' : 'Unknown'}</dd></div>
-            <div><dt>Session</dt><dd>{securityVisibility.session === 'healthy' ? 'Healthy' : securityVisibility.session === 'unhealthy' ? 'Unavailable' : securityVisibility.session === 'renewal-pending' ? 'Renewal pending' : 'Not available'}</dd></div>
-          </dl>
-          <p>Relay acknowledgements are not signed peer receipts. They do not prove that a message was displayed or read.</p>
-        </details>}
       </div>
       <div className="header-actions">
-        {typeof navigator !== 'undefined' && 'share' in navigator && (
-          <Button
-            className="btn--icon chat-header__share-action"
-            variant="secondary"
-            onClick={handleShare}
-            title="Share Link"
-          >
-            <ShareIcon size={20} />
-          </Button>
-        )}
         <Button
           className="btn--icon"
           variant="secondary"

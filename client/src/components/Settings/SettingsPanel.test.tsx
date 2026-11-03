@@ -90,3 +90,9 @@ it('shows local data status and conversation codes under Advanced', () => {
   expect(markup).toContain('Old friend'); expect(markup).toContain('CONTACT_REGISTRY_MISSING');
   expect(markup).toContain('Local data status');
 });
+it('shows the current conversation security details under Advanced', () => {
+  mockChat.mockReturnValue({ ...state, contactIdentity: { identityId: 'peer', verification: 'verified', changeStatus: 'unchanged' } });
+  const markup = render('advanced');
+  expect(markup).toContain('This conversation'); expect(markup).toContain('Message path'); expect(markup).toContain('Relay');
+  expect(markup).toContain('Relay acknowledgements are not signed peer receipts');
+});

@@ -90,3 +90,14 @@ it('offers one Review action when the secure connection needs renewing', () => {
   expect(markup).toContain('Your secure connection with your contact needs renewing.');
   expect(markup).toMatch(/<button[^>]*>Review<\/button>/);
 });
+
+// UX A6: no share icon (it shared a URL with no invitation); Security details live in Settings → Advanced.
+it('has no share icon and no Security details disclosure in the header', () => {
+  Object.defineProperty(globalThis.navigator, 'share', { value: () => Promise.resolve(), configurable: true });
+  try {
+    const markup = renderHeader();
+    expect(markup).not.toContain('chat-header__share-action');
+    expect(markup).not.toContain('Share Link');
+    expect(markup).not.toContain('Security details');
+  } finally { delete (globalThis.navigator as unknown as Record<string, unknown>).share; }
+});

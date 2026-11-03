@@ -1,3 +1,4 @@
+import { deriveSecurityVisibility } from '../../product/securityVisibility';
 import { LocalDataStatus } from '../AppShell/LocalDataStatus';
 import { conversationStateCopy } from '../../product/conversationEligibility';
 import { serverCopy } from '../../content/checkCopy';
@@ -232,6 +233,15 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, initialVie
               {unavailableConversations.length === 0 ? <p>None.</p> : <ul className="advanced-diagnostics">{unavailableConversations.map((item, index) =>
                 <li key={`${item.roomId ?? 'entry'}-${index}`}><strong>{item.label}</strong> <code>{item.code ?? item.state}</code><p>{conversationStateCopy(item)}</p></li>)}</ul>}
               <LocalDataStatus className="conversation-recovery conversation-recovery--advanced" />
+              {channelHash && protocolMode === 'modern' && (() => {
+                const visibility = deriveSecurityVisibility({ contact: contactIdentity, sessionHealth, protocol: protocolMode });
+                return <><h4>This conversation</h4><dl className="advanced-security-details">
+                  <div><dt>Check</dt><dd>{visibility.badgeLabel}</dd></div>
+                  <div><dt>Security number</dt><dd>{visibility.identityChange === 'unchanged' ? 'No change' : visibility.identityChange === 'changed-pending-review' ? 'Changed' : 'Not available'}</dd></div>
+                  <div><dt>Message path</dt><dd>{visibility.transport === 'relay' ? 'Relay' : 'Not available'}</dd></div>
+                  <div><dt>Session</dt><dd>{visibility.session === 'healthy' ? 'Healthy' : visibility.session === 'unhealthy' ? 'Unavailable' : visibility.session === 'renewal-pending' ? 'Renewal pending' : 'Not available'}</dd></div>
+                </dl><p>Relay acknowledgements are not signed peer receipts. They do not prove that a message was displayed or read.</p></>;
+              })()}
             </section>
           )}
 
