@@ -34,3 +34,9 @@
 .unlock-progress progress { width: 100%; height: 6px; accent-color: var(--brand); }
 @media (prefers-reduced-motion: no-preference) { .unlock-progress span { animation: unlock-pulse 1.4s ease-in-out infinite; } }
 @keyframes unlock-pulse { 50% { opacity: .55; } }
+
+/* Audit: the unlock and invitation forms had no layout rules; the note rendered at body size with the actions
+   pressed against it. Small muted note, spaced actions that stack on narrow screens. */
+.create-hash-view { display: grid; gap: 10px; text-align: left; }
+.invite-note { margin: 0 0 4px; color: var(--muted); font-size: .8rem; line-height: 1.5; }
+.create-hash-view > .btn { width: 100%; }
