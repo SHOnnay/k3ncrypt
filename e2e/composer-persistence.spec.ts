@@ -1,5 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { create, invite } from './usabilityHelpers';
+// The call steps need media devices in headless Chromium, as in the other call specs.
+test.use({ launchOptions: { args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required'] } });
 
 const verify = async (page: Page) => {
   await page.getByRole('button', { name: 'Open settings' }).click();
@@ -107,6 +109,8 @@ test('keeps the composer mounted and usable through history, room switches, rest
     await openContact(alice, 'Composer Bob');
     await expect(alice.locator('.chat-footer')).toBeVisible();
   }
+  // UX A14: after a room switch the message box has focus, ready to type.
+  await expect(alice.getByRole('textbox', { name: 'Write a message', exact: true })).toBeFocused();
   const switched = await composerState(alice);
   console.log('COMPOSER_SNAPSHOT_SWITCHED', JSON.stringify(switched));
   await expect(alice.getByRole('textbox', { name: 'Write a message', exact: true })).toBeVisible();

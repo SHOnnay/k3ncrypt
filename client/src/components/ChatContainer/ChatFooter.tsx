@@ -20,7 +20,7 @@ import { MAX_USER_MESSAGE_UTF8_BYTES } from '@chat-e2ee/service';
 import { ComposerDrafts } from '../../product/composerDrafts';
 
 export const ChatFooter: React.FC<{ onVerifyContact: () => void }> = (props) => {
-  const { channelHash, plaintextSession } = useChat();
+  const { plaintextSession } = useChat();
   const drafts = useRef(new ComposerDrafts());
   const lifetime = useRef({ scope: plaintextSession, epoch: 0 });
   if (lifetime.current.scope !== plaintextSession) { lifetime.current = { scope: plaintextSession, epoch: lifetime.current.epoch + 1 }; }
@@ -30,7 +30,9 @@ export const ChatFooter: React.FC<{ onVerifyContact: () => void }> = (props) => 
     window.addEventListener('pagehide', clear);
     return () => { window.removeEventListener('pagehide', clear); clear(); };
   }, []);
-  return <RoomComposer key={`${lifetime.current.epoch}:${channelHash}`} {...props} drafts={drafts.current} scope={plaintextSession} />;
+  // UX A14: one composer across room switches (focus and the room's draft stay put); it is rebuilt only when the
+  // unlocked session changes. Per-room fencing lives in RoomComposer (current() checks the room).
+  return <RoomComposer key={lifetime.current.epoch} {...props} drafts={drafts.current} scope={plaintextSession} />;
 };
 
 const RoomComposer: React.FC<{ onVerifyContact: () => void; drafts: ComposerDrafts; scope?: { readonly isCurrent: () => boolean } }> = ({ onVerifyContact, drafts, scope }) => {
@@ -50,7 +52,10 @@ const RoomComposer: React.FC<{ onVerifyContact: () => void; drafts: ComposerDraf
   const mounted = useRef(false);
   const sending = useRef(false);
   const currentScope = useRef(plaintextSession); currentScope.current = plaintextSession;
-  const current = () => mounted.current && scope?.isCurrent() === true && currentScope.current === scope && drafts.boundTo(scope);
+  // A continuation started in one room never updates the composer after the user moved to another room.
+  const currentRoom = useRef(channelHash); currentRoom.current = channelHash;
+  const renderRoom = channelHash;
+  const current = () => mounted.current && scope?.isCurrent() === true && currentScope.current === scope && drafts.boundTo(scope) && currentRoom.current === renderRoom;
   useLayoutEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const [localSending, setIsSending] = useState<boolean>(false);
   const isSending = localSending || drafts.isSending(channelHash);
@@ -103,6 +108,11 @@ const RoomComposer: React.FC<{ onVerifyContact: () => void; drafts: ComposerDraf
     setActionMessage('');
     setActionDiagnostic(undefined);
     if (attachmentInputRef.current) attachmentInputRef.current.value = '';
+    // UX A14: the composer is no longer rebuilt per room, so reset what belonged to the previous room here.
+    setIsSending(false); sending.current = false; attachmentSendLock.current = false;
+    if (recorderRef.current?.state === 'recording') { discardRecording.current = true; recorderRef.current.stop(); }
+    capture.current.release(); setIsRecording(false);
+    inputRef.current?.focus({ preventScroll: true });
   }, [channelHash]);
 
   useEffect(() => {
