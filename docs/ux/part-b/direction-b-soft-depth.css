@@ -1,0 +1,15 @@
+/* Direction B — Soft Depth. Warmer, tactile: warmer cream, rounder shapes, layered soft shadows, pill controls. */
+:root[data-direction='b'] {
+  --canvas: #F2EDE3; --canvas-soft: #F5F1E9; --surface: #FAF7F1; --surface-raised: #FFFCF6; --surface-muted: #ECE6DA; --surface-tint: #E9E6DD;
+  --border: #E6DFD1; --brand-soft: #DFE7EF;
+  --radius-md: 18px; --radius-lg: 24px; --radius-xl: 32px;
+  --shadow-sm: 0 2px 6px rgba(52, 44, 30, .06), 0 8px 24px rgba(52, 44, 30, .06);
+  --shadow-md: 0 4px 12px rgba(52, 44, 30, .06), 0 20px 50px rgba(52, 44, 30, .10);
+}
+:root[data-direction='b'] .btn, :root[data-direction='b'] .new-conversation, :root[data-direction='b'] .composer-tool { border-radius: 999px; }
+:root[data-direction='b'] .message-file-card, :root[data-direction='b'] .call-history-row, :root[data-direction='b'] .call-launch-card { box-shadow: var(--shadow-sm); border: 0; }
+:root[data-direction='b'] .message.sent .message-text { border-radius: 22px 22px 6px 22px; }
+:root[data-direction='b'] .message.received .message-text { border-radius: 22px 22px 22px 6px; }
+:root[data-direction='b'] .avatar { background: linear-gradient(155deg, #E3E9EE, #D5DFE9); color: var(--brand-strong); }
+:root[data-direction='b'] .call-row { background: var(--surface-raised); box-shadow: var(--shadow-sm); }
+:root[data-direction='b'] .input-container { border-radius: 999px; box-shadow: var(--shadow-sm); }

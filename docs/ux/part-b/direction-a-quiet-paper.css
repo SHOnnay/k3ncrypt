@@ -1,0 +1,16 @@
+/* Direction A — Quiet Paper. Flatter, editorial: hairline borders, solid cobalt, more air. Same tokens, calmer values. */
+:root[data-direction='a'] {
+  --canvas: #F3F1EC; --canvas-soft: #F6F4EF; --surface: #FBFAF7; --surface-raised: #FFFFFF; --surface-muted: #EFECE5; --surface-tint: #ECEDEA;
+  --border: #E4E0D6; --border-strong: #D2CDC1;
+  --brand-grad: #2F5D8A; --sent-grad: #2F5D8A; --glow: none;
+  --shadow-sm: none; --shadow-md: 0 1px 0 rgba(27, 31, 36, .06); --shadow-lg: 0 12px 40px rgba(27, 31, 36, .08);
+  --radius-md: 10px; --radius-lg: 14px; --radius-xl: 18px;
+}
+:root[data-direction='a'] .sidebar { background: var(--canvas); border-right: 1px solid var(--border); box-shadow: none; }
+:root[data-direction='a'] .new-conversation, :root[data-direction='a'] .btn--primary { background: var(--brand); box-shadow: none; }
+:root[data-direction='a'] .chat-header { background: var(--canvas); border-bottom: 1px solid var(--border); backdrop-filter: none; }
+:root[data-direction='a'] .message .message-text, :root[data-direction='a'] .message-file-card { box-shadow: none; border: 1px solid var(--border); }
+:root[data-direction='a'] .message.sent .message-text { border-color: transparent; }
+:root[data-direction='a'] h1, :root[data-direction='a'] .channel-title, :root[data-direction='a'] .workspace-page__header h1 { letter-spacing: -.01em; font-weight: 600; }
+:root[data-direction='a'] .call-row { background: transparent; border: 1px solid var(--border); }
+:root[data-direction='a'] .conversation-row.active, :root[data-direction='a'] .primary-navigation button.active { background: var(--surface); box-shadow: inset 2px 0 0 var(--brand); }
