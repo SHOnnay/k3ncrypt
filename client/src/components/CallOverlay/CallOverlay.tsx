@@ -34,15 +34,19 @@ export const CallOverlay: React.FC = () => {
   // that node is mounted again even when the MediaStream object is unchanged.
   }, [callActive, remoteCallStream]);
 
+  // The <video> nodes unmount behind the "Camera off" / "Waiting" placeholders, and turning the camera back on
+  // reuses the same MediaStream object. Re-attach whenever a node mounts again, not only when the stream changes.
+  const localVideoState = localVideoPlaceholder(cameraEnabled, localCallStream);
+  const remoteVideoState = remoteVideoPlaceholder(remoteCallStream);
   useEffect(() => {
     attachMediaStream(localVideo.current, localCallStream);
     return () => attachMediaStream(localVideo.current, undefined);
-  }, [localCallStream]);
+  }, [localCallStream, localVideoState]);
 
   useEffect(() => {
     attachMediaStream(remoteVideo.current, remoteCallStream);
     return () => attachMediaStream(remoteVideo.current, undefined);
-  }, [remoteCallStream]);
+  }, [remoteCallStream, remoteVideoState]);
 
   useEffect(() => {
     if (callActive && callStatus === 'Connected') {
@@ -79,8 +83,6 @@ export const CallOverlay: React.FC = () => {
   const isVideo = callMediaMode === 'video';
   const callConversation = conversations.find((conversation) => conversation.roomId === (activeCallRoomId ?? channelHash));
   const callContact = contactDisplayName(callConversation?.label, activeCallRoomId ?? channelHash, callConversation?.remoteDisplayName, callConversation?.localNickname);
-  const localVideoState = localVideoPlaceholder(cameraEnabled, localCallStream);
-  const remoteVideoState = remoteVideoPlaceholder(remoteCallStream);
   const mediaControlsReady = ['connecting', 'connected'].includes(callLifecycleState);
 
   return (
