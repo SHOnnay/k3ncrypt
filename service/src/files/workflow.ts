@@ -10,7 +10,8 @@ export interface FileGateway {
     status(id: string, signal: AbortSignal): Promise<FileStatus>;
     put(id: string, index: 'manifest' | number, value: WireObject, signal: AbortSignal): Promise<FileStatus>;
     complete(id: string, signal: AbortSignal): Promise<FileStatus>;
-    chunk(id: string, index: number, signal: AbortSignal): Promise<WireObject>;
+    /** onBytes reports response bytes received so far, so a slow chunk can show progress (UX A3). */
+    chunk(id: string, index: number, signal: AbortSignal, onBytes?: (received: number) => void): Promise<WireObject>;
     cancel(id: string): Promise<void>;
 }
 interface Pending { source: FileSource; reference: FileReference; key: Uint8Array; cache: SealedFileCache; produced: Set<string>; }
@@ -124,7 +125,8 @@ export class FileTransferWorkflow {
                 for (let i = 0; i < r.context.chunkCount; i++) {
                     if (!sameBinding(await this.authority(true, false), own)) throw new Error('File contact changed.'); this.fence(g);
                     this.failureStage = 'FILE_DOWNLOAD_FAILED';
-                    const value = await this.gateway.chunk(r.context.transferId, i, this.controller.signal); this.fence(g);
+                    const plainSize = Math.min(r.context.chunkSize, manifest.fileSize - i * r.context.chunkSize);
+                    const value = await this.gateway.chunk(r.context.transferId, i, this.controller.signal, chunkProgress(plainSize, (part) => this.state.move(g, 'Downloading', total + part))); this.fence(g);
                     this.state.move(g, 'Verifying', total);
                     this.failureStage = 'FILE_AUTHENTICATION_FAILED';
                     const plaintext = await openAttachmentChunk(key, { ...r.context, chunkIndex: i }, sealed(value, L.MAX_CHUNK_SIZE + 16));
@@ -156,3 +158,13 @@ export class FileTransferWorkflow {
     private async forget(): Promise<void> { this.controller?.abort(); await this.release(true); }
     dispose(): void { this.cancel(); }
 }
+
+/** Maps response bytes onto the chunk's plaintext share (base64 JSON is ~4/3 larger), emitting only on a new percent. */
+const chunkProgress = (plainSize: number, report: (plainBytes: number) => void) => {
+    const expected = Math.ceil((plainSize + 16) / 3) * 4 + 200; let last = -1;
+    return (received: number): void => {
+        const part = Math.min(plainSize, Math.floor(plainSize * Math.min(1, received / expected)));
+        const percent = Math.floor((part / Math.max(1, plainSize)) * 100);
+        if (percent > last && part < plainSize) { last = percent; report(part); }
+    };
+};

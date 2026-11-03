@@ -125,3 +125,24 @@ test('receive refreshes contact authority from the server once, then checks loca
     expect(authority.mock.calls.filter(([, refresh]) => refresh === false).length).toBeGreaterThanOrEqual(3);
     expect(authority.mock.calls.every(([verified]) => verified === true)).toBe(true);
 });
+
+// UX A3: a single-chunk download showed "Downloading… 0%" for the whole fetch. Progress follows bytes as they arrive.
+test('download progress advances while a chunk streams in, not only after it completes', async () => {
+    class StreamingGateway extends Gateway {
+        async chunk(id: string, index: number, signal?: AbortSignal, onBytes?: (received: number) => void): Promise<WireObject> {
+            const value = await super.chunk(id, index);
+            const wire = value.ciphertext.length + 200;
+            for (const share of [0.25, 0.5, 0.75, 1]) onBytes?.(Math.floor(wire * share));
+            void signal; return value;
+        }
+    }
+    const gateway = new StreamingGateway(); let reference = ''; const size = 200_000;
+    await new FileTransferWorkflow(gateway, async () => binding, async () => cache(), async r => { reference = r; }).send(source(size));
+    const events: { phase: string; bytes: number; total: number }[] = [];
+    const receiver = new FileTransferWorkflow(gateway, async () => recipient, async () => cache(), async () => {}, p => events.push({ phase: p.phase, bytes: p.bytes, total: p.total }));
+    await receiver.receive(reference, async () => output().out);
+    const midway = events.filter(e => e.phase === 'Downloading' && e.total === size && e.bytes > 0 && e.bytes < size);
+    expect(midway.length).toBeGreaterThanOrEqual(2);
+    expect(midway.map(e => e.bytes)).toEqual([...midway.map(e => e.bytes)].sort((a, b) => a - b));
+    expect(receiver.state.value.phase).toBe('Complete');
+});
