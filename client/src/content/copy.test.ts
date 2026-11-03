@@ -13,7 +13,6 @@ describe('contact labels', () => {
 
 // UX A11: unlocking shows where it is, in plain words.
 it('describes each unlock phase in plain words', () => {
-  expect(unlockProgressCopy('unlocking')).toEqual({ label: 'Unlocking your private space…', step: 1, of: 3 });
-  expect(unlockProgressCopy('opening')).toEqual({ label: 'Opening your chats…', step: 2, of: 3 });
-  expect(unlockProgressCopy('connecting')).toEqual({ label: 'Connecting securely…', step: 3, of: 3 });
+  expect(unlockProgressCopy('unlocking')).toEqual({ label: 'Unlocking your private space…', step: 1, of: 2 });
+  expect(unlockProgressCopy('opening')).toEqual({ label: 'Opening your chats…', step: 2, of: 2 });
 });

@@ -1,6 +1,6 @@
 # Unlock speed: measurements and proposal (UX A11)
 
-Status: proposal for the owner. **Nothing in the key derivation or the unlock flow has been changed.** The only change shipped with this note is the unlock progress state ("Unlocking your private space…" → "Opening your chats…" → "Connecting securely…").
+Status: decided 2026-11-03. A (keep Argon2id) and B (unlock waits only for local work) are done; C is partly done. See "Result" at the end. Argon2id parameters are unchanged.
 
 ## What was reported
 
@@ -47,3 +47,27 @@ Each saves one or more round trips per unlock and per chat opened.
 1. Keep the Argon2id parameters (A, recommended), or move to m = 46 MiB, t = 1 with a re-wrap migration.
 2. Approve B (unlock waits only for local work).
 3. Schedule C as a relay/client performance task.
+
+## Result (2026-11-03)
+
+Owner decision: keep the Argon2id parameters, do B, and cut the sequential round trips.
+
+What changed:
+- **B.** `restoreSession` returns once the vault is open and the chat list is read. The first saved chat then connects in the background, the same way a selected chat opens: its row shows as opening, and a click on another chat supersedes it. The unlock progress is now two steps (unlocking, opening chats).
+- **C, status probe.** The startup path no longer asks for the room status before connecting. Local eligibility decides; the status is read only if admission fails, to report expiry or deletion. This is the rule `openConversation` already followed.
+- **C, transport.** Socket.IO opens over WebSocket first (`RELAY_SOCKET_OPTIONS`), with polling as the fallback (`tryAllTransports`). This removes the three polling handshake requests.
+
+Not changed, with reasons:
+- **Two device proofs.** Both are `relay:message`: one for the channel join, one for the first protected send after it. They are separate operations, and proofs are single-use by design, so they stay separate.
+- **Prekey requests.** The three are: read own key bundle, renew it (only when fewer than 10 one-time keys remain), read the contact's bundle. They are not a re-read of the same thing. Combining them needs a new relay endpoint that Android would share; left for the relay performance task.
+
+Measured with the opt-in spec `e2e/unlock-timing.spec.ts` (`UNLOCK_TIMING=true`): local stack, 110 ms added to every HTTP request, 3 rounds each. The test cannot delay WebSocket frames, so production numbers will be higher in both columns.
+
+| | Before (`6948f4a6`) | After |
+|---|---|---|
+| Unlock screen open after clicking Unlock | 885–947 ms | 133–137 ms |
+| HTTP requests while the unlock screen waits | 9 | 1 |
+| HTTP requests until the chat is connected | 9 | 5 |
+| Chat connected and ready to send | 894–954 ms | 1006–1008 ms |
+
+Time until the chat is connected is about the same locally. The network chain is shorter by four requests, but the app now renders while the connection finishes, which adds about 100 ms of main-thread work on this stack. On production, each removed request is about 110–220 ms, so the connected time should drop by roughly 0.4–0.9 s there; this is unconfirmed until measured after release.

@@ -1,4 +1,4 @@
-import socketIOClient, { Socket } from 'socket.io-client';
+import socketIOClient, { Socket, type ManagerOptions, type SocketOptions } from 'socket.io-client';
 import { configContext } from '../configContext';
 import type {
     CryptoChannel,
@@ -29,6 +29,9 @@ export type RawChatMessage = {
     claimId?: string;
 };
 export type RawSignalMessage = { envelope: EncryptedEnvelope };
+
+/** UX A11: open the relay over WebSocket directly, saving the polling handshake's round trips. Polling stays as the fallback. */
+export const RELAY_SOCKET_OPTIONS: Partial<ManagerOptions & SocketOptions> = { transports: ['websocket', 'polling'], tryAllTransports: true };
 
 export const JOIN_INTRODUCTION_FEATURE = 'join-introduction-v1';
 const SUPPORTED_PROTOCOL_FEATURES = [JOIN_INTRODUCTION_FEATURE, ROOM_MESSAGE_V1_FEATURE, ROOM_CALL_SIGNAL_V2_FEATURE] as const;
@@ -83,7 +86,7 @@ export class SocketIoRelayTransport implements Transport {
         private readonly onEnvelope: TransportEnvelopeHandler,
     ) {
         this.eventHandlerLogger = this.logger.createChild('eventHandler');
-        this.socket = socketIOClient(`${configContext().baseUrl}/`);
+        this.socket = socketIOClient(`${configContext().baseUrl}/`, RELAY_SOCKET_OPTIONS);
         this.socket.on('connect', () => {
             this.connectionGeneration += 1;
             this.joinedGeneration = -1;

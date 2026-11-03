@@ -1,5 +1,6 @@
 import socketIOClient, { type Socket } from 'socket.io-client';
 import { configContext } from '../configContext';
+import { RELAY_SOCKET_OPTIONS } from './socketIoRelayTransport';
 import type { CryptoChannel, EncryptedEnvelope, InboundTransportDecision, Transport, TransportConnectionState, TransportDeliveryStatusHandler, TransportEnvelopeHandler, TransportManager, TransportSendResult } from '../core/contracts';
 import type { DeviceProofCarrier, DeviceResourceContext } from '../devices/trustProtocol';
 import type { DeviceProofOperation } from '../devices/deviceProofClient';
@@ -36,7 +37,7 @@ export class MultiplexedRelayConnection {
   private readonly diagnostics = { sendAttempts: 0, storedMessages: 0, receivedFrames: 0, acceptedFrames: 0, retryableFrames: 0, acceptedStatuses: 0, rejectedStatuses: 0, subscriptionProofAcquisitions: 0, subscriptionRenewals: 0 };
 
   constructor(socket?: Socket) {
-    this.socket = socket ?? socketIOClient(`${configContext().baseUrl}/`);
+    this.socket = socket ?? socketIOClient(`${configContext().baseUrl}/`, RELAY_SOCKET_OPTIONS);
     this.socket.on('disconnect', () => {
       this.authenticatedGeneration = undefined;
       for (const room of this.rooms.values()) {

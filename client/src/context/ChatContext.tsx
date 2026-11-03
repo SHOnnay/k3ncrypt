@@ -993,25 +993,44 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     // Local eligibility first. Probe only rooms actually opened, avoiding hundreds of cold-start requests.
     const index = await refreshConversations(secureVault);
     setOrphanedConversationRecords(await diagnoseOrphanedConversationRecords(secureVault).catch(() => ({ roomIds: [], truncated: false, available: false })));
-    onProgress?.('connecting');
-    for (const descriptor of index.conversations) {
+    // UX A11: the unlock screen waits only for local work. The first saved conversation connects in the
+    // background like a selected one, so a click on another conversation supersedes it.
+    setAccountState('ready');
+    void reconnectFirstConversation(secureVault, index.conversations);
+  }, [modern]);
+
+  const reconnectFirstConversation = async (secureVault: BrowserSecureStorage, descriptors: ConversationDescriptor[]): Promise<void> => {
+    const operationId = ++conversationOpenGeneration.current;
+    const current = () => conversationOpenGeneration.current === operationId && !secureVault.isLocked();
+    for (const descriptor of descriptors) {
       if (descriptor.locallyArchived) continue;
+      if (!current()) return;
+      setPendingConversation({ roomId: descriptor.roomId, operationId });
       try {
-        const failure = await conversationEligibility(secureVault, descriptor, probeConversationRoom);
+        // Local eligibility only; the room status is observed off this path, only if admission fails.
+        const failure = await conversationEligibility(secureVault, descriptor);
         if (failure) throw conversationFailure(failure);
-        await connectModern(secureVault, descriptor); setAccountState('ready'); return;
+        await connectModern(secureVault, descriptor, false, operationId);
+        if (current()) setPendingConversation(undefined);
+        return;
       }
       catch (error) {
+        if (!current()) return;
         const code = classifySafeDiagnostic('conversation-open', error);
-        setUnavailableConversations(current => [...current.filter(item => item.roomId !== descriptor.roomId), conversationDiagnostic(descriptor, code)]);
+        setUnavailableConversations(items => [...items.filter(item => item.roomId !== descriptor.roomId), conversationDiagnostic(descriptor, code)]);
         setRoomState(descriptor.roomId, { connection: authoritativeTerminal(code) ? 'failed' : 'disconnected' });
-        if (authoritativeTerminal(code)) setConversations(current => current.filter(item => item.roomId !== descriptor.roomId));
+        if (authoritativeTerminal(code)) setConversations(items => items.filter(item => item.roomId !== descriptor.roomId));
+        else void observeAuthoritativeRoomState(descriptor, probeConversationRoom, (terminal) => {
+          if (!current()) return;
+          setUnavailableConversations(items => [...items.filter(item => item.roomId !== descriptor.roomId), conversationDiagnostic(descriptor, terminal)]);
+          setRoomState(descriptor.roomId, { connection: 'failed' });
+          setConversations(items => items.filter(item => item.roomId !== descriptor.roomId));
+        }, current);
         if (code === 'NETWORK_FAILURE' || code === 'SERVICE_NOT_READY') break;
       }
     }
-    setAccountState('ready');
-
-  }, [modern]);
+    if (current()) setPendingConversation(undefined);
+  };
 
   const openConversation = useCallback(async (roomId: string): Promise<void> => {
     roomObservation.current?.abort();
