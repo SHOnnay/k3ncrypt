@@ -21,6 +21,10 @@ test('an unverified recipient cannot open a received file until they verify the 
   await bob.locator('#channel-hash').fill(link); await bob.getByRole('button', { name: 'Continue', exact: true }).click();
   await expect(alice.locator('.chat-header')).toContainText('Bob', { timeout: 30_000 });
   await expect(bob.locator('.chat-header')).toContainText('Alice', { timeout: 30_000 });
+  // UX A10: before checking, the attach control is off and says why; Check now is offered.
+  const blockedAttach = bob.getByRole('button', { name: 'Check Alice first to send files', exact: true });
+  await expect(blockedAttach).toBeDisabled();
+  await expect(bob.locator('.check-banner').getByRole('button', { name: 'Check now', exact: true })).toBeVisible();
   await verify(alice);
 
   await alice.locator('input[type=file]').setInputFiles({ name: 'note.txt', mimeType: 'text/plain', buffer: Buffer.from('family photo list') });

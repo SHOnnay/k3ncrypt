@@ -28,4 +28,17 @@ describe('Web chat composer', () => {
     expect(markup).toContain('Before sharing photos and files, check it’s really your contact. It takes a minute.');
     expect(markup).toContain('>Check now</button>');
   });
+
+  // UX A10: before checking, the attach control says why it is off and the banner offers Check now.
+  it('labels the disabled attach control with the reason and offers Check now', () => {
+    mockUseChat.mockReturnValue({ sendMessage: jest.fn(), sessionHealth: 'healthy', channelHash: 'room', conversations: [{ roomId: 'room', label: 'Alice' }],
+      contactIdentity: { verification: 'unverified', changeStatus: 'unchanged' } });
+    mockUseFiles.mockReturnValue({ transfer: { phase: 'Idle', bytes: 0, total: 0 }, sendFile: jest.fn(), retry: jest.fn(), cancel: jest.fn(), receive: jest.fn() });
+    const markup = renderToStaticMarkup(createElement(ChatFooter, { onVerifyContact: () => undefined }));
+    const attach = markup.match(/<button class="composer-tool"[^>]*aria-label="Check Alice first to send files"[^>]*>/)?.[0] ?? '';
+    expect(attach).toContain('disabled'); expect(attach).toContain('title="Check Alice first to send files"');
+    expect(markup).toContain('aria-describedby="check-files-reason"');
+    expect(markup).toContain('id="check-files-reason"');
+    expect(markup).toContain('Check now');
+  });
 });
