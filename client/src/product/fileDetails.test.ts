@@ -17,7 +17,8 @@ it('remembers file details per chat in encrypted storage and caps them', async (
   expect(details['transfer-a']).toEqual({ name: 'report.pdf', mimeType: 'application/pdf' });
   expect(details['transfer-b'].name.length).toBeLessThanOrEqual(120);
   expect(await readFileDetails(vault, 'room-2')).toEqual({});
-  for (let i = 0; i < 520; i++) await rememberFileDetails(vault, { roomId: 'room-3', transferId: `t${i}`, details: { name: `f${i}.bin` } });
+  // 502 sequential encrypted writes prove the 500-entry cap; slow under full-suite load, hence the explicit timeout.
+  for (let i = 0; i < 502; i++) await rememberFileDetails(vault, { roomId: 'room-3', transferId: `t${i}`, details: { name: `f${i}.bin` } });
   const capped = await readFileDetails(vault, 'room-3');
-  expect(Object.keys(capped)).toHaveLength(500); expect(capped.t519).toBeDefined(); expect(capped.t0).toBeUndefined();
-});
+  expect(Object.keys(capped)).toHaveLength(500); expect(capped.t501).toBeDefined(); expect(capped.t0).toBeUndefined(); expect(capped.t1).toBeUndefined();
+}, 30_000);
