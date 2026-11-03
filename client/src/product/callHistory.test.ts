@@ -1,4 +1,4 @@
-import { LocalCallHistory, callRowSummary, validLocalCallEvent } from './callHistory';
+import { LocalCallHistory, buildCallHistory, callRowSummary, validLocalCallEvent } from './callHistory';
 import type { CallSession } from '@chat-e2ee/service';
 import { BrowserSecureStorage } from '../../../service/src/storage/secureVault';
 import { MemoryVaultPersistence } from '../../../service/src/storage/persistence';
@@ -72,4 +72,19 @@ it.each([
   [{ mode: 'video', outcome: 'failed', direction: 'outgoing' }, 'Failed video call', undefined, 'failed'],
 ] as const)('summarizes %j as one line', (event, title, duration, tone) => {
   expect(callRowSummary(event)).toEqual({ title, duration, tone });
+});
+
+// UX A8: the Calls page lists every saved chat's calls, newest first, from local encrypted history.
+it('builds a newest-first call list across rooms and ignores ordinary messages', () => {
+  const at = (minute: number) => new Date(Date.UTC(2026, 10, 3, 9, minute));
+  const call = (id: string, minute: number, event: Record<string, unknown>) => ({ id, sender: 'local-call-history', type: 'received' as const, text: 'Call', timestamp: at(minute), callEvent: event as never });
+  const history = buildCallHistory([
+    { roomId: 'r1', name: 'Alice', messages: [call('a1', 1, { mode: 'audio', outcome: 'completed', direction: 'outgoing', durationSeconds: 60 }), { id: 'm', sender: 'me', type: 'sent', text: 'hi', timestamp: at(2) }] },
+    { roomId: 'r2', name: 'Bob', messages: [call('b1', 5, { mode: 'video', outcome: 'missed', direction: 'incoming' })] },
+  ]);
+  expect(history.map((entry) => [entry.id, entry.roomId, entry.name, entry.event.outcome])).toEqual([['b1', 'r2', 'Bob', 'missed'], ['a1', 'r1', 'Alice', 'completed']]);
+});
+it('caps the call list', () => {
+  const messages = Array.from({ length: 250 }, (_, i) => ({ id: `c${i}`, sender: 'local-call-history', type: 'received' as const, text: 'Call', timestamp: new Date(i * 1000), callEvent: { mode: 'audio', outcome: 'completed', direction: 'outgoing', durationSeconds: 1 } as never }));
+  expect(buildCallHistory([{ roomId: 'r', name: 'A', messages }])).toHaveLength(200);
 });

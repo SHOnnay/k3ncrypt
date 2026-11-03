@@ -3,7 +3,8 @@ import { probeConversationRoom, probeInvitationExpiry } from '../product/convers
 import { ConversationSelection, commitPreparedSelection } from '../product/conversationSelection';
 import { authoritativeTerminal, conversationDiagnostic, conversationEligibility, conversationFailure, diagnoseOrphanedConversationRecords, observeAuthoritativeRoomState, readConversationIndex, roomObservationCurrent, type ConversationDiagnostic } from '../product/conversationEligibility';
 import { classifySafeDiagnostic, type SafeDiagnosticCode } from '../product/safeDiagnostics';
-import { LocalCallHistory } from '../product/callHistory';
+import { LocalCallHistory, buildCallHistory, type CallHistoryEntry } from '../product/callHistory';
+import { contactDisplayName } from '../content/copy';
 import { parseFileReference } from '@chat-e2ee/service';
 /**
  * Chat context provider for explicit legacy and modern service paths.
@@ -146,6 +147,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [orphanedConversationRecords, setOrphanedConversationRecords] = useState<{ roomIds: string[]; truncated: boolean; available: boolean }>();
   const [conversations, setConversations] = useState<ConversationDescriptor[]>([]);
   const [savedConversations, setSavedConversations] = useState<ConversationDescriptor[]>([]);
+  const [callHistory, setCallHistory] = useState<CallHistoryEntry[]>([]);
   const [savedContactVerification, setSavedContactVerification] = useState<Record<string, 'verified' | 'unverified' | 'review-required' | 'unknown'>>({});
   const invitationExpiryLookups = useRef(new Map<string, number | null>());
   const conversationsRef = useRef(conversations); conversationsRef.current = conversations;
@@ -1760,6 +1762,16 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   }, [chat, channelHash, modern, protocolMode, vault]);
 
+  const refreshCallHistory = useCallback(async (): Promise<void> => {
+    if (!vault || accountState !== 'ready') { setCallHistory([]); return; }
+    const rooms = await Promise.all(savedConversations.filter((item) => !item.locallyArchived).map(async (item) => ({
+      roomId: item.roomId, name: contactDisplayName(item.label, item.roomId, item.remoteDisplayName, item.localNickname),
+      messages: await readMessages(vault, item.roomId).catch(() => []),
+    })));
+    setCallHistory(buildCallHistory(rooms));
+  }, [vault, accountState, savedConversations]);
+  useEffect(() => { if (accountState !== 'ready') setCallHistory([]); }, [accountState]);
+
   const value: ChatContextType = {
     plaintextSession,
     chat,
@@ -1790,6 +1802,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     conversations,
     unavailableConversations,
     savedConversations,
+    callHistory,
+    refreshCallHistory,
     savedContactVerification,
     orphanedConversationRecords,
     profileDisplayName,

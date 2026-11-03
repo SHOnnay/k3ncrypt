@@ -120,3 +120,16 @@
 .workspace-contact-group { display: grid; gap: 10px; margin-top: 16px; }
 .workspace-contact-group__title { margin: 0; font-size: .8rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted-strong); }
 .workspace-contact-group__title span { font-weight: 500; }
+
+/* UX A8: recent calls across all saved chats. */
+.call-history { margin-top: 22px; }
+.call-history h2 { margin: 0 0 10px; font-size: .95rem; }
+.call-history__empty { color: var(--muted); font-size: .85rem; }
+.call-history__list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.call-history-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 12px; padding: 10px 12px; border-radius: var(--radius-md); background: var(--surface); }
+.call-history-row__copy { display: grid; min-width: 0; }
+.call-history-row__copy strong, .call-history-row__copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.call-history-row__copy small { color: var(--muted); }
+.call-history-row--missed .call-history-row__copy small, .call-history-row--failed .call-history-row__copy small { color: var(--danger); }
+.call-history-row__time { color: var(--muted); font-size: .75rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+@media (max-width: 480px) { .call-history-row { grid-template-columns: auto minmax(0, 1fr) auto; } .call-history-row__time { display: none; } }

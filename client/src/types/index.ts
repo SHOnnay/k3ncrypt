@@ -79,6 +79,9 @@ export interface ChatContextType {
   conversations: ConversationDescriptor[];
   /** List presentation includes unavailable/archived descriptors; never admission or trust authority. */
   savedConversations: ConversationDescriptor[];
+  /** UX A8: calls across saved chats, newest first, from local encrypted history. Empty while locked. */
+  callHistory?: import('../product/callHistory').CallHistoryEntry[];
+  refreshCallHistory?: () => Promise<void>;
   savedContactVerification: Record<string, 'verified' | 'unverified' | 'review-required' | 'unknown'>;
   unavailableConversations: import('../product/conversationEligibility').ConversationDiagnostic[];
   orphanedConversationRecords?: { roomIds: string[]; truncated: boolean; available: boolean };

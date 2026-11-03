@@ -1,5 +1,6 @@
+import { callRowSummary } from '../../product/callHistory';
 import { CHECK_PILL, contactsCopy } from '../../content/checkCopy';
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useChat } from '../../context/ChatContext';
 import { Avatar } from '../common/Avatar';
 import { Button } from '../common/Button';
@@ -20,7 +21,7 @@ export const WorkspaceSection: React.FC<WorkspaceSectionProps> = ({ section, onO
   const [callMessage, setCallMessage] = useState('');
   const [startingCall, setStartingCall] = useState<'audio' | 'video'>();
   const [contactQuery, setContactQuery] = useState('');
-  const { conversations, savedConversations = conversations, savedContactVerification = {}, unavailableConversations = [], channelHash, isConnected, sessionHealth, protocolMode, contactIdentity, startCall, startVideoCall, callActive, setContactNickname } = useChat();
+  const { conversations, savedConversations = conversations, savedContactVerification = {}, unavailableConversations = [], channelHash, isConnected, sessionHealth, protocolMode, contactIdentity, startCall, startVideoCall, callActive, setContactNickname, callHistory = [], refreshCallHistory } = useChat();
   const groups = useMemo(() => classifySidebarConversations(savedConversations, unavailableConversations), [savedConversations, unavailableConversations]);
   const displayName = (item: typeof conversations[number]) => contactDisplayName(item.label, item.roomId, item.remoteDisplayName, item.localNickname);
   const verificationCopy: Record<string, string> = { verified: CHECK_PILL.checked, unverified: CHECK_PILL.unchecked, 'review-required': CHECK_PILL.changed, unknown: CHECK_PILL.unavailable };
@@ -53,6 +54,17 @@ export const WorkspaceSection: React.FC<WorkspaceSectionProps> = ({ section, onO
       setStartingCall(undefined);
     }
   };
+  // UX A8: Calls page history and Call back. Call back opens that chat, then starts the call once it is the
+  // active, checked, connected conversation; otherwise the existing plain reason is shown on the launch card.
+  const [callBack, setCallBack] = useState<{ roomId: string; mode: 'audio' | 'video' }>();
+  useEffect(() => { if (section === 'calls') void refreshCallHistory?.(); }, [section, refreshCallHistory]);
+  useEffect(() => {
+    if (!callBack) return undefined;
+    if (channelHash === callBack.roomId && !callLaunchBlockReason) { setCallBack(undefined); void launchCall(callBack.mode); return undefined; }
+    const expiry = setTimeout(() => setCallBack(undefined), 15_000);
+    return () => clearTimeout(expiry);
+  // launchCall is recreated each render; the trigger is the active room and readiness.
+  }, [callBack, channelHash, callLaunchBlockReason]);
 
   if (section === 'contacts') {
     return <main className="workspace-page">
@@ -85,6 +97,21 @@ export const WorkspaceSection: React.FC<WorkspaceSectionProps> = ({ section, onO
       {callLaunchBlockReason && <p className="workspace-call-readiness" role="status">{callLaunchBlockMessage(callLaunchBlockReason)}</p>}
       {callMessage && <p className="workspace-feedback" role="status">{callMessage}</p>}
     </section> : <div className="workspace-empty"><span className="workspace-empty__mark"><img src="/branding/k3ncrypt-cluster-white.svg" alt="" /></span><h2>No active conversation</h2><p>Open a checked contact’s chat to start a call.</p></div>}
+    <section className="call-history" aria-labelledby="call-history-heading">
+      <h2 id="call-history-heading">Recent calls</h2>
+      {callHistory.length === 0 ? <p className="call-history__empty">No calls yet. Calls you make or receive appear here.</p> : <ul className="call-history__list">{callHistory.map((entry) => {
+        const row = callRowSummary(entry.event); const kind = entry.event.mode === 'video' ? 'video' : 'voice';
+        return <li key={`${entry.roomId}-${entry.id}`} className={`call-history-row call-history-row--${row.tone}`}>
+          <Avatar label={entry.name} size="medium" />
+          <span className="call-history-row__copy"><strong>{entry.name}</strong><small>{row.title}{row.duration ? ` · ${row.duration}` : ''}</small></span>
+          <time className="call-history-row__time">{entry.timestamp.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</time>
+          <Button variant="secondary" className="btn--icon" aria-label={`Call back ${entry.name} (${kind})`} title={`Call back (${kind})`} disabled={callActive || startingCall !== undefined}
+            onClick={() => { setCallMessage(''); setCallBack({ roomId: entry.roomId, mode: entry.event.mode }); if (channelHash !== entry.roomId) onOpenConversation(entry.roomId); }}>
+            {entry.event.mode === 'video' ? <VideoIcon size={17} /> : <PhoneIcon size={17} />}
+          </Button>
+        </li>;
+      })}</ul>}
+    </section>
     <section className="calls-note"><span className="calls-note__dot" /><p>Call history is saved locally in this device’s encrypted conversation history. Microphone or camera access is requested only when you start or accept a call.</p></section>
   </main>;
 };

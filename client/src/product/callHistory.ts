@@ -46,3 +46,12 @@ export class LocalCallHistory {
     return { id: `local-call:${session.callId}`, sender: 'local-call-history', type: 'received', text: callEventLabel(event), timestamp: new Date(session.updatedAt), callEvent: event };
   }
 }
+
+/** UX A8: one entry on the Calls page, read from a saved chat's local encrypted history. */
+export interface CallHistoryEntry { id: string; roomId: string; name: string; timestamp: Date; event: LocalCallEvent; }
+export const CALL_HISTORY_LIMIT = 200;
+export const buildCallHistory = (rooms: readonly { roomId: string; name: string; messages: readonly Message[] }[]): CallHistoryEntry[] =>
+  rooms.flatMap(({ roomId, name, messages }) => messages.flatMap((message) => message.callEvent && validLocalCallEvent(message.callEvent)
+    ? [{ id: message.id, roomId, name, timestamp: message.timestamp, event: message.callEvent }] : []))
+    .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
+    .slice(0, CALL_HISTORY_LIMIT);

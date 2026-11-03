@@ -90,3 +90,22 @@ describe('Calls workspace launch controls', () => {
     }
   });
 });
+
+// UX A8: real call history on the Calls page with Call back.
+it('lists call history with direction, duration and a Call back action', () => {
+  mockUseChat.mockReturnValue({ ...verifiedState, accountState: 'ready', conversations: [], savedConversations: [], refreshCallHistory: jest.fn(),
+    callHistory: [
+      { id: 'c2', roomId: 'r2', name: 'Bob', timestamp: new Date(Date.UTC(2026, 10, 3, 9, 30)), event: { mode: 'video', outcome: 'missed', direction: 'incoming' } },
+      { id: 'c1', roomId: 'r1', name: 'Alice', timestamp: new Date(Date.UTC(2026, 10, 3, 9, 5)), event: { mode: 'audio', outcome: 'completed', direction: 'outgoing', durationSeconds: 125 } },
+    ] });
+  const html = renderToStaticMarkup(React.createElement(WorkspaceSection, { section: 'calls', onOpenConversation: () => undefined, onNewConversation: () => undefined }));
+  expect(html).toContain('Recent calls');
+  expect(html.indexOf('Bob')).toBeLessThan(html.indexOf('Alice'));
+  expect(html).toContain('Missed video call'); expect(html).toContain('Outgoing voice call'); expect(html).toContain('2:05');
+  expect(html).toContain('aria-label="Call back Bob (video)"'); expect(html).toContain('aria-label="Call back Alice (voice)"');
+});
+it('explains an empty call history plainly', () => {
+  mockUseChat.mockReturnValue({ ...verifiedState, accountState: 'ready', conversations: [], savedConversations: [], refreshCallHistory: jest.fn(), callHistory: [] });
+  const html = renderToStaticMarkup(React.createElement(WorkspaceSection, { section: 'calls', onOpenConversation: () => undefined, onNewConversation: () => undefined }));
+  expect(html).toContain('No calls yet');
+});
