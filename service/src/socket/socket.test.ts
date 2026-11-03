@@ -68,9 +68,9 @@ describe('SocketInstance', () => {
     });
 
     describe('constructor', () => {
-        it('connects to the base url provided by configContext', () => {
+        it('connects to the base url provided by configContext, WebSocket first with polling as fallback', () => {
             createInstance();
-            expect(socketIOClient).toHaveBeenCalledWith('http://localhost:3000/');
+            expect(socketIOClient).toHaveBeenCalledWith('http://localhost:3000/', { transports: ['websocket', 'polling'], tryAllTransports: true });
         });
 
         it('registers wire events and the authenticated reconnect handler', () => {
