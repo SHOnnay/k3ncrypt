@@ -4,7 +4,8 @@ Scope: web client + Socket.IO relay. Android only where shared protocol is affec
 Evidence labels: [read code] [unit test] [integration test] [local browser run] [two-browser E2E] [production].
 
 ## Production
-- Render, branch `main`, live on **`b16c92f8`** (RC1 = M0–M3 + RC1), deployed 2026-11-03 06:27 UTC (`dep-dbknsrm7bikc73fe0f1g`). Previous: `f927941` (rollback target).
+- Render, branch `main`, live on **`e99f6aae`** (RC1 + UX Part A + unlock change), deployed 2026-11-03 16:00 UTC (`dep-dbl092m1egvs7397arlg`). Previous: `b16c92f8` (rollback target), RC1, deployed 06:27 UTC.
+- UX release record [production]: no backend or database change, so no backup or migration. `main` fast-forwarded `243e9faf` → `e99f6aae`; deployed under maintenance (health 200, ready 200, 503 gate, HSTS + COOP + CSP, `messaging_relay_ready`, no `startup_failed`), then maintenance off: `/` 200, served bundle contains the new unlock copy and WebSocket-first relay option.
 - `K3NCRYPT_DURABLE_ROUTING=true`, `K3NCRYPT_TRUST_PROXY=true`, `K3NCRYPT_MAINTENANCE_MODE=false`. Auto-Deploy off, 1 instance (free).
 - Deploy record [production]: backup `~/k3ncrypt-backups/k3ncrypt-20261103T061112Z.archive.gz` (339 docs, sha256 `864c101f…`, verified by local restore with matching counts); `npm run migrate` ok in 3.3 s, all required indexes present, TTL removed 8 empty `file_ledgers_v2` rows (10 → 2), all other counts unchanged; `main` fast-forwarded `f927941` → `b16c92f8`; deployed under maintenance, then maintenance off. After: `/api/health` 200, `/api/ready` 200, HSTS + COOP + CSP present, served WASM sha256 `acd138dd…`.
 - Render's Build Command order (`build:backend` first) is equivalent to the runbook's: byte-identical output for `b16c92f8`.
@@ -39,11 +40,7 @@ Based on `243e9faf` (production code). One commit per item; evidence in each com
 
 Verification on the branch head: unit 1236 passed [unit test]; lint and type checks clean; full E2E 62 passed, 2 failed (the two known mux specs), 24 skipped (opt-in) [two-browser E2E]. Mongo suites not re-run (backend unchanged).
 
-Decisions waiting for the owner:
-1. Part B: pick direction A, B or C (or a named mix).
-2. Unlock (A11): approve "unlock waits only for local work" and the round-trip cuts; keep Argon2id parameters (recommended).
-3. zbar-wasm is LGPL-2.1+: approve shipping it as a separate replaceable module with its license notice (`/licenses/zbar-wasm-LGPL-2.1.txt`).
-4. Review and merge `ux/part-a`, then a release with the RC1 runbook.
+Owner decisions (2026-11-03): unlock waits only for local work, round trips cut, Argon2id unchanged (done, `docs/ux/UNLOCK_TIMING_PROPOSAL.md`); zbar-wasm LGPL arrangement approved; received file names stay hidden until download (Android milestone); `ux/part-a` released. Still open: Part B direction; C0 cleanup approval (`docs/cleanup/C0_INVENTORY.md`, uncommitted draft in this worktree).
 
 ## Where things are
 Repo `SHOnnay/k3ncrypt` (public). Nothing below is pushed except `main`.
@@ -106,7 +103,7 @@ Follow `docs/releases/RELEASE_CANDIDATE_1.md`. In short: maintenance on, **backu
 - **Proposed milestones:** A0 security number on the release line + shared `relationship-comparison.json` fixture read by Jest and Kotlin; A1 receive/open/save file gate parity + call-ends-on-trust-loss test; A2 first call (opt-in connection helper), biometric re-prompt, startup time, notifications.
 
 ## Next prompt (owner)
-Deploy RC1 with the runbook; smoke tests on real devices; then Android A0, the web QR scanner (UX milestone) and the Calls milestone.
+Smoke tests of `e99f6aae` on real devices; pick the Part B direction; approve C0 cleanup actions; then Android A0 and the Calls milestone.
 
 ## Known risks
 - Web users trust the host: a compromised server can serve modified code (disclosed, not fixable on web).
