@@ -12,7 +12,8 @@ import { debugError } from '../../utils/debug';
 import { useFiles } from '../../context/FileContext';
 import { BrowserCaptureController } from '../../../../service/src/privacy/capture';
 import { contactDisplayName } from '../../content/copy';
-import { fileTransferCopy } from '../../product/fileTransferCopy';
+import { fileTransferCopy, fileTypeLabel } from '../../product/fileTransferCopy';
+import { ApprovedIcon } from '../common/ApprovedIcon';
 import { classifySafeDiagnostic, logSafeFailure, safeFailureCopy, type SafeDiagnosticCode } from '../../product/safeDiagnostics';
 import { SafeDiagnosticDetails } from '../common/SafeDiagnosticDetails';
 import { MAX_USER_MESSAGE_UTF8_BYTES } from '@chat-e2ee/service';
@@ -38,6 +39,7 @@ const RoomComposer: React.FC<{ onVerifyContact: () => void; drafts: ComposerDraf
   const activeContact = conversations?.find((item) => item.roomId === channelHash);
   const contactLabel = contactDisplayName(activeContact?.label, activeContact?.roomId, activeContact?.remoteDisplayName, activeContact?.localNickname);
   const transferStatus = fileTransferCopy(transfer);
+  const transferStep = fileTransferCopy(transfer, { includeName: false });
   const busy = transferStatus.active;
   const verified = contactIdentity?.verification === 'verified' && contactIdentity.changeStatus === 'unchanged';
   useSyncExternalStore(drafts.subscribe, drafts.snapshot, drafts.snapshot);
@@ -293,7 +295,12 @@ const RoomComposer: React.FC<{ onVerifyContact: () => void; drafts: ComposerDraf
         <button type="button" onClick={removeAttachment} disabled={isSending || busy} aria-label="Remove attachment">Remove</button>
       </div>}
       {sendWaiting && <div className="media-transfer-status" role="status" aria-live="polite"><span>Waiting for the current file to finish…</span></div>}
-      {transfer.phase !== 'Idle' && <div className="media-transfer-status" role="status" aria-live="polite"><span>{transferStatus.label}</span>{transferStatus.progress !== undefined && <progress max={100} value={transferStatus.progress} aria-label="File transfer progress" />}{busy && <button type="button" onClick={cancelTransfer}>Cancel</button>}{transfer.phase === 'Failed' && transfer.retryable && <button type="button" onClick={retryAttachment}>Retry</button>}</div>}
+      {transfer.phase !== 'Idle' && <div className="media-transfer-status file-transfer-card" role="status" aria-live="polite">
+        <span className="message-file-icon" aria-hidden="true"><ApprovedIcon name="file" size={17} /><span className="message-file-badge">{fileTypeLabel(transfer.filename)}</span></span>
+        <span className="file-transfer-card__copy">{transfer.filename && <strong>{transfer.filename}</strong>}<span>{transfer.filename ? transferStep.label : transferStatus.label}</span>
+          {transferStatus.progress !== undefined && <progress max={100} value={transferStatus.progress} aria-label="File transfer progress" />}</span>
+        {busy && <button type="button" onClick={cancelTransfer}>Cancel</button>}{transfer.phase === 'Failed' && transfer.retryable && <button type="button" onClick={retryAttachment}>Retry</button>}
+      </div>}
       {actionMessage && <div className="composer-feedback" role="status">{actionMessage}<SafeDiagnosticDetails code={actionDiagnostic} /></div>}
     </footer>
   );

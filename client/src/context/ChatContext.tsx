@@ -5,6 +5,7 @@ import { authoritativeTerminal, conversationDiagnostic, conversationEligibility,
 import { classifySafeDiagnostic, type SafeDiagnosticCode } from '../product/safeDiagnostics';
 import { LocalCallHistory, buildCallHistory, type CallHistoryEntry } from '../product/callHistory';
 import { contactDisplayName } from '../content/copy';
+import { readFileDetails, rememberFileDetails, type FileDetails } from '../product/fileDetails';
 import { parseFileReference } from '@chat-e2ee/service';
 /**
  * Chat context provider for explicit legacy and modern service paths.
@@ -148,6 +149,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [conversations, setConversations] = useState<ConversationDescriptor[]>([]);
   const [savedConversations, setSavedConversations] = useState<ConversationDescriptor[]>([]);
   const [callHistory, setCallHistory] = useState<CallHistoryEntry[]>([]);
+  const [fileDetails, setFileDetails] = useState<Record<string, FileDetails>>({});
   const [savedContactVerification, setSavedContactVerification] = useState<Record<string, 'verified' | 'unverified' | 'review-required' | 'unknown'>>({});
   const invitationExpiryLookups = useRef(new Map<string, number | null>());
   const conversationsRef = useRef(conversations); conversationsRef.current = conversations;
@@ -1771,6 +1773,22 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setCallHistory(buildCallHistory(rooms));
   }, [vault, accountState, savedConversations]);
   useEffect(() => { if (accountState !== 'ready') setCallHistory([]); }, [accountState]);
+  useEffect(() => {
+    let active = true;
+    if (!vault || !channelHash || accountState !== 'ready') { setFileDetails({}); return undefined; }
+    void readFileDetails(vault, channelHash).then((details) => { if (active) setFileDetails(details); }).catch(() => undefined);
+    return () => { active = false; };
+  }, [vault, channelHash, accountState]);
+  const fileDetailsForReference = useCallback((reference: string): FileDetails | undefined => {
+    try { return fileDetails[parseFileReference(reference).context.transferId]; } catch { return undefined; }
+  }, [fileDetails]);
+  const rememberFileDetailsForRoom = useCallback(async (roomId: string, reference: string, details: FileDetails): Promise<void> => {
+    if (!vault || accountState !== 'ready') return;
+    let transferId: string;
+    try { transferId = parseFileReference(reference).context.transferId; } catch { return; }
+    await rememberFileDetails(vault, { roomId, transferId, details });
+    if (roomId === channelHash) setFileDetails((current) => ({ ...current, [transferId]: details }));
+  }, [vault, accountState, channelHash]);
 
   const value: ChatContextType = {
     plaintextSession,
@@ -1804,6 +1822,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     savedConversations,
     callHistory,
     refreshCallHistory,
+    fileDetailsForReference,
+    rememberFileDetails: rememberFileDetailsForRoom,
     savedContactVerification,
     orphanedConversationRecords,
     profileDisplayName,

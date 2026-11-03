@@ -82,6 +82,9 @@ export interface ChatContextType {
   /** UX A8: calls across saved chats, newest first, from local encrypted history. Empty while locked. */
   callHistory?: import('../product/callHistory').CallHistoryEntry[];
   refreshCallHistory?: () => Promise<void>;
+  /** UX A9: names and types of files in the open chat, keyed by transfer ID; remembered locally, encrypted. */
+  fileDetailsForReference?: (reference: string) => import('../product/fileDetails').FileDetails | undefined;
+  rememberFileDetails?: (roomId: string, reference: string, details: import('../product/fileDetails').FileDetails) => Promise<void>;
   savedContactVerification: Record<string, 'verified' | 'unverified' | 'review-required' | 'unknown'>;
   unavailableConversations: import('../product/conversationEligibility').ConversationDiagnostic[];
   orphanedConversationRecords?: { roomIds: string[]; truncated: boolean; available: boolean };

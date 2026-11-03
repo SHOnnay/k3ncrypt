@@ -27,10 +27,11 @@ const safeFailureCopy = (failure: string): string => {
   return 'Couldn’t send this file. Retry in this session or select the file again.';
 };
 
-export const fileTransferCopy = (transfer: FileProgress): FileTransferCopy => {
+/** includeName: false when the file name is already shown next to the status (UX A9 card). */
+export const fileTransferCopy = (transfer: FileProgress, options: { includeName?: boolean } = {}): FileTransferCopy => {
   const percent = transfer.total > 0 ? Math.min(100, Math.max(0, Math.round((transfer.bytes / transfer.total) * 100))) : undefined;
   const progress = ['Uploading', 'Downloading', 'Verifying'].includes(transfer.phase) ? percent : undefined;
-  const name = transfer.filename ? `${transfer.filename} · ` : '';
+  const name = transfer.filename && options.includeName !== false ? `${transfer.filename} · ` : '';
   switch (transfer.phase) {
     case 'Idle': return { label: '', active: false };
     case 'Preparing': return { label: `${name}Preparing…`, active: true };
@@ -52,4 +53,13 @@ export const fileTransferCopy = (transfer: FileProgress): FileTransferCopy => {
       return { label, active: false };
     }
   }
+};
+
+/** UX A9: file card badge. */
+const MIME_LABELS: Record<string, string> = { 'application/pdf': 'PDF', 'text/plain': 'TXT', 'image/png': 'PNG', 'image/jpeg': 'JPEG', 'image/gif': 'GIF', 'image/webp': 'WEBP', 'application/zip': 'ZIP', 'audio/mpeg': 'MP3', 'video/mp4': 'MP4' };
+/** Short type label for the card badge: the file extension (1–4 letters or digits), else a known MIME type, else FILE. */
+export const fileTypeLabel = (name: string | undefined, mimeType?: string): string => {
+  const extension = name?.match(/\.([A-Za-z0-9]{1,4})$/)?.[1];
+  if (extension) return extension.toUpperCase();
+  return (mimeType && MIME_LABELS[mimeType]) || 'FILE';
 };

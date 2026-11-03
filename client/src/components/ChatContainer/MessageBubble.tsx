@@ -17,7 +17,7 @@ import { checkCopy, checkName } from '../../content/checkCopy';
 import { contactDisplayName } from '../../content/copy';
 import { deriveMessageDeliveryVisibility } from '../../product/securityVisibility';
 import { ApprovedIcon } from '../common/ApprovedIcon';
-import { fileDownloadForReference, fileTransferCopy } from '../../product/fileTransferCopy';
+import { fileDownloadForReference, fileTransferCopy, fileTypeLabel } from '../../product/fileTransferCopy';
 import './SecurityVisibility.css';
 import './MessageBubble.css';
 
@@ -33,7 +33,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
   // Verified file output is moved into page memory as soon as it is ready, so the shared secure
   // disk slot is free for the next attachment and cancelling a browser save dialog loses nothing.
   const [saved, setSaved] = useState<{ filename: string; mimeType?: string }>();
-  const { retryMessage, protocolMode, channelHash, plaintextSession, contactIdentity, conversations = [] } = useChat();
+  const { retryMessage, protocolMode, channelHash, plaintextSession, contactIdentity, conversations = [], fileDetailsForReference, rememberFileDetails } = useChat();
   const openCheck = useOpenCheck();
   const activeContact = conversations.find((item) => item.roomId === channelHash);
   const contactName = checkName(contactDisplayName(activeContact?.label, activeContact?.roomId, activeContact?.remoteDisplayName, activeContact?.localNickname));
@@ -75,6 +75,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
         if (!current()) return;
         const url = files.previews.add(resourceKey, detached.blob);
         setSaved({ filename: detached.filename, mimeType: detached.mimeType }); setMediaUrl(url);
+        if (channelHash && detached.filename) void rememberFileDetails?.(channelHash, media.reference, { name: detached.filename, ...(detached.mimeType ? { mimeType: detached.mimeType } : {}) }).catch(() => undefined);
         return;
       }
       const result = await receive(media.reference);
@@ -96,13 +97,14 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
     </div>;
   }
   const fileCaption = isFile && message.text !== 'Protected file' && !message.text.startsWith(FILE_PREFIX) ? message.text : undefined;
+  const fileDetails = isFile && media?.reference ? fileDetailsForReference?.(media.reference) : undefined;
   return (
     <div className={`message ${message.type}${isFile ? ' message--file' : ''}`}>
       {!isFile && <div className="message-text">{message.text}</div>}
       {isFile && <div className="message-file-card">
-        <span className="message-file-icon" aria-hidden="true"><ApprovedIcon name="file" size={17} /></span>
+        <span className="message-file-icon" aria-hidden="true"><ApprovedIcon name="file" size={17} /><span className="message-file-badge">{fileTypeLabel(fileDetails?.name, fileDetails?.mimeType ?? media?.mimeType)}</span></span>
         <span className="message-file-details">
-          <strong>{fileCaption ?? 'Protected file'}</strong>
+          <strong>{fileDetails?.name ?? fileCaption ?? 'Protected file'}</strong>
           <small>{media?.size !== undefined ? formatFileSize(media.size) : 'Encrypted attachment'} · Encrypted</small>
         </span>
         {media?.reference && !mediaUrl && !fileContactTrusted && <span className="message-file-blocked" role="note">{blockedNote} {blockedAction}</span>}
@@ -117,7 +119,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
       {!isFile && mediaUrl && <button className="message-file-close" type="button" onClick={closePreview}>Close</button>}
       {!isFile && mediaUrl && media && media.kind !== 'image' && media.kind !== 'voice' && media.kind !== 'video' && <a className="message-media-action" href={mediaUrl} download="protected-file">Save protected file</a>}
       {isFile && isOpening && fileProgress?.active && <div className="message-file-progress" role="status" aria-live="polite"><span>{fileProgress.label}</span>{fileProgress.progress !== undefined && <progress max={100} value={fileProgress.progress} aria-label="File download progress" />} <button type="button" onClick={files.cancel}>Cancel</button></div>}
-      {mediaError && <div className="message-media-error" role="status">{mediaError}</div>}
+      {mediaError && <div className="message-media-error" role="status">{mediaError}{isFile && media?.reference && fileContactTrusted && !isOpening && <> <button type="button" className="message-file-retry" onClick={openMedia}>Retry</button></>}</div>}
       {saved && mediaUrl && previewableImageType(saved.mimeType) && <img className="message-media-preview" src={mediaUrl} alt="Downloaded photo" />}
       {!isFile && mediaUrl && media?.kind === 'image' && <img className="message-media-preview" src={mediaUrl} alt="Protected image" />}
       {mediaUrl && media?.kind === 'voice' && <audio className="message-media-audio" controls src={mediaUrl} />}

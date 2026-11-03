@@ -65,3 +65,12 @@ a.message-file-action:has(.message-file-action__label) { width: auto; flex: 0 0 
 .call-row__title { color: var(--ink); font-weight: 600; white-space: nowrap; }
 .call-row__duration, .call-row__time { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .call-row__duration::before, .call-row__time::before { content: '·'; margin-right: 8px; color: var(--muted); }
+
+/* UX A9: type badge on the file icon, and the sending card above the composer. */
+.message-file-icon { position: relative; }
+.message-file-badge { position: absolute; right: -6px; bottom: -5px; padding: 1px 4px; border-radius: 5px; background: var(--brand); color: #fff; font-size: .55rem; font-weight: 700; letter-spacing: .02em; line-height: 1.3; }
+.message-file-retry { margin-left: 6px; border: 0; border-radius: 8px; padding: 3px 9px; background: var(--surface); color: var(--brand); font: inherit; font-weight: 650; cursor: pointer; }
+.file-transfer-card { display: flex; align-items: center; gap: 12px; }
+.file-transfer-card__copy { display: grid; flex: 1; min-width: 0; gap: 2px; }
+.file-transfer-card__copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-transfer-card__copy progress { width: 100%; }

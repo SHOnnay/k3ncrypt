@@ -62,3 +62,16 @@ it('renders a call as one compact row with direction, duration and time, without
   expect(markup).toContain('Outgoing voice call'); expect(markup).toContain('2:05');
   expect(markup).not.toContain('On this device'); expect(markup).not.toContain(' min ');
 });
+
+// UX A9: the card shows the file name and a type badge once known.
+it('shows the remembered file name and type badge on the card', () => {
+  mockUseChat.mockReturnValue({ retryMessage: jest.fn(), protocolMode: 'modern', channelHash: 'room', plaintextSession: { isCurrent: () => true },
+    contactIdentity: { verification: 'verified', changeStatus: 'unchanged' }, fileDetailsForReference: () => ({ name: 'Quarterly report.pdf', mimeType: 'application/pdf' }) });
+  const markup = renderToStaticMarkup(createElement(MessageBubble, { message: v2File }));
+  expect(markup).toContain('Quarterly report.pdf'); expect(markup).toContain('message-file-badge'); expect(markup).toContain('>PDF<');
+  expect(markup).not.toContain('>Protected file<');
+});
+it('says a received file name appears after download when it is not known yet', () => {
+  const markup = render(v2File, { verification: 'verified', changeStatus: 'unchanged' });
+  expect(markup).toContain('Protected file'); expect(markup).toContain('>FILE<');
+});

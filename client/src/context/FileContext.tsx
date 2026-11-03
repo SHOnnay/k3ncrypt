@@ -9,7 +9,9 @@ import { clearFileDisk, createFileOutput, createSealedCache, type SavedFile } fr
 interface FileContextValue { previews: PreviewResources; transfer: FileProgress; /** References waiting for an earlier file operation (UX A2). */ queued: string[]; sendWaiting: boolean; download?: { reference: string; transfer: FileProgress }; sendFile(file: File): Promise<void>; retry(): Promise<void>; cancel(): void; receive(text: string): Promise<SavedFile | undefined>; }
 const Context = createContext<FileContextValue | undefined>(undefined);
 export const FileProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-    const { fileTransferBindingForRoom, attachmentRequestHeadersForRoom, sendMessageForRoom, channelHash, plaintextSession } = useChat();
+    const { fileTransferBindingForRoom, attachmentRequestHeadersForRoom, sendMessageForRoom, channelHash, plaintextSession, rememberFileDetails } = useChat();
+    /** UX A9: the name and type of the file being sent, remembered once its reference is published. */
+    const sending = useRef<{ name: string; mimeType?: string }>();
     const [diskReady, setDiskReady] = useState(false);
     const saved = useRef<SavedFile>();
     const operation = useRef(new FileOperationGate());
@@ -45,9 +47,10 @@ export const FileProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         async (reference, binding) => {
             if (!current() || !channelHash || !sameBinding(await fileTransferBindingForRoom(channelHash, true, false), binding)) throw new Error('File contact identity changed.');
             await sendMessageForRoom(channelHash, reference);
+            if (sending.current) void rememberFileDetails?.(channelHash, reference, sending.current).catch(() => undefined);
         },
         progress => { if (!current() || currentRoom.current !== channelHash) return; if (progress.phase === 'Failed') logSafeFailure(activeDownload.current ? 'file_download_failed' : 'file_send_failed', classifySafeDiagnostic('file-send', { safeDiagnosticCode: progress.diagnosticCode })); if (activeDownload.current) setDownload({ reference: activeDownload.current, transfer: progress }); else changed(progress); },
-    ), [attachmentRequestHeadersForRoom, channelHash, plaintextSession, fileTransferBindingForRoom, sendMessageForRoom]);
+    ), [attachmentRequestHeadersForRoom, channelHash, plaintextSession, fileTransferBindingForRoom, sendMessageForRoom, rememberFileDetails]);
     useEffect(() => {
         activeDownload.current = undefined;
         changed({ phase: 'Idle', bytes: 0, total: 0 });
@@ -77,6 +80,7 @@ export const FileProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return <Context.Provider value={{ previews, transfer, download, queued, sendWaiting,
         sendFile: file => runExclusive(async () => {
             if (!diskReady) throw new Error('Secure disk workspace unavailable or in use by another tab.');
+            sending.current = { name: file.name, ...(file.type ? { mimeType: file.type } : {}) };
             await workflow.send({ size: file.size, name: file.name, type: file.type, read: async (at, count) => new Uint8Array(await file.slice(at, at + count).arrayBuffer()) });
         }), retry: () => runExclusive(() => workflow.retry()), cancel: () => workflow.cancel(), receive: async text => {
         if (!current() || !diskReady) throw new Error('Secure file workspace unavailable.');
