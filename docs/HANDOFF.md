@@ -55,12 +55,14 @@ Follow `docs/releases/RELEASE_CANDIDATE_1.md`. In short: maintenance on, **backu
 - **WASM** (2026-11-03): committed `.wasm` is the container build; no history rewrite (the old file with the home path stays in public history).
 - **Android security number** (2026-11-03): Android shows the 30-digit per-contact number + verification QR, same as web; the `K3 …` fingerprint only under Security details. Once Android A0 ships, web drops the "Is <name> on Android?" step. See `docs/ANDROID_SECURITY_NUMBER_DECISION.md`.
 - **Socket caps** (2026-11-03): per device 10, per IP 64.
+- **Web QR scanner** (2026-11-03, UX milestone): use the browser's built-in `BarcodeDetector` first, fall back to a local zbar-wasm decoder (no CDN), and suggest "Show numbers instead" automatically after ~15 s with no read. Done = 100% decode over ~1,000 generated identities [unit test] plus a camera-free E2E.
+- **Calls "Ringing..."** (2026-11-03): the intermittent failure in long sequential E2E runs stays in the Calls milestone; it does not block RC1.
+- **RC1 approved** (2026-11-03) for the owner to deploy with `docs/releases/RELEASE_CANDIDATE_1.md`.
 
 ## Open decisions
-1. Web QR scanner reliability: add a second decoder (browser `BarcodeDetector` where available) or switch libraries. Needs a new dependency choice; not in RC1.
-2. Retention for `links`, `device_lifecycle`, `device_identity_registry`.
-3. Background check so a new acceptance appears without opening the invitation (UX).
-4. `vite` 8.3.0 dev-server advisory: npm won't move it here; dev only.
+1. Retention for `links`, `device_lifecycle`, `device_identity_registry`.
+2. Background check so a new acceptance appears without opening the invitation (UX).
+3. `vite` 8.3.0 dev-server advisory: npm won't move it here; dev only.
 
 ## Android findings (read-only, 2026-11-03)
 - **Where:** `android/` in this repo; newest on `codex/android-beta23-stabilization` (`76eade5d`, versionName `0.1.0-beta.23-private.1`). `main`/`m3/hardening` carry an older 92-file tree.
@@ -72,7 +74,7 @@ Follow `docs/releases/RELEASE_CANDIDATE_1.md`. In short: maintenance on, **backu
 - **Proposed milestones:** A0 security number on the release line + shared `relationship-comparison.json` fixture read by Jest and Kotlin; A1 receive/open/save file gate parity + call-ends-on-trust-loss test; A2 first call (opt-in connection helper), biometric re-prompt, startup time, notifications.
 
 ## Next prompt (owner)
-Deploy RC1 with the runbook; smoke tests on real devices; then Android A0, and the web QR scanner fix.
+Deploy RC1 with the runbook; smoke tests on real devices; then Android A0, the web QR scanner (UX milestone) and the Calls milestone.
 
 ## Known risks
 - Web users trust the host: a compromised server can serve modified code (disclosed, not fixable on web).
