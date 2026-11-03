@@ -35,3 +35,28 @@ it('does not hide a genuine missing registry diagnosis or present it as a usable
   expect(html).toContain('matching local contact identity is unavailable');
   expect(html).not.toContain('Contact saved · reconnection paused');
 });
+
+// Item 4: nothing about contacts while locked; contact data present in state must still not render before ready.
+const renderState = (accountState: 'checking' | 'locked' | 'new' | 'ready') => {
+  mockUseChat.mockReturnValue({ conversations: [descriptor], unavailableConversations: [conversationDiagnostic(descriptor, 'CONTACT_REGISTRY_MISSING')],
+    messages: [], accountState, profileDisplayName: 'Synthetic owner', syncStatus: 'ready' });
+  return renderToStaticMarkup(React.createElement(Sidebar, { isWelcomeActive: true, activeSection: 'chats', onNavigate: () => undefined,
+    onNewConversation: () => undefined, onOpenConversation: () => undefined, onOpenSettings: () => undefined }));
+};
+it.each(['locked', 'checking'] as const)('shows a neutral %s state with no contact data and nothing clickable', (state) => {
+  const html = renderState(state);
+  expect(html).toContain('Unlock to see your chats');
+  expect(html).not.toContain('Saved friend');
+  expect(html).not.toContain('Synthetic owner');
+  expect(html).not.toContain('conversation-row');
+  expect(html).not.toContain('Unavailable Conversations');
+  expect(html).not.toContain('No chats yet');
+  const buttons = html.match(/<button[^>]*>/g) ?? [];
+  expect(buttons.length).toBeGreaterThan(0);
+  expect(buttons.every((button) => button.includes('disabled'))).toBe(true);
+});
+it('shows saved contacts once the account is ready', () => {
+  const html = renderState('ready');
+  expect(html).toContain('Saved friend');
+  expect(html).not.toContain('Unlock to see your chats');
+});

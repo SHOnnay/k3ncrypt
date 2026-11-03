@@ -27,7 +27,10 @@ const formatSidebarTime = (date?: Date): string => {
 };
 
 export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection, onNavigate, onNewConversation, onOpenConversation, onOpenSettings, settingsOpen = false }) => {
-  const { channelHash, messages, conversations, savedConversations = conversations, syncStatus, sessionHealth, profileDisplayName, protocolMode, unavailableConversations = [], pendingConversation, conversationOpenError } = useChat();
+  const { channelHash, messages, conversations, savedConversations = conversations, syncStatus, sessionHealth, profileDisplayName, protocolMode, unavailableConversations = [], pendingConversation, conversationOpenError, accountState } = useChat();
+  // Item 4: nothing about contacts while locked. accountState becomes 'ready' only after vault.unlock()
+  // succeeds (openModernVault), so names can appear during the rest of "Unlocking…" but never before.
+  if (accountState === 'locked' || accountState === 'checking') return <LockedSidebar />;
   const latest = messages.at(-1);
   const groups = classifySidebarConversations(savedConversations, unavailableConversations);
   const displayName = (conversation: typeof conversations[number]) => contactDisplayName(conversation.label, conversation.roomId, conversation.remoteDisplayName, conversation.localNickname);
@@ -98,3 +101,22 @@ export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection
     </aside>
   );
 };
+
+const LockedSidebar: React.FC = () => (
+  <aside className="sidebar sidebar--locked" aria-label="K3ncrypt navigation">
+    <div className="brand-row">
+      <div className="brand-mark" aria-hidden="true"><img src="/branding/k3ncrypt-cluster-white.svg" alt="" /></div>
+      <div><strong>K3ncrypt</strong><span>Your private space</span></div>
+    </div>
+    <button className="new-conversation" type="button" disabled><PlusIcon size={17} />New conversation</button>
+    <nav className="primary-navigation" aria-label="Main navigation">
+      <button type="button" disabled><ApprovedIcon name="chat" /><span>Chats</span></button>
+      <button type="button" disabled><ApprovedIcon name="contacts" /><span>Contacts</span></button>
+      <button type="button" disabled><ApprovedIcon name="call" /><span>Calls</span></button>
+      <button type="button" disabled><ApprovedIcon name="settings" /><span>Settings</span></button>
+    </nav>
+    <div className="conversation-section">
+      <div className="conversation-placeholder" role="status"><strong>{contactsCopy.lockedTitle}</strong><span>{contactsCopy.lockedHelp}</span></div>
+    </div>
+  </aside>
+);

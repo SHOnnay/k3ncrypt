@@ -72,6 +72,8 @@ export const contactsCopy = {
   uncheckedGroup: 'Not checked yet',
   emptyTitle: 'No contacts yet.',
   chatsEmptyTitle: 'No chats yet.',
+  lockedTitle: 'Unlock to see your chats',
+  lockedHelp: 'Your chats and contacts stay encrypted on this device until you unlock.',
   emptyHelp: 'Invite someone to start.',
   inviteTitle: 'Invite someone',
   yourInvitations: 'Your invitations',
