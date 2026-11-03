@@ -102,6 +102,7 @@ Follow `docs/releases/RELEASE_CANDIDATE_1.md`. In short: maintenance on, **backu
 - **Security number:** beta23 already has the 30-digit comparison number (same algorithm as web) and a byte-compatible verification QR (show + scan). Not on the release line; no shared fixture for the number; own `K3 …` fingerprint not shown as text.
 - **P0-1 parity:** calls require a verified contact (outgoing and incoming) — mirrored. Files: **sending** requires verified; **receiving/saving** only blocks unknown or changed identity, so an unverified contact's file opens on Android — **not mirrored** (web refuses).
 - **Relay:** Socket.IO Java 2.1.1 over OkHttp; one socket per conversation (1 foreground + up to 7 background = 8 per phone); HTTPS REST with device proofs; optional FCM wake. No STUN/TURN by default.
+- **Received file names (owner decision 2026-11-03):** web shows a received file's name only after download, because the name is inside the encrypted file. Showing it earlier needs the name in the encrypted message metadata, a format change shared with Android. Do it in an Android milestone, with a shared fixture, so both clients change together.
 - **Proposed milestones:** A0 security number on the release line + shared `relationship-comparison.json` fixture read by Jest and Kotlin; A1 receive/open/save file gate parity + call-ends-on-trust-loss test; A2 first call (opt-in connection helper), biometric re-prompt, startup time, notifications.
 
 ## Next prompt (owner)
