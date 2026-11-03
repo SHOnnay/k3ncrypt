@@ -3,5 +3,5 @@
   "protocolVersion": 1,
   "vodozemacVersion": "0.11.0",
   "wasm": "k3ncrypt_vodozemac_bg.wasm",
-  "sha256": "3733196782a95cff0fc72290fdef2f7024530475638c38bb8d75f745c425a600"
+  "sha256": "acd138ddefd4149a9c12b1824a28fc8ca84355118bc06514302a7d4714eb5b59"
 }

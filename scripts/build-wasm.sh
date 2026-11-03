@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # M3k: build the browser crypto WASM in a pinned, disposable container and compare it with the
-# committed artifact. Pins: rust:1.89.0 (crate, per rust-toolchain.toml), wasm-pack 0.15.0 (built
+# committed artifact. Pins: rust:1.89.0 image by digest (crate, per rust-toolchain.toml), wasm-pack 0.15.0 (built
 # with Rust 1.91.0 because it needs it), wasm-bindgen-cli 0.2.128, release profile, wasm-opt as run
 # by wasm-pack. Output goes to a temp dir; the committed crypto-wasm/pkg is never modified.
 # Usage: bash scripts/build-wasm.sh [output-dir]
@@ -8,7 +8,7 @@ set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="${1:-$(mktemp -d /tmp/k3n-wasm.XXXXXX)}"; SRC="$(mktemp -d /tmp/k3n-wasm-src.XXXXXX)"
 git -C "$ROOT" archive HEAD crypto-wasm | tar -x -C "$SRC"
-docker run --rm -v "$SRC/crypto-wasm:/src:ro" -v "$OUT:/out" rust:1.89.0 bash -c '
+docker run --rm -v "$SRC/crypto-wasm:/src:ro" -v "$OUT:/out" rust:1.89.0@sha256:57407b378b2b6e07b48a6135a20c87cc22ea6e249c0acf6cb1833ead3cf116e9 bash -c '
   set -e; cp -r /src /build; cd /build
   rustup toolchain install 1.91.0 --profile minimal >/dev/null 2>&1
   cargo +1.91.0 install wasm-pack --version 0.15.0 --locked >/dev/null 2>&1

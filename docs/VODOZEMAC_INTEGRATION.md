@@ -53,9 +53,10 @@ legacy invite protocol. Encrypt/decrypt are rejected unless the state is
 `active`. Account and session persistence continue through `SecureStorage`,
 including the existing Vodozemac pickle-key boundary.
 
-The client package is generated into `crypto-wasm/pkg/` by the pinned
-`wasm-bindgen-cli 0.2.128` tool and includes the JS glue, TypeScript
-declarations, and WASM binary. Vite bundles the glue and emits the local WASM
+The client package in `crypto-wasm/pkg/` is the output of the pinned container
+build `bash scripts/build-wasm.sh` (wasm-pack 0.15.0, `wasm-bindgen-cli
+0.2.128`; see `crypto-wasm/pkg/README.md` for the reproducibility check) and
+includes the JS glue, TypeScript declarations, and WASM binary. Vite bundles the glue and emits the local WASM
 asset under `client/dist/assets/`. Application startup initializes this local
 module; no identity or session is selected for the existing legacy path. A
 missing or corrupt artifact rejects initialization and never triggers a
