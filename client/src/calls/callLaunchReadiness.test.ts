@@ -1,4 +1,4 @@
-import { callLaunchBlockMessage, callStartFailureMessage, getCallLaunchBlockReason, terminalCallStatusMessage, type CallLaunchReadinessInput } from './callLaunchReadiness';
+import { callLaunchBlockMessage, callStartFailureMessage, getCallLaunchBlockReason, terminalCallStatusMessage, terminalCallRetryable, type CallLaunchReadinessInput } from './callLaunchReadiness';
 
 const verifiedConnected: CallLaunchReadinessInput = {
   hasConversation: true,
@@ -54,6 +54,13 @@ describe('call launch readiness', () => {
     expect(terminalCallStatusMessage('rejected')).toBe('Call declined.');
     expect(terminalCallStatusMessage('cancelled')).toBe('Call cancelled.');
     expect(terminalCallStatusMessage('connected')).toBeUndefined();
+    // Calls milestone 2: "Ringing…" ends in a plain answer, with Retry where retrying can help.
+    expect(terminalCallStatusMessage('timeout', { outgoing: true, name: 'Bob' })).toBe('No answer. Bob may be offline or have K3NCRYPT closed.');
+    expect(terminalCallStatusMessage('timeout', { outgoing: false, name: 'Bob' })).toBe('Missed call from Bob.');
+    expect(terminalCallRetryable('timeout', true)).toBe(true);
+    expect(terminalCallRetryable('timeout', false)).toBe(false);
+    expect(terminalCallRetryable('ice-failed', true)).toBe(true);
+    expect(terminalCallRetryable('rejected', true)).toBe(false);
   });
 });
 

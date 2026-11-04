@@ -87,7 +87,11 @@ export class ProductionCallNegotiator {
   releaseUnboundMedia(): void { this.media.release(); }
   async switchCamera(): Promise<boolean> { return this.media.switchCamera(); }
   async beginOffer(callId: string, restart = false): Promise<void> {
-    const session = await this.require(callId); const connection = this.connections.get(callId);
+    let session = await this.require(callId); let connection = this.connections.get(callId);
+    // Calls milestone 2: an offer can be requested while media preparation (permission prompt, capture) is
+    // still running. Wait for it instead of failing the call with "not prepared".
+    const inFlight = connection ? undefined : this.preparing.get(callId);
+    if (inFlight) { await inFlight.catch(() => undefined); session = await this.require(callId); connection = this.connections.get(callId); }
     if (!connection) {
       if (session.state === 'accepted') { this.pendingOffers.add(callId); return; }
       throw new Error('Call media is not prepared.');

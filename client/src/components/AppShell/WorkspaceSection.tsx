@@ -1,4 +1,5 @@
 import { callRowSummary } from '../../product/callHistory';
+import { CallOutcome } from '../ChatContainer/CallOutcome';
 import { CHECK_PILL, contactsCopy } from '../../content/checkCopy';
 import React, { useEffect, useMemo, useState } from 'react';
 import { useChat } from '../../context/ChatContext';
@@ -96,6 +97,7 @@ export const WorkspaceSection: React.FC<WorkspaceSectionProps> = ({ section, onO
       <div className="call-launch-card__actions"><Button variant="secondary" disabled={Boolean(callLaunchBlockReason)} onClick={() => void launchCall('audio')} aria-label="Start audio call"><PhoneIcon size={18} /> Voice call</Button><Button variant="primary" disabled={Boolean(callLaunchBlockReason)} onClick={() => void launchCall('video')} aria-label="Start video call"><VideoIcon size={18} /> Video call</Button></div>
       {callLaunchBlockReason && <p className="workspace-call-readiness" role="status">{callLaunchBlockMessage(callLaunchBlockReason)}</p>}
       {callMessage && <p className="workspace-feedback" role="status">{callMessage}</p>}
+      <CallOutcome roomId={active.roomId} />
     </section> : <div className="workspace-empty"><span className="workspace-empty__mark"><img src="/branding/k3ncrypt-cluster-white.svg" alt="" /></span><h2>No active conversation</h2><p>Open a checked contact’s chat to start a call.</p></div>}
     <section className="call-history" aria-labelledby="call-history-heading">
       <h2 id="call-history-heading">Recent calls</h2>

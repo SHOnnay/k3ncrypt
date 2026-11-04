@@ -213,6 +213,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [callDuration, setCallDuration] = useState<number>(0);
   const [callLifecycleState, setCallLifecycleState] = useState<CallLifecycleState>('idle');
   const [isIncomingCall, setIsIncomingCall] = useState<boolean>(false);
+  const [callWasOutgoing, setCallWasOutgoing] = useState(false);
   const [callMediaMode, setCallMediaMode] = useState<'audio' | 'video'>('audio');
   const [localCallStream, setLocalCallStream] = useState<MediaStream>();
   const [remoteCallStream, setRemoteCallStream] = useState<MediaStream>();
@@ -348,6 +349,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           modernCallIdRef.current = session.callId;
         }
         setCallMediaMode(session.mediaMode);
+        if (session.state === 'inviting') setCallWasOutgoing(true); else if (session.state === 'ringing') setCallWasOutgoing(false);
         const failedMedia = session.state === 'failed' ? callMediaFailureRef.current : undefined;
         setCallLifecycleState(failedMedia === 'microphone-unavailable' ? 'media-failed' : session.state === 'inviting' || session.state === 'ringing' ? 'ringing' : session.state === 'accepted' || session.state === 'connecting' || session.state === 'reconnecting' ? 'connecting' : session.state === 'connected' ? 'connected' : session.state === 'rejected' ? 'rejected' : session.state === 'cancelled' ? 'cancelled' : session.state === 'expired' ? 'timeout' : session.state === 'ended' ? 'ended' : 'ice-failed');
         setIsIncomingCall(session.state === 'ringing');
@@ -1827,6 +1829,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     callLifecycleState,
     isIncomingCall,
     callMediaMode,
+    callWasOutgoing,
     localCallStream,
     remoteCallStream,
     microphoneMuted,

@@ -65,6 +65,8 @@ export interface ChatContextType {
   callLifecycleState: CallLifecycleState;
   isIncomingCall: boolean;
   callMediaMode: 'audio' | 'video';
+  /** Calls milestone 2: whether the last call was started here (for "No answer" and Retry). */
+  callWasOutgoing?: boolean;
   localCallStream?: MediaStream;
   remoteCallStream?: MediaStream;
   microphoneMuted: boolean;

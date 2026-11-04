@@ -1,4 +1,5 @@
 import { checkRequired, numberChanged } from '../utils/checkErrors';
+import { PendingSignals } from '../calls/pendingSignals';
 import { parseFileReference, sameBinding } from '../files/protocol';
 import { testDiagnosticsEnabled } from '../utils/testDiagnostics';
 import type { EncryptedEnvelope, InboundTransportDecision, PermanentInboundRejectionReason, SecureRecordUpdate, SecureStorage, TransportManager } from '../core/contracts';
@@ -201,7 +202,7 @@ const testOnlyNextMessageEventId = (): string | undefined => {
     return eventId;
 };
 
-const testOnlyCallSignalStage = (stage: 'signal-received' | 'trust-check-passed' | 'signal-decrypt-started' | 'signal-decrypted' | 'call-signal-accepted' | 'call-listener-unavailable' | 'signal-handler-rejected'): void => {
+const testOnlyCallSignalStage = (stage: 'signal-received' | 'trust-check-passed' | 'signal-decrypt-started' | 'signal-decrypted' | 'call-signal-accepted' | 'call-listener-unavailable' | 'call-listener-unavailable-held' | 'call-signal-replayed' | 'signal-handler-rejected'): void => {
     const diagnostic = globalThis as typeof globalThis & {
         __K3NCRYPT_TEST_ONLY_DIAGNOSTICS__?: boolean;
         __k3ncryptCallSignalStages?: string[];
@@ -436,6 +437,8 @@ export class ModernConversation {
     private localDeviceId?: string;
     private callComposition?: AuthenticatedCallComposition;
     private callSignalTransport?: AuthenticatedCallComposition['signalTransport'];
+    /** Calls milestone 2: signals that arrived before the call receiver existed, replayed when it is installed. */
+    private readonly pendingCallSignals = new PendingSignals<{ plaintext: ArrayBuffer } | { envelope: import('../core/contracts').EncryptedEnvelope }>();
     private deviceControlChannel?: AuthenticatedDeviceControlChannel;
     private deviceLifecycle?: DeviceLifecycleService;
     private deviceLifecyclePersistence?: SecureStorageDeviceLifecyclePersistence;
@@ -480,13 +483,13 @@ export class ModernConversation {
                         else if (this.callSignalTransport) {
                             await this.callSignalTransport.receivePlaintext(plaintext);
                             testOnlyCallSignalStage('call-signal-accepted');
-                        } else testOnlyCallSignalStage('call-listener-unavailable');
+                        } else { this.pendingCallSignals.hold({ plaintext }); testOnlyCallSignalStage('call-listener-unavailable-held'); }
                     } else if (this.callSignalTransport) {
                         testOnlyCallSignalStage('signal-decrypt-started');
                         await this.callSignalTransport.receive(message.envelope);
                         testOnlyCallSignalStage('signal-decrypted');
                         testOnlyCallSignalStage('call-signal-accepted');
-                    } else testOnlyCallSignalStage('call-listener-unavailable');
+                    } else { this.pendingCallSignals.hold({ envelope: message.envelope }); testOnlyCallSignalStage('call-listener-unavailable-held'); }
                 } catch {
                     testOnlyCallSignalStage('signal-handler-rejected');
                     throw new Error('Authenticated signaling receive failed.');
@@ -1476,6 +1479,12 @@ export class ModernConversation {
         });
         this.callComposition = composition;
         this.callSignalTransport = composition.signalTransport;
+        const transport = composition.signalTransport;
+        await this.pendingCallSignals.drain(async (held) => {
+            if (this.callSignalTransport !== transport) return;
+            if ('plaintext' in held) await transport.receivePlaintext(held.plaintext); else await transport.receive(held.envelope);
+            testOnlyCallSignalStage('call-signal-replayed');
+        });
         return composition;
     }
 
@@ -1565,7 +1574,7 @@ export class ModernConversation {
         await this.modes.write(this.roomId, { sessionId: undefined });
         this.runtime.close();
         this.callComposition = undefined;
-        this.callSignalTransport = undefined;
+        this.callSignalTransport = undefined; this.pendingCallSignals.clear();
         this.syncController = undefined;
         this.groupRuntime = undefined;
         this.groupAdapter = undefined;
@@ -1582,7 +1591,7 @@ export class ModernConversation {
         this.inboundLockAbort.abort();
         this.runtime.close();
         this.callComposition = undefined;
-        this.callSignalTransport = undefined;
+        this.callSignalTransport = undefined; this.pendingCallSignals.clear();
         this.syncController = undefined;
         const browserWindow = (globalThis as typeof globalThis & { window?: { removeEventListener?: (event: string, handler: () => void) => void } }).window;
         if (this.unloadHandler && browserWindow?.removeEventListener) {
@@ -2093,7 +2102,7 @@ export class ModernConversation {
                 if (event.deviceId === this.localDeviceId && event.state === 'revoked' && local?.state !== 'active') {
                     this.runtime.close();
                     this.callComposition = undefined;
-                    this.callSignalTransport = undefined;
+                    this.callSignalTransport = undefined; this.pendingCallSignals.clear();
                 }
                 this.onDeviceControl?.(message as DeviceControlEvent);
                 return;
@@ -2128,7 +2137,7 @@ export class ModernConversation {
                 await this.deviceTrust.recordFreshnessEvidence({ version: 1, deviceId: sender.deviceId, identityReference: sender.publicIdentityReference, epoch: state.list.epoch, commitment: state.commitment, evidenceId: `snapshot:${state.list.epoch}:${sender.deviceId}` });
                 this.trustEpoch = state.list.epoch;
                 if (state.list.devices.find((entry) => entry.deviceId === this.localDeviceId)?.state !== 'active') {
-                    this.runtime.close(); this.callComposition = undefined; this.callSignalTransport = undefined;
+                    this.runtime.close(); this.callComposition = undefined; this.callSignalTransport = undefined; this.pendingCallSignals.clear();
                 }
                 this.onDeviceControl?.(message as DeviceControlEvent);
             } catch {
@@ -2215,7 +2224,7 @@ export class ModernConversation {
         } catch (error) {
             this.runtime.close();
             this.callComposition = undefined;
-            this.callSignalTransport = undefined;
+            this.callSignalTransport = undefined; this.pendingCallSignals.clear();
             throw error;
         }
     }

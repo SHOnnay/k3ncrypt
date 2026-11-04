@@ -13,7 +13,8 @@ import './ChatContainer.css';
 import { debugError } from '../../utils/debug';
 import { Button } from '../common/Button';
 import { PlusIcon } from '../common/icons';
-import { callStartFailureMessage, terminalCallStatusMessage } from '../../calls/callLaunchReadiness';
+import { callStartFailureMessage } from '../../calls/callLaunchReadiness';
+import { CallOutcome } from './CallOutcome';
 import { emptyStateOpenStatus } from '../../product/conversationOpenCopy';
 import { contactDisplayName } from '../../content/copy';
 
@@ -34,7 +35,6 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ isHidden, onNewCon
   const activeIsOwnInvitation = activeDescriptor?.relationship === 'invitation' && !activeDescriptor.remoteAddress;
   const hasActiveConversation = (Boolean(activeDescriptor) && !activeIsOwnInvitation)
     || (protocolMode === 'legacy' && Boolean(channelHash));
-  const terminalCallMessage = terminalCallStatusMessage(callLifecycleState);
 
   if (!hasActiveConversation) {
     const hasContacts = conversations.some((conversation) => !(conversation.relationship === 'invitation' && !conversation.remoteAddress));
@@ -86,7 +86,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ isHidden, onNewCon
       <div id="chat-container" className={`chat-container ${isHidden ? 'hidden' : ''}`}>
         <ChatHeader onStartCall={handleStartCall} onStartVideoCall={handleStartVideoCall} disableStartCall={isCallBusy || isStartingCall} />
         {(callError || remoteCallError) && <div className="chat-call-error" role="alert">{remoteCallError || callError}</div>}
-        {!callError && !remoteCallError && terminalCallMessage && <div className="chat-call-status" role="status">{terminalCallMessage}</div>}
+        {!callError && !remoteCallError && <CallOutcome />}
         <MessagesArea />
         <ChatFooter onVerifyContact={onVerifyContact} />
       </div>

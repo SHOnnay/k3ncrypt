@@ -9,7 +9,7 @@
 .chat-empty-card p { max-width: 380px; color: var(--muted); font-size: .8rem; line-height: 1.65; overflow-wrap: anywhere; }
 .chat-empty-card > button { display: inline-flex; align-items: center; gap: 8px; margin-top: 16px; }
 .chat-call-error { flex: none; margin: 10px 16px 0; padding: 11px 14px; border: 1px solid color-mix(in srgb, var(--danger) 28%, var(--border)); border-radius: 12px; color: var(--danger); background: var(--danger-soft); font-size: .76rem; line-height: 1.45; animation: notice-in var(--motion-fast) ease-out both; }
-.chat-call-status { flex: none; margin: 10px 16px 0; padding: 9px 12px; border-radius: 10px; color: var(--muted-strong); background: var(--surface-raised); font-size: .74rem; line-height: 1.4; }
+.chat-call-status { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 10px 16px 0; padding: 9px 12px; border-radius: 10px; color: var(--muted-strong); background: var(--surface-raised); font-size: .74rem; line-height: 1.4; }
 @media (max-width: 620px) { #chat-container, .chat-empty-page { border: 0; border-radius: 0; box-shadow: none; }.chat-empty-page { height: calc(100% - 72px - env(safe-area-inset-bottom)); } }
 .chat-empty-card p.chat-empty-open-status { margin-top: 14px; padding: 9px 12px; border-radius: 10px; color: var(--muted-strong); background: var(--surface-raised); font-size: .76rem; }
 .chat-empty-card p.chat-empty-open-status--opening { animation: open-status-breathe 1.8s ease-in-out infinite; }
@@ -24,3 +24,4 @@
 .chat-empty-page { background: radial-gradient(circle at 50% 32%, var(--surface-raised) 0, var(--canvas) 60%); }
 .chat-empty-card { background: color-mix(in srgb, var(--surface) 94%, transparent); border-color: color-mix(in srgb, var(--border) 60%, transparent); }
 .chat-empty-mark { border-radius: 19px; background: var(--brand-grad); box-shadow: var(--glow), inset 0 1px var(--sheen); }
+.chat-call-retry { flex: none; min-height: 32px; padding: 4px 14px; }

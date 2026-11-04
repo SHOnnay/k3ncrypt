@@ -78,7 +78,8 @@ export const callStartFailureMessage = (error: unknown, media: 'audio' | 'video'
   return 'Call could not start. Check your connection and try again.';
 };
 
-export const terminalCallStatusMessage = (state: CallLifecycleState): string | undefined => {
+export const terminalCallStatusMessage = (state: CallLifecycleState, call?: { outgoing: boolean; name: string }): string | undefined => {
+  if (state === 'timeout' && call) return call.outgoing ? `No answer. ${call.name} may be offline or have K3NCRYPT closed.` : `Missed call from ${call.name}.`;
   switch (state) {
     case 'ended': return 'Call ended.';
     case 'rejected': return 'Call declined.';
@@ -92,3 +93,7 @@ export const terminalCallStatusMessage = (state: CallLifecycleState): string | u
     default: return undefined;
   }
 };
+
+/** Calls milestone 2: the outcomes where calling again can help; only the caller retries a timed-out call. */
+export const terminalCallRetryable = (state: CallLifecycleState, outgoing: boolean): boolean =>
+  ['ice-failed', 'signaling-failed', 'media-failed'].includes(state) || (state === 'timeout' && outgoing);

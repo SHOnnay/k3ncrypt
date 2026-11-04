@@ -11,10 +11,11 @@ import { SecureCallSignaling } from './signaling';
 import { signalDigest } from './signalBinding';
 import { generateUUID } from '../utils/uuid';
 import { CALL_SIGNAL_LIFETIME_MS } from './callSecurityPolicy';
+import { PENDING_CALL_SIGNAL_WINDOW_MS, PendingSignals } from './pendingSignals';
 
 const TERMINAL_SIGNAL_WAIT_MS = 3_000;
 
-const callSignalDiagnostic = (category: 'device-trust-rejected' | 'invite-binding-rejected' | 'session-binding-rejected' | 'media-listener-missing' | 'media-handler-rejected' | 'call-state-transition-rejected'): void => {
+const callSignalDiagnostic = (category: 'device-trust-rejected' | 'invite-binding-rejected' | 'session-binding-rejected' | 'media-listener-missing' | 'media-listener-missing-held' | 'media-handler-rejected' | 'call-state-transition-rejected'): void => {
   if (testDiagnosticsEnabled()) console.info(`k3ncrypt-call-failure:${category}`);
 };
 
@@ -64,6 +65,8 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
   const listeners = new Set<(session: CallSession) => void>();
   const protocolIssueListeners = new Set<(issue: CallProtocolIssue) => void>();
   const mediaListeners = new Set<(session: CallSession, signal: CallSignal) => Promise<void>>();
+  /** Calls milestone 2: media signals (offer, candidates) that arrive before the negotiator is attached. */
+  const pendingMedia = new PendingSignals<CallSignal>();
   const sequences = new Map<string, number>();
   const endings = new Map<string, Promise<CallSession | undefined>>();
   const expiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -159,7 +162,9 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
       if (signal.event !== 'invite' || signal.kind !== 'control' || signal.receiverIdentityId !== localParticipant.identityId || signal.mediaMode !== 'audio' && signal.mediaMode !== 'video' || signal.identityBinding !== await input.identity.identityBinding(input.conversationId, [localParticipant, input.remoteParticipant])) return;
       // Call state is intentionally process-local. Do not turn an invitation
       // created before this composition existed into a fresh ringing call.
-      if (signal.timestamp < compositionStartedAt) return;
+      // Calls milestone 2: an invite held while this composition was being installed is replayed, so allow the
+      // holding window (which also absorbs a few seconds of clock difference); an expired invite never rings.
+      if (signal.timestamp < compositionStartedAt - PENDING_CALL_SIGNAL_WINDOW_MS || signal.expiresAt <= Date.now()) return;
       if (activeCallId && activeCallId !== signal.callId) {
         const active = await service.get(activeCallId);
         const simultaneousOutgoing = active?.state === 'inviting';
@@ -202,7 +207,7 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
     if (signal.conversationId !== existing.conversationId || signal.identityBinding !== existing.identityBinding || signal.receiverIdentityId !== localParticipant.identityId || signal.mediaMode !== existing.mediaMode) { callSignalDiagnostic('session-binding-rejected'); throw new Error('Call signal binding rejected.'); }
     if (signal.kind && signal.kind !== 'control') {
       if (!['accepted', 'connecting', 'connected', 'reconnecting'].includes(existing.state)) return;
-      if (mediaListeners.size === 0) { callSignalDiagnostic('media-listener-missing'); throw new Error('Call media handler unavailable.'); }
+      if (mediaListeners.size === 0) { callSignalDiagnostic('media-listener-missing-held'); pendingMedia.hold(signal); return; }
       try { for (const listener of mediaListeners) await listener(existing, signal); } catch { callSignalDiagnostic('media-handler-rejected'); throw new Error('Call media handler rejected.'); }
       return;
     }
@@ -317,7 +322,14 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
     const sequence = (sequences.get(callId) ?? 1) + 1; sequences.set(callId, sequence);
     await sendEvent(session, event, sequence, kind, payload);
   };
-  const onMediaSignal = (listener: (session: CallSession, signal: CallSignal) => Promise<void>): (() => void) => { mediaListeners.add(listener); return () => mediaListeners.delete(listener); };
+  const onMediaSignal = (listener: (session: CallSession, signal: CallSignal) => Promise<void>): (() => void) => {
+    mediaListeners.add(listener);
+    void pendingMedia.drain(async (signal) => {
+      const current = await repository.get(signal.callId);
+      if (current && mediaListeners.has(listener) && ['accepted', 'connecting', 'connected', 'reconnecting'].includes(current.state)) await listener(current, signal);
+    });
+    return () => mediaListeners.delete(listener);
+  };
   // Keep the transport listener alive for the lifetime of the composition.
   void unsubscribeSignals;
   return Object.freeze({ assertVerifiedContact, service, signaling, signalTransport, repository, invite, accept: (id: string) => respond(id, 'accept'), reject: (id: string) => respond(id, 'reject'), cancel: (id: string) => respond(id, 'cancel'), end, terminateLocally, onCallUpdate, onProtocolIssue, watchVerification, sendMediaSignal, onMediaSignal });

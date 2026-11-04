@@ -21,6 +21,20 @@ describe('production WebRTC negotiation boundary', () => {
     return { current: () => current, setCurrent: (value: CallSession) => { current = value; }, receiver: () => receiver!, service, calls, connection, transport, negotiator, media, getUserMedia };
   };
 
+  // Calls milestone 2: a slow permission prompt kept preparation running when the offer was requested, and a
+  // call that had already moved to connecting failed with "Call media is not prepared."
+  it('waits for in-flight media preparation before starting the offer', async () => {
+    const test = setup(); let release!: () => void;
+    test.getUserMedia.mockImplementationOnce(() => new Promise<MediaStream>((resolve) => { release = () => resolve(stream); }));
+    const preparing = test.negotiator.prepareOutgoing(test.current());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    test.setCurrent({ ...test.current(), state: 'connecting' });
+    const offer = test.negotiator.beginOffer('call-1');
+    release(); await preparing;
+    await expect(offer).resolves.toBeUndefined();
+    expect(test.calls.sendMediaSignal).toHaveBeenCalledWith('call-1', 'connect', 'offer', expect.objectContaining({ type: 'offer' }));
+  });
+
   it('rejects malformed SDP before it reaches the peer connection', async () => {
     const test = setup(); test.setCurrent({ ...test.current(), state: 'ringing' }); await test.negotiator.acceptIncoming(test.current());
     await expect(test.receiver()(test.current(), signal('offer', { type: 'offer', sdp: '' }))).rejects.toThrow('offer rejected');
