@@ -146,3 +146,20 @@ test('download progress advances while a chunk streams in, not only after it com
     expect(midway.map(e => e.bytes)).toEqual([...midway.map(e => e.bytes)].sort((a, b) => a - b));
     expect(receiver.state.value.phase).toBe('Complete');
 });
+
+// Part A2 bug 3: upload progress jumped once per 256 KiB chunk. It follows bytes as each chunk is sent.
+test('upload progress advances while a chunk is being sent, not only after it is accepted', async () => {
+    class StreamingGateway extends Gateway {
+        async put(id: string, index: 'manifest' | number, value: WireObject, signal?: AbortSignal, onBytes?: (sent: number) => void): Promise<FileStatus> {
+            if (index !== 'manifest') { const wire = value.ciphertext.length; for (const share of [0.25, 0.5, 0.75, 1]) onBytes?.(Math.floor(wire * share)); }
+            void signal; return super.put(id, index, value);
+        }
+    }
+    const events: { phase: string; bytes: number }[] = []; const size = 200_000;
+    const sender = new FileTransferWorkflow(new StreamingGateway(), async () => binding, async () => cache(), async () => {}, p => events.push({ phase: p.phase, bytes: p.bytes }));
+    await sender.send(source(size));
+    const midway = events.filter(e => e.phase === 'Uploading' && e.bytes > 0 && e.bytes < size);
+    expect(midway.length).toBeGreaterThanOrEqual(2);
+    expect(midway.map(e => e.bytes)).toEqual([...midway.map(e => e.bytes)].sort((a, b) => a - b));
+    expect(Math.max(...events.filter(e => e.phase === 'Uploading').map(e => e.bytes))).toBeLessThanOrEqual(size);
+});

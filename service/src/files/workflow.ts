@@ -8,7 +8,8 @@ export interface FileOutput<T> { write(bytes: Uint8Array): Promise<void>; finish
 export interface FileGateway {
     create(binding: FileBinding, size: number, signal: AbortSignal): Promise<FileStatus>;
     status(id: string, signal: AbortSignal): Promise<FileStatus>;
-    put(id: string, index: 'manifest' | number, value: WireObject, signal: AbortSignal): Promise<FileStatus>;
+    /** onBytes reports request bytes sent so far, so upload progress follows bytes (Part A2). */
+    put(id: string, index: 'manifest' | number, value: WireObject, signal: AbortSignal, onBytes?: (sent: number) => void): Promise<FileStatus>;
     complete(id: string, signal: AbortSignal): Promise<FileStatus>;
     /** onBytes reports response bytes received so far, so a slow chunk can show progress (UX A3). */
     chunk(id: string, index: number, signal: AbortSignal, onBytes?: (received: number) => void): Promise<WireObject>;
@@ -89,7 +90,8 @@ export class FileTransferWorkflow {
                 this.fence(g); await p.cache.put(String(i), value); this.fence(g);
             }
             this.state.move(g, 'Uploading', accepted);
-            status = await this.gateway.put(r.context.transferId, i, value, signal); this.fence(g); checkStatus(r, status);
+            const plain = Math.min(r.context.chunkSize, r.context.fileSize - i * r.context.chunkSize); const wireLength = value.ciphertext.length; const before = accepted;
+            status = await this.gateway.put(r.context.transferId, i, value, signal, sent => { if (this.state.live(g)) this.state.move(g, 'Uploading', before + Math.min(plain, Math.floor(plain * sent / Math.max(1, wireLength)))); }); this.fence(g); checkStatus(r, status);
             accepted = status.indices.reduce((sum, j) => sum + Math.min(r.context.chunkSize, r.context.fileSize - j * r.context.chunkSize), 0);
             this.state.move(g, 'Uploading', accepted);
         }

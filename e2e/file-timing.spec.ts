@@ -6,11 +6,14 @@ import { checkByNumbers, uncheckedPair, expectFileSent } from './usabilityHelper
 // where a file send and receive spend their time. Not a pass/fail gate.
 const enabled = process.env.K3NCRYPT_FILE_TIMING === 'true';
 const latencyMs = Number(process.env.K3NCRYPT_FILE_TIMING_LATENCY_MS ?? 150);
+const upMbit = Number(process.env.K3NCRYPT_FILE_TIMING_UP_MBIT ?? 1);
+const downMbit = Number(process.env.K3NCRYPT_FILE_TIMING_DOWN_MBIT ?? 2.5);
+const sizes = (process.env.K3NCRYPT_FILE_TIMING_SIZES ?? `${23 * 1024},${170 * 1024},${1024 * 1024}`).split(',').map(Number);
 
 async function slowNetwork(page: Page) {
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('Network.enable');
-  await cdp.send('Network.emulateNetworkConditions', { offline: false, latency: latencyMs, downloadThroughput: 2_500_000 / 8, uploadThroughput: 1_000_000 / 8 /* bytes per second: 2.5 Mbit/s down, 1 Mbit/s up */ });
+  await cdp.send('Network.emulateNetworkConditions', { offline: false, latency: latencyMs, downloadThroughput: downMbit * 1_000_000 / 8, uploadThroughput: upMbit * 1_000_000 / 8 /* bytes per second; defaults 2.5 Mbit/s down, 1 Mbit/s up */ });
 }
 
 const categorize = (path: string) => path.includes('/device-trust/proof') ? 'device proof'
@@ -19,7 +22,7 @@ const categorize = (path: string) => path.includes('/device-trust/proof') ? 'dev
       : path.endsWith('/create') ? 'create' : path.endsWith('/complete') ? 'complete' : path.endsWith('/manifest') ? 'manifest'
         : /\/attachments\/v2\/[^/]+$/.test(path) ? 'status' : 'other';
 
-for (const size of [23 * 1024, 170 * 1024, 1024 * 1024]) test(`file timing at ${latencyMs} ms latency: ${size} bytes`, async ({ browser }) => {
+for (const size of sizes) test(`file timing at ${latencyMs} ms latency: ${size} bytes`, async ({ browser }) => {
   test.skip(!enabled, 'Opt-in measurement: K3NCRYPT_FILE_TIMING=true');
   test.setTimeout(300_000);
   const { a, b, alice, bob } = await uncheckedPair(browser);
@@ -41,6 +44,6 @@ for (const size of [23 * 1024, 170 * 1024, 1024 * 1024]) test(`file timing at ${
   const opened = Date.now() - t0;
   const summary: Record<string, { calls: number; totalMs: number }> = {};
   for (const call of calls) { const key = `${call.who}: ${call.kind}`; summary[key] ??= { calls: 0, totalMs: 0 }; summary[key].calls++; summary[key].totalMs += call.ms; }
-  console.log('FILE_TIMING', JSON.stringify({ size, latencyMs, selectedMs: selected, sentMs: sent, receiverOpenedMs: opened - sent, totalMs: opened, apiCalls: calls.length, summary }));
+  console.log('FILE_TIMING', JSON.stringify({ size, latencyMs, upMbit, sendCalls: calls.filter((call) => call.who === 'send').map((call) => `${call.at}:${call.kind}:${call.ms}`), selectedMs: selected, sentMs: sent, receiverOpenedMs: opened - sent, totalMs: opened, apiCalls: calls.length, summary }));
   await a.close(); await b.close();
 });
