@@ -1,0 +1,74 @@
+/*
+ * Part B visual base (owner decision 2026-11-04): Direction C "Ink Rail" with B's softer cards.
+ * A dark ink navigation rail beside cream content; crisp controls with strong cobalt focus;
+ * cards (files, calls, panels) are soft and rounded with layered shadows and no hard border.
+ * Prototype stylesheets: docs/ux/part-b/direction-c-ink-rail.css and direction-b-soft-depth.css.
+ */
+:root,
+:root[data-theme='paper'] {
+  --rail-bg: #1B1F24;
+  --rail-ink: #F4F1EA;
+  --rail-text: #D8D4CB;
+  --rail-muted: #A9A59C;
+  --rail-line: rgba(255, 255, 255, .08);
+  --rail-hover: rgba(255, 255, 255, .08);
+  --rail-active: rgba(110, 156, 203, .18);
+  --rail-accent: #6E9CCB;
+  --brand: #2A5788;
+  --brand-strong: #1F4470;
+  --brand-grad: #2A5788;
+  --sent-grad: #2A5788;
+  --glow: none;
+  --radius-sm: 7px;
+  --radius-md: 10px;
+  --card-radius: 18px;
+  --card-shadow: 0 2px 6px rgba(52, 44, 30, .06), 0 8px 24px rgba(52, 44, 30, .06);
+}
+:root[data-theme='slate'] {
+  --rail-bg: #0A0D10;
+  --rail-ink: #EDEFF2;
+  --rail-text: #C9D0D8;
+  --rail-muted: #8B94A0;
+  --rail-line: rgba(255, 255, 255, .06);
+  --rail-hover: rgba(255, 255, 255, .06);
+  --rail-active: rgba(91, 155, 217, .18);
+  --rail-accent: #5B9BD9;
+  --brand-grad: var(--brand);
+  --sent-grad: var(--brand);
+  --glow: none;
+  --card-shadow: 0 2px 6px rgba(0, 0, 0, .22), 0 10px 28px rgba(0, 0, 0, .26);
+}
+
+/* Rail: sidebar on desktop, tab bar on phones. */
+.sidebar { background: var(--rail-bg); color: var(--rail-text); border-right: 0; }
+.sidebar .brand-row strong, .sidebar .conversation-name, .sidebar-profile strong { color: var(--rail-ink); }
+.sidebar .brand-row span, .sidebar .conversation-preview, .sidebar small, .sidebar .section-label { color: var(--rail-muted); }
+.sidebar-profile { border-top-color: var(--rail-line); }
+.sidebar-settings { color: var(--rail-muted); }
+.sidebar-settings:hover { color: var(--rail-ink); background: var(--rail-hover); }
+.primary-navigation button { color: var(--rail-text); }
+.primary-navigation button:hover { color: #fff; background: var(--rail-hover); }
+.primary-navigation button.active { color: #fff; background: var(--rail-hover); box-shadow: inset 3px 0 0 var(--rail-accent); }
+.conversation-row { background: transparent; border-color: var(--rail-line); color: var(--rail-text); }
+.conversation-row:hover { background: var(--rail-hover); }
+.conversation-row.active { background: var(--rail-active); border-color: transparent; }
+.new-conversation { background: var(--brand); box-shadow: none; border-radius: var(--radius-md); }
+.section-label, .eyebrow { letter-spacing: .12em; font-weight: 700; }
+@media (max-width: 620px) {
+  .primary-navigation button.active { box-shadow: inset 0 3px 0 var(--rail-accent); }
+}
+
+/* Crisp controls, strong focus. */
+.btn, .composer-tool { border-radius: var(--radius-md); }
+button:focus-visible, a:focus-visible, .conversation-row:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px; }
+.sidebar button:focus-visible, .sidebar a:focus-visible { outline-color: var(--rail-accent); }
+
+/* Softer cards (from B). */
+.message-file-card, .call-history-row, .call-launch-card, .file-transfer-card, .panel-details, .verification-security-details {
+  border: 0; border-radius: var(--card-radius); box-shadow: var(--card-shadow); background: var(--surface-raised);
+}
+.call-row { border: 0; border-radius: 12px; background: var(--surface-raised); box-shadow: var(--card-shadow); }
+.message.sent .message-text { border-radius: 18px 18px 6px 18px; }
+.message.received .message-text { border-radius: 18px 18px 18px 6px; }
+.avatar { background: linear-gradient(155deg, #E3E9EE, #D5DFE9); color: var(--brand-strong); }
+:root[data-theme='slate'] .avatar { background: linear-gradient(155deg, #22324A, #1A2636); color: var(--brand-strong); }

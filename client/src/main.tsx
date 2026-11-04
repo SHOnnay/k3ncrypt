@@ -7,6 +7,8 @@ import ReactDOM from 'react-dom/client';
 import { ChatProvider } from './context/ChatContext';
 import { ThemeProvider } from './theme/ThemeContext';
 import App from './App';
+// Part B visual base; loaded after the component styles so it takes precedence.
+import './theme/inkRail.css';
 import { loadVodozemacBindings } from './crypto/vodozemacModule';
 
 // Remove the isolated resume database used by an earlier local testing build.
