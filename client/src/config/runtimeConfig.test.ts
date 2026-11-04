@@ -19,7 +19,8 @@ describe('getRuntimeConfig', () => {
     expect(getRuntimeConfig()).toEqual(expect.objectContaining({
       baseUrl: 'https://app.example.test',
       settings: { disableLog: true },
-      webrtc: { iceServers: [], iceTransportPolicy: 'all' },
+      // The connection helper's servers are configured but used only when the user turns it on.
+      webrtc: { iceServers: [], iceTransportPolicy: 'all', connectionHelper: [{ urls: 'stun:stun.cloudflare.com:3478' }] },
     }));
   });
 
@@ -37,7 +38,15 @@ describe('getRuntimeConfig', () => {
     expect(getRuntimeConfig().webrtc).toEqual({
       iceServers: [{ urls: 'turn:turn.example.test' }],
       iceTransportPolicy: 'relay',
+      connectionHelper: [{ urls: 'stun:stun.cloudflare.com:3478' }],
     });
+  });
+
+  // Calls milestone 3: the helper can point at a self-hosted coturn.
+  it('accepts a configured connection helper server', () => {
+    process.env.CHATE2EE_CONNECTION_HELPER_ICE_SERVERS = JSON.stringify([{ urls: 'turn:pi.example:3478', username: 'k3n', credential: 'secret' }, { urls: 'http://not-ice' }]);
+    expect(getRuntimeConfig().webrtc.connectionHelper).toEqual([{ urls: 'turn:pi.example:3478', username: 'k3n', credential: 'secret' }]);
+    delete process.env.CHATE2EE_CONNECTION_HELPER_ICE_SERVERS;
   });
 
   it('fails closed to an empty ICE list when JSON is malformed', () => {

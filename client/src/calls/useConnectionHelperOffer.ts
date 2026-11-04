@@ -17,7 +17,7 @@ export function useConnectionHelperOffer(): { offer: boolean; busy: boolean; tur
     const timer = setInterval(() => setNow(Date.now()), 1_000);
     return () => clearInterval(timer);
   }, [since]);
-  const offer = connectionStalled(callLifecycleState, since ?? now, now, privacyPreferences.connectionHelper);
+  const offer = connectionStalled(callLifecycleState, since ?? now, now, privacyPreferences?.connectionHelper === true);
   const turnOnAndRetry = async () => {
     setBusy(true);
     try {
