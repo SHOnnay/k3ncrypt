@@ -1,9 +1,12 @@
+import { DEFAULT_CONNECTION_HELPER } from '../calls/connectionHelper';
 export interface ClientRuntimeConfig {
   baseUrl: string;
   settings: { disableLog: boolean };
   webrtc: {
     iceServers: RTCIceServer[];
     iceTransportPolicy: RTCIceTransportPolicy;
+    /** Calls milestone 3: servers added when the user turns the connection helper on. */
+    connectionHelper: RTCIceServer[];
   };
 }
 
@@ -32,6 +35,7 @@ export const getRuntimeConfig = (): ClientRuntimeConfig => {
   const webrtc: ClientRuntimeConfig['webrtc'] = {
     iceServers: parseIceServers(process.env.CHATE2EE_ICE_SERVERS),
     iceTransportPolicy: parseIcePolicy(process.env.CHATE2EE_ICE_TRANSPORT_POLICY),
+    connectionHelper: process.env.CHATE2EE_CONNECTION_HELPER_ICE_SERVERS ? parseIceServers(process.env.CHATE2EE_CONNECTION_HELPER_ICE_SERVERS) : [...DEFAULT_CONNECTION_HELPER],
   };
 
   const configuredApiUrl = process.env.CHATE2EE_API_URL?.trim();

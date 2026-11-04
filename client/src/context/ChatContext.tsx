@@ -5,6 +5,7 @@ import { authoritativeTerminal, conversationDiagnostic, conversationEligibility,
 import { classifySafeDiagnostic, type SafeDiagnosticCode } from '../product/safeDiagnostics';
 import { LocalCallHistory, buildCallHistory, type CallHistoryEntry } from '../product/callHistory';
 import { recordCallFailure } from '../calls/callFailureCode';
+import { callIceServers } from '../calls/connectionHelper';
 import { contactDisplayName, type UnlockPhase } from '../content/copy';
 import { readFileDetails, rememberFileDetails, type FileDetails } from '../product/fileDetails';
 import { parseFileReference } from '@chat-e2ee/service';
@@ -406,7 +407,11 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     callMediaUnsubscribe.current?.();
     callMediaUnsubscribe.current = null;
     callNegotiator.current?.dispose();
-    callNegotiator.current = new ProductionCallNegotiator(receiver.composition, new BrowserCallTransport(), async () => getRuntimeConfig().webrtc);
+    callNegotiator.current = new ProductionCallNegotiator(receiver.composition, new BrowserCallTransport(), async () => {
+      // Read per call, so turning the connection helper on applies to the next call (Calls milestone 3).
+      const webrtc = getRuntimeConfig().webrtc;
+      return { iceServers: callIceServers(webrtc.iceServers, privacyPreferencesRef.current.connectionHelper, webrtc.connectionHelper), iceTransportPolicy: webrtc.iceTransportPolicy };
+    });
     modernCallCompositionRef.current = receiver.composition;
     setModernCallComposition(receiver.composition);
     callSupportConversation.current = conversation;
@@ -1299,7 +1304,10 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, [modern]);
 
   const updatePrivacyPreferences = useCallback((next: Partial<PrivacyPreferences>): void => {
-    setPrivacyPreferences((current) => writePrivacyPreferences({ ...current, ...next, analytics: false }));
+    // The ref is updated at once so a call started right after (connection helper retry) sees the change.
+    const written = writePrivacyPreferences({ ...privacyPreferencesRef.current, ...next, analytics: false });
+    privacyPreferencesRef.current = written;
+    setPrivacyPreferences(written);
   }, []);
 
   const attachmentRequestHeaders = useCallback(async (operation: 'attachment:create' | 'attachment:read' | 'attachment:write' | 'attachment:delete' = 'attachment:read'): Promise<Record<string, string>> => {

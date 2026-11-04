@@ -22,3 +22,4 @@
 .call-video-stage { background: linear-gradient(155deg, #1b2a38, #0e1620); }
 .call-video-remote { background: linear-gradient(155deg, #1b2a38, #0e1620); }
 .call-video-preview { background: linear-gradient(155deg, #2a3d4d, #16222c); }
+.call-helper-offer { display: grid; gap: 8px; justify-items: center; max-width: 320px; margin: 0 auto 14px; text-align: center; font-size: .8rem; }

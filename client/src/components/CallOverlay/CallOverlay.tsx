@@ -13,11 +13,13 @@ import { attachMediaStream } from './mediaStream';
 import { contactDisplayName } from '../../content/copy';
 import { hasLiveEnabledVideoTrack, localVideoPlaceholder, videoPlaceholderCopy } from '../../calls/callVideoUiState';
 import { useRemoteVideoState } from '../../calls/useRemoteVideoState';
+import { useConnectionHelperOffer } from '../../calls/useConnectionHelperOffer';
 import './CallOverlay.css';
 
 export const CallOverlay: React.FC = () => {
   const { callActive, callStatus, isIncomingCall, callLifecycleState, callMediaMode, localCallStream, remoteCallStream, microphoneMuted, cameraEnabled, callError, endCall, acceptCall, rejectCall, cancelCall, setMicrophoneMuted, setCameraEnabled, privacyPreferences, conversations, channelHash, activeCallRoomId } = useChat();
   const { duration, formatDuration, startTimer, stopTimer } = useCallTimer();
+  const helper = useConnectionHelperOffer();
   const remoteAudio = useRef<HTMLAudioElement>(null);
   const localVideo = useRef<HTMLVideoElement>(null);
   const remoteVideo = useRef<HTMLVideoElement>(null);
@@ -109,6 +111,7 @@ export const CallOverlay: React.FC = () => {
           {formatDuration(duration)}
         </p>
         {callError && <p className="call-error" role="alert">{callError}</p>}
+        {helper.offer && <div className="call-helper-offer" role="status"><p>Still connecting. Calls between some networks need the connection helper.</p><Button variant="secondary" disabled={helper.busy} onClick={() => void helper.turnOnAndRetry().catch(() => undefined)}>Turn on connection helper</Button></div>}
         {isIncomingCall ? (
           <div className="incoming-call-actions">
             <Button variant="secondary" size="medium" onClick={handleAcceptCall} title="Accept Call" aria-label="Accept call">
