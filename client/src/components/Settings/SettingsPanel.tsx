@@ -1,4 +1,5 @@
 import { deriveSecurityVisibility } from '../../product/securityVisibility';
+import { lastCallFailure } from '../../calls/callFailureCode';
 import { LocalDataStatus } from '../AppShell/LocalDataStatus';
 import { conversationStateCopy } from '../../product/conversationEligibility';
 import { serverCopy } from '../../content/checkCopy';
@@ -233,6 +234,8 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, initialVie
               {unavailableConversations.length === 0 ? <p>None.</p> : <ul className="advanced-diagnostics">{unavailableConversations.map((item, index) =>
                 <li key={`${item.roomId ?? 'entry'}-${index}`}><strong>{item.label}</strong> <code>{item.code ?? item.state}</code><p>{conversationStateCopy(item)}</p></li>)}</ul>}
               <LocalDataStatus className="conversation-recovery conversation-recovery--advanced" />
+              <h4>Last call problem</h4>
+              {(() => { const failure = lastCallFailure(); return failure ? <p className="advanced-call-failure"><code>{failure.code}</code> at {failure.stage.replace('-', ' ')}, {new Date(failure.at).toLocaleTimeString()}</p> : <p>None since this page opened.</p>; })()}
               {channelHash && protocolMode === 'modern' && (() => {
                 const visibility = deriveSecurityVisibility({ contact: contactIdentity, sessionHealth, protocol: protocolMode });
                 return <><h4>This conversation</h4><dl className="advanced-security-details">

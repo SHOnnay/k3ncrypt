@@ -4,6 +4,7 @@ import { ConversationSelection, commitPreparedSelection } from '../product/conve
 import { authoritativeTerminal, conversationDiagnostic, conversationEligibility, conversationFailure, diagnoseOrphanedConversationRecords, observeAuthoritativeRoomState, readConversationIndex, roomObservationCurrent, type ConversationDiagnostic } from '../product/conversationEligibility';
 import { classifySafeDiagnostic, type SafeDiagnosticCode } from '../product/safeDiagnostics';
 import { LocalCallHistory, buildCallHistory, type CallHistoryEntry } from '../product/callHistory';
+import { recordCallFailure } from '../calls/callFailureCode';
 import { contactDisplayName, type UnlockPhase } from '../content/copy';
 import { readFileDetails, rememberFileDetails, type FileDetails } from '../product/fileDetails';
 import { parseFileReference } from '@chat-e2ee/service';
@@ -360,6 +361,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         if (session.state === 'accepted' && !locallyAcceptedCalls.current.delete(session.callId)) {
           const negotiator = callSupportConversation.current === conversation ? callNegotiator.current : undefined;
           if (negotiator) void negotiator.prepareOutgoing(session).then(() => negotiator.beginOffer(session.callId).catch(async (error: unknown) => {
+            recordCallFailure('caller-offer', error);
             const failure = callSetupFailure(error);
             setCallError(failure.message);
             localCallHistory.current.failed(session.callId);
@@ -367,6 +369,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             setCallLifecycleState(failure.kind);
             setCallStatus(failure.kind === 'verification-required' ? 'Check needed' : failure.kind === 'signaling-failed' ? 'Call negotiation failed' : 'Call media could not start');
           })).catch(async (error: unknown) => {
+            recordCallFailure('caller-prepare', error);
             const failure = callSetupFailure(error);
             setCallError(failure.message);
             localCallHistory.current.failed(session.callId);
@@ -1449,6 +1452,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         await composition.accept(callId);
       } catch (error) {
         locallyAcceptedCalls.current.delete(callId);
+        recordCallFailure('callee-accept', error);
         const failure = callSetupFailure(error);
         setCallError(failure.message);
         localCallHistory.current.failed(callId);
