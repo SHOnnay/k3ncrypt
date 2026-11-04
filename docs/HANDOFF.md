@@ -4,7 +4,7 @@ Scope: web client + Socket.IO relay. Android only where shared protocol is affec
 Evidence labels: [read code] [unit test] [integration test] [local browser run] [two-browser E2E] [production].
 
 ## Production
-- Render, branch `main`, live on **`e99f6aae`** (RC1 + UX Part A + unlock change), deployed 2026-11-03 16:00 UTC (`dep-dbl092m1egvs7397arlg`). Previous: `b16c92f8` (rollback target), RC1, deployed 06:27 UTC.
+- Render, branch `main`, live on **`66a88067`** (UX Part A2: sent-row clear, remote camera off, byte upload progress, Security options, profile centring, call failure codes, Ink Rail visual base), deployed 2026-11-04 07:52 UTC (`dep-dble7rt9el5s73cppbl0`), no backend change. Previous: `e99f6aae` (rollback target).
 - UX release record [production]: no backend or database change, so no backup or migration. `main` fast-forwarded `243e9faf` → `e99f6aae`; deployed under maintenance (health 200, ready 200, 503 gate, HSTS + COOP + CSP, `messaging_relay_ready`, no `startup_failed`), then maintenance off: `/` 200, served bundle contains the new unlock copy and WebSocket-first relay option.
 - `K3NCRYPT_DURABLE_ROUTING=true`, `K3NCRYPT_TRUST_PROXY=true`, `K3NCRYPT_MAINTENANCE_MODE=false`. Auto-Deploy off, 1 instance (free).
 - Deploy record [production]: backup `~/k3ncrypt-backups/k3ncrypt-20261103T061112Z.archive.gz` (339 docs, sha256 `864c101f…`, verified by local restore with matching counts); `npm run migrate` ok in 3.3 s, all required indexes present, TTL removed 8 empty `file_ledgers_v2` rows (10 → 2), all other counts unchanged; `main` fast-forwarded `f927941` → `b16c92f8`; deployed under maintenance, then maintenance off. After: `/api/health` 200, `/api/ready` 200, HSTS + COOP + CSP present, served WASM sha256 `acd138dd…`.
@@ -40,7 +40,7 @@ Based on `243e9faf` (production code). One commit per item; evidence in each com
 
 Verification on the branch head: unit 1236 passed [unit test]; lint and type checks clean; full E2E 62 passed, 2 failed (the two known mux specs), 24 skipped (opt-in) [two-browser E2E]. Mongo suites not re-run (backend unchanged).
 
-Owner decisions (2026-11-03): unlock waits only for local work, round trips cut, Argon2id unchanged (done, `docs/ux/UNLOCK_TIMING_PROPOSAL.md`); zbar-wasm LGPL arrangement approved; received file names stay hidden until download (Android milestone); `ux/part-a` released. Still open: Part B direction; C0 cleanup approval (`docs/cleanup/C0_INVENTORY.md`, uncommitted draft in this worktree).
+Owner decisions (2026-11-03): unlock waits only for local work, round trips cut, Argon2id unchanged (done, `docs/ux/UNLOCK_TIMING_PROPOSAL.md`); zbar-wasm LGPL arrangement approved; received file names stay hidden until download (Android milestone); `ux/part-a` released. Part B: Ink Rail + soft cards applied; motion prototype (`docs/ux/part-b/motion/`) waits for owner approval. Bug 6 (first video call) not reproduced; codes now under Settings → Advanced (`docs/ux/FIRST_CALL_INVESTIGATION.md`). Still open: C0 cleanup approval (`docs/cleanup/C0_INVENTORY.md`, uncommitted draft in this worktree).
 
 ## Where things are
 Repo `SHOnnay/k3ncrypt` (public). Nothing below is pushed except `main`.
