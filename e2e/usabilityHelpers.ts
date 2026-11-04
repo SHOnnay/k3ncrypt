@@ -22,9 +22,16 @@ export async function ownIdentity(page: Page): Promise<string> {
   await security(page);
   await expect(page.locator('.verification-security-details')).toHaveCount(1);
   await page.locator('.verification-security-details > summary').click();
-  const qr = await page.getByRole('textbox', { name: 'My code as text', exact: true }).inputValue();
+  const qr = await copyMyCode(page);
   await page.getByRole('button', { name: 'Close settings' }).click();
   return JSON.parse(qr).fingerprint as string;
+}
+/** Part A2 bug 4: the raw code is no longer shown; "Copy my code" puts it on the clipboard. More options must be open. */
+export async function copyMyCode(page: Page): Promise<string> {
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await page.getByRole('button', { name: 'Copy my code', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Copied', exact: true })).toBeVisible();
+  return page.evaluate(() => navigator.clipboard.readText());
 }
 export async function invite(page: Page): Promise<string> {
   await page.locator('.new-conversation').click();

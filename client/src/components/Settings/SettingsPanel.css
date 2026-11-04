@@ -87,7 +87,6 @@ button.settings-row:focus-visible, .settings-row input:focus-visible, .quiet-ico
   border-radius: 12px;
 }
 .verification-security-details { margin-top: 20px; }
-.verification-security-details textarea { display: block; width: 100%; min-height: 72px; }
 .verification-view video { max-width: 100%; }
 
 
@@ -136,7 +135,7 @@ button.settings-row:focus-visible, .settings-row input:focus-visible, .quiet-ico
 .verification-view { padding-top: 0; gap: 18px; }
 .verification-view h4 { margin: 2px 0; font-size: .82rem; }
 .verification-security-details[open] { display: grid; gap: 12px; }
-.verification-security-details textarea, .device-advanced-details input { padding: 10px; min-height: 44px; border: 1px solid var(--border-strong); border-radius: 10px; color: var(--ink); background: var(--surface); font: .72rem/1.5 ui-monospace, monospace; }
+.device-advanced-details input { padding: 10px; min-height: 44px; border: 1px solid var(--border-strong); border-radius: 10px; color: var(--ink); background: var(--surface); font: .72rem/1.5 ui-monospace, monospace; }
 .device-management > .state-card { flex-direction: column; }
 @media (max-width: 420px) {
   .settings-panel__body { padding: 18px 14px calc(28px + env(safe-area-inset-bottom)); }
@@ -178,3 +177,18 @@ button.settings-row:focus-visible, .settings-row input:focus-visible, .quiet-ico
 .advanced-security-details dd { margin: 0; font: inherit; font-size: .78rem; color: var(--muted); }
 .advanced-diagnostics { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: .78rem; }
 .conversation-recovery--advanced { margin: 10px 0 0; }
+
+/* Part A2 bug 4: Security → More options. Labelled rows, no raw code, a styled paste field. */
+.verification-security-details > summary { cursor: pointer; font-weight: 650; }
+.security-numbers { display: grid; gap: 10px; margin: 6px 0 0; }
+.security-numbers > div { display: grid; gap: 4px; }
+.security-numbers dt { color: var(--muted-strong); font-size: .7rem; font-weight: 650; letter-spacing: .02em; }
+.security-numbers dd { margin: 0; }
+.security-numbers .verification-code { display: block; padding: 8px 10px; border-radius: 10px; background: var(--surface); overflow-wrap: anywhere; font: .74rem/1.5 ui-monospace, monospace; }
+.code-by-text { display: grid; gap: 10px; padding-top: 12px; border-top: 1px solid var(--border); }
+.code-by-text h5 { margin: 0; font-size: .8rem; }
+.code-by-text p { margin: 0; }
+.code-by-text__paste { display: grid; gap: 6px; font-size: .72rem; font-weight: 650; color: var(--muted-strong); }
+.code-by-text__paste textarea { width: 100%; box-sizing: border-box; min-height: 64px; padding: 10px 12px; resize: vertical; border: 1px solid var(--border-strong); border-radius: 10px; color: var(--ink); background: var(--surface); font: .74rem/1.5 ui-monospace, monospace; }
+.code-by-text__paste textarea:focus-visible { outline: 3px solid var(--focus-outline); outline-offset: 1px; }
+.code-by-text .btn { justify-self: start; }

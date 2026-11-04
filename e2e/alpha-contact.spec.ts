@@ -1,3 +1,4 @@
+import { copyMyCode } from './usabilityHelpers';
 import { test, expect, type Page } from '@playwright/test';
 const passphrase = 'alpha-family-existing-account-2026';
 async function create(page: Page, name: string) {
@@ -18,7 +19,7 @@ async function ownIdentity(page: Page): Promise<string> {
   await security(page);
   await expect(page.locator('.verification-security-details')).toHaveCount(1);
   await page.locator('.verification-security-details > summary').click();
-  const qr = await page.getByRole('textbox', { name: 'My code as text', exact: true }).inputValue();
+  const qr = await copyMyCode(page);
   await page.getByRole('button', { name: 'Close settings' }).click();
   return JSON.parse(qr).fingerprint as string;
 }
@@ -84,14 +85,14 @@ test('independent accounts connect, exchange claimed names, explicitly verify, a
   await expect(bobCode).toHaveText(await aliceCode.textContent() ?? '');
   await alice.locator('.verification-security-details > summary').click();
   await bob.locator('.verification-security-details > summary').click();
-  const aliceQr = await alice.getByLabel('My code as text', { exact: true }).inputValue();
-  const bobQr = await bob.getByLabel('My code as text', { exact: true }).inputValue();
+  const aliceQr = await copyMyCode(alice);
+  const bobQr = await copyMyCode(bob);
   const mark = bob.getByRole('button', { name: 'Confirm', exact: true });
-  await bob.getByLabel('Their code as text', { exact: true }).fill(bobQr);
+  await bob.getByLabel('Their code', { exact: true }).fill(bobQr);
   await bob.getByRole('button', { name: 'Check their code' }).click();
   await expect(mark).toHaveCount(0); // Confirm appears only after a matching code
   await expect(bob.locator('.verification-view')).toContainText('This isn’t Alpha Alice’s code.');
-  await bob.getByLabel('Their code as text', { exact: true }).fill(aliceQr);
+  await bob.getByLabel('Their code', { exact: true }).fill(aliceQr);
   await bob.getByRole('button', { name: 'Check their code' }).click();
   await expect(mark).toBeVisible();
   await expect(bob.locator('.verification-summary')).toContainText('Not checked yet');

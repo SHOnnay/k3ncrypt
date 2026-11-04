@@ -31,6 +31,7 @@ export const VerificationPanel: React.FC<Props> = ({ label, ownFingerprint, cont
   const [notice, setNotice] = useState('');
   const [mismatch, setMismatch] = useState(false);
   const [qrInput, setQrInput] = useState('');
+  const [copied, setCopied] = useState(false);
   const [renewalConfirmed, setRenewalConfirmed] = useState(false);
   const changed = contact?.changeStatus === 'changed-pending-review';
   const peer = changed ? contact?.pendingIdentity?.identityId : contact?.identityId;
@@ -128,13 +129,18 @@ export const VerificationPanel: React.FC<Props> = ({ label, ownFingerprint, cont
     <details className="verification-security-details"><summary>More options</summary>
       {!checked && <details className="check-show-mine"><summary>Show my code</summary><p>{checkCopy.askBack(name)}</p><LocalQrImage value={myCode} label="Your code for scanning" /></details>}
       <p>Names can be copied by anyone. Only the security number shows it’s really them. Checking never happens on its own: only your tap changes it.</p>
-      <strong>Your full security number</strong><code className="verification-code">{ownFingerprint}</code>
-      <strong>{name === 'your contact' ? 'Their' : `${name}’s`} full security number</strong><code className="verification-code">{peer ?? 'Not available yet'}</code>
-      {changed && <><strong>Previous security number</strong><code className="verification-code">{contact?.identityId}</code></>}
-      <label>My code as text<textarea aria-label="My code as text" readOnly value={myCode} /></label>
-      <button className="btn btn--secondary" type="button" onClick={() => void navigator.clipboard.writeText(myCode)}>Copy my code as text</button>
-      <label>Their code as text (if the camera doesn’t work)<textarea aria-label="Their code as text" value={qrInput} onChange={(event) => setQrInput(event.target.value)} /></label>
-      <button className="btn btn--secondary" type="button" disabled={!peer} onClick={() => { scan(qrInput); setStep('scan'); }}>Check their code</button>
+      <dl className="security-numbers">
+        <div><dt>Your security number</dt><dd><code className="verification-code">{ownFingerprint}</code></dd></div>
+        <div><dt>{name === 'your contact' ? 'Their' : `${name}’s`} security number</dt><dd><code className="verification-code">{peer ?? 'Not available yet'}</code></dd></div>
+        {changed && <div><dt>Previous security number</dt><dd><code className="verification-code">{contact?.identityId}</code></dd></div>}
+      </dl>
+      <section className="code-by-text" aria-label="Check without the camera">
+        <h5>Camera not working?</h5>
+        <p>Copy your code and send it to {name} another way. When they send theirs, paste it below.</p>
+        <button className="btn btn--secondary" type="button" onClick={() => void navigator.clipboard.writeText(myCode).then(() => setCopied(true)).catch(() => setCopied(false))}>{copied ? 'Copied' : 'Copy my code'}</button>
+        <label className="code-by-text__paste"><span>Paste {name === 'your contact' ? 'their' : `${name}’s`} code</span><textarea aria-label="Their code" rows={3} placeholder="Paste the code here" value={qrInput} onChange={(event) => setQrInput(event.target.value)} /></label>
+        <button className="btn btn--secondary" type="button" disabled={!peer || !qrInput.trim()} onClick={() => { scan(qrInput); setStep('scan'); }}>Check their code</button>
+      </section>
       {changed && <button type="button" className="btn btn--danger" onClick={() => block().catch(onError)}>Block conversation</button>}
       {checked && <button className="btn btn--secondary" type="button" onClick={() => unverify().catch(onError)}>Mark as not checked</button>}
       {checked && sessionHealth === 'unhealthy' && <><p>This saved encrypted session needs a checked renewal. Your history is kept.</p><label><input type="checkbox" checked={renewalConfirmed} onChange={(event) => setRenewalConfirmed(event.target.checked)} /> I compared the security number again on a call I trust</label><button className="btn btn--secondary" disabled={!renewalConfirmed} type="button" onClick={() => renew().catch(onError)}>Prepare renewal</button></>}
