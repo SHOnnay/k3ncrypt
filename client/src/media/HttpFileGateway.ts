@@ -1,4 +1,5 @@
 import { fileHttpFailure } from './fileHttpFailure';
+import { PrefetchedHeaders } from './prefetchedHeaders';
 import { rateLimitedRequest } from '../../../service/src/api/rateLimitedRequest';
 import { unb64, type FileBinding, type FileGateway, type FileStatus, type WireObject } from '@chat-e2ee/service';
 /**
@@ -21,9 +22,14 @@ const sendWithProgress = (url: string, init: { method: string; headers: Record<s
 type Operation = 'attachment:create' | 'attachment:read' | 'attachment:write' | 'attachment:delete';
 export class HttpFileGateway implements FileGateway {
     /** requestTimeoutMs bounds every request (headers, response and body) so a hung server never leaves a transfer 'Sending' forever. */
-    constructor(private readonly baseUrl: string, private readonly headers: (operation: Operation) => Promise<Record<string, string>>, private readonly requestTimeoutMs = 60_000) {}
+    private readonly proofs: PrefetchedHeaders<Operation, Record<string, string>>;
+    constructor(private readonly baseUrl: string, headers: (operation: Operation) => Promise<Record<string, string>>, private readonly requestTimeoutMs = 60_000) {
+        this.proofs = new PrefetchedHeaders(headers);
+    }
     private async request<T>(path: string, operation: Operation, signal?: AbortSignal, method = 'GET', value?: unknown, object?: WireObject, onBytes?: (received: number) => void, onSent?: (sent: number) => void): Promise<T> {
-        const makeHeaders = async () => ({ ...await this.headers(operation), 'X-K3ncrypt-File-Version': '2', ...(object ? { 'Content-Type': 'application/octet-stream', 'X-K3ncrypt-File-Nonce': object.nonce } : value ? { 'Content-Type': 'application/json' } : {}) });
+        // A chunk upload starts fetching the next proof while it sends; the next request (chunk or complete) uses it.
+        const proof = () => { const taken = this.proofs.take(operation); if (object) this.proofs.prefetch(operation); return taken; };
+        const makeHeaders = async () => ({ ...await proof(), 'X-K3ncrypt-File-Version': '2', ...(object ? { 'Content-Type': 'application/octet-stream', 'X-K3ncrypt-File-Nonce': object.nonce } : value ? { 'Content-Type': 'application/json' } : {}) });
         if (signal?.aborted) throw new Error('File canceled.');
         const bounded = new AbortController();
         const relay = () => bounded.abort(); signal?.addEventListener('abort', relay, { once: true });

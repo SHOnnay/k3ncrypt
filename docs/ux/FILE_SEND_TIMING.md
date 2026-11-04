@@ -20,5 +20,5 @@ What the rest of 10–11 s most likely is: upload bandwidth. 1.5 MB is 12 Mbit, 
 
 Changes and options:
 - **Done:** upload progress now follows bytes sent (XMLHttpRequest `upload.onprogress` per chunk), not one step per chunk.
-- **Option (not done):** fetch the device proof for the next chunk while the current chunk uploads. Proofs stay single-use and short-lived; this saves about one round trip per chunk (≈0.7 s for 1.5 MB at 110 ms).
+- **Done (Calls milestone, 2026-11-04):** the device proof for the next request is fetched while the current chunk uploads (`client/src/media/prefetchedHeaders.ts`). Proofs stay single-use; one older than 20 s is dropped. Same conditions, 2 runs each: **5.04–5.06 s before, 4.03–4.08 s after** (≈1.0 s saved for 1.5 MB).
 - **Option (not done):** drop the third contact bundle lookup before publish when the first one is under a few seconds old (≈0.1 s).
