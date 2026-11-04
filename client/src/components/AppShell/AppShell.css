@@ -56,8 +56,9 @@
 .conversation-placeholder span { color: var(--muted); font-size: .7rem; line-height: 1.45; }
 
 .sidebar-profile { flex: 0 0 auto; display: grid; grid-template-columns: 34px minmax(0, 1fr) 36px; align-items: center; gap: 10px; margin-top: 10px; padding: 14px 7px 0; border-top: 1px solid color-mix(in srgb, var(--border) 76%, transparent); }
-.sidebar-profile > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.sidebar-profile strong { font-size: .74rem; }.sidebar-profile small { color: var(--muted); font-size: .63rem; }
+.sidebar-profile > span { display: flex; flex-direction: column; justify-content: center; align-self: center; gap: 2px; min-width: 0; }
+.sidebar-profile > .avatar { align-self: center; }
+.sidebar-profile strong { font-size: .74rem; line-height: 1.25; }.sidebar-profile small { color: var(--muted); font-size: .63rem; line-height: 1.25; }
 .sidebar-settings { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 11px; color: var(--muted-strong); }
 .sidebar-settings:hover { color: var(--brand); background: var(--brand-soft); }
 .conversation-row:focus-visible, .sidebar-settings:focus-visible, .new-conversation:focus-visible, .primary-navigation button:focus-visible { outline: 3px solid var(--focus-outline); outline-offset: 2px; }
