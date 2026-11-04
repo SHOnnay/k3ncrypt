@@ -77,7 +77,8 @@ describe('video call controls and render state', () => {
     const markup = renderOverlay({ localCallStream: undefined, remoteCallStream: undefined });
     expect(markup).toContain('Waiting for remote video');
     expect(markup).toContain('Camera starting…');
-    expect(markup).not.toContain('aria-label="Remote video"');
+    // Part A2: the remote <video> stays mounted (hidden) so its frames can be watched; the placeholder covers it.
+    expect(markup).toMatch(/aria-label="Remote video" aria-hidden="true"/);
   });
 
   it('keeps media controls disabled before remote acceptance and lets the caller cancel', () => {

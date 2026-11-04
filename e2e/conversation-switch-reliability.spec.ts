@@ -1,7 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { createHash } from 'crypto';
 import { readFile } from 'fs/promises';
-import { connectedPair, create, invite } from './usabilityHelpers';
+import { connectedPair, create, invite, expectFileSent } from './usabilityHelpers';
 
 type SafeMetrics = {
   startedAt: number;
@@ -132,12 +132,10 @@ async function fileTransfer(sender: Page, recipient: Page, file: Buffer, output:
   await sender.locator('input[type=file]').setInputFiles({ name: filename, mimeType: 'image/jpeg', buffer: file });
   // 1238e7cf (fix(files): require explicit send for attachments): selection is only a draft until Send file.
   await sender.getByRole('button', { name: 'Send file', exact: true }).click();
-  const status = sender.locator('.media-transfer-status');
-  // After M3a (one bundle check per transfer) a 20 KiB send can finish before 'Sending' is observed.
-  await expect(status).toContainText(/Sending|Sent/, { timeout: 180000 });
+  // Part A2: the composer row clears once the sent file is in the chat; preparation is not timed separately.
   console.log('MUX_TIMING', `file-preparation elapsedMs=${Date.now() - preparationStartedAt}`);
   const uploadStartedAt = Date.now();
-  await expect(status).toContainText('Sent', { timeout: 180000 });
+  await expectFileSent(sender, 180000);
   console.log('MUX_TIMING', `file-upload elapsedMs=${Date.now() - uploadStartedAt}`);
   const buttons = recipient.getByRole('button', { name: 'Download protected file', exact: true });
   await expect(buttons).toHaveCount(before + 1, { timeout: 30000 });
