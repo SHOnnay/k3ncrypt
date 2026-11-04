@@ -29,11 +29,16 @@ test('camera off and on twice restores local preview and remote video', async ({
     await alice.getByRole('button', { name: 'Turn camera off', exact: true }).click();
     await expect(alice.getByRole('button', { name: 'Turn camera on', exact: true })).toBeVisible();
     await expect(alice.locator('.call-video-indicator')).toHaveText('Camera off');
+    // Part A2 bug 2: the other side shows Camera off with the contact's avatar, not a frozen last frame.
+    const remoteOff = bob.locator('.call-video-placeholder--remote-camera-off');
+    await expect(remoteOff, `round ${round}`).toContainText('Camera off', { timeout: 15_000 });
+    await expect(remoteOff.locator('.avatar')).toBeVisible();
     await alice.getByRole('button', { name: 'Turn camera on', exact: true }).click();
     await expect(alice.getByRole('button', { name: 'Turn camera off', exact: true }), `round ${round}`).toBeVisible();
     await expect(alice.locator('.call-error')).toHaveCount(0);
     await playing(alice, 'Local video preview');
     await playing(bob, 'Remote video');
+    await expect(bob.locator('.call-video-placeholder')).toHaveCount(0);
   }
   await expect(bob.locator('#call-status')).toHaveText('Connected');
   await alice.getByRole('button', { name: 'End call', exact: true }).click();

@@ -11,7 +11,8 @@ import { Avatar } from '../common/Avatar';
 import { startRingtone, stopRingtone } from '../../utils/ringtone';
 import { attachMediaStream } from './mediaStream';
 import { contactDisplayName } from '../../content/copy';
-import { hasLiveEnabledVideoTrack, localVideoPlaceholder, remoteVideoPlaceholder, videoPlaceholderCopy } from '../../calls/callVideoUiState';
+import { hasLiveEnabledVideoTrack, localVideoPlaceholder, videoPlaceholderCopy } from '../../calls/callVideoUiState';
+import { useRemoteVideoState } from '../../calls/useRemoteVideoState';
 import './CallOverlay.css';
 
 export const CallOverlay: React.FC = () => {
@@ -37,7 +38,7 @@ export const CallOverlay: React.FC = () => {
   // The <video> nodes unmount behind the "Camera off" / "Waiting" placeholders, and turning the camera back on
   // reuses the same MediaStream object. Re-attach whenever a node mounts again, not only when the stream changes.
   const localVideoState = localVideoPlaceholder(cameraEnabled, localCallStream);
-  const remoteVideoState = remoteVideoPlaceholder(remoteCallStream);
+  const remoteVideoState = useRemoteVideoState(remoteCallStream, remoteVideo);
   useEffect(() => {
     attachMediaStream(localVideo.current, localCallStream);
     return () => attachMediaStream(localVideo.current, undefined);
@@ -46,7 +47,7 @@ export const CallOverlay: React.FC = () => {
   useEffect(() => {
     attachMediaStream(remoteVideo.current, remoteCallStream);
     return () => attachMediaStream(remoteVideo.current, undefined);
-  }, [remoteCallStream, remoteVideoState]);
+  }, [remoteCallStream]);
 
   useEffect(() => {
     if (callActive && callStatus === 'Connected') {
@@ -90,7 +91,9 @@ export const CallOverlay: React.FC = () => {
       <div className={`call-info ${isVideo ? 'call-info--video' : ''}`}>
         <audio ref={remoteAudio} autoPlay playsInline aria-label="Remote call audio" />
         {isVideo && !isIncomingCall && <div className="call-video-stage">
-          {remoteVideoState === undefined ? <video ref={remoteVideo} className="call-video-remote" autoPlay muted playsInline aria-label="Remote video" /> : <div className="call-video-placeholder" role="status">{videoPlaceholderCopy[remoteVideoState]}</div>}
+          {/* The remote <video> stays mounted so frames can be watched; the placeholder covers it when there are none. */}
+          <video ref={remoteVideo} className="call-video-remote" autoPlay muted playsInline aria-label="Remote video" aria-hidden={remoteVideoState !== undefined || undefined} />
+          {remoteVideoState !== undefined && <div className={`call-video-placeholder call-video-placeholder--${remoteVideoState}`} role="status">{remoteVideoState === 'remote-camera-off' && <Avatar label={callContact} size="hero" />}<span>{videoPlaceholderCopy[remoteVideoState]}</span></div>}
           <div className="call-video-preview">
             {localVideoState === undefined && hasLiveEnabledVideoTrack(localCallStream) ? <video ref={localVideo} autoPlay muted playsInline aria-label="Local video preview" /> : <span role="status">{videoPlaceholderCopy[localVideoState ?? 'camera-starting']}</span>}
             <span className="call-video-indicator">{cameraEnabled ? 'Camera on' : 'Camera off'}</span>
