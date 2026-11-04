@@ -85,3 +85,9 @@ export async function checkByNumbers(page: Page) {
   await expect(page.locator('.verification-summary')).toContainText('Checked on this device');
   await page.getByRole('button', { name: 'Back to chat', exact: true }).click();
 }
+
+/** Part A2 bug 1: a sent file's composer row clears once the file is in the chat. */
+export async function expectFileSent(page: Page, timeout = 60_000) {
+  await expect(page.locator('.file-transfer-card')).toHaveCount(0, { timeout });
+  await expect(page.locator('.message.sent.message--file').last()).toBeVisible();
+}

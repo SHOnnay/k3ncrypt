@@ -1,7 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { readFile, appendFile } from 'node:fs/promises';
-import { connectedPair } from './usabilityHelpers';
+import { connectedPair, expectFileSent } from './usabilityHelpers';
 
 // Opt-in benchmark: synthetic data and fresh browser identities only. Never export
 // request URLs/authentication headers/bodies, file names, keys, room IDs, or user content.
@@ -78,9 +78,9 @@ test('opt-in authenticated file stage benchmark', async ({ browser }, testInfo) 
         await expect(alice.getByRole('group', { name: 'File attachment draft' })).toBeVisible(); row.selectionMs = Date.now() - origin;
         const sendAt = Date.now(); origin = sendAt;
         await alice.getByRole('button', { name: 'Send file', exact: true }).click();
-        await expect(alice.locator('.media-transfer-status')).toContainText(/Sent|failed|Could not|quota|expired/i, { timeout: 45000 });
+        await expect.poll(async () => await alice.locator('.file-transfer-card').count() ? (await alice.locator('.file-transfer-card').innerText()) : 'Sent', { timeout: 45000 }).toMatch(/Sent|failed|Could not|quota|expired/i);
         row.sendMs = Date.now() - sendAt;
-        await expect(alice.locator('.media-transfer-status')).toContainText('Sent');
+        await expectFileSent(alice);
         const completed = requests.find(r => r.category === 'complete' && r.status === 200);
         row.completeToSentMs = completed ? Number(row.sendMs) - completed.startMs - completed.headersMs : undefined;
         await expect(bob.getByRole('button', { name: 'Download protected file', exact: true })).toHaveCount(receivedBefore + 1, { timeout: 30000 });

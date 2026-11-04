@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { connectedPair } from './usabilityHelpers';
+import { connectedPair, expectFileSent } from './usabilityHelpers';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 
@@ -13,7 +13,7 @@ test('real repeated maximum transfer distinguishes retained quota from rate admi
     const begin = Date.now();
     await alice.locator('input[type=file]').setInputFiles({ name: 'synthetic.bin', mimeType: 'application/octet-stream', buffer: data });
     await alice.getByRole('button', { name: 'Send file', exact: true }).click();
-    await expect(alice.locator('.media-transfer-status')).toContainText('Sent', { timeout: 90000 });
+    await expectFileSent(alice, 90000);
     const sentMs = Date.now() - begin;
     const downloadAt = Date.now();
     await bob.getByRole('button', { name: 'Download protected file', exact: true }).click();
@@ -46,7 +46,7 @@ test('real repeated maximum transfer distinguishes retained quota from rate admi
     // No server limit is changed; a small legitimate reservation still fits.
     await alice.locator('input[type=file]').setInputFiles({ name: 'small.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(23 * 1024, 31) });
     await alice.getByRole('button', { name: 'Send file', exact: true }).click();
-    await expect(alice.locator('.media-transfer-status')).toContainText('Sent', { timeout: 45000 });
+    await expectFileSent(alice, 45000);
     await expect(bob.getByRole('button', { name: 'Download protected file', exact: true })).toHaveCount(2);
     console.log('PHASE4C_SAFE', JSON.stringify({ bytes: data.length, sentMs, downloadMs, integrity: true, repeatFailure: 'quota', smallerRecovery: true }));
   } finally { await a.close(); await b.close(); }

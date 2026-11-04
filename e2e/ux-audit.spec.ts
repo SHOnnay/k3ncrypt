@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'fs';
-import { connectedPair, create } from './usabilityHelpers';
+import { connectedPair, create, expectFileSent } from './usabilityHelpers';
 
 // UX audit (opt-in: UX_AUDIT=true): every main web screen at phone and desktop size, light and dark. Screenshots go to
 // AUDIT_DIR; findings (technical words, horizontal overflow, overlapping controls, unnamed buttons) to findings.json.
@@ -63,7 +63,7 @@ test('UX audit of every main screen', async ({ browser }) => {
   const { alice, bob } = await connectedPair(browser);
   await alice.locator('input[type=file]').setInputFiles({ name: 'Family plan.pdf', mimeType: 'application/pdf', buffer: Buffer.alloc(80 * 1024, 3) });
   await alice.getByRole('button', { name: 'Send file', exact: true }).click();
-  await expect(alice.locator('.media-transfer-status')).toContainText('Sent', { timeout: 60_000 });
+  await expectFileSent(alice, 60_000);
   await alice.getByRole('button', { name: 'Calls', exact: true }).click();
   await alice.getByRole('button', { name: 'Start audio call', exact: true }).click();
   await bob.getByRole('button', { name: 'Accept call', exact: true }).click({ timeout: 30_000 });

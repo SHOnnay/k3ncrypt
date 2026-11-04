@@ -1,7 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { createHash } from 'crypto';
 import { readFile } from 'fs/promises';
-import { connectedPair, create, invite } from './usabilityHelpers';
+import { connectedPair, create, invite, expectFileSent } from './usabilityHelpers';
 const fixtures = [
   { name: 'document.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4\n1 0 obj << /Type /Catalog >> endobj\n%%EOF') },
   { name: 'photo.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jXioAAAAASUVORK5CYII=', 'base64') },
@@ -15,7 +15,7 @@ async function transfer(sender: Page, recipient: Page, file: typeof fixtures[num
   await expect(sender.getByRole('button', { name: 'Send file', exact: true })).toBeEnabled();
   await sender.getByRole('button', { name: 'Send file', exact: true }).click();
   await expect(sender.locator('.media-transfer-status')).toContainText(file.name, { timeout: 30000 });
-  await expect(sender.locator('.media-transfer-status')).toContainText('Sent', { timeout: 300000 });
+  await expectFileSent(sender, 300000);
   const buttons = recipient.getByRole('button', { name: 'Download protected file', exact: true });
   await expect(buttons).toHaveCount(before + 1); await buttons.last().click();
   const save = recipient.getByRole('link', { name: `Save ${file.name}`, exact: true });
@@ -74,7 +74,7 @@ test('file selection is a local draft until explicit Send, then encrypted transf
   const sendFileButton = alice.getByRole('button', { name: 'Send file', exact: true });
   await sendFileButton.click();
   await sendFileButton.dispatchEvent('click'); // Simulate a rapid duplicate activation while the first send is in flight.
-  await expect(alice.locator('.media-transfer-status')).toContainText('Sent', { timeout: 300000 });
+  await expectFileSent(alice, 300000);
   expect(requests.filter(request => request.endsWith('/create'))).toHaveLength(1);
   await expect(bob.getByRole('button', { name: 'Download protected file', exact: true })).toHaveCount(receivedBefore + 1, { timeout: 300000 });
   const downloadButton = bob.getByRole('button', { name: 'Download protected file', exact: true }).last();
@@ -103,7 +103,7 @@ test('retry, cancel, next transfer, oversize photo and scoped state after reload
   await alice.route('**/api/attachments/v2/*/chunks/*', async route => { if (route.request().method() !== 'PUT') return route.continue(); const body = route.request().postDataBuffer(); if (fail) { fail = false; firstBody = body; return route.fulfill({ status: 503, contentType: 'application/json', body: '{"failure":"storage"}' }); } expect(body).toEqual(firstBody); return route.continue(); });
   await alice.locator('input[type=file]').setInputFiles(fixtures[0]);
   await alice.getByRole('button', { name: 'Send file', exact: true }).click();
-  await alice.getByRole('button', { name: 'Retry', exact: true }).click(); await expect(alice.locator('.media-transfer-status')).toContainText('Sent', { timeout: 300000 });
+  await alice.getByRole('button', { name: 'Retry', exact: true }).click(); await expectFileSent(alice, 300000);
   await alice.unroute('**/api/attachments/v2/*/chunks/*');
   let release: (() => void) | undefined; const gate = new Promise<void>(resolve => { release = resolve; });
   let uploadBlocked!: () => void; const blocked = new Promise<void>(resolve => { uploadBlocked = resolve; });
@@ -130,7 +130,7 @@ test('two verified files keep independent Save links after cancellation and rele
     for (const file of fixtures.slice(0,2)) {
       await alice.locator('input[type=file]').setInputFiles(file);
       await alice.getByRole('button',{name:'Send file',exact:true}).click();
-      await expect(alice.locator('.media-transfer-status')).toContainText('Sent',{timeout:30000});
+      await expectFileSent(alice, 30000);
       await bob.getByRole('button',{name:'Download protected file',exact:true}).last().click();
       const save=bob.getByRole('link',{name:`Save ${file.name}`,exact:true});
       await expect(save).toBeVisible({timeout:30000});

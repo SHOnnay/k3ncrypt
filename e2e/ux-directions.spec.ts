@@ -1,7 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { mkdirSync } from 'fs';
 import { resolve } from 'path';
-import { connectedPair } from './usabilityHelpers';
+import { connectedPair, expectFileSent } from './usabilityHelpers';
 
 // UX Part B (opt-in: UX_DIRECTIONS=true). Screenshots of four screens in each proposed visual direction.
 // The directions are stylesheets over the existing tokens (docs/ux/part-b/*.css); product code is unchanged.
@@ -34,7 +34,7 @@ test('visual directions: unlock, chat with file and call, invite, calls page', a
   const { alice, bob } = await connectedPair(browser);
   await alice.locator('input[type=file]').setInputFiles({ name: 'Family plan.pdf', mimeType: 'application/pdf', buffer: Buffer.alloc(80 * 1024, 3) });
   await alice.getByRole('button', { name: 'Send file', exact: true }).click();
-  await expect(alice.locator('.media-transfer-status')).toContainText('Sent', { timeout: 60_000 });
+  await expectFileSent(alice, 60_000);
   await alice.locator('.chat-footer textarea').fill('See you at seven. Bringing the plan.');
   await alice.getByRole('button', { name: 'Send message', exact: true }).click();
   await alice.getByRole('button', { name: 'Calls', exact: true }).click();

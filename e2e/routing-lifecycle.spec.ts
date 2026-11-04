@@ -4,7 +4,7 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { MongoClient } from 'mongodb';
-import { create, invite } from './usabilityHelpers';
+import { create, invite, expectFileSent } from './usabilityHelpers';
 
 const uri = process.env.K3NCRYPT_ROUTING_MONGO_URI;
 const base = 'http://127.0.0.1:43432', api = 'http://127.0.0.1:43431';
@@ -169,7 +169,7 @@ test.describe('persistent authenticated routing lifecycle', () => {
         const bytes = Buffer.alloc(23 * 1024, 71), name = 'synthetic.bin';
         await alice.locator('input[type=file]').setInputFiles({ name, mimeType: 'application/octet-stream', buffer: bytes });
         await alice.getByRole('button', { name: 'Send file', exact: true }).click();
-        await expect(alice.locator('.media-transfer-status')).toContainText('Sent', { timeout: 30000 });
+        await expectFileSent(alice, 30000);
         await bob.getByRole('button', { name: 'Download protected file', exact: true }).last().click();
         const save = bob.getByRole('link', { name: `Save ${name}`, exact: true }); await expect(save).toBeVisible({ timeout: 30000 });
         const hash = await save.evaluate(async element => { const data = await (await fetch((element as HTMLAnchorElement).href)).arrayBuffer(); return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', data)), n => n.toString(16).padStart(2, '0')).join(''); });

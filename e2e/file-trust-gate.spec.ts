@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { create, invite, security } from './usabilityHelpers';
+import { create, invite, security, expectFileSent } from './usabilityHelpers';
 
 // P0-1. Invariant: calls and file transfer require a verified, unchanged identity.
 // Alice verified Bob, so Alice may send. Bob has NOT verified Alice, so Bob must not
@@ -29,7 +29,7 @@ test('an unverified recipient cannot open a received file until they verify the 
 
   await alice.locator('input[type=file]').setInputFiles({ name: 'note.txt', mimeType: 'text/plain', buffer: Buffer.from('family photo list') });
   await alice.getByRole('button', { name: 'Send file', exact: true }).click();
-  await expect(alice.locator('.media-transfer-status')).toContainText('Sent', { timeout: 60_000 });
+  await expectFileSent(alice, 60_000);
 
   const card = bob.locator('.message.received .message-file-card').last();
   await expect(card).toBeVisible({ timeout: 30_000 });

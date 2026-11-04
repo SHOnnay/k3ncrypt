@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { mkdirSync } from 'fs';
-import { create, security, uncheckedPair } from './usabilityHelpers';
+import { create, security, uncheckedPair, expectFileSent } from './usabilityHelpers';
 
 // M1c (Option B). Invariant: checking is explicit and user-controlled; nothing changes trust
 // silently. Screenshots go to SHOT_DIR at 1440x900 and 390x844.
@@ -155,7 +155,7 @@ test('file card before and after checking, and the changed-number banner pauses 
   await alice.getByRole('button', { name: 'Back to chat', exact: true }).click();
   await alice.locator('input[type=file]').setInputFiles({ name: 'garden.txt', mimeType: 'text/plain', buffer: Buffer.from('roses and mint') });
   await alice.getByRole('button', { name: 'Send file', exact: true }).click();
-  await expect(alice.locator('.media-transfer-status')).toContainText('Sent', { timeout: 60_000 });
+  await expectFileSent(alice, 60_000);
 
   const card = bob.locator('.message.received .message-file-card').last();
   await expect(card).toContainText('Check it’s really Alice to open this file.', { timeout: 30_000 });

@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { connectedPair } from './usabilityHelpers';
+import { connectedPair, expectFileSent } from './usabilityHelpers';
 
 // UX A9. Invariants: file cards show the name and a type badge once known (sender at once, recipient after
 // download, remembered across unlock); a failed download offers Retry that succeeds.
@@ -19,7 +19,7 @@ test('file cards show name and type, remember it, and retry a failed download', 
   await alice.locator('input[type=file]').setInputFiles(file);
   await alice.getByRole('button', { name: 'Send file', exact: true }).click();
   await expect(alice.locator('.file-transfer-card')).toContainText(file.name, { timeout: 30_000 });
-  await expect(alice.locator('.media-transfer-status')).toContainText('Sent', { timeout: 120_000 });
+  await expectFileSent(alice, 120_000);
   const sentCard = alice.locator('.message.sent .message-file-card').last();
   await expect(sentCard).toContainText(file.name); await expect(sentCard.locator('.message-file-badge')).toHaveText('PDF');
 

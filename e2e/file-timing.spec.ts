@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { checkByNumbers, uncheckedPair } from './usabilityHelpers';
+import { checkByNumbers, uncheckedPair, expectFileSent } from './usabilityHelpers';
 
 // M2 measurement, opt-in: K3NCRYPT_FILE_TIMING=true. Emulates a slow round trip to the server
 // (Render Free seen from a home connection) with Chromium network conditions, then records
@@ -34,7 +34,7 @@ for (const size of [23 * 1024, 170 * 1024, 1024 * 1024]) test(`file timing at ${
   await alice.locator('input[type=file]').setInputFiles({ name: 'm.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(size, 9) });
   const selected = Date.now() - t0;
   await alice.getByRole('button', { name: 'Send file', exact: true }).click();
-  await expect(alice.locator('.media-transfer-status')).toContainText('Sent', { timeout: 240_000 });
+  await expectFileSent(alice, 240_000);
   const sent = Date.now() - t0;
   await bob.getByRole('button', { name: 'Download protected file', exact: true }).last().click();
   await expect(bob.getByRole('link', { name: 'Save m.bin', exact: true })).toBeVisible({ timeout: 240_000 });

@@ -1,7 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { connectedPair } from './usabilityHelpers';
+import { connectedPair, expectFileSent } from './usabilityHelpers';
 const file = { name: 'synthetic.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(1258291, 73) };
 async function attach(page: Page) {
   await page.locator('input[type=file]').setInputFiles(file);
@@ -28,7 +28,7 @@ test('pre-allocation 429 terminates with honest feedback after bounded retries, 
     await expect(alice.locator('.media-transfer-status')).not.toContainText('Preparing');
     await expect(bob.getByRole('button', { name: 'Download protected file', exact: true })).toHaveCount(0);
     await alice.unroute('**/api/attachments/v2/create');
-    await attach(alice); await expect(alice.locator('.media-transfer-status')).toContainText('Sent', { timeout: 60000 });
+    await attach(alice); await expectFileSent(alice, 60000);
     await verifyDownload(bob, info.outputPath('after-rate-limit'));
   } finally { await a.close(); await b.close(); }
 });
@@ -49,7 +49,7 @@ test('preparing remains cancelable while encrypted chat works; late allocation c
     await expect(alice.locator('.media-transfer-status')).toContainText('Transfer canceled');
     await expect(bob.getByRole('button', { name: 'Download protected file', exact: true })).toHaveCount(0);
     await alice.unroute('**/api/attachments/v2/create');
-    await attach(alice); await expect(alice.locator('.media-transfer-status')).toContainText('Sent', { timeout: 60000 });
+    await attach(alice); await expectFileSent(alice, 60000);
     await verifyDownload(bob, info.outputPath('after-preparing-cancel'));
   } finally { release(); await a.close(); await b.close(); }
 });

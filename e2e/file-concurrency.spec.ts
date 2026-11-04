@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { connectedPair } from './usabilityHelpers';
+import { connectedPair, expectFileSent } from './usabilityHelpers';
 
 // UX A2 + A3. Invariants: opening a second file while one is downloading waits visibly ("Waiting…") and then
 // completes, never a raw "Another file operation" error; download progress shows real intermediate percentages.
@@ -11,7 +11,7 @@ const files = [
 async function send(sender: Page, file: typeof files[number]) {
   await sender.locator('input[type=file]').setInputFiles(file);
   await sender.getByRole('button', { name: 'Send file', exact: true }).click();
-  await expect(sender.locator('.media-transfer-status')).toContainText('Sent', { timeout: 300_000 });
+  await expectFileSent(sender, 300_000);
 }
 
 test('two downloads in a row: second waits visibly, both complete, progress is real', async ({ browser }) => {
