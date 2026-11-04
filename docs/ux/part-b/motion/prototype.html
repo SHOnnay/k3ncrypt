@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>K3NCRYPT motion prototype</title>
+<style>
+/* Part B motion prototype (not in the app). Ink Rail + soft cards, cobalt seam split/merge motif from the landing page. */
+:root{--canvas:#F1EFEA;--surface:#FBFAF6;--ink:#1B1F24;--muted:#626870;--brand:#2A5788;--seam:#2F4FD8;--rail:#1B1F24;--railtext:#D8D4CB;--card:0 2px 6px rgba(52,44,30,.06),0 8px 24px rgba(52,44,30,.06);font-family:Inter,system-ui,sans-serif}
+*{box-sizing:border-box;margin:0}body{background:var(--canvas);color:var(--ink);width:390px;height:844px;overflow:hidden;position:relative}
+.app{position:absolute;inset:0;display:grid;grid-template-rows:64px 1fr 72px}
+.head{display:flex;align-items:center;padding:0 16px;font:600 20px Georgia,serif;border-bottom:1px solid #E1DED4}
+.list{padding:12px;display:grid;gap:10px;align-content:start}
+.row{display:grid;grid-template-columns:44px 1fr;gap:10px;align-items:center;padding:10px;border-radius:14px;background:var(--surface);box-shadow:var(--card)}
+.av{width:44px;height:44px;border-radius:12px;background:linear-gradient(155deg,#E3E9EE,#D5DFE9);display:grid;place-items:center;font-weight:700;color:#1F4470}
+.row b{display:block;font-size:14px}.row small{color:var(--muted);font-size:12px}
+.tabs{background:var(--rail);display:flex;justify-content:space-around;align-items:center;color:var(--railtext);font-size:11px}
+.tabs span:first-child{color:#fff;box-shadow:inset 0 3px 0 #6E9CCB;padding:14px 10px}
+/* Unlock: two halves meet on a cobalt seam, then part. */
+.lock{position:absolute;inset:0;pointer-events:none}
+.half{position:absolute;top:0;bottom:0;width:50%;background:var(--rail);overflow:hidden}
+.half.l{left:0}.half.r{right:0}
+.half .mark{position:absolute;top:300px;width:390px;text-align:center;color:#F4F1EA;font:700 30px Georgia,serif}
+.half.l .mark{left:0}.half.r .mark{right:0}
+.half .step{position:absolute;top:350px;width:390px;text-align:center;color:#A9A59C;font-size:13px}
+.half.l .step{left:0}.half.r .step{right:0}
+.seam{position:absolute;left:calc(50% - 2px);top:0;width:4px;height:100%;background:var(--seam);transform-origin:top}
+/* File card: pieces merge as upload progresses. */
+.chat{position:absolute;inset:64px 0 72px;padding:16px;display:grid;align-content:end;gap:10px}
+.filecard{justify-self:end;width:250px;height:64px;position:relative}
+.piece{position:absolute;top:0;height:64px;background:var(--surface);box-shadow:var(--card);overflow:hidden}
+.piece:first-child{border-radius:16px 0 0 16px}.piece:last-child{border-radius:0 16px 16px 0}
+.piece .content{position:absolute;top:0;left:0;width:250px;height:64px;display:grid;grid-template-columns:36px 1fr;gap:10px;align-items:center;padding:0 14px}
+.icon{width:30px;height:34px;border-radius:6px;background:#E3E9EE;position:relative}.icon:after{content:"PDF";position:absolute;bottom:-4px;left:4px;font:700 8px Inter;background:var(--brand);color:#fff;padding:1px 3px;border-radius:3px}
+.content b{font-size:13px}.content small{display:block;color:var(--muted);font-size:11px}
+.bar{position:absolute;left:14px;right:14px;bottom:6px;height:2px;background:#E1DED4;border-radius:2px}.bar i{display:block;height:100%;width:0;background:var(--seam);border-radius:2px}
+.label{position:absolute;top:8px;left:0;right:0;text-align:center;font:600 12px Inter;color:var(--muted)}
+</style></head>
+<body>
+<div class="app"><div class="head">Chats</div>
+  <div class="list" id="list">
+    <div class="row"><div class="av">B</div><div><b>Bob</b><small>See you at seven.</small></div></div>
+    <div class="row"><div class="av">M</div><div><b>Mira</b><small>Photo · Encrypted</small></div></div>
+    <div class="row"><div class="av">S</div><div><b>Sam</b><small>Outgoing voice call · 0:42</small></div></div>
+    <div class="row"><div class="av">J</div><div><b>Jo</b><small>Thanks!</small></div></div>
+  </div>
+  <div class="tabs"><span>Chats</span><span>Contacts</span><span>Calls</span><span>Settings</span></div>
+</div>
+<div class="chat" id="chat" hidden><div class="filecard" id="file"></div></div>
+<div class="lock" id="lock" hidden><div class="half l"><div class="mark">K3ncrypt</div><div class="step">Opening your chats…</div></div><div class="half r"><div class="mark">K3ncrypt</div><div class="step">Opening your chats…</div></div><div class="seam"></div></div>
+<div class="label" id="label"></div>
+<script>
+const q = new URLSearchParams(location.search); const scene = q.get('scene') ?? 'unlock';
+const reduced = q.get('reduced') === '1' || matchMedia('(prefers-reduced-motion: reduce)').matches;
+const ease = 'cubic-bezier(.2,.7,.1,1)'; const animations = [];
+const run = (el, frames, opts) => { const a = el.animate(frames, { fill: 'both', easing: ease, ...opts }); animations.push(a); return a; };
+document.getElementById('label').textContent = `${scene}${reduced ? ' · reduced motion' : ''}`;
+if (scene === 'unlock') {
+  // ~500 ms: the seam draws (0–150 ms), then the halves part along it (150–500 ms) and the seam fades.
+  const lock = document.getElementById('lock'); lock.hidden = false;
+  const [l, r] = lock.querySelectorAll('.half'); const seam = lock.querySelector('.seam');
+  if (reduced) { run(lock, [{ opacity: 1 }, { opacity: 0 }], { duration: 150 }); }
+  else {
+    run(seam, [{ transform: 'scaleY(0)' }, { transform: 'scaleY(1)' }], { duration: 150 });
+    run(seam, [{ opacity: 1 }, { opacity: 0 }], { delay: 380, duration: 120 });
+    run(l, [{ transform: 'translateX(0)' }, { transform: 'translateX(-100%)' }], { delay: 150, duration: 350 });
+    run(r, [{ transform: 'translateX(0)' }, { transform: 'translateX(100%)' }], { delay: 150, duration: 350 });
+    for (const [i, row] of [...document.querySelectorAll('.row')].entries()) run(row, [{ opacity: 0, transform: 'scale(.98)' }, { opacity: 1, transform: 'none' }], { delay: 260 + i * 40, duration: 240 });
+  }
+}
+if (scene === 'file') {
+  // The card starts as four pieces, split apart; each piece slides home as its share of bytes is sent.
+  document.getElementById('chat').hidden = false; document.getElementById('list').style.visibility = 'hidden';
+  const card = document.getElementById('file'); const pieces = 4; const w = 250 / pieces; const total = 2400;
+  for (let i = 0; i < pieces; i++) {
+    const p = document.createElement('div'); p.className = 'piece'; p.style.left = `${i * w}px`; p.style.width = `${w}px`;
+    p.innerHTML = `<div class="content" style="left:${-i * w}px"><span class="icon"></span><span><b>Family plan.pdf</b><small>Sending… 1.5 MB</small></span></div>`; card.append(p);
+    const offset = (i - (pieces - 1) / 2) * 14;
+    if (reduced) run(p, [{ opacity: .55 }, { opacity: 1 }], { delay: i * total / pieces, duration: 120 });
+    else run(p, [{ transform: `translate(${offset}px, ${i % 2 ? 6 : -6}px) rotate(${i % 2 ? 1.5 : -1.5}deg)`, opacity: .7 }, { transform: 'none', opacity: 1 }], { delay: i * total / pieces, duration: total / pieces, easing: 'linear' });
+  }
+  const bar = document.createElement('div'); bar.className = 'bar'; bar.innerHTML = '<i></i>'; card.append(bar);
+  run(bar.firstChild, [{ width: '0%' }, { width: '100%' }], { duration: total, easing: 'linear' });
+}
+if (scene === 'load') {
+  // First load: rows settle in with a 40 ms stagger, at most 8 px of movement.
+  for (const [i, row] of [...document.querySelectorAll('.row')].entries())
+    run(row, reduced ? [{ opacity: 0 }, { opacity: 1 }] : [{ opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }], { delay: i * 40, duration: reduced ? 120 : 280 });
+}
+// Frame capture: ?t=<ms> pauses every animation at that time.
+if (q.has('t')) { const t = Number(q.get('t')); for (const a of animations) { a.pause(); a.currentTime = t; } }
+window.__motionReady = true;
+</script></body></html>
