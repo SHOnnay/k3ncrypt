@@ -1,0 +1,10 @@
+{
+  "description": "Shared vectors for the 30-digit per-contact security number. Synthetic identities only. Read by Jest and Kotlin tests.",
+  "vectors": [
+    { "own": "K3 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "peer": "K3 BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", "number": "62986 · 29402 · 06636 · 16135 · 54684 · 29097" }
+  ],
+  "qr": {
+    "fingerprint": "K3 ABCD EFGH IJKL MNOP",
+    "payload": "{\"version\":1,\"algorithm\":\"vodozemac\",\"fingerprint\":\"K3 ABCD EFGH IJKL MNOP\"}"
+  }
+}

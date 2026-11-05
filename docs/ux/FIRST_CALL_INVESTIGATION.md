@@ -43,4 +43,4 @@ Found by reading the receive path: a call signal that arrived before the callee'
 
 Stress: `CALL_STRESS=true` in `e2e/calls-reliability.spec.ts`, 20 first video calls per direction, each on freshly reloaded and unlocked sessions with alternating reload order: **20/20 and 20/20**. [two-browser E2E] Not run against the old code, so it is not shown to catch the original failure; the receive-path fixes are covered by unit tests.
 
-**Android:** no wire change. Android checks invites by expiry, not by receiver start, so the clock issue does not apply there. Whether it drops signals before its receiver is ready was not checked. The connection helper setting does not exist on Android yet (planned in A2); web with the helper on still connects to Android, since one side's public address is often enough.
+**Android:** no wire change. Correction (2026-11-05): Android had the same two problems (a decrypted signal with no observer was lost; invites stamped before the controller started were ignored). Both are fixed on `android/a0-a1`. The connection helper setting does not exist on Android yet (planned in A2).
