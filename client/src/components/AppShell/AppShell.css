@@ -134,3 +134,9 @@
 /* Audit: the locked navigation looks unavailable (it is disabled until unlock). */
 .sidebar--locked button:disabled { opacity: .45; cursor: not-allowed; }
 .sidebar--locked .primary-navigation button:disabled:hover { color: inherit; background: transparent; }
+
+/* First load: chat rows settle in with a 40 ms stagger, at most 8 px of movement. */
+@keyframes conversation-row-settle { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes conversation-row-fade { from { opacity: 0; } to { opacity: 1; } }
+.conversation-section .conversation-row--settle { animation: conversation-row-settle 260ms cubic-bezier(.2, .7, .2, 1) calc(var(--row-index, 0) * 40ms) both; }
+@media (prefers-reduced-motion: reduce) { .conversation-section .conversation-row--settle { animation: conversation-row-fade 150ms linear both !important; animation-duration: 150ms !important; } }

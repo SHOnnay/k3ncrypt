@@ -11,6 +11,16 @@ import { conversationRowOpenStatus } from '../../product/conversationOpenCopy';
 import { ConversationArchiveButton } from './ConversationArchiveButton';
 import './AppShell.css';
 
+/** Chats settle in once per page load. The window outlasts the animation, so re-renders during it don't cancel it. */
+const SETTLE_WINDOW_MS = 1_000;
+let settleEndsAt: number | undefined;
+export const shouldSettleRows = (hasRows: boolean, now: number): boolean => {
+  if (!hasRows) return false;
+  settleEndsAt ??= now + SETTLE_WINDOW_MS;
+  return now < settleEndsAt;
+};
+export const resetRowSettleForTest = (): void => { settleEndsAt = undefined; };
+
 interface SidebarProps {
   isWelcomeActive: boolean;
   activeSection: 'chats' | 'contacts' | 'calls';
@@ -33,6 +43,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection
   if (accountState === 'locked' || accountState === 'checking') return <LockedSidebar />;
   const latest = messages.at(-1);
   const groups = classifySidebarConversations(savedConversations, unavailableConversations);
+  const settleRows = shouldSettleRows(groups.chats.length > 0, Date.now());
   const displayName = (conversation: typeof conversations[number]) => contactDisplayName(conversation.label, conversation.roomId, conversation.remoteDisplayName, conversation.localNickname);
 
   return (
@@ -60,12 +71,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection
       <div className="conversation-section">
         <section aria-labelledby="sidebar-chats-heading">
         <p className="section-label" id="sidebar-chats-heading">Conversations</p>
-        {groups.chats.map((conversation) => {
+        {groups.chats.map((conversation, rowIndex) => {
           const diagnostic = unavailableConversations.find(item => item.roomId === conversation.roomId);
           const openStatus = conversationRowOpenStatus(conversation.roomId, { pending: pendingConversation, error: conversationOpenError });
           const isActive = !isWelcomeActive && channelHash === conversation.roomId;
           return (
-          <button key={conversation.roomId} className={`conversation-row ${isActive ? 'active' : ''}`} type="button" aria-current={isActive ? 'true' : undefined} aria-busy={pendingConversation?.roomId === conversation.roomId ? true : undefined} onClick={() => onOpenConversation(conversation.roomId)}>
+          <button key={conversation.roomId} className={`conversation-row ${isActive ? 'active' : ''} ${settleRows ? 'conversation-row--settle' : ''}`} style={settleRows ? { '--row-index': rowIndex } as React.CSSProperties : undefined} type="button" aria-current={isActive ? 'true' : undefined} aria-busy={pendingConversation?.roomId === conversation.roomId ? true : undefined} onClick={() => onOpenConversation(conversation.roomId)}>
             <Avatar label={displayName(conversation)} size="medium" />
             <span className="conversation-copy">
               <span className="conversation-name-row"><span className="conversation-name">{displayName(conversation)}</span><time>{channelHash === conversation.roomId ? formatSidebarTime(latest?.timestamp) : ''}</time></span>

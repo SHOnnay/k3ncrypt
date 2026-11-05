@@ -1,6 +1,6 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { Sidebar } from './Sidebar';
+import { Sidebar, resetRowSettleForTest, shouldSettleRows } from './Sidebar';
 import { conversationDiagnostic } from '../../product/conversationEligibility';
 const mockUseChat = jest.fn();
 jest.mock('../../context/ChatContext', () => ({ useChat: () => mockUseChat() }));
@@ -80,4 +80,18 @@ it('shows saved contacts once the account is ready', () => {
   const html = renderState('ready');
   expect(html).toContain('Saved friend');
   expect(html).not.toContain('Unlock to see your chats');
+});
+
+it('settles chat rows only in the first second after they appear', () => {
+  resetRowSettleForTest();
+  expect(shouldSettleRows(false, 0)).toBe(false);
+  expect(shouldSettleRows(true, 5_000)).toBe(true);
+  expect(shouldSettleRows(true, 5_900)).toBe(true);
+  expect(shouldSettleRows(true, 6_000)).toBe(false);
+  expect(shouldSettleRows(true, 60_000)).toBe(false);
+});
+it('marks rows for the settle animation with their position', () => {
+  resetRowSettleForTest();
+  const html = render('NETWORK_FAILURE');
+  expect(html).toContain('conversation-row--settle'); expect(html).toContain('--row-index:0');
 });
