@@ -1,0 +1,15 @@
+.mark-motion { color: var(--brand, #2f5d8a); overflow: visible; }
+.mark-motion__dot { fill: currentColor; }
+.mark-motion__curve { fill: none; stroke: currentColor; stroke-width: 4.5; stroke-linecap: round; opacity: .55; }
+@keyframes mark-settle { 0% { transform: translate(var(--fx), var(--fy)) scale(.4); opacity: 0; } 60% { transform: translate(calc(var(--fx) * -.12), calc(var(--fy) * -.12)) scale(1.06); opacity: 1; } 100% { transform: none; opacity: 1; } }
+@keyframes mark-curve { from { opacity: 0; } to { opacity: .55; } }
+@keyframes mark-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .72; } }
+@media (prefers-reduced-motion: no-preference) {
+  .mark-motion { animation: mark-pulse 2.6s ease-in-out .9s infinite; }
+  .mark-motion__dot { animation: mark-settle .9s cubic-bezier(.2, .8, .2, 1) both; }
+  .mark-motion__dot--a { transform-origin: 38px 62px; --fx: -30px; --fy: -10px; }
+  .mark-motion__dot--b { transform-origin: 66px 40px; --fx: 26px; --fy: -24px; animation-delay: .12s; }
+  .mark-motion__dot--c { transform-origin: 70px 70px; --fx: 22px; --fy: 20px; animation-delay: .24s; }
+  .mark-motion__curve { animation: mark-curve .5s ease .55s both; }
+  .mark-motion__curve--late { animation-delay: .68s; }
+}

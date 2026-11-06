@@ -22,7 +22,7 @@ import { playBeep } from '../utils/audioNotification';
 import { getRuntimeConfig } from '../config/runtimeConfig';
 import { debugError } from '../utils/debug';
 import { bindPageHideCallTermination } from '../calls/pagehideTermination';
-import { CALLS_PAUSED_NUMBER_CHANGED, CHECK_BEFORE_CALLING, checkFailureKind } from '../calls/callLaunchReadiness';
+import { CALLS_PAUSED_NUMBER_CHANGED, CHECK_BEFORE_CALLING, callAttemptClearsError, checkFailureKind } from '../calls/callLaunchReadiness';
 import { loadVodozemacBindings } from '../crypto/vodozemacModule';
 import { readConversationDescriptors, removeConversationDescriptor, saveConversationDescriptor, updateConversationDescriptor, type ConversationDescriptor } from '../product/sessionStore';
 import { readProfileName, readLocalProfile, writeProfileName } from '../product/profileStore';
@@ -221,6 +221,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [microphoneMuted, setMicrophoneMutedState] = useState(false);
   const [cameraEnabled, setCameraEnabledState] = useState(false);
   const [callError, setCallError] = useState<string>();
+  useEffect(() => { if (callAttemptClearsError(callLifecycleState)) setCallError(undefined); }, [callLifecycleState]);
   const callActiveRef = useRef(callActive);
   const modernCallIdRef = useRef(modernCallId);
   callActiveRef.current = callActive;

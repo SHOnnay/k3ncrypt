@@ -8,6 +8,7 @@ import { useCallTimer } from '../../hooks/useCallTimer';
 import { Button } from '../common/Button';
 import { EndCallIcon, MicIcon, VideoIcon } from '../common/icons';
 import { Avatar } from '../common/Avatar';
+import { MarkMotion } from '../common/MarkMotion';
 import { startRingtone, stopRingtone } from '../../utils/ringtone';
 import { attachMediaStream } from './mediaStream';
 import { contactDisplayName } from '../../content/copy';
@@ -101,7 +102,7 @@ export const CallOverlay: React.FC = () => {
             <span className="call-video-indicator">{cameraEnabled ? 'Camera on' : 'Camera off'}</span>
           </div>
         </div>}
-        {(!isVideo || isIncomingCall) && <div className="call-avatar shimmer"><Avatar label={callContact} size="hero" /></div>}
+        {(!isVideo || isIncomingCall) && (callLifecycleState === 'connecting' ? <MarkMotion size={96} label="Connecting" /> : <div className="call-avatar shimmer"><Avatar label={callContact} size="hero" /></div>)}
         <span className="call-kicker">Private {isVideo ? 'video' : 'audio'} call</span>
         <span className="call-contact-name">{callContact}</span>
         <h3 id="call-status" className="call-status">

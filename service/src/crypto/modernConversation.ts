@@ -42,6 +42,7 @@ import { SecureStorageGroupRuntimeAdapter } from '../groups/persistence';
 import { createProductionRecoveryRuntime } from '../recovery/production';
 import type { RecoveryRuntime } from '../recovery/runtime';
 import { DeviceProofClient } from '../devices/deviceProofClient';
+import { SignalProofReserve } from '../devices/signalProofReserve';
 import { bootstrapFirstDevice } from '../devices/bootstrap';
 import { signEnrollmentEvent, type EnrollmentEvent } from '../devices/trustProtocol';
 import makeRequest from '../api/client';
@@ -452,6 +453,7 @@ export class ModernConversation {
     private groupRuntime?: GroupSecurityRuntime;
     private recoveryRuntime?: RecoveryRuntime;
     private durableProofs?: DeviceProofClient;
+    private signalProofs?: SignalProofReserve;
     private retryTimer?: ReturnType<typeof setInterval>;
     private onMessage?: (text: string, envelopeId: string) => InboundMessageAcceptancePlan | Promise<InboundMessageAcceptancePlan>;
     private onContactChange?: (contact: StoredContactIdentity) => void | Promise<void>;
@@ -678,7 +680,8 @@ export class ModernConversation {
                 return { accountIdentityReference: this.userScope, deviceId: this.localDeviceId, deviceIdentityReference: this.localIdentityId, epoch: this.trustEpoch };
             },
         );
-        if (activeTransport && 'setDeviceProofProvider' in activeTransport && typeof activeTransport.setDeviceProofProvider === 'function') activeTransport.setDeviceProofProvider(this.durableProofs);
+        this.signalProofs = new SignalProofReserve(this.durableProofs);
+        if (activeTransport && 'setDeviceProofProvider' in activeTransport && typeof activeTransport.setDeviceProofProvider === 'function') activeTransport.setDeviceProofProvider(this.signalProofs);
         if (localPublicationExpired) {
             await this.runtime.replenishOneTimeKeys(20);
             await replenishAuthenticatedPrekeys(roomId, capability, localAddress!, await this.routingRequestAuthority(), await this.runtime.getPublicBundle());
@@ -1476,6 +1479,7 @@ export class ModernConversation {
             remoteParticipant,
             identity,
             deviceTrust: this.deviceTrust!,
+            signalProofs: { warm: () => this.signalProofs?.warm(this.roomId ? { conversationId: this.roomId } : undefined), cool: () => this.signalProofs?.cool() },
         });
         this.callComposition = composition;
         this.callSignalTransport = composition.signalTransport;

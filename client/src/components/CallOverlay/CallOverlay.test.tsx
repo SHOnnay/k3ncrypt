@@ -5,6 +5,7 @@ import { CallOverlay } from './CallOverlay';
 
 const mockUseChat = jest.fn();
 
+jest.mock('../common/MarkMotion.css', () => ({}));
 jest.mock('../../context/ChatContext', () => ({ useChat: () => mockUseChat() }));
 jest.mock('./CallOverlay.css', () => ({}));
 jest.mock('../common/Button.css', () => ({}));

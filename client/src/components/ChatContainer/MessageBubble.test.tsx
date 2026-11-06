@@ -43,12 +43,13 @@ describe('received file and media trust presentation', () => {
 });
 
 // UX A2: a queued download shows that it is waiting, never a raw error.
-it('shows a queued file as Waiting with its action disabled', () => {
+it('shows a queued file as Waiting inside the card, with no action', () => {
   mockFiles.queued = [`${FILE_PREFIX}opaque`];
   try {
     const markup = render(v2File, { verification: 'verified', changeStatus: 'unchanged' });
     expect(markup).toContain('Waiting…');
-    expect(markup).toMatch(/<button[^>]*disabled[^>]*aria-label="Waiting for another file to finish"/);
+    expect(markup).toMatch(/<span[^>]*aria-label="Waiting for another file to finish"/);
+    expect(markup.indexOf('Waiting…')).toBeLessThan(markup.indexOf('message-meta')); // inside the card
     expect(markup).not.toContain('Another file operation');
   } finally { mockFiles.queued = []; }
 });

@@ -30,6 +30,8 @@ export interface AuthenticatedCallCompositionInput {
   identity: CallIdentityVerifier;
   replay?: ReplayProtectionStore;
   deviceTrust: { assertTrusted(): Promise<void> };
+  /** Keeps signal proofs ready while a call is active, so signals never wait on a proof request. */
+  signalProofs?: { warm(): void; cool(): void };
 }
 export interface AuthenticatedCallComposition {
   readonly service: CallService;
@@ -117,6 +119,7 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
   const notify = (session: CallSession): void => {
     if (!['inviting', 'ringing', 'accepted', 'connecting'].includes(session.state)) clearExpiry(session.callId);
     if (['ended', 'rejected', 'cancelled', 'expired', 'failed'].includes(session.state) && activeCallId === session.callId) activeCallId = undefined;
+    if (activeCallId) input.signalProofs?.warm(); else input.signalProofs?.cool();
     listeners.forEach((listener) => listener(session));
   };
   const scheduleExpiry = (session: CallSession): void => {

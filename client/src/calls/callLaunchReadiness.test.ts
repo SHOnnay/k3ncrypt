@@ -1,4 +1,4 @@
-import { callLaunchBlockMessage, callStartFailureMessage, getCallLaunchBlockReason, terminalCallStatusMessage, terminalCallRetryable, type CallLaunchReadinessInput } from './callLaunchReadiness';
+import { callAttemptClearsError, callLaunchBlockMessage, callStartFailureMessage, getCallLaunchBlockReason, terminalCallStatusMessage, terminalCallRetryable, type CallLaunchReadinessInput } from './callLaunchReadiness';
 
 const verifiedConnected: CallLaunchReadinessInput = {
   hasConversation: true,
@@ -75,5 +75,12 @@ describe('call failures are classified by code', () => {
   it('a code wins over misleading text', () => {
     const error = Object.assign(new Error('microphone permission denied'), { safeDiagnosticCode: 'VERIFICATION_REQUIRED' });
     expect(callStartFailureMessage(error, 'audio')).toBe('Check this contact before calling.');
+  });
+});
+
+describe('callAttemptClearsError', () => {
+  it('clears on a new attempt, never during a live call or after a failure', () => {
+    for (const state of ['inviting', 'ringing', 'connecting']) expect(callAttemptClearsError(state)).toBe(true);
+    for (const state of ['connected', 'media-failed', 'ended', undefined]) expect(callAttemptClearsError(state)).toBe(false);
   });
 });

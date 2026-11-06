@@ -109,17 +109,18 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
         </span>
         {media?.reference && !mediaUrl && !fileContactTrusted && <span className="message-file-blocked" role="note">{blockedNote} {blockedAction}</span>}
         {media?.reference && !mediaUrl && fileContactTrusted && (queued
-          ? <button className="message-file-action" type="button" disabled aria-label="Waiting for another file to finish" title="Waiting for another file to finish"><span className="message-file-action__label">Waiting…</span></button>
+          ? <span className="message-file-state" role="status" aria-label="Waiting for another file to finish">Waiting…</span>
           : <button className="message-file-action" type="button" onClick={openMedia} disabled={isOpening} aria-label={isOpening ? 'Downloading and checking protected file' : 'Download protected file'} title={isOpening ? 'Downloading and checking' : 'Download protected file'}><ApprovedIcon name="download" size={17} /></button>)}
         {mediaUrl && saved && <a className="message-file-action" href={mediaUrl} download={saved.filename || 'protected-file'} aria-label={`Save ${saved.filename}`} title="Save file"><ApprovedIcon name="download" size={17} /><span className="message-file-action__label">Save</span></a>}
         {mediaUrl && <button className="message-file-close" type="button" onClick={closePreview} aria-label="Close file preview" title="Close preview"><span aria-hidden="true">×</span></button>}
+        {isFile && isOpening && fileProgress?.active && <div className="message-file-progress" role="status" aria-live="polite"><span>{fileProgress.label}</span>{fileProgress.progress !== undefined && <progress max={100} value={fileProgress.progress} aria-label="File download progress" />} <button type="button" onClick={files.cancel}>Cancel</button></div>}
+        {isFile && mediaError && <div className="message-media-error" role="status">{mediaError}{isFile && media?.reference && fileContactTrusted && !isOpening && <> <button type="button" className="message-file-retry" onClick={openMedia}>Retry</button></>}</div>}
       </div>}
       {!isFile && media?.reference && !mediaUrl && !fileContactTrusted && <div className="message-media-blocked" role="note">{blockedNote} {blockedAction}</div>}
       {!isFile && media?.reference && !mediaUrl && fileContactTrusted && <button className="message-media-action" type="button" onClick={openMedia} disabled={isOpening}>{isOpening ? 'Opening and checking…' : `Open protected ${media.kind}`}</button>}
       {!isFile && mediaUrl && <button className="message-file-close" type="button" onClick={closePreview}>Close</button>}
       {!isFile && mediaUrl && media && media.kind !== 'image' && media.kind !== 'voice' && media.kind !== 'video' && <a className="message-media-action" href={mediaUrl} download="protected-file">Save protected file</a>}
-      {isFile && isOpening && fileProgress?.active && <div className="message-file-progress" role="status" aria-live="polite"><span>{fileProgress.label}</span>{fileProgress.progress !== undefined && <progress max={100} value={fileProgress.progress} aria-label="File download progress" />} <button type="button" onClick={files.cancel}>Cancel</button></div>}
-      {mediaError && <div className="message-media-error" role="status">{mediaError}{isFile && media?.reference && fileContactTrusted && !isOpening && <> <button type="button" className="message-file-retry" onClick={openMedia}>Retry</button></>}</div>}
+      {!isFile && mediaError && <div className="message-media-error" role="status">{mediaError}</div>}
       {saved && mediaUrl && previewableImageType(saved.mimeType) && <img className="message-media-preview" src={mediaUrl} alt="Downloaded photo" />}
       {!isFile && mediaUrl && media?.kind === 'image' && <img className="message-media-preview" src={mediaUrl} alt="Protected image" />}
       {mediaUrl && media?.kind === 'voice' && <audio className="message-media-audio" controls src={mediaUrl} />}

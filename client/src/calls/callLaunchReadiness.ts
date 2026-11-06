@@ -97,3 +97,6 @@ export const terminalCallStatusMessage = (state: CallLifecycleState, call?: { ou
 /** Calls milestone 2: the outcomes where calling again can help; only the caller retries a timed-out call. */
 export const terminalCallRetryable = (state: CallLifecycleState, outgoing: boolean): boolean =>
   ['ice-failed', 'signaling-failed', 'media-failed'].includes(state) || (state === 'timeout' && outgoing);
+
+/** A new attempt starts clean: an error from the last attempt must not sit beside "Connecting…". */
+export const callAttemptClearsError = (state: string | undefined): boolean => state === 'inviting' || state === 'ringing' || state === 'connecting';
