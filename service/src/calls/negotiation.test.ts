@@ -12,7 +12,7 @@ describe('production WebRTC negotiation boundary', () => {
   const setup = () => {
     let current = session(); let receiver: ((value: CallSession, value2: CallSignal) => Promise<void>) | undefined;
     const service = { get: jest.fn(async () => current), event: jest.fn(async (_id: string, event: string) => { current = { ...current, state: event === 'connect' ? 'connecting' : event === 'connected' ? 'connected' : event === 'reconnect' ? 'reconnecting' : event === 'fail' ? 'failed' : event === 'end' ? 'ended' : current.state, updatedAt: Date.now() }; return current; }) };
-    const calls: any = { service, end: jest.fn(async (id: string) => service.event(id, 'end')), onMediaSignal: jest.fn((listener) => { receiver = listener; return () => undefined; }), sendMediaSignal: jest.fn(async () => undefined) };
+    const calls: any = { service, end: jest.fn(async (id: string) => service.event(id, 'end')), terminateLocally: jest.fn(async (id: string) => service.event(id, 'fail')), onMediaSignal: jest.fn((listener) => { receiver = listener; return () => undefined; }), sendMediaSignal: jest.fn(async () => undefined) };
     const connection: CallMediaConnection & { addStream: jest.Mock; state: (value: any) => void } = { createOffer: jest.fn(async () => ({ type: 'offer', sdp: 'v=0' })), acceptOffer: jest.fn(async () => ({ type: 'answer', sdp: 'v=0' })), acceptAnswer: jest.fn(async () => undefined), addIceCandidate: jest.fn(async () => undefined), close: jest.fn(async () => undefined), onIceCandidate: jest.fn(() => () => undefined), onStateChange: jest.fn((listener) => { connection.state = listener; return () => undefined; }), addStream: jest.fn(), state: () => undefined };
     const getUserMedia = jest.fn(async () => stream);
     const media = new CallMediaController({ getUserMedia });
@@ -128,6 +128,11 @@ describe('production WebRTC negotiation boundary', () => {
     const test = setup(); await test.negotiator.prepareOutgoing(test.current()); test.connection.state('failed'); await new Promise<void>((resolve) => setTimeout(resolve, 0));
     expect(test.service.event).toHaveBeenCalledWith('call-1', 'fail');
     expect(track.stop as jest.Mock).toHaveBeenCalled();
+  });
+
+  it('ends a failed call through the composition, so this side is not left busy for the next call', async () => {
+    const test = setup(); await test.negotiator.prepareOutgoing(test.current()); test.connection.state('failed'); await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(test.calls.terminateLocally).toHaveBeenCalledWith('call-1');
   });
 
   it('closes the peer and stops capture even when the local end transition fails', async () => {

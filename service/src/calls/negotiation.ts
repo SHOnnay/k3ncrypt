@@ -238,7 +238,8 @@ export class ProductionCallNegotiator {
     } catch (error) { await connection.close().catch(() => undefined); this.media.release(); throw error; }
   }
   private async connected(callId: string): Promise<void> { const session = await this.require(callId); if (session.state === 'connecting') await this.calls.service.event(callId, 'connected'); }
-  private async fail(callId: string): Promise<void> { callStabilityDiagnostic('failure-handler-entered', 'peer-failed'); const session = await this.calls.service.get(callId); if (session && !['ended', 'failed', 'cancelled', 'rejected', 'expired'].includes(session.state)) await this.calls.service.event(callId, 'fail'); callStabilityDiagnostic('cleanup-trigger', 'peer-failed'); await this.cleanup(callId); }
+  private async fail(callId: string): Promise<void> { callStabilityDiagnostic('failure-handler-entered', 'peer-failed'); const session = await this.calls.service.get(callId); // Through the composition: it must learn the call is over, or it stays busy and rejects the next call.
+    if (session && !['ended', 'failed', 'cancelled', 'rejected', 'expired'].includes(session.state)) await this.calls.terminateLocally(callId); callStabilityDiagnostic('cleanup-trigger', 'peer-failed'); await this.cleanup(callId); }
   private async cleanup(callId: string): Promise<void> {
     const existing = this.cleanups.get(callId);
     if (existing) return existing;

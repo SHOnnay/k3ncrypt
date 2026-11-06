@@ -14,6 +14,7 @@ import { CALL_SIGNAL_LIFETIME_MS } from './callSecurityPolicy';
 import { PENDING_CALL_SIGNAL_WINDOW_MS, PendingSignals } from './pendingSignals';
 
 const TERMINAL_SIGNAL_WAIT_MS = 3_000;
+const TERMINAL_EVENTS: readonly CallEvent[] = ['reject', 'cancel', 'end', 'fail', 'expire'];
 
 const callSignalDiagnostic = (category: 'device-trust-rejected' | 'invite-binding-rejected' | 'session-binding-rejected' | 'media-listener-missing' | 'media-listener-missing-held' | 'media-handler-rejected' | 'call-state-transition-rejected'): void => {
   if (testDiagnosticsEnabled()) console.info(`k3ncrypt-call-failure:${category}`);
@@ -74,6 +75,7 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
   const expiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const compositionStartedAt = Date.now();
   let activeCallId: string | undefined;
+  let coolTimer: ReturnType<typeof setTimeout> | undefined;
   const localParticipant: CallParticipant = {
     participantId: input.localParticipantId ?? input.localIdentityId,
     identityId: input.localIdentityId,
@@ -86,7 +88,8 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
     }
   };
   const sendEvent = async (session: CallSession, event: CallEvent, sequence: number, kind: CallSignalKind = 'control', payload?: unknown): Promise<void> => {
-    await assertVerifiedContact();
+    // Ending a call only reduces access, so it never waits on a trust check.
+    if (!TERMINAL_EVENTS.includes(event)) await assertVerifiedContact();
     if (event === 'heartbeat' || event === 'expire') {
       throw new Error('Unsupported call signal event.');
     }
@@ -119,7 +122,9 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
   const notify = (session: CallSession): void => {
     if (!['inviting', 'ringing', 'accepted', 'connecting'].includes(session.state)) clearExpiry(session.callId);
     if (['ended', 'rejected', 'cancelled', 'expired', 'failed'].includes(session.state) && activeCallId === session.callId) activeCallId = undefined;
-    if (activeCallId) input.signalProofs?.warm(); else input.signalProofs?.cool();
+    if (coolTimer) clearTimeout(coolTimer);
+    // Not at once: the end signal that follows this notification still needs a ready proof.
+    if (activeCallId) input.signalProofs?.warm(); else coolTimer = setTimeout(() => input.signalProofs?.cool(), TERMINAL_SIGNAL_WAIT_MS + 500);
     listeners.forEach((listener) => listener(session));
   };
   const scheduleExpiry = (session: CallSession): void => {
@@ -159,7 +164,9 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
     await sendEvent(session, event, signal.sequence + 1);
   };
   const unsubscribeSignals = signaling.onSignal(async (signal) => {
-    try { await assertVerifiedContact(); } catch { callSignalDiagnostic('device-trust-rejected'); throw new Error('Call device trust rejected.'); }
+    if (!TERMINAL_EVENTS.includes(signal.event)) {
+      try { await assertVerifiedContact(); } catch { callSignalDiagnostic('device-trust-rejected'); throw new Error('Call device trust rejected.'); }
+    }
     const existing = await repository.get(signal.callId);
     if (!existing) {
       if (signal.event !== 'invite' || signal.kind !== 'control' || signal.receiverIdentityId !== localParticipant.identityId || signal.mediaMode !== 'audio' && signal.mediaMode !== 'video' || signal.identityBinding !== await input.identity.identityBinding(input.conversationId, [localParticipant, input.remoteParticipant])) return;
