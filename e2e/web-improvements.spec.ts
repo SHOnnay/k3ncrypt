@@ -124,7 +124,7 @@ test('concurrent file clicks queue the second operation visibly until the first 
   await fixture(page); await update(page,{messages:[message('first'),message('second')]});
   const buttons=page.getByRole('button',{name:'Download protected file',exact:true});
   await buttons.first().click(); await buttons.last().click();
-  await expect(page.getByRole('button',{name:'Waiting for another file to finish',exact:true})).toBeVisible();
+  await expect(page.getByRole('status',{name:'Waiting for another file to finish',exact:true})).toBeVisible();
   await expect(page.getByText(/Another file operation/)).toHaveCount(0);
   expect(await page.evaluate(() => (window as any).__ui.downloads.length)).toBe(1);
   await page.evaluate(() => (window as any).__ui.downloads.shift()());

@@ -30,7 +30,7 @@ test('two downloads in a row: second waits visibly, both complete, progress is r
   await buttons.nth(0).click();
   await buttons.nth(0).click(); // the second card is index 0 once the first one is busy
   try {
-    await expect(bob.getByRole('button', { name: 'Waiting for another file to finish', exact: true })).toBeVisible({ timeout: 10_000 });
+    await expect(bob.getByRole('status', { name: 'Waiting for another file to finish', exact: true })).toBeVisible({ timeout: 10_000 });
     await expect(bob.getByRole('link', { name: `Save ${files[0].name}`, exact: true })).toBeVisible({ timeout: 300_000 });
     await expect(bob.getByRole('link', { name: `Save ${files[1].name}`, exact: true })).toBeVisible({ timeout: 300_000 });
   } finally { clearInterval(watch); }
