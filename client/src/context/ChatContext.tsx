@@ -28,6 +28,9 @@ import { readConversationDescriptors, removeConversationDescriptor, saveConversa
 import { readProfileName, readLocalProfile, writeProfileName } from '../product/profileStore';
 import { readPrivacyPreferences, writePrivacyPreferences, type PrivacyPreferences } from '../product/preferences';
 import { deliverNotification } from '../product/notifications';
+import { addUnread, clearUnread, planIncomingMessage, shouldOfferNotificationPermission, tabTitle, totalUnread, type UnreadCounts } from '../product/alerts';
+import { readMutedChats, setChatMuted as persistChatMuted } from '../product/mutedChats';
+import { playMessageSound } from '../utils/sounds';
 import { prepareHeldTextRetry, prepareMessageAcceptance, readMessages, writeMessages } from '../product/messageStore';
 import { createRoomState, updateRoomState, type RoomState } from '../product/roomState';
 import { encodeSignedModernInvitation, type ParsedModernInvite } from '../utils/urlHash';
@@ -206,6 +209,27 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const addMessage = useCallback((roomId: string, message: Message) => {
     setRoomMessages(roomId, (current) => [...current, message]);
   }, [setRoomMessages]);
+  // N1: unread badges, per-chat mute (encrypted vault), message sound and background notification.
+  const [unreadCounts, setUnreadCounts] = useState<UnreadCounts>({});
+  const [mutedChats, setMutedChats] = useState<string[]>([]);
+  const mutedChatsRef = useRef(mutedChats); mutedChatsRef.current = mutedChats;
+  const openRoomRef = useRef(channelHash); openRoomRef.current = channelHash;
+  const [notificationOfferAnswered, setNotificationOfferAnswered] = useState(false);
+  const alertIncomingMessage = useCallback((roomId: string, text: string): void => {
+    const preferences = privacyPreferencesRef.current;
+    const plan = planIncomingMessage({
+      roomId, openRoomId: openRoomRef.current || undefined,
+      pageVisible: typeof document === 'undefined' || document.visibilityState === 'visible',
+      muted: mutedChatsRef.current.includes(roomId), soundsEnabled: preferences.ringtoneEnabled, notificationsEnabled: preferences.notificationsEnabled,
+    });
+    if (plan.unread) setUnreadCounts((current) => addUnread(current, roomId));
+    if (plan.sound) playMessageSound();
+    if (plan.notify) {
+      const descriptor = conversationsRef.current.find((item) => item.roomId === roomId);
+      const sender = descriptor ? contactDisplayName(descriptor.label, roomId, descriptor.remoteDisplayName, descriptor.localNickname) : undefined;
+      deliverNotification({ kind: 'message', conversationId: roomId, ...(sender ? { sender } : {}), preview: text }, preferences);
+    }
+  }, []);
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const localCallHistory = useRef(new LocalCallHistory());
   const historyVault = useRef(vault); historyVault.current = vault;
@@ -673,7 +697,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           afterCommit: async () => {
             setMessages((previous) => previous.some((item) => item.id === envelopeId) ? previous : [...previous, message]);
             if (message.text.startsWith('k3ncrypt-file-')) setRoomState(descriptor.roomId, { fileReferences: [...new Set([...(roomStatesRef.current[descriptor.roomId]?.fileReferences ?? []), message.text])] });
-            deliverNotification({ kind: 'message', conversationId: descriptor.roomId, preview: message.text }, privacyPreferencesRef.current);
+            alertIncomingMessage(descriptor.roomId, message.text);
             if (selectedConversation.current === conversation && conversation.hasEstablishedSession()) {
               const contact = await conversation.getContact();
               if (!callActiveRef.current && contact?.verification === 'verified' && contact.changeStatus === 'unchanged') {
@@ -1671,7 +1695,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     chatInstance.on('chat-message', (msg: any) => {
       const message = displayMessage(msg.sender, msg.message, 'received');
       addMessage(roomId, message);
-      deliverNotification({ kind: 'message', conversationId: roomId || 'legacy', preview: message.text }, privacyPreferencesRef.current);
+      alertIncomingMessage(roomId || 'legacy', message.text);
     });
 
     chatInstance.on('call-added', (call: IE2ECall) => {
@@ -1822,7 +1846,49 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (roomId === channelHash) setFileDetails((current) => ({ ...current, [transferId]: details }));
   }, [vault, accountState, channelHash]);
 
+  // N1: mute list lives in the encrypted vault; the old plain-localStorage list only seeds it once.
+  useEffect(() => {
+    let active = true;
+    if (!vault || accountState !== 'ready') { setMutedChats([]); return undefined; }
+    void readMutedChats(vault, privacyPreferencesRef.current.mutedConversations).then((list) => { if (active) setMutedChats(list); }).catch(() => undefined);
+    return () => { active = false; };
+  }, [vault, accountState]);
+  const setChatMuted = useCallback(async (roomId: string, muted: boolean): Promise<void> => {
+    if (!vault || accountState !== 'ready') return;
+    setMutedChats(await persistChatMuted(vault, roomId, muted, privacyPreferencesRef.current.mutedConversations));
+  }, [vault, accountState]);
+  // Reading a chat clears its badge: when it is open and the page is visible, now or when the tab returns to the front.
+  useEffect(() => {
+    const clearIfSeen = () => { if (channelHash && document.visibilityState === 'visible') setUnreadCounts((current) => clearUnread(current, channelHash)); };
+    clearIfSeen();
+    document.addEventListener('visibilitychange', clearIfSeen);
+    return () => document.removeEventListener('visibilitychange', clearIfSeen);
+  }, [channelHash, unreadCounts]);
+  useEffect(() => { if (accountState !== 'ready') setUnreadCounts({}); }, [accountState]);
+  const unreadTotal = totalUnread(unreadCounts);
+  useEffect(() => {
+    const base = document.title.replace(/^\(\d+\+?\)\s/, '');
+    document.title = tabTitle(base, unreadTotal);
+    return () => { document.title = base; };
+  }, [unreadTotal]);
+  // Ask for browser notifications once, after the first chat exists, and only from a button the person presses.
+  const OFFER_KEY = 'k3ncrypt:notification-offer:v1';
+  const notificationPermission = (): NotificationPermission | 'unsupported' => typeof Notification === 'undefined' ? 'unsupported' : Notification.permission;
+  const offered = (): boolean => { try { return localStorage.getItem(OFFER_KEY) === '1'; } catch { return true; } };
+  const hasEstablishedChat = accountState === 'ready' && conversations.some((item) => item.bootstrapState === 'ESTABLISHED');
+  const notificationOffer = !notificationOfferAnswered && shouldOfferNotificationPermission({ permission: notificationPermission(), hasChat: hasEstablishedChat, alreadyOffered: offered() });
+  const answerNotificationOffer = useCallback(async (accept: boolean): Promise<void> => {
+    try { localStorage.setItem(OFFER_KEY, '1'); } catch { /* the offer may repeat on a device with blocked storage */ }
+    setNotificationOfferAnswered(true);
+    if (accept && typeof Notification !== 'undefined') await Notification.requestPermission().catch(() => undefined);
+  }, []);
+
   const value: ChatContextType = {
+    unreadCounts,
+    mutedChats,
+    setChatMuted,
+    notificationOffer,
+    answerNotificationOffer,
     plaintextSession,
     chat,
     userId,

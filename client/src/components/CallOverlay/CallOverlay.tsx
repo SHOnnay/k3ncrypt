@@ -9,7 +9,9 @@ import { Button } from '../common/Button';
 import { EndCallIcon, MicIcon, VideoIcon } from '../common/icons';
 import { Avatar } from '../common/Avatar';
 import { MarkMotion } from '../common/MarkMotion';
-import { startRingtone, stopRingtone } from '../../utils/ringtone';
+import { startIncomingRingtone, startRingback, stopCallSounds } from '../../utils/sounds';
+import { useRemoteMediaNotice } from '../../calls/useRemoteMediaNotice';
+import { remoteMediaNoticeCopy } from '../../calls/remoteMedia';
 import { attachMediaStream } from './mediaStream';
 import { contactDisplayName } from '../../content/copy';
 import { hasLiveEnabledVideoTrack, localVideoPlaceholder, videoPlaceholderCopy } from '../../calls/callVideoUiState';
@@ -60,11 +62,14 @@ export const CallOverlay: React.FC = () => {
     }
   }, [callActive, callStatus, startTimer, stopTimer]);
 
+  // N1: ringtone for the callee, ringback tone for the caller. Both stop the moment the call leaves those states.
   useEffect(() => {
-    if (callActive && isIncomingCall && callLifecycleState === 'incoming' && privacyPreferences.ringtoneEnabled) startRingtone();
-    else stopRingtone();
-    return stopRingtone;
+    if (callActive && privacyPreferences.ringtoneEnabled && isIncomingCall && callLifecycleState === 'incoming') startIncomingRingtone();
+    else if (callActive && privacyPreferences.ringtoneEnabled && !isIncomingCall && callLifecycleState === 'ringing') startRingback();
+    else stopCallSounds();
+    return stopCallSounds;
   }, [callActive, callLifecycleState, isIncomingCall, privacyPreferences.ringtoneEnabled]);
+  const remoteMediaNotice = useRemoteMediaNotice(remoteCallStream, callActive && callLifecycleState === 'connected');
 
   if (!callActive) return null;
 
@@ -111,6 +116,7 @@ export const CallOverlay: React.FC = () => {
         <p id="call-duration" className="call-duration">
           {formatDuration(duration)}
         </p>
+        {remoteMediaNotice && <p className="call-remote-notice" role="status">{remoteMediaNoticeCopy[remoteMediaNotice]}</p>}
         {callError && <p className="call-error" role="alert">{callError}</p>}
         {helper.offer && <div className="call-helper-offer" role="status"><p>Still connecting. Calls between some networks need the connection helper.</p><Button variant="secondary" disabled={helper.busy} onClick={() => void helper.turnOnAndRetry().catch(() => undefined)}>Turn on connection helper</Button></div>}
         {isIncomingCall ? (

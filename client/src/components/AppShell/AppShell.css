@@ -140,3 +140,14 @@
 @keyframes conversation-row-fade { from { opacity: 0; } to { opacity: 1; } }
 .conversation-section .conversation-row--settle { animation: conversation-row-settle 260ms cubic-bezier(.2, .7, .2, 1) calc(var(--row-index, 0) * 40ms) both; }
 @media (prefers-reduced-motion: reduce) { .conversation-section .conversation-row--settle { animation: conversation-row-fade 150ms linear both !important; animation-duration: 150ms !important; } }
+
+/* N1: unread badge, per-chat mute, one-time notification offer */
+.conversation-row-wrap { position: relative; display: block; }
+.conversation-row-wrap .conversation-row { width: 100%; }
+.conversation-badge { margin-left: auto; min-width: 20px; padding: 0 6px; border-radius: 10px; background: var(--accent, #6c8cff); color: #fff; font-size: 12px; line-height: 20px; text-align: center; font-weight: 600; }
+.conversation-badge--muted { background: transparent; color: inherit; border: 1px solid currentColor; opacity: .75; }
+.conversation-mute { position: absolute; right: 8px; bottom: 6px; padding: 0 6px; font-size: 11px; line-height: 18px; border: 0; border-radius: 6px; background: transparent; color: inherit; opacity: 0; cursor: pointer; }
+.conversation-row-wrap:hover .conversation-mute, .conversation-row-wrap:focus-within .conversation-mute, .conversation-mute--on { opacity: .8; }
+.notification-offer { margin: 8px 12px; padding: 10px 12px; border-radius: 10px; font-size: 13px; border: 1px solid rgba(128, 128, 128, .35); display: grid; gap: 8px; }
+.notification-offer-actions { display: flex; gap: 8px; }
+.notification-offer-actions button { cursor: pointer; }

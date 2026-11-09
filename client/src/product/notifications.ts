@@ -14,7 +14,10 @@ const genericBody: Record<ProductNotification['kind'], string> = {
 /** Produces metadata-minimizing notification text after a client event is authenticated. */
 export const notificationPayload = (event: ProductNotification, preferences: PrivacyPreferences): NotificationPayload | undefined => {
   if (!preferences.notificationsEnabled || (event.conversationId && preferences.mutedConversations.includes(event.conversationId))) return undefined;
-  const preview = (event.kind === 'message' || event.kind === 'group-message') && preferences.notificationPreviews && event.preview ? event.preview.slice(0, 120) : genericBody[event.kind];
+  // N1: never message content unless previews are on. The local contact name (kept only on this device) may name the sender.
+  const messageEvent = event.kind === 'message' || event.kind === 'group-message' ? event : undefined;
+  const sender = messageEvent?.sender?.trim().slice(0, 40) ?? '';
+  const preview = messageEvent && preferences.notificationPreviews && messageEvent.preview ? messageEvent.preview.slice(0, 120) : sender ? `${genericBody[event.kind]} from ${sender}` : genericBody[event.kind];
   return { title: 'K3NCRYPT', body: preview, tag: `k3ncrypt:${event.kind}:${event.conversationId ?? 'account'}`, silent: event.kind === 'incoming-call' };
 };
 

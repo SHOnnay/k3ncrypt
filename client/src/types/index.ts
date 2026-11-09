@@ -98,6 +98,13 @@ export interface ChatContextType {
   privacyPreferences: PrivacyPreferences;
   permissionStatus: { microphone: PermissionState | 'unknown'; camera: PermissionState | 'unknown' };
 
+  /** N1: unread messages per chat (this session), chats muted on this device (encrypted), and the one-time notification offer. */
+  unreadCounts?: Readonly<Record<string, number>>;
+  mutedChats?: readonly string[];
+  setChatMuted?: (roomId: string, muted: boolean) => Promise<void>;
+  notificationOffer?: boolean;
+  answerNotificationOffer?: (accept: boolean) => Promise<void>;
+
   // Methods
   initializeChat: () => Promise<void>;
   /** onProgress reports the unlock phase for the unlock screen (UX A11). */

@@ -1,4 +1,5 @@
-import { callRowSummary } from '../../product/callHistory';
+﻿import { callRowSummary } from '../../product/callHistory';
+import { badgeLabel } from '../../product/alerts';
 import { contactsCopy } from '../../content/checkCopy';
 import React from 'react';
 import { useChat } from '../../context/ChatContext';
@@ -37,9 +38,9 @@ const formatSidebarTime = (date?: Date): string => {
 };
 
 export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection, onNavigate, onNewConversation, onOpenConversation, onOpenSettings, settingsOpen = false }) => {
-  const { channelHash, messages, conversations, savedConversations = conversations, sessionHealth, profileDisplayName, protocolMode, unavailableConversations = [], pendingConversation, conversationOpenError, accountState } = useChat();
+  const { channelHash, messages, conversations, savedConversations = conversations, sessionHealth, profileDisplayName, protocolMode, unavailableConversations = [], pendingConversation, conversationOpenError, accountState, unreadCounts = {}, mutedChats = [], setChatMuted, notificationOffer, answerNotificationOffer } = useChat();
   // Item 4: nothing about contacts while locked. accountState becomes 'ready' only after vault.unlock()
-  // succeeds (openModernVault), so names can appear during the rest of "Unlocking…" but never before.
+  // succeeds (openModernVault), so names can appear during the rest of "Unlockingâ€¦" but never before.
   if (accountState === 'locked' || accountState === 'checking') return <LockedSidebar />;
   const latest = messages.at(-1);
   const groups = classifySidebarConversations(savedConversations, unavailableConversations);
@@ -75,14 +76,19 @@ export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection
           const diagnostic = unavailableConversations.find(item => item.roomId === conversation.roomId);
           const openStatus = conversationRowOpenStatus(conversation.roomId, { pending: pendingConversation, error: conversationOpenError });
           const isActive = !isWelcomeActive && channelHash === conversation.roomId;
+          const unread = unreadCounts[conversation.roomId] ?? 0;
+          const muted = mutedChats.includes(conversation.roomId);
           return (
-          <button key={conversation.roomId} className={`conversation-row ${isActive ? 'active' : ''} ${settleRows ? 'conversation-row--settle' : ''}`} style={settleRows ? { '--row-index': rowIndex } as React.CSSProperties : undefined} type="button" aria-current={isActive ? 'true' : undefined} aria-busy={pendingConversation?.roomId === conversation.roomId ? true : undefined} onClick={() => onOpenConversation(conversation.roomId)}>
+          <div key={conversation.roomId} className="conversation-row-wrap">
+          <button className={`conversation-row ${isActive ? 'active' : ''} ${settleRows ? 'conversation-row--settle' : ''}`} style={settleRows ? { '--row-index': rowIndex } as React.CSSProperties : undefined} type="button" aria-current={isActive ? 'true' : undefined} aria-busy={pendingConversation?.roomId === conversation.roomId ? true : undefined} onClick={() => onOpenConversation(conversation.roomId)}>
             <Avatar label={displayName(conversation)} size="medium" />
             <span className="conversation-copy">
-              <span className="conversation-name-row"><span className="conversation-name">{displayName(conversation)}</span><time>{channelHash === conversation.roomId ? formatSidebarTime(latest?.timestamp) : ''}</time></span>
+              <span className="conversation-name-row"><span className="conversation-name">{displayName(conversation)}</span><time>{channelHash === conversation.roomId ? formatSidebarTime(latest?.timestamp) : ''}</time>{unread > 0 && <span className={`conversation-badge ${muted ? 'conversation-badge--muted' : ''}`} role="status" aria-label={`${unread} unread`}>{badgeLabel(unread)}</span>}</span>
               <span className="conversation-preview">{openStatus ?? (diagnostic ? conversationStateCopy(diagnostic) : conversation.bootstrapState === 'PENDING_REMOTE' || conversation.bootstrapState === 'PENDING_LOCAL' || conversation.relationship === 'invitation' && !conversation.remoteAddress ? 'Waiting for contact to accept' : conversation.bootstrapState === 'FAILED_OR_UNSUPPORTED' ? 'Invitation needs a compatible link' : channelHash === conversation.roomId && protocolMode === 'modern' && sessionHealth === 'unhealthy' ? 'Secure connection needs renewing' : channelHash === conversation.roomId && protocolMode === 'modern' && sessionHealth === 'renewal-pending' ? 'Waiting for your contact to confirm' : channelHash === conversation.roomId && latest?.callEvent ? callRowSummary(latest.callEvent).title : channelHash === conversation.roomId && latest?.text ? latest.text : channelHash === conversation.roomId ? 'Conversation open' : 'Saved on this device')}</span>
             </span>
           </button>
+          {setChatMuted && <button type="button" className={`conversation-mute ${muted ? 'conversation-mute--on' : ''}`} aria-pressed={muted} aria-label={`${muted ? 'Unmute' : 'Mute'} ${displayName(conversation)}`} title={muted ? 'Muted: no sound, badge still shows' : 'Mute sound'} onClick={() => { void setChatMuted(conversation.roomId, !muted).catch(() => undefined); }}>{muted ? 'Muted' : 'Mute'}</button>}
+          </div>
         ); })}
         {groups.chats.length === 0 && (
           <div className="conversation-placeholder"><strong>{contactsCopy.chatsEmptyTitle}</strong><span>{copy.contactsEmpty.description}</span></div>
@@ -100,12 +106,20 @@ export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection
             </li>;
           })}</ul>
         </section>}
-        {groups.archived.length > 0 && <button className="invitation-local-action" type="button" onClick={() => onNavigate('contacts')}>Archived conversations ({groups.archived.length}) — manage in Contacts</button>}
+        {groups.archived.length > 0 && <button className="invitation-local-action" type="button" onClick={() => onNavigate('contacts')}>Archived conversations ({groups.archived.length}) â€” manage in Contacts</button>}
       </div>
+
+      {notificationOffer && answerNotificationOffer && <div className="notification-offer" role="region" aria-label="Notifications">
+        <span>Get a heads-up when a message arrives while this tab is in the background. It never shows what the message says.</span>
+        <span className="notification-offer-actions">
+          <button type="button" onClick={() => { void answerNotificationOffer(true); }}>Turn on</button>
+          <button type="button" onClick={() => { void answerNotificationOffer(false); }}>Not now</button>
+        </span>
+      </div>}
 
       <div className="sidebar-profile">
         <Avatar label={profileDisplayName} size="small" />
-        <span><strong>{profileDisplayName}</strong><small>Your profile · this device</small></span>
+        <span><strong>{profileDisplayName}</strong><small>Your profile Â· this device</small></span>
         <button className="sidebar-settings" type="button" onClick={onOpenSettings} aria-label="Open settings"><ApprovedIcon name="settings" size={17} /></button>
       </div>
     </aside>

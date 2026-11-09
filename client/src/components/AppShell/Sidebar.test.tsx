@@ -95,3 +95,20 @@ it('marks rows for the settle animation with their position', () => {
   const html = render('NETWORK_FAILURE');
   expect(html).toContain('conversation-row--settle'); expect(html).toContain('--row-index:0');
 });
+// N1: unread badge, mute and the one-time notification offer.
+const renderN1 = (extra: Record<string, unknown>) => {
+  mockUseChat.mockReturnValue({ conversations: [descriptor], unavailableConversations: [], messages: [], accountState: 'ready', profileDisplayName: 'Synthetic owner', channelHash: 'another-room', ...extra });
+  return renderToStaticMarkup(React.createElement(Sidebar, { isWelcomeActive: false, activeSection: 'chats', onNavigate: () => undefined, onNewConversation: () => undefined, onOpenConversation: () => undefined, onOpenSettings: () => undefined }));
+};
+it('shows the unread count on that chat, and still shows it (marked muted) when the chat is muted', () => {
+  const unread = renderN1({ unreadCounts: { [descriptor.roomId]: 3 }, mutedChats: [], setChatMuted: async () => undefined });
+  expect(unread).toContain('aria-label="3 unread"'); expect(unread).not.toContain('conversation-badge--muted'); expect(unread).toContain('aria-label="Mute Saved friend"');
+  const muted = renderN1({ unreadCounts: { [descriptor.roomId]: 120 }, mutedChats: [descriptor.roomId], setChatMuted: async () => undefined });
+  expect(muted).toContain('conversation-badge--muted'); expect(muted).toContain('>99+<'); expect(muted).toContain('aria-pressed="true"'); expect(muted).toContain('aria-label="Unmute Saved friend"');
+});
+it('shows no badge when nothing is unread', () => expect(renderN1({ unreadCounts: {} })).not.toContain('conversation-badge'));
+it('offers notifications only when the context says so, with a plain promise that content is never shown', () => {
+  expect(renderN1({ notificationOffer: false, answerNotificationOffer: async () => undefined })).not.toContain('notification-offer');
+  const html = renderN1({ notificationOffer: true, answerNotificationOffer: async () => undefined });
+  expect(html).toContain('Turn on'); expect(html).toContain('Not now'); expect(html).toContain('never shows what the message says');
+});
