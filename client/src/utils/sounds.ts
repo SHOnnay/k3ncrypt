@@ -22,7 +22,7 @@ export const ringbackSound: SoundPattern = { period: 6, steps: [{ freqs: [440, 4
 interface Param { setValueAtTime(value: number, at: number): void; linearRampToValueAtTime?(value: number, at: number): void }
 interface Osc { connect(target: unknown): void; disconnect(): void; start(at: number): void; stop(at: number): void; type: OscillatorType; frequency: Param }
 interface GainNodeLike { connect(target: unknown): void; disconnect(): void; gain: Param }
-export interface SoundContext { currentTime: number; destination: unknown; createOscillator(): Osc; createGain(): GainNodeLike; close?(): Promise<void> }
+export interface SoundContext { resume?(): Promise<void>; currentTime: number; destination: unknown; createOscillator(): Osc; createGain(): GainNodeLike; close?(): Promise<void> }
 
 const stepsOf = (pattern: SoundPattern): number => pattern.steps.reduce((end, step) => Math.max(end, step.at + step.duration), 0);
 
@@ -55,7 +55,8 @@ export const createSoundPlayer = (create: () => SoundContext | undefined, timers
   let context: SoundContext | undefined;
   let loop: unknown;
   let closeTimer: unknown;
-  const ensure = (): SoundContext | undefined => { context ??= create(); return context; };
+  // Browsers may start an AudioContext suspended until a user gesture; resume() is a no-op when it is already running.
+  const ensure = (): SoundContext | undefined => { context ??= create(); try { void context?.resume?.()?.catch?.(() => undefined); } catch { /* sound is best effort */ } return context; };
   const release = (): void => { void context?.close?.(); context = undefined; };
   const stopLoop = (): void => {
     if (loop !== undefined) { timers.clear(loop); loop = undefined; }

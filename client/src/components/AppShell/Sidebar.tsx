@@ -1,4 +1,4 @@
-﻿import { callRowSummary } from '../../product/callHistory';
+import { callRowSummary } from '../../product/callHistory';
 import { badgeLabel } from '../../product/alerts';
 import { contactsCopy } from '../../content/checkCopy';
 import React from 'react';
@@ -40,7 +40,7 @@ const formatSidebarTime = (date?: Date): string => {
 export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection, onNavigate, onNewConversation, onOpenConversation, onOpenSettings, settingsOpen = false }) => {
   const { channelHash, messages, conversations, savedConversations = conversations, sessionHealth, profileDisplayName, protocolMode, unavailableConversations = [], pendingConversation, conversationOpenError, accountState, unreadCounts = {}, mutedChats = [], setChatMuted, notificationOffer, answerNotificationOffer } = useChat();
   // Item 4: nothing about contacts while locked. accountState becomes 'ready' only after vault.unlock()
-  // succeeds (openModernVault), so names can appear during the rest of "Unlockingâ€¦" but never before.
+  // succeeds (openModernVault), so names can appear during the rest of "Unlocking…" but never before.
   if (accountState === 'locked' || accountState === 'checking') return <LockedSidebar />;
   const latest = messages.at(-1);
   const groups = classifySidebarConversations(savedConversations, unavailableConversations);
@@ -106,11 +106,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection
             </li>;
           })}</ul>
         </section>}
-        {groups.archived.length > 0 && <button className="invitation-local-action" type="button" onClick={() => onNavigate('contacts')}>Archived conversations ({groups.archived.length}) â€” manage in Contacts</button>}
+        {groups.archived.length > 0 && <button className="invitation-local-action" type="button" onClick={() => onNavigate('contacts')}>Archived conversations ({groups.archived.length}) — manage in Contacts</button>}
       </div>
 
       {notificationOffer && answerNotificationOffer && <div className="notification-offer" role="region" aria-label="Notifications">
-        <span>Get a heads-up when a message arrives while this tab is in the background. It never shows what the message says.</span>
+        <span>Get a heads-up when a message arrives while this tab is in the background. It never shows what the message says unless you turn previews on in Settings.</span>
         <span className="notification-offer-actions">
           <button type="button" onClick={() => { void answerNotificationOffer(true); }}>Turn on</button>
           <button type="button" onClick={() => { void answerNotificationOffer(false); }}>Not now</button>
@@ -119,7 +119,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection
 
       <div className="sidebar-profile">
         <Avatar label={profileDisplayName} size="small" />
-        <span><strong>{profileDisplayName}</strong><small>Your profile Â· this device</small></span>
+        <span><strong>{profileDisplayName}</strong><small>Your profile · this device</small></span>
         <button className="sidebar-settings" type="button" onClick={onOpenSettings} aria-label="Open settings"><ApprovedIcon name="settings" size={17} /></button>
       </div>
     </aside>

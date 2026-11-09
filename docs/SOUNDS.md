@@ -1,4 +1,4 @@
-﻿# Sounds
+# Sounds
 
 All K3NCRYPT sounds are **self-made**: they are generated at run time from sine tones (Web Audio on the web;
 the Android client plays the same notes). There are no audio files and no third-party material, so there is no

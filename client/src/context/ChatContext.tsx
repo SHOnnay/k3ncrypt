@@ -227,7 +227,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (plan.notify) {
       const descriptor = conversationsRef.current.find((item) => item.roomId === roomId);
       const sender = descriptor ? contactDisplayName(descriptor.label, roomId, descriptor.remoteDisplayName, descriptor.localNickname) : undefined;
-      deliverNotification({ kind: 'message', conversationId: roomId, ...(sender ? { sender } : {}), preview: text }, preferences);
+      // The encrypted vault list is the only mute list here; the old plain list must not silently block notifications.
+      deliverNotification({ kind: 'message', conversationId: roomId, ...(sender ? { sender } : {}), preview: text }, { ...preferences, mutedConversations: [] });
     }
   }, []);
   const [isConnected, setIsConnected] = useState<boolean>(false);

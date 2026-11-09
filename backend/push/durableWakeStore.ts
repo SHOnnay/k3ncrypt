@@ -81,7 +81,17 @@ export async function applyWakeSchema(db: Db): Promise<void> {
   await db.collection('offline_messages').createIndex({ timestamp: -1, _id: -1 }, { name: 'wake_reconcile_recent' });
 }
 
+const SCHEMA_OK_MS = 30_000;
+const schemaOk = new WeakMap<Db, number>();
+/** A positive answer is reused for 30 s so room admissions and stored mail do not each re-read the schema. Negatives are never cached. */
 export async function wakeSchemaReady(db: Db): Promise<boolean> {
+  const checkedAt = schemaOk.get(db);
+  if (checkedAt !== undefined && Date.now() - checkedAt < SCHEMA_OK_MS) return true;
+  const ready = await wakeSchemaReadyUncached(db);
+  if (ready) schemaOk.set(db, Date.now()); else schemaOk.delete(db);
+  return ready;
+}
+async function wakeSchemaReadyUncached(db: Db): Promise<boolean> {
   try {
     for (const [name, expected] of [[WAKE_SLOTS, ['wake_one_registration', 'wake_due', 'wake_lease', 'wake_expiry']], [PUSH_ROUTES, ['push_route_owner', 'push_route_key', 'push_route_expiry']], ['device_push_tokens_v1', ['push_one_device']]] as const) {
       const indexes = await db.collection(name).indexes();

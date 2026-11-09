@@ -27,9 +27,8 @@ void (async () => {
   // Content-free push wake-ups. Returns a no-op unless K3NCRYPT_FCM_ENABLED=true and the credentials are present.
   const database = db.getDatabase();
   const stopWakes = database ? startPrivateWakeWorker(database) : () => undefined;
+  // Do NOT add SIGTERM/SIGINT listeners here: any listener replaces Node's default exit-on-signal.
   server.once('close', stopWakes);
-  process.once('SIGTERM', stopWakes);
-  process.once('SIGINT', stopWakes);
 })().catch((error: unknown) => {
   operationalLog('error', 'startup_failed', { errorType: error instanceof Error ? error.name : 'unknown' });
   process.exitCode = 1;

@@ -1,4 +1,4 @@
-﻿# Push wake-ups (Firebase Cloud Messaging)
+# Push wake-ups (Firebase Cloud Messaging)
 
 **Off unless configured.** With no push settings the relay behaves exactly as before: no Firebase code runs, no network request is made, and `POST /api/device-trust/push` answers 503.
 
