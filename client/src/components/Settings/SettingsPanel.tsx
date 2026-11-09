@@ -260,6 +260,8 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, initialVie
               <p>For the strongest protection, use the K3NCRYPT Android app. It is installed once and does not download its code every time you open it.</p>
               <h4>What the server can see</h4>
               <p>The server can see that two accounts talk, when, and roughly how much. It cannot see what you say or send. File details are deleted within a day of a transfer ending, and never kept longer than 7 days.</p>
+              <h4>Wake-up alerts on Android</h4>
+              <p>So a closed phone can tell you something is waiting, Google delivers a content-free wake-up. It carries no names and no message text, only a signal to open K3NCRYPT and check. Google can see that a wake-up reached your phone, and when. It cannot see who wrote or what was said, because your phone fetches and unlocks the message itself.</p>
             </section>
           )}
 

@@ -1,4 +1,5 @@
 import { onSafe, type Ack } from './safeAck';
+import { recordAdmittedPushRoute } from '../push/privateWake';
 import { authorizeCurrentRouting, bindVerifiedRouting, boundRoutingDevice, currentRoutingIdentity, durableRoutingEnabled } from '../security/routingOwnership';
 import { randomUUID } from 'crypto';
 import type { Server } from 'socket.io';
@@ -612,6 +613,11 @@ export const registerMultiplexedRelay = (socket: CustomSocket, io: MuxServer): v
     if (!locallyOwnsSubscription(socket, admission.next)) { reject(); return; }
     ack({ version: MUX_PROTOCOL_VERSION, status: 'subscribed', roomId, connectionGeneration: generation,
       subscriptionNonce: admission.next.nonce, expiresAt: admission.next.expiresAt, peerFeatures });
+    if (socket.accountIdentityReference && socket.deviceId && socket.deviceTrustEpoch) {
+      recordAdmittedPushRoute(db.getDatabase(), { account: socket.accountIdentityReference, device: socket.deviceId, epoch: socket.deviceTrustEpoch,
+        room: roomId, address: routingAddress, control: body.controlCapability as string, routingProof: body.routingProof as string,
+        current: () => locallyOwnsSubscription(socket, admission.next) });
+    }
   }, ack, 'Room subscription rejected.'));
 
   onSafe(socket, 'mux-unsubscribe', (payload: unknown, ack: Ack) => enqueue(socket, async () => {

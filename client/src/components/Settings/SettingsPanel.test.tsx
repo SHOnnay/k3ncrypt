@@ -81,6 +81,13 @@ it('explains in plain words that a compromised server could serve a changed web 
   expect(markup).toContain('use the K3NCRYPT Android app');
   expect(markup).not.toMatch(/fingerprint|payload|pinned/i);
 });
+// N1 item 7: Google delivers a wake-up, and the page must say it has no content.
+it('says Google delivers a content-free wake-up on Android', () => {
+  mockChat.mockReturnValue(state);
+  const markup = render('about' as never).replace(/<[^>]*>/g, ' ');
+  expect(markup).toContain('Google delivers a content-free wake-up');
+  expect(markup).toContain('no names and no message text');
+});
 // UX A5: diagnostics live behind Settings → Advanced, not in the sidebar.
 it('shows local data status and conversation codes under Advanced', () => {
   mockChat.mockReturnValue({ ...state, unavailableConversations: [{ roomId: 'r1', label: 'Old friend', code: 'CONTACT_REGISTRY_MISSING', state: 'local-incomplete' }],

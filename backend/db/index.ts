@@ -8,6 +8,7 @@ import {
 } from './inMemDB';
 import { LINK_COLLECTION, PREKEY_COLLECTION, OFFLINE_MESSAGE_COLLECTION } from './const';
 import { applyMigrations } from './migrations';
+import { notifyEncryptedMailboxStored } from '../push/privateWake';
 
 const uri = process.env.MONGO_URI;
 const dbName = process.env.MONGO_DB_NAME;
@@ -181,6 +182,8 @@ export const storeOfflineMessage = async <T extends Record<string, unknown>>(dat
     const candidate = { ...activeData, slot: (start + offset) % 64 };
     try {
       await db.collection(OFFLINE_MESSAGE_COLLECTION).insertOne(candidate);
+      // Content-free wake-up request after the envelope is stored. Never awaited; a no-op unless push is configured.
+      notifyEncryptedMailboxStored(db, candidate.channel, candidate.mailbox, candidate.id);
       return candidate;
     } catch {
       const duplicate = await db.collection(OFFLINE_MESSAGE_COLLECTION).findOne({ dedupeKey: data.dedupeKey });

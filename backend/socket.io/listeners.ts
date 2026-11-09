@@ -1,6 +1,7 @@
 import { admitDeviceSocket, controlEventLimiter, deliveryAckLimiter } from './socketLimits';
 import { STORAGE_FULL_MESSAGE, StorageFullError } from '../db/storageCaps';
 import { onSafe, type Ack } from './safeAck';
+import { recordAdmittedPushRoute } from '../push/privateWake';
 import { randomUUID } from 'crypto';
 import getClientInstance from "./clients";
 import channelValid from "../api/chatHash/utils/validateChannel";
@@ -380,6 +381,11 @@ const connectionListener = (socket: CustomSocket, io) => {
     const peerFeatures = await notifyRoomPeerFeatures(socket, channelID, userID, io);
     if (!currentLegacyOwner(socket)) { rejectJoin('Room owner changed; retry the connection.', 'room-transport-conflict'); return; }
     ack({ status: 'accepted', peerFeatures });
+    if (socket.accountIdentityReference && socket.deviceId && socket.deviceTrustEpoch) {
+      // Remembers which room route this device admitted, so a later wake-up can find its token. No-op unless push is configured.
+      recordAdmittedPushRoute(db.getDatabase(), { account: socket.accountIdentityReference, device: socket.deviceId, epoch: socket.deviceTrustEpoch,
+        room: channelID, address: userID, control: controlCapability, routingProof: routingProof as string, current: () => currentLegacyOwner(socket) && socket.channelID === channelID && socket.userID === userID });
+    }
   });
 
   onSafe(socket, 'mailbox-replay', async (_payload: unknown, ack: Ack) => {
