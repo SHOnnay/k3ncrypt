@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { mkdirSync } from 'fs';
 import { create, security, uncheckedPair, expectFileSent } from './usabilityHelpers';
+import { fsUrl } from './fsUrl';
 
 // M1c (Option B). Invariant: checking is explicit and user-controlled; nothing changes trust
 // silently. Screenshots go to SHOT_DIR at 1440x900 and 390x844.
@@ -187,7 +188,7 @@ test('file card before and after checking, and the changed-number banner pauses 
       delete next.verifiedAt;
       await vault.write('contact-identity', room.remoteAddress, new TextEncoder().encode(JSON.stringify(next)).buffer);
     } finally { vault.lock(); }
-  }, { root: '/@fs' + process.cwd(), passphrase: 'alpha-family-existing-account-2026', changed });
+  }, { root: fsUrl(process.cwd()), passphrase: 'alpha-family-existing-account-2026', changed });
   await bob.reload();
   await bob.getByRole('button', { name: 'Unlock this device', exact: true }).click();
   await bob.locator('input[type=password]').fill('alpha-family-existing-account-2026');

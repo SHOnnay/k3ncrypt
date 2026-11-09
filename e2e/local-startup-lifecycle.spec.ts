@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { resolve } from 'node:path';
 import { connectedPair, invite } from './usabilityHelpers';
+import { fsUrl } from './fsUrl';
 
 test('unlocked saved contacts appear while legacy invitation expiry enrichment is stalled', async ({ browser }) => {
   test.setTimeout(60000);
@@ -17,7 +18,7 @@ test('unlocked saved contacts appear while legacy invitation expiry enrichment i
       const records=JSON.parse(new TextDecoder().decode(await vault.read('product-session','conversations')));
       for(const item of records) if(item.relationship==='invitation'&&!item.remoteAddress){delete item.pendingInvitationExpiresAt;delete item.signedInvitation;}
       await vault.write('product-session','conversations',new TextEncoder().encode(JSON.stringify(records)).buffer);vault.lock();
-    },{storageModule:`/@fs${resolve('service/src/storage/secureVault.ts')}`,persistenceModule:`/@fs${resolve('service/src/storage/persistence.ts')}`});
+    },{storageModule:`${fsUrl(resolve('service/src/storage/secureVault.ts'))}`,persistenceModule:`${fsUrl(resolve('service/src/storage/persistence.ts'))}`});
     let probes=0;
     await alice.route('**/api/chat-link/status/*',async route=>{probes++;await gate;await route.continue().catch(()=>undefined);});
     await alice.reload();

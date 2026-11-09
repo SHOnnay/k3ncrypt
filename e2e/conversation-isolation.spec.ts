@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { resolve } from 'path';
 import { create, invite, connectedPair } from './usabilityHelpers';
+import { fsUrl } from './fsUrl';
 const passphrase = 'alpha-family-existing-account-2026';
 async function fixture(page: Page, change: 'malformed' | 'missing-session', label = 'Bob') {
   await page.evaluate(async ({ vaultUrl, persistenceUrl, change, label, passphrase }) => {
@@ -18,7 +19,7 @@ async function fixture(page: Page, change: 'malformed' | 'missing-session', labe
       await vault.delete('vodozemac-session', target.roomId);
     }
     vault.lock();
-  }, { vaultUrl: '/@fs' + resolve('service/src/storage/secureVault.ts'), persistenceUrl: '/@fs' + resolve('service/src/storage/persistence.ts'), change, label, passphrase });
+  }, { vaultUrl: fsUrl(resolve('service/src/storage/secureVault.ts')), persistenceUrl: fsUrl(resolve('service/src/storage/persistence.ts')), change, label, passphrase });
 }
 async function join(page: Page, link: string) {
   await page.locator('.new-conversation').click(); await page.getByRole('button', { name: 'I have an invitation' }).click();

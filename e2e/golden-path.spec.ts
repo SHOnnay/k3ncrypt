@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { checkByNumbers, uncheckedPair } from './usabilityHelpers';
+import { fsUrl } from './fsUrl';
 
 // M2 release gate: one family's whole path in one run.
 // invite -> check both ways -> message -> offline delivery -> security number change.
@@ -51,7 +52,7 @@ test('invite, check, message, offline delivery, then a number change pauses file
       delete next.verifiedAt;
       await vault.write('contact-identity', room.remoteAddress, new TextEncoder().encode(JSON.stringify(next)).buffer);
     } finally { vault.lock(); }
-  }, { root: '/@fs' + process.cwd(), passphrase });
+  }, { root: fsUrl(process.cwd()), passphrase });
   await unlock(bobAgain);
   await bobAgain.locator('.conversation-row').first().click();
   await expect(bobAgain.locator('.check-banner--changed')).toContainText('Files and calls are paused until you check again.', { timeout: 30_000 });

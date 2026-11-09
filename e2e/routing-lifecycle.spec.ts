@@ -5,6 +5,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { MongoClient } from 'mongodb';
 import { create, invite, expectFileSent } from './usabilityHelpers';
+import { fsUrl } from './fsUrl';
 
 const uri = process.env.K3NCRYPT_ROUTING_MONGO_URI;
 const base = 'http://127.0.0.1:43432', api = 'http://127.0.0.1:43431';
@@ -112,7 +113,7 @@ test.describe('persistent authenticated routing lifecycle', () => {
             }
             return { hashes, verification: contact.verification, unchanged: contact.changeStatus === 'unchanged' };
           } finally { vault.lock(); }
-        }, { roomId: mainRoom!.hash as string, passphrase, root: '/@fs' + process.cwd() });
+        }, { roomId: mainRoom!.hash as string, passphrase, root: fsUrl(process.cwd()) });
         await alice.locator('[aria-labelledby=sidebar-chats-heading] .conversation-row').click();
         await expect(alice.locator('body')).toContainText('CONVERSATION_ROUTING_AUTHORIZATION_UNAVAILABLE');
         const originals = [await oldSnapshot(alice), await oldSnapshot(bob)];

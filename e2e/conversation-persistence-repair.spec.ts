@@ -1,11 +1,12 @@
 import { test, expect, type Page } from '@playwright/test';
 import { resolve } from 'node:path';
 import { connectedPair, create, invite } from './usabilityHelpers';
+import { fsUrl } from './fsUrl';
 
-const storageModule = `/@fs${resolve('service/src/storage/secureVault.ts')}`;
-const persistenceModule = `/@fs${resolve('service/src/storage/persistence.ts')}`;
-const sessionModule = `/@fs${resolve('client/src/product/sessionStore.ts')}`;
-const eligibilityModule = `/@fs${resolve('client/src/product/conversationEligibility.ts')}`;
+const storageModule = `${fsUrl(resolve('service/src/storage/secureVault.ts'))}`;
+const persistenceModule = `${fsUrl(resolve('service/src/storage/persistence.ts'))}`;
+const sessionModule = `${fsUrl(resolve('client/src/product/sessionStore.ts'))}`;
+const eligibilityModule = `${fsUrl(resolve('client/src/product/conversationEligibility.ts'))}`;
 const passphrase = 'alpha-family-existing-account-2026';
 
 test('real encrypted IndexedDB survives 1200 competing mutations across two pages and a fresh unlock', async ({ context }) => {

@@ -1,7 +1,8 @@
 import { test, expect } from '@playwright/test';
 import { resolve } from 'node:path';
+import { fsUrl } from './fsUrl';
 
-const modulePath = `/@fs${resolve('service/src/storage/persistence.ts')}`;
+const modulePath = `${fsUrl(resolve('service/src/storage/persistence.ts'))}`;
 
 test('IndexedDB security CAS has one winner across browser pages and rejects partial stale writes', async ({ context }) => {
     const first = await context.newPage();

@@ -10,13 +10,18 @@ OUT="${K3NCRYPT_M0_OUT:-test-results/m0}"
 PROJECT="${K3NCRYPT_M0_PROJECT:-chromium}"
 mkdir -p "$OUT"
 
-if ! docker ps --format '{{.Names}}' | grep -qx "$NAME"; then
+# Windows without Docker: start the native disposable Mongo (scripts/local-mongo.ps1, default 127.0.0.1:27117)
+# and run this script with K3NCRYPT_M0_NATIVE_MONGO=1. The Docker path below is unchanged.
+if [ "${K3NCRYPT_M0_NATIVE_MONGO:-}" = "1" ]; then
+  :
+elif ! docker ps --format '{{.Names}}' | grep -qx "$NAME"; then
   docker run -d --name "$NAME" -p "127.0.0.1:$PORT:27017" --tmpfs /data/db:size=2g mongo:8.0 --replSet rs0 --bind_ip_all >/dev/null
   until docker exec "$NAME" mongosh --quiet --eval 'db.runCommand({ping:1}).ok' 2>/dev/null | grep -q 1; do sleep 1; done
   docker exec "$NAME" mongosh --quiet --eval 'rs.initiate({_id:"rs0",members:[{_id:0,host:"127.0.0.1:27017"}]}).ok' >/dev/null
   sleep 3
 fi
 
+if [ "${K3NCRYPT_M0_NATIVE_MONGO:-}" = "1" ]; then PORT="${K3NCRYPT_M0_MONGO_PORT:-27117}"; fi
 export PLAYWRIGHT_MONGO_URI="mongodb://127.0.0.1:$PORT/?directConnection=true"
 specs=("$@")
 [ ${#specs[@]} -eq 0 ] && specs=(e2e/*.spec.ts)

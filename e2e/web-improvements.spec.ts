@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { resolve } from 'node:path';
+import { fsUrl } from './fsUrl';
 
 const pageErrors = new WeakMap<Page, string[]>();
 test.beforeEach(({page}) => { const errors: string[]=[]; pageErrors.set(page,errors); page.on('pageerror', error => errors.push(error.name)); });
@@ -49,7 +50,7 @@ async function fixture(page: Page) {
   `}));
   await page.route('**/src/context/MediaContext.tsx*', route => route.fulfill({contentType:'text/javascript',body:'export const useMedia=()=>({receive:async()=>undefined});'}));
   const path = resolve('e2e/fixtures/web-improvements-harness.tsx');
-  await page.route('**/__web-improvements', route => route.fulfill({contentType:'text/html',body:`<html><body><div id="app"></div><script type="module">import RefreshRuntime from "/@react-refresh"; RefreshRuntime.injectIntoGlobalHook(window); window.$RefreshReg$ = () => {}; window.$RefreshSig$ = () => type => type; window.__vite_plugin_react_preamble_installed__ = true;</script><script type="module" src="/@vite/client"></script><script type="module" src="/@fs${path}"></script></body></html>`}));
+  await page.route('**/__web-improvements', route => route.fulfill({contentType:'text/html',body:`<html><body><div id="app"></div><script type="module">import RefreshRuntime from "/@react-refresh"; RefreshRuntime.injectIntoGlobalHook(window); window.$RefreshReg$ = () => {}; window.$RefreshSig$ = () => type => type; window.__vite_plugin_react_preamble_installed__ = true;</script><script type="module" src="/@vite/client"></script><script type="module" src="${fsUrl(path)}"></script></body></html>`}));
   await page.goto('/__web-improvements');
   await expect(page.locator('#msg-input')).toBeVisible();
 }

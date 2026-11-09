@@ -1,9 +1,10 @@
 import { test, expect, type Page } from '@playwright/test';
 import { resolve } from 'node:path';
 import { connectedPair } from './usabilityHelpers';
+import { fsUrl } from './fsUrl';
 
-const storageModule = `/@fs${resolve('service/src/storage/secureVault.ts')}`;
-const persistenceModule = `/@fs${resolve('service/src/storage/persistence.ts')}`;
+const storageModule = `${fsUrl(resolve('service/src/storage/secureVault.ts'))}`;
+const persistenceModule = `${fsUrl(resolve('service/src/storage/persistence.ts'))}`;
 const passphrase = 'alpha-family-existing-account-2026';
 async function unlock(page: Page) {
   await page.reload();

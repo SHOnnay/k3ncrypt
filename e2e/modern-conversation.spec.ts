@@ -2,6 +2,7 @@ import { test, expect, type Browser, type BrowserContext, type Page } from '@pla
 import { resolve } from 'node:path';
 import { parseModernInviteInput } from '../client/src/utils/urlHash';
 import { invite } from './usabilityHelpers';
+import { fsUrl } from './fsUrl';
 
 const PASSPHRASE = 'paper-ink-private-room-2026';
 const BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? `http://127.0.0.1:${process.env.PLAYWRIGHT_CLIENT_PORT ?? '43102'}`;
@@ -250,7 +251,7 @@ test('recipient IndexedDB abort preserves the first-prekey account and does not 
         Object.defineProperty(databasePrototype, 'transaction', { configurable: true, value: originalTransaction });
       }
     };
-  }, `/@fs${resolve('service/src/storage/persistence.ts')}`);
+  }, `${fsUrl(resolve('service/src/storage/persistence.ts'))}`);
 
   const bobPage = await resume(bob.context, invitation, bob.outbound, 'Bob');
   await expect.poll(() => alice.page.evaluate(() => (window as Window & { __bootstrapAbortTriggered?: boolean }).__bootstrapAbortTriggered)).toBe(true);
