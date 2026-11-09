@@ -1,5 +1,7 @@
 import { test, expect, chromium, type BrowserContext, type Page } from '@playwright/test';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { create, invite } from './usabilityHelpers';
 
 const passphrase = 'alpha-family-existing-account-2026';
@@ -20,7 +22,7 @@ const verify = async (page: Page) => {
 
 test('both participants restore exactly one completed call from encrypted history after browser processes restart', async ({ baseURL }) => {
   test.setTimeout(120_000);
-  const directory = await mkdtemp('/private/tmp/k3ncrypt-call-history-');
+  const directory = await mkdtemp(join(tmpdir(), 'k3ncrypt-call-history-'));
   const contexts = new Set<BrowserContext>();
   const close = async (context: BrowserContext) => {
     // A normal exit runs the application's existing pagehide/beforeunload
