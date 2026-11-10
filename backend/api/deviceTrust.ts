@@ -1,6 +1,7 @@
 import { STORAGE_CAPS, STORAGE_FULL_MESSAGE } from '../db/storageCaps';
 import express from 'express';
 import { createPushRegistry, pushConfigured, type PushEvent } from '../push/privateWake';
+import { revokeWakeRoute } from '../push/authenticatedWakeRoutes';
 import db from '../db';
 import { durableDeviceTrustAuthority, type DurableDeviceTrustAuthority } from '../security/durableDeviceTrust';
 import type { BootstrapRequest, EnrollmentEvent, DeviceProofRequest } from '../../service/src/devices/trustProtocol';
@@ -26,6 +27,21 @@ router.post('/push', async (req, res) => {
     await registry.update(body.event, body.deviceAuthorizationProof, body.token);
     return res.send({ status: 'accepted' });
   } catch { return res.status(403).send({ error: 'Push rejected' }); }
+});
+/**
+ * A removed contact must not be able to ring this device. The participant withdraws its wake route for (room, own address),
+ * proving it with the room control capability and its routing proof. The answer never says whether a route existed.
+ */
+router.post('/push/route-revoke', async (req, res) => {
+  const body = req.body as { room?: unknown; address?: unknown };
+  const control = req.get('X-K3ncrypt-Control-Capability'); const proof = req.get('X-K3ncrypt-Routing-Proof');
+  if (!body || typeof body !== 'object' || Object.keys(body).some((key) => !['room', 'address'].includes(key)) || typeof body.room !== 'string' || typeof body.address !== 'string' ||
+      !/^[0-9a-f-]{36}$/.test(body.room) || !/^[0-9a-f-]{36}$/.test(body.address) || typeof control !== 'string' || typeof proof !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(proof)) return res.status(400).send({ error: 'Malformed route revocation' });
+  try {
+    const database = db.getDatabase();
+    if (database && pushConfigured()) await revokeWakeRoute(database, { room: body.room, address: body.address, control, routingProof: proof });
+    return res.send({ status: 'ok' });
+  } catch { return res.send({ status: 'ok' }); }
 });
 router.post('/bootstrap', async (req, res) => { try { const value = authority(); if (!value) return res.status(503).send({ error: 'Device trust unavailable' }); if (await db.collectionCount('device_lifecycle') >= STORAGE_CAPS.devices) return res.status(503).send({ error: STORAGE_FULL_MESSAGE }); /* P1-2: global device cap */ return res.status(201).send(await value.bootstrap(req.body as BootstrapRequest)); } catch { return res.status(403).send({ error: 'Initial device bootstrap rejected' }); } });
 router.post('/enrollment', async (req, res) => { try { const value = authority(); const body = req.body as { event?: EnrollmentEvent; deviceAuthorizationProof?: import('../security/deviceTrust').DeviceAuthorizationProof; proofNonce?: string }; if (!value) return res.status(503).send({ error: 'Device trust unavailable' }); if (!body.event || !body.deviceAuthorizationProof || body.proofNonce !== body.deviceAuthorizationProof.nonce) return res.status(403).send({ error: 'Lifecycle enrollment rejected' }); return res.status(201).send(await value.enroll(body.event, body.deviceAuthorizationProof)); } catch { return res.status(403).send({ error: 'Lifecycle enrollment rejected' }); } });

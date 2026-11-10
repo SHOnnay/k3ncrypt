@@ -8,7 +8,7 @@ import { initSocket } from './index';
 // emit('chat-message', {}, 'x') threw inside an async handler and the process
 // exited on the unhandled rejection. Fail closed: drop the ack, keep serving.
 const events = [
-  'chat-join', 'mailbox-replay', 'chat-message', 'webrtc-signal', 'recipient-rejected', 'received',
+  'chat-join', 'mailbox-replay', 'chat-message', 'webrtc-signal', 'call-wake', 'recipient-rejected', 'received',
   'mux-authenticate', 'mux-subscribe', 'mux-unsubscribe', 'mux-send-message', 'mux-send-signal', 'mux-mailbox-replay',
 ] as const;
 const hostileAcks: unknown[] = ['x', 1, { call: 'x' }, ['x'], null, true];

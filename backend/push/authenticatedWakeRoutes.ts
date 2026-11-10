@@ -43,6 +43,22 @@ export async function captureAdmittedWakeRoute(db: Db, input: AdmittedWakeRoute)
   return true;
 }
 
+/**
+ * A participant who removes a contact withdraws the wake route for (room, its own address). Authority is exactly what created the route:
+ * the room control capability plus the routing proof of that address. Returns false when it cannot be proven (for example the
+ * pre-key publication has already expired, in which case the route no longer authorises a call wake anyway).
+ * Re-joining the room later captures a fresh route, so restoring a contact restores wakes.
+ */
+export async function revokeWakeRoute(db: Db, input: { room: string; address: string; control: string; routingProof: string }): Promise<boolean> {
+  const room = await db.collection('links').findOne({ hash: input.room });
+  if (!room || !equalHash(hash(input.control), room.controlCapabilityHash)) return false;
+  const publication = await db.collection('prekey_bundles').findOne({ channel: input.room, address: input.address });
+  if (!publication || !equalHash(hash(`k3ncrypt-prekey-renewal-v1\0${input.routingProof}`), publication.renewalProofHash)) return false;
+  const key = routeKey(input.room, input.address);
+  await db.collection<RouteDocument>(PUSH_ROUTES).updateMany({ 'routes.key': key }, { $pull: { routes: { key } }, $set: { revision: randomUUID(), updatedAt: new Date() } });
+  return true;
+}
+
 /** No prekey query here: a retained binding plus CURRENT existing authority is required. */
 export async function validWakeRoute(db: Db, row: PushRow, keys: readonly string[]): Promise<boolean> {
   const doc = await db.collection<RouteDocument>(PUSH_ROUTES).findOne({ _id: ownerKey(row.accountIdentityReference, row.deviceId), trustEpoch: row.trustEpoch, deviceIdentityReference: row.deviceIdentityReference, expiresAt: { $gt: new Date() } });

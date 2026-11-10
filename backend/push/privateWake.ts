@@ -14,7 +14,7 @@ export type PushEvent = {
   tokenHash: string; createdAt: number; expiresAt: number; nonce: string; signature: string;
 };
 export type PushRow = { _id: string; token: string; accountIdentityReference: string; deviceId: string; deviceIdentityReference: string; trustEpoch: number; updatedAt: Date; registrationVersion?: string };
-export type WakePayload = { version: '1'; type: 'encrypted-activity'; eventId: string; createdAt: string; expiresAt: string };
+export type WakePayload = { version: '1'; type: 'encrypted-activity' | 'call' | 'call-cancel'; eventId: string; createdAt: string; expiresAt: string };
 export const tokenHash = (token: string): string => createHash('sha256').update(token).digest('hex');
 export const canonicalPushEvent = (event: PushEvent): string => JSON.stringify({ version: event.version, requestId: event.requestId,
   accountIdentityReference: event.accountIdentityReference, deviceId: event.deviceId, deviceIdentityReference: event.deviceIdentityReference,
@@ -132,19 +132,20 @@ export const createPushRegistry = (db: Db, client?: MongoClient): PrivatePushReg
 
 let pending = 0;
 const dispatchers = new WeakMap<Db, WakeDispatcher>();
+/** The only place that talks to Firebase. No provider/configuration access until the disabled-by-default gate has passed. */
+export const sendFcm = async (token: string, data: WakePayload, ttl: number, collapseKey?: string): Promise<void> => {
+  const { initializeApp, getApps, cert } = await import('firebase-admin/app');
+  const { getMessaging } = await import('firebase-admin/messaging');
+  if (!pushConfigured()) throw new Error('PUSH_DISABLED');
+  const app = getApps().find((value) => value.name === 'k3ncrypt-private-push') ?? initializeApp({
+    credential: cert(JSON.parse(readFileSync(process.env.K3NCRYPT_FCM_SERVICE_ACCOUNT_PATH!, 'utf8'))), projectId: process.env.K3NCRYPT_FCM_PROJECT_ID,
+  }, 'k3ncrypt-private-push');
+  if (!pushConfigured()) throw new Error('PUSH_DISABLED');
+  await getMessaging(app).send({ token, data, android: { priority: 'high', ttl, ...(collapseKey ? { collapseKey } : {}) } });
+};
 const dispatcherFor = (db: Db): WakeDispatcher => {
   const existing = dispatchers.get(db); if (existing) return existing;
-  const dispatcher = new WakeDispatcher(new MongoPushStore(db), async (token, data, ttl) => {
-    // No provider/configuration access until the disabled-by-default gate has passed.
-    const { initializeApp, getApps, cert } = await import('firebase-admin/app');
-    const { getMessaging } = await import('firebase-admin/messaging');
-    if (!pushConfigured()) throw new Error('PUSH_DISABLED');
-    const app = getApps().find((value) => value.name === 'k3ncrypt-private-push') ?? initializeApp({
-      credential: cert(JSON.parse(readFileSync(process.env.K3NCRYPT_FCM_SERVICE_ACCOUNT_PATH!, 'utf8'))), projectId: process.env.K3NCRYPT_FCM_PROJECT_ID,
-    }, 'k3ncrypt-private-push');
-    if (!pushConfigured()) throw new Error('PUSH_DISABLED');
-    await getMessaging(app).send({ token, data, android: { priority: 'high', ttl, collapseKey: 'encrypted_activity' } });
-  }, pushConfigured, wakePayload);
+  const dispatcher = new WakeDispatcher(new MongoPushStore(db), (token, data, ttl) => sendFcm(token, data, ttl, 'encrypted_activity'), pushConfigured, wakePayload);
   dispatchers.set(db, dispatcher); return dispatcher;
 };
 /** Aggregate process-local counters only. No identifiers, provider errors, tokens, or public HTTP endpoint. */

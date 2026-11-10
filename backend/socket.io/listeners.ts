@@ -2,6 +2,7 @@ import { admitDeviceSocket, controlEventLimiter, deliveryAckLimiter } from './so
 import { STORAGE_FULL_MESSAGE, StorageFullError } from '../db/storageCaps';
 import { onSafe, type Ack } from './safeAck';
 import { recordAdmittedPushRoute } from '../push/privateWake';
+import { requestCallWake, validWakeId } from '../push/callWake';
 import { randomUUID } from 'crypto';
 import getClientInstance from "./clients";
 import channelValid from "../api/chatHash/utils/validateChannel";
@@ -536,6 +537,24 @@ const connectionListener = (socket: CustomSocket, io) => {
       envelope: payload?.envelope,
     });
     ack({ status: "ok" });
+  });
+
+  // Content-free incoming-call wake-up, requested by the CALLER's client. The relay cannot see invites, so it never guesses.
+  // The ack is immediate and identical whether or not anything is sent; the wake itself is fire-and-forget (see push/callWake.ts).
+  onSafe(socket, 'call-wake', async (payload: Record<string, unknown>, ack: Ack) => {
+    if (!controlEventLimiter.consume(socket.id)) { ack({ error: 'Rate limit exceeded.' }); return; }
+    const raw = payload as Record<string, unknown>;
+    const kind = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw.kind : undefined;
+    if (!socket.userID || !socket.channelID || !payload || typeof payload !== 'object' || Array.isArray(payload) ||
+        !exactKeys(payload, ['version', 'kind', 'wakeId', 'recipientRoutingId', 'deviceAuthorizationProof', 'proofNonce', 'proofOperation']) ||
+        payload.version !== 1 || (kind !== 'ring' && kind !== 'cancel') || !validWakeId(payload.wakeId) || payload.proofOperation !== 'relay:signal' ||
+        !isValidRoomId(payload.recipientRoutingId) || payload.recipientRoutingId === socket.userID || !validCarrier(payload) ||
+        (payload as unknown as ProofCarrier).deviceAuthorizationProof.resource?.conversationId !== socket.channelID) { ack({ error: 'Call wake rejected.' }); return; }
+    if (!currentLegacyOwner(socket) || !await verifyCarrier(socket, payload as unknown as ProofCarrier, 'relay:signal') || !currentLegacyOwner(socket)) { ack({ error: 'Device authorization rejected.' }); return; }
+    const room = socket.channelID; const recipient = raw.recipientRoutingId as string;
+    const present = !!(legacyRoomOwner(room, recipient, io) ?? muxRoomOwner(room, recipient));
+    ack({ status: 'accepted', peer: present ? 'present' : 'absent' });
+    requestCallWake(db.getDatabase(), { room, recipient, callerAccount: socket.accountIdentityReference!, callerDevice: socket.deviceId!, wakeId: raw.wakeId as string, kind: kind as 'ring' | 'cancel' });
   });
 
   onSafe(socket, 'recipient-rejected', async (payload: { id?: unknown; roomId?: unknown; claimId?: unknown; reasonClass?: unknown }, ack: Ack) => {
