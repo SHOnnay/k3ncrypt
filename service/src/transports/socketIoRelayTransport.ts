@@ -141,6 +141,32 @@ export class SocketIoRelayTransport implements Transport {
         await this.ensureChannelPresence(desired);
     }
 
+    /** Fire-and-forget by design: the answer only says whether the peer is in the room right now; any failure is 'unknown'. */
+    public async requestCallWake(kind: 'ring' | 'cancel', wakeId: string, timeoutMs = 1_500): Promise<'present' | 'absent' | 'unknown'> {
+        const desired = this.desiredConversation;
+        if (!desired || !this.proofProvider || !this.socket.connected) return 'unknown';
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+            const carrier = await this.proofProvider.acquire('relay:signal', { conversationId: desired.conversationId });
+            if (!carrier) return 'unknown';
+            const response = await Promise.race([
+                this.emitWithAck<{ status?: string; peer?: string }>('call-wake', { version: 1, kind, wakeId, recipientRoutingId: desired.peerRoutingId, ...carrier, proofOperation: 'relay:signal' }),
+                new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), timeoutMs); }),
+            ]);
+            return response?.peer === 'present' ? 'present' : response?.peer === 'absent' ? 'absent' : 'unknown';
+        } catch { return 'unknown'; } finally { if (timer !== undefined) clearTimeout(timer); }
+    }
+
+    public waitForPeerJoin(timeoutMs: number): { promise: Promise<boolean>; cancel: () => void } {
+        let finish: (joined: boolean) => void = () => undefined;
+        const promise = new Promise<boolean>((resolve) => { finish = resolve; });
+        const onJoin = (): void => done(true);
+        const timer = setTimeout(() => done(false), timeoutMs);
+        const done = (joined: boolean): void => { clearTimeout(timer); this.socket.off(WIRE_EVENTS.ON_ALICE_JOIN, onJoin); finish(joined); };
+        this.socket.on(WIRE_EVENTS.ON_ALICE_JOIN, onJoin);
+        return { promise, cancel: () => done(false) };
+    }
+
     public peerSupportsFeature(feature: string): boolean {
         return this.peerProtocolFeatures.has(feature);
     }

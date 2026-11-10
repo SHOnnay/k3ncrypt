@@ -1425,6 +1425,29 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     callSupportConversation.current = null;
   }, []);
 
+  // Calls to a phone that may be closed: ask the relay for a content-free wake-up, and if the contact is not in the room yet,
+  // wait (up to 60 s) for their phone to wake and unlock before placing the invite. Never delays a call to someone who is present.
+  const callWakeRef = useRef<{ id: string; waiter?: { cancel: () => void } } | undefined>();
+  const placeInvite = useCallback(async (conversation: ModernConversation, composition: AuthenticatedCallComposition, mediaMode?: 'video'): Promise<void> => {
+    const wakeId = crypto.randomUUID();
+    callWakeRef.current = { id: wakeId };
+    const presence = await conversation.requestCallWake('ring', wakeId);
+    if (callWakeRef.current?.id !== wakeId) return;                       // cancelled while the relay was answering
+    if (presence === 'absent') {
+      const waiter = conversation.waitForPeerJoin(60_000);
+      callWakeRef.current = { id: wakeId, waiter };
+      setCallActive(true); setIsIncomingCall(false); setCallWasOutgoing(true); setCallLifecycleState('ringing');
+      setCallStatus('Calling… their phone may need to wake');
+      const joined = await waiter.promise;
+      if (callWakeRef.current?.id !== wakeId) return;                     // cancelled by the person
+      if (!joined) {
+        callWakeRef.current = undefined; setCallActive(false); setCallLifecycleState('timeout'); setCallStatus('No answer');
+        return;
+      }
+    }
+    if (mediaMode) await composition.invite(mediaMode); else await composition.invite();
+  }, []);
+
   // Start call
   const startCall = useCallback(async () => {
     if (protocolMode === 'modern') {
@@ -1441,12 +1464,12 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       try { composition = await conversation.createAuthenticatedCallComposition(); }
       catch (error) { callStartDiagnostic('composition', error); throw error; }
       setModernCallComposition(composition);
-      try { await composition.invite(); }
+      try { await placeInvite(conversation, composition); }
       catch (error) { callStartDiagnostic('invite', error); throw error; }
       return;
     }
     throw Object.assign(new Error('Calls need a checked contact. Older room invitations can’t be checked.'), { safeDiagnosticCode: 'VERIFICATION_REQUIRED' });
-  }, [modern, protocolMode]);
+  }, [modern, protocolMode, placeInvite]);
 
   const startVideoCall = useCallback(async () => {
     if (protocolMode === 'modern') {
@@ -1463,12 +1486,12 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       try { composition = await conversation.createAuthenticatedCallComposition(); }
       catch (error) { callStartDiagnostic('composition', error); throw error; }
       setModernCallComposition(composition);
-      try { await composition.invite('video'); }
+      try { await placeInvite(conversation, composition, 'video'); }
       catch (error) { callStartDiagnostic('invite', error); throw error; }
       return;
     }
     throw Object.assign(new Error('Calls need a checked contact. Older room invitations can’t be checked.'), { safeDiagnosticCode: 'VERIFICATION_REQUIRED' });
-  }, [modern, protocolMode]);
+  }, [modern, protocolMode, placeInvite]);
 
   const acceptCall = useCallback(async () => {
     const modernIncoming = activeModernCall();
@@ -1536,7 +1559,16 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, [activeModernCall, chat, protocolMode]);
 
   const cancelCall = useCallback(async () => {
+    // Still waiting for the contact's phone to wake: nothing was ever sent to them, so stop waiting and cancel the wake-up.
+    const waking = callWakeRef.current;
+    if (waking?.waiter) {
+      callWakeRef.current = undefined; waking.waiter.cancel();
+      void modern?.requestCallWake('cancel', waking.id);
+      setCallActive(false); setIsIncomingCall(false); setCallLifecycleState('cancelled'); setCallStatus('Call Cancelled');
+      return;
+    }
     const modernCall = activeModernCall();
+    if (waking && modern) void modern.requestCallWake('cancel', waking.id); // invite already sent: also stop a ringing phone
     if (modernCall?.conversation) {
       if (!modernCall.receiver || !modernCall.callId) throw new Error('No authenticated outgoing call is available.');
       await modernCall.receiver.composition.cancel(modernCall.callId);

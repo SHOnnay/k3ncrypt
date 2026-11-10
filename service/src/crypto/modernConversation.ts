@@ -1437,6 +1437,20 @@ export class ModernConversation {
      * verified contact are all required; legacy conversations cannot reach
      * this boundary because they do not own a ModernConversation instance.
      */
+    /**
+     * Rings the contact's phone while it is closed (content-free push through the relay). Best effort: it never throws and the
+     * caller must not wait for it. 'unknown' also covers a relay that does not know the event.
+     */
+    public async requestCallWake(kind: 'ring' | 'cancel', wakeId: string): Promise<'present' | 'absent' | 'unknown'> {
+        try { return await this.transport.activeTransport()?.requestCallWake?.(kind, wakeId) ?? 'unknown'; } catch { return 'unknown'; }
+    }
+
+    /** Resolves true when the contact joins the room (for example after their phone woke and unlocked). */
+    public waitForPeerJoin(timeoutMs: number): { promise: Promise<boolean>; cancel: () => void } {
+        const waiter = this.transport.activeTransport()?.waitForPeerJoin?.(timeoutMs);
+        return waiter ?? { promise: Promise.resolve(false), cancel: () => undefined };
+    }
+
     public async createAuthenticatedCallComposition(refreshSessionBinding = false): Promise<AuthenticatedCallComposition> {
         if (this.sessionHealth !== 'healthy') throw new Error('The encrypted session needs verified renewal before calling.');
         if (!this.roomId || !this.localAddress || !this.localIdentityId || !this.remoteAddress) {
