@@ -109,7 +109,7 @@ export interface Transport {
     /** Dispatch-scoped evidence from the encrypted, room-and-pin-bound message-version floor. Not authorization. */
     setAuthenticatedMessageVersionFloor?(floor: 0 | 1): void;
     /** Asks the relay to wake the peer's phone for a call (or cancel that wake). Best effort; resolves 'unknown' on any failure. */
-    requestCallWake?(kind: 'ring' | 'cancel', wakeId: string, timeoutMs?: number): Promise<'present' | 'absent' | 'unknown'>;
+    requestCallWake?(kind: 'ring' | 'cancel', wakeId: string, recipientRoutingId: string, timeoutMs?: number): Promise<'present' | 'absent' | 'unknown'>;
     /** Resolves true when the peer joins the room, false on timeout or cancel. */
     waitForPeerJoin?(timeoutMs: number): { promise: Promise<boolean>; cancel: () => void };
 }

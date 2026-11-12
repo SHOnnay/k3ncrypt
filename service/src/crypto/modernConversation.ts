@@ -1442,7 +1442,8 @@ export class ModernConversation {
      * caller must not wait for it. 'unknown' also covers a relay that does not know the event.
      */
     public async requestCallWake(kind: 'ring' | 'cancel', wakeId: string): Promise<'present' | 'absent' | 'unknown'> {
-        try { return await this.transport.activeTransport()?.requestCallWake?.(kind, wakeId) ?? 'unknown'; } catch { return 'unknown'; }
+        if (!this.remoteAddress) return 'unknown';
+        try { return await this.transport.activeTransport()?.requestCallWake?.(kind, wakeId, this.remoteAddress) ?? 'unknown'; } catch { return 'unknown'; }
     }
 
     /** Resolves true when the contact joins the room (for example after their phone woke and unlocked). */

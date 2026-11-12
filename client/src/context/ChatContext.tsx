@@ -6,6 +6,7 @@ import { classifySafeDiagnostic, type SafeDiagnosticCode } from '../product/safe
 import { LocalCallHistory, buildCallHistory, type CallHistoryEntry } from '../product/callHistory';
 import { recordCallFailure } from '../calls/callFailureCode';
 import { callIceServers } from '../calls/connectionHelper';
+import { CallWakeCoordinator } from '../calls/callWake';
 import { contactDisplayName, type UnlockPhase } from '../content/copy';
 import { readFileDetails, rememberFileDetails, type FileDetails } from '../product/fileDetails';
 import { parseFileReference } from '@chat-e2ee/service';
@@ -455,7 +456,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         callMediaFailureRef.current = update.mediaFailure;
         setCallError('The microphone became unavailable. The call ended to stop media safely.');
       }
-      if (update.state === 'connected') { localCallHistory.current.connected(update.callId); setCallLifecycleState('connected'); setCallStatus('Connected'); }
+      if (update.state === 'connected') { callWake.current.settle(); localCallHistory.current.connected(update.callId); setCallLifecycleState('connected'); setCallStatus('Connected'); }
       if (update.state === 'reconnecting') { setCallLifecycleState('connecting'); setCallStatus('Reconnecting...'); }
       if (update.state === 'failed') { setCallLifecycleState('ice-failed'); setCallStatus('Connection Failed'); }
     });
@@ -1428,24 +1429,14 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   // Calls to a phone that may be closed: ask the relay for a content-free wake-up, and if the contact is not in the room yet,
   // wait (up to 60 s) for their phone to wake and unlock before placing the invite. Never delays a call to someone who is present.
-  const callWakeRef = useRef<{ id: string; waiter?: { cancel: () => void } } | undefined>();
+  const callWake = useRef(new CallWakeCoordinator());
   const placeInvite = useCallback(async (conversation: ModernConversation, composition: AuthenticatedCallComposition, mediaMode?: 'video'): Promise<void> => {
-    const wakeId = crypto.randomUUID();
-    callWakeRef.current = { id: wakeId };
-    const presence = await conversation.requestCallWake('ring', wakeId);
-    if (callWakeRef.current?.id !== wakeId) return;                       // cancelled while the relay was answering
-    if (presence === 'absent') {
-      const waiter = conversation.waitForPeerJoin(60_000);
-      callWakeRef.current = { id: wakeId, waiter };
+    const decision = await callWake.current.prepare(conversation, () => {
       setCallActive(true); setIsIncomingCall(false); setCallWasOutgoing(true); setCallLifecycleState('ringing');
       setCallStatus('Calling… their phone may need to wake');
-      const joined = await waiter.promise;
-      if (callWakeRef.current?.id !== wakeId) return;                     // cancelled by the person
-      if (!joined) {
-        callWakeRef.current = undefined; setCallActive(false); setCallLifecycleState('timeout'); setCallStatus('No answer');
-        return;
-      }
-    }
+    });
+    if (decision === 'cancelled') return;
+    if (decision === 'no-answer') { setCallActive(false); setCallLifecycleState('timeout'); setCallStatus('No answer'); return; }
     if (mediaMode) await composition.invite(mediaMode); else await composition.invite();
   }, []);
 
@@ -1561,15 +1552,12 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const cancelCall = useCallback(async () => {
     // Still waiting for the contact's phone to wake: nothing was ever sent to them, so stop waiting and cancel the wake-up.
-    const waking = callWakeRef.current;
-    if (waking?.waiter) {
-      callWakeRef.current = undefined; waking.waiter.cancel();
-      void modern?.requestCallWake('cancel', waking.id);
+    // If the invite was already sent, the wake-up cancel also stops a phone that is still ringing from the push.
+    if (callWake.current.cancel() === 'stopped') {
       setCallActive(false); setIsIncomingCall(false); setCallLifecycleState('cancelled'); setCallStatus('Call Cancelled');
       return;
     }
     const modernCall = activeModernCall();
-    if (waking && modern) void modern.requestCallWake('cancel', waking.id); // invite already sent: also stop a ringing phone
     if (modernCall?.conversation) {
       if (!modernCall.receiver || !modernCall.callId) throw new Error('No authenticated outgoing call is available.');
       await modernCall.receiver.composition.cancel(modernCall.callId);
