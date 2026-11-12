@@ -45,7 +45,11 @@ export const fetchAuthenticatedRoutingIdentity = async (room: string, capability
     if (value.version !== 1) throw new Error('Authenticated routing identity unavailable.');
     return value.identity;
 };
-export const replenishAuthenticatedPrekeys = async (room: string, capability: string, address: string, authority: RoutingRequestAuthority, bundle: VodozemacPublicBundle): Promise<void> => {
+/** Remove contact: withdraws this device's own address from the room. Repeatable; 410 means the room is already gone. */
+export const revokeRoutingOwnership = async (room: string, capability: string, address: string, authority: RoutingRequestAuthority): Promise<void> => {
+    await makeRequest(`chat-link/${encodeURIComponent(room)}/routing/${encodeURIComponent(address)}`, { method: 'DELETE', headers: routingHeaders(capability, authority) });
+};
+export const replenishAuthenticatedPrekeys =async (room: string, capability: string, address: string, authority: RoutingRequestAuthority, bundle: VodozemacPublicBundle): Promise<void> => {
     await makeRequest(`chat-link/${encodeURIComponent(room)}/routing/${encodeURIComponent(address)}/prekeys`, {
         method: 'POST', headers: routingHeaders(capability, authority), body: bundle,
     });

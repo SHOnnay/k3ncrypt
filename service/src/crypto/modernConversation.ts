@@ -2330,3 +2330,26 @@ export class ModernConversation {
         return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
     }
 }
+
+export interface ContactRemovalRequest { roomId: string; controlCapability: string; address: string; routingProof: string }
+
+/** What the relay must be told when this device removes a contact. Undefined when this device never published an address in that room. */
+export const readContactRemovalRequest = async (storage: SecureStorage, roomId: string, controlCapability: string): Promise<ContactRemovalRequest | undefined> => {
+    const mode = await new ConversationModeStore(storage).read(roomId);
+    if (mode?.localAddress && mode.routingProof) return { roomId, controlCapability, address: mode.localAddress, routingProof: mode.routingProof };
+    const bytes = await storage.read(PUBLICATION_RECORD, 'local');
+    const publication = bytes ? JSON.parse(decoder.decode(bytes)) as PublicationMarker : undefined;
+    return publication?.roomId === roomId && publication.address && publication.routingProof
+        ? { roomId, controlCapability, address: publication.address, routingProof: publication.routingProof } : undefined;
+};
+
+const ROOM_KEYED_RECORDS = [OUTBOX_RECORD, SEEN_RECORD, M1_SEEN_RECORD, ROOM_MESSAGE_SEEN_RECORD, SESSION_AUDIT_RECORD, SESSION_RENEWAL_RECORD,
+    JOIN_INTRODUCTION_RECORD, JOIN_INTRODUCTION_SEEN_RECORD, 'vodozemac-session', 'conversation-protocol'] as const;
+
+/** Deletes this device's session, keys and pinned identity for a removed contact. The account identity is untouched. */
+export const purgeRemovedConversation = async (storage: SecureStorage, roomId: string, remoteAddress?: string): Promise<void> => {
+    for (const recordType of ROOM_KEYED_RECORDS) await storage.delete(recordType, roomId);
+    if (remoteAddress) await storage.delete('contact-identity', remoteAddress);
+    const bytes = await storage.read(PUBLICATION_RECORD, 'local');
+    if (bytes && (JSON.parse(decoder.decode(bytes)) as PublicationMarker).roomId === roomId) await storage.delete(PUBLICATION_RECORD, 'local');
+};
