@@ -82,6 +82,8 @@ export const initSocket = (server) => {
   return io;
 };
 
+export const relayServer = (): Server | undefined => io ?? undefined;
+
 export const socketEmit = <T extends keyof emitDataTypes>(topic: T, sid: string, data: emitDataTypes[T]): void => {
   const socket = io.sockets.sockets.get(sid);
   if (!socket) {

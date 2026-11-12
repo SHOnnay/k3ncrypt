@@ -22,10 +22,10 @@ function Run([string]$label, [string]$db, [string[]]$tests) {
 }
 Run 'database, device trust, private network' 'k3ncrypt_playwright_mongo' @('backend/db/mongo.integration', 'backend/security/durableDeviceTrust.mongo', 'backend/privateNetwork/membershipSecurity.mongo')
 Run 'web lifecycle TTL' 'k3ncrypt_playwright_lifecycle_mongo' @('backend/db/webLifecycle.mongo')
-Run 'routing ownership and clock skew' 'k3ncrypt_playwright_routing' @('backend/security/routingOwnership.mongo', 'backend/security/lifecycleClockSkew.mongo')
+Run 'routing ownership and clock skew' 'k3ncrypt_playwright_routing' @('backend/security/routingOwnership.mongo', 'backend/security/contactRemoval.mongo', 'backend/security/lifecycleClockSkew.mongo')
 Run 'attachments (without the Docker-restart suite)' 'k3ncrypt_playwright_attachments' @('backend/attachments/attachmentRevocation.mongo', 'backend/attachments/fileRead.mongo')
 Run 'retention TTL' 'k3ncrypt_playwright_retention' @('backend/db/retention.mongo')
 Run 'storage caps' 'k3ncrypt_playwright_caps' @('backend/db/storageCaps.mongo')
-Run 'push wake (Mongo integration)' 'k3ncrypt_playwright_push' @('backend/push/privateWake.mongo.integration', 'backend/push/durableWake.mongo.integration')
+Run 'push wake (Mongo integration)' 'k3ncrypt_playwright_push' @('backend/push/privateWake.mongo.integration', 'backend/push/durableWake.mongo.integration', 'backend/push/callWake.mongo.integration')
 if ($Stop) { powershell -NoProfile -File (Join-Path $PSScriptRoot 'local-mongo.ps1') stop -Port $Port }
 exit $status

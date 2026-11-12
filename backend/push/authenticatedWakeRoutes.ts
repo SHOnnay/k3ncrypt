@@ -59,6 +59,12 @@ export async function revokeWakeRoute(db: Db, input: { room: string; address: st
   return true;
 }
 
+/** For a caller that has ALREADY authorised the removal (the routing-revoke endpoint). Removes every device's pointer to this route. */
+export async function withdrawWakeRoute(db: Db, room: string, address: string): Promise<void> {
+  const key = routeKey(room, address);
+  await db.collection<RouteDocument>(PUSH_ROUTES).updateMany({ 'routes.key': key }, { $pull: { routes: { key } }, $set: { revision: randomUUID(), updatedAt: new Date() } });
+}
+
 /** No prekey query here: a retained binding plus CURRENT existing authority is required. */
 export async function validWakeRoute(db: Db, row: PushRow, keys: readonly string[]): Promise<boolean> {
   const doc = await db.collection<RouteDocument>(PUSH_ROUTES).findOne({ _id: ownerKey(row.accountIdentityReference, row.deviceId), trustEpoch: row.trustEpoch, deviceIdentityReference: row.deviceIdentityReference, expiresAt: { $gt: new Date() } });

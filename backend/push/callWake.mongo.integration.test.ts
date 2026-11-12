@@ -3,13 +3,12 @@ import { createHash, generateKeyPairSync, randomUUID, sign } from 'crypto';
 import { DurableDeviceTrustAuthority, MongoDeviceTrustStore } from '../security/durableDeviceTrust';
 import { canonicalPushEvent, MongoPushStore, PrivatePushRegistry, tokenHash, type PushEvent } from './privateWake';
 import { applyWakeSchema, ownerKey, PUSH_ROUTES, routeKey } from './durableWakeStore';
-import { revokeWakeRoute } from './authenticatedWakeRoutes';
+import { revokeWakeRoute, withdrawWakeRoute } from './authenticatedWakeRoutes';
 import { applyMigrations } from '../db/migrations';
 import { requestCallWake } from './callWake';
 import type { BootstrapRequest, DeviceProofRequest } from '../../service/src/devices/trustProtocol';
 
 jest.mock('./privateWake', () => ({ ...jest.requireActual('./privateWake'), sendFcm: jest.fn(async () => undefined) }));
-// eslint-disable-next-line @typescript-eslint/no-var-requires
 const sendFcm = require('./privateWake').sendFcm as jest.Mock;
 
 const uri = process.env.K3NCRYPT_TEST_MONGO_URI;
@@ -88,6 +87,14 @@ localSuite('Mongo-backed call wake [integration test]', () => {
     ring(s, 'ring', randomUUID()); await settle(); expect(sendFcm).toHaveBeenCalledTimes(1); sendFcm.mockClear();
     expect(await revokeWakeRoute(database, { room: s.room, address: s.recipient, control: s.control, routingProof: s.proof })).toBe(true);
     const next = { ...s, caller: await device() }; ring(next, 'ring', randomUUID()); await settle(); expect(sendFcm).not.toHaveBeenCalled();
+  });
+
+  test('a removed contact cannot ring: the routing revocation withdraws the wake route without a pre-key publication', async () => {
+    const s = await scene(); await database.collection('prekey_bundles').deleteMany({ channel: s.room });
+    await withdrawWakeRoute(database, s.room, s.recipient);
+    expect(await database.collection(PUSH_ROUTES).countDocuments({ 'routes.key': routeKey(s.room, s.recipient) })).toBe(0);
+    await database.collection('prekey_bundles').insertOne({ channel: s.room, address: s.recipient, expiresAt: new Date(Date.now() + 3_600_000), renewalProofHash: sha(`k3ncrypt-prekey-renewal-v1\0${s.proof}`), bundle: {} });
+    ring(s, 'ring', randomUUID()); await settle(); expect(sendFcm).not.toHaveBeenCalled();
   });
 
   test('no ring when the room was deleted, the publication lapsed, or the callee device was revoked', async () => {

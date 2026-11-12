@@ -680,7 +680,7 @@ export const registerMultiplexedRelay = (socket: CustomSocket, io: MuxServer): v
         return;
       }
       ack({ version: MUX_PROTOCOL_VERSION, status: 'stored', id: stored.id, timestamp: stored.timestamp });
-      await wakeRoomMailbox(subscription.roomId, subscription.peerRoutingAddress, io);
+      if (!stored.discarded) await wakeRoomMailbox(subscription.roomId, subscription.peerRoutingAddress, io);
     } catch {
       reject();
     }

@@ -116,11 +116,22 @@ export class RoutingOwnershipStore {
     this.deadline(until);
     await this.transact(async session => {
       const room = await this.room(channel, session); const owner = room?.routingOwners?.find(o => o.address === address);
-      if (!live(room) || !owner || owner.state !== 'active' || !matchesDevice(owner, admitted) || !routingProofMatches(proof, owner.renewalProofHash)) return deny();
+      if (!live(room) || !owner || !routingProofMatches(proof, owner.renewalProofHash)) return deny();
+      // Repeating a revocation is a no-op for the same device, so a client outbox can retry until it sees success.
+      if (owner.state === 'revoked') {
+        if (admitted.state !== 'active' || owner.accountIdentityReference !== admitted.accountIdentityReference || owner.deviceId !== admitted.deviceId) return deny();
+        return;
+      }
+      if (!matchesDevice(owner, admitted)) return deny();
       await this.fenceDevice(owner, session); this.deadline(until);
       const owners = room.routingOwners!.map(o => o.address === address ? { ...o, state: 'revoked' as const, generation: o.generation + 1, revokedAt: new Date(this.now()) } : o);
       await this.database.collection(LINK_COLLECTION).updateOne({ hash: channel }, { $set: { routingOwners: owners }, $inc: { routingOwnershipRevision: 1 } }, { session });
     });
+  }
+  /** The tombstone left by an explicit self-revocation (contact removal). A revoked DEVICE keeps state 'active' here and is not matched. */
+  async removedOwner(channel: string, address: string): Promise<RoutingOwner | undefined> {
+    const room = await this.room(channel);
+    return live(room) ? room.routingOwners?.find(o => o.address === address && o.state === 'revoked') : undefined;
   }
 }
 

@@ -32,7 +32,7 @@ run() { local label=$1; shift; local db=$1; shift
 }
 run 'database, device trust, private network' k3ncrypt_playwright_mongo backend/db/mongo.integration backend/security/durableDeviceTrust.mongo backend/privateNetwork/membershipSecurity.mongo
 run 'web lifecycle TTL' k3ncrypt_playwright_lifecycle_mongo backend/db/webLifecycle.mongo
-run 'routing ownership and clock skew' k3ncrypt_playwright_routing backend/security/routingOwnership.mongo backend/security/lifecycleClockSkew.mongo
+run 'routing ownership and clock skew' k3ncrypt_playwright_routing backend/security/routingOwnership.mongo backend/security/contactRemoval.mongo backend/security/lifecycleClockSkew.mongo
 run 'attachments' k3ncrypt_playwright_attachments backend/attachments/attachmentRevocation.mongo backend/attachments/fileRead.mongo backend/attachments/fileLedger.mongo
 run 'retention TTL' k3ncrypt_playwright_retention backend/db/retention.mongo
 run 'storage caps' k3ncrypt_playwright_caps backend/db/storageCaps.mongo
