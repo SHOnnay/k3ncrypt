@@ -1,7 +1,0 @@
-.gradle/
-build/
-**/build/
-local.properties
-native-crypto/target/
-*.iml
-.kotlin/
