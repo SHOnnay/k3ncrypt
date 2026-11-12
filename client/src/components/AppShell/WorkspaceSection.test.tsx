@@ -49,7 +49,7 @@ it('separates actual verified contacts from invitations, unavailable and archive
   expect(html).not.toContain('Unaccepted invitation');
   // UX A5: plain words and one action; codes live in Settings → Advanced.
   expect(html).toContain('Part of this chat’s saved data is missing, so it can’t open.');
-  expect(html).toContain('Remove conversation Unknown saved label');
+  expect(html).toContain('Remove contact Unknown saved label');
   expect(html).not.toContain('CONTACT_REGISTRY_MISSING'); expect(html).not.toContain('Technical details');
   expect(html).toContain('Archived conversations (1)');
   expect(html).toContain('Restore conversation Archived test');

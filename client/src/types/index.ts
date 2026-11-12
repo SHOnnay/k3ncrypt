@@ -136,6 +136,10 @@ export interface ChatContextType {
   addMessage: (roomId: string, message: Message) => void;
   setCallDuration: (duration: number) => void;
   deleteChannel: () => Promise<void>;
+  /** Remove contact: local tombstone and purge now; the relay is told from a durable outbox. */
+  removeContact?: (roomId: string) => Promise<void>;
+  /** Removed contacts the relay has not confirmed yet. */
+  pendingRemovals?: number;
   updateProfileDisplayName: (name: string) => Promise<void>;
   setContactNickname: (roomId: string, nickname: string) => Promise<void>;
   setPendingInvitationDismissed: (roomId: string, dismissed: boolean) => Promise<void>;

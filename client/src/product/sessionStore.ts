@@ -36,6 +36,7 @@ export interface ConversationDescriptor {
 const RECORD_TYPE = 'product-session';
 const RECORD_ID = 'conversations';
 const REMOVALS_ID = 'conversation-removals';
+const OUTBOX_ID = 'removal-outbox';
 /** A bounded visible window; excess records are retained and reported, never deleted. */
 export const CONVERSATION_WINDOW = 1000;
 const MAX_CONFLICT_RETRIES = 64;
@@ -117,8 +118,36 @@ const roomOf = (value: unknown): string | undefined => {
   try { return validateConversationDescriptor(value).roomId; } catch { return undefined; }
 };
 
+/** What the relay still has to be told about a removed contact. Kept in the vault until the relay confirms. */
+export interface RemovalOutboxEntry { version: 1; roomId: string; controlCapability: string; address: string; routingProof: string; queuedAt: number }
+export type PendingRemoval = Pick<RemovalOutboxEntry, 'controlCapability' | 'address' | 'routingProof'>;
+const validRemoval = (value: unknown): value is RemovalOutboxEntry => {
+  const item = value as Partial<RemovalOutboxEntry> | null;
+  return !!item && typeof item === 'object' && item.version === 1 && typeof item.roomId === 'string' && roomPattern.test(item.roomId)
+    && typeof item.controlCapability === 'string' && /^[A-Za-z0-9_-]{43}$/.test(item.controlCapability)
+    && typeof item.address === 'string' && roomPattern.test(item.address)
+    && typeof item.routingProof === 'string' && /^[A-Za-z0-9_-]{43}$/.test(item.routingProof)
+    && typeof item.queuedAt === 'number' && Number.isSafeInteger(item.queuedAt) && item.queuedAt >= 0;
+};
+export const readRemovalOutbox = async (storage: ProductSecureStorage): Promise<RemovalOutboxEntry[]> => {
+  try { return decodeArray(await storage.read(RECORD_TYPE, OUTBOX_ID)).filter(validRemoval); } catch { return []; }
+};
+/** Drops outbox entries once the relay has confirmed them (or they are abandoned). The tombstone stays. */
+export const completeRemovals = async (storage: ProductSecureStorage, roomIds: readonly string[]): Promise<RemovalOutboxEntry[]> => {
+  if (!storage.compareAndSwapRecords) throw storageFailure('CONVERSATION_STORAGE_UNAVAILABLE');
+  for (let attempt = 0; attempt < MAX_CONFLICT_RETRIES; attempt++) {
+    const expected = await storage.read(RECORD_TYPE, OUTBOX_ID);
+    const current = decodeArray(expected).filter(validRemoval);
+    const next = current.filter(item => !roomIds.includes(item.roomId));
+    if (next.length === current.length) return current;
+    if (await storage.compareAndSwapRecords([{ recordType: RECORD_TYPE, recordId: OUTBOX_ID, expected, next: encode(next) }])) return next;
+    await new Promise(resolve => setTimeout(resolve, Math.min(attempt + 1, 16)));
+  }
+  throw storageFailure('CONVERSATION_STORAGE_CONFLICT');
+};
+
 /** All writes contend on the encrypted index AND removal markers in one vault transaction. */
-async function mutate(storage: ProductSecureStorage, roomId: string, change?: (current: ConversationDescriptor | undefined) => Promise<ConversationDescriptor>): Promise<ConversationDescriptor[]> {
+async function mutate(storage: ProductSecureStorage, roomId: string, change?: (current: ConversationDescriptor | undefined) => Promise<ConversationDescriptor>, pending?: PendingRemoval): Promise<ConversationDescriptor[]> {
   if (!roomPattern.test(roomId)) throw new Error('Saved conversation is invalid.');
   if (!storage.compareAndSwapRecords) throw storageFailure('CONVERSATION_STORAGE_UNAVAILABLE');
   for (let attempt = 0; attempt < MAX_CONFLICT_RETRIES; attempt++) {
@@ -137,10 +166,19 @@ async function mutate(storage: ProductSecureStorage, roomId: string, change?: (c
     if (next && !current && raw.filter(value => roomOf(value)).length >= CONVERSATION_WINDOW) throw storageFailure('CONVERSATION_INDEX_LIMIT');
     const nextRaw = next ? [{ ...(matching as object | undefined), ...next }, ...retained] : retained;
     const nextRemovals = change || removals.includes(roomId) ? removals : [...removals, roomId];
-    if (await storage.compareAndSwapRecords([
+    const updates: SecureRecordUpdate[] = [
       { recordType: RECORD_TYPE, recordId: RECORD_ID, expected: bytes, next: encode(nextRaw) },
       { recordType: RECORD_TYPE, recordId: REMOVALS_ID, expected: removalsBytes, next: encode(nextRemovals) },
-    ])) return readConversationDescriptors(storage, false);
+    ];
+    if (pending) {
+      // Same transaction as the tombstone: a removal can never exist locally without the relay notice being queued.
+      const outboxBytes = await storage.read(RECORD_TYPE, OUTBOX_ID);
+      const outbox = decodeArray(outboxBytes).filter(validRemoval).filter(item => item.roomId !== roomId);
+      const entry: RemovalOutboxEntry = { version: 1, roomId, ...pending, queuedAt: Date.now() };
+      // A malformed saved address cannot be a real relay route, so there is nothing to revoke; the local removal still happens.
+      if (validRemoval(entry)) updates.push({ recordType: RECORD_TYPE, recordId: OUTBOX_ID, expected: outboxBytes, next: encode([...outbox, entry]) });
+    }
+    if (await storage.compareAndSwapRecords(updates)) return readConversationDescriptors(storage, false);
     // Bounded yielding/backoff prevents a busy tab from monopolizing the CAS loop.
     await new Promise(resolve => setTimeout(resolve, Math.min(attempt + 1, 16)));
   }
@@ -179,6 +217,9 @@ export const updateConversationDescriptor = async (storage: ProductSecureStorage
       relationship: current.relationship === 'accepted' ? 'accepted' : patch.relationship ?? current.relationship });
   });
 
-export const removeConversationDescriptor = async (storage: ProductSecureStorage, roomId: string): Promise<ConversationDescriptor[]> => {
-  return mutate(storage, roomId);
+export const removeConversationDescriptor = async (storage: ProductSecureStorage, roomId: string, pending?: PendingRemoval): Promise<ConversationDescriptor[]> => {
+  return mutate(storage, roomId, undefined, pending);
+};
+export const readRemovedRooms = async (storage: ProductSecureStorage): Promise<string[]> => {
+  try { return decodeArray(await storage.read(RECORD_TYPE, REMOVALS_ID)).filter((value): value is string => typeof value === 'string' && roomPattern.test(value)); } catch { return []; }
 };

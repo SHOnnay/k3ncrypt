@@ -44,6 +44,8 @@ export default defineConfig({
         MONGO_DB_NAME: mongoDbName,
         K3NCRYPT_DEVICE_TRUST_PROOF_SECRET: deviceTrustTestSecret,
         K3NCRYPT_TEST_ONLY_DIAGNOSTICS: 'true',
+        // Production runs with durable routing on; specs that depend on it (remove contact) set PLAYWRIGHT_DURABLE_ROUTING=true.
+        ...(process.env.PLAYWRIGHT_DURABLE_ROUTING === 'true' ? { K3NCRYPT_DURABLE_ROUTING: 'true' } : {}),
         ...(muxStage1 ? { K3NCRYPT_MUX_MESSAGE_DELIVERY: 'true', K3NCRYPT_TEST_MUX_SUBSCRIPTION_LEASE_MS: '90000' } : {}),
       },
       reuseExistingServer: false,

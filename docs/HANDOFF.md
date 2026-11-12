@@ -36,27 +36,24 @@ Local test notes (Windows):
 | # | Milestone | State | Evidence |
 |---|---|---|---|
 | 1 | Truth pass | **Done 2026-11-12** (branch `chore/truth-pass`) | see below |
-| 3 | Remove-contact, web | **In progress** on branch `beta-now` (= `main` + call-wake commits). Relay part done (`bcae705`); service helpers written, not yet used; client not started. See "Resume here". | relay [integration test] |
-| 4 | Remove-contact, Android | Pending | — |
+| 3 | Remove-contact, relay + web | **Done 2026-11-12** on branch `beta-now` (= `main` + call-wake commits). Not deployed. | [integration test] [two-browser E2E] |
+| 4 | Remove-contact, Android | Next. Needs the relay change deployed first, then [physical device]. | — |
 | 5 | Call wake, web tests | Pending. Relay `34590d5` and web `f2d2d50` exist on local branch `feat/call-wake` (not pushed); web part is untested. | [read code] |
 | 6 | Call wake, Android | Pending | — |
 | 7 | Unread counts in the vault | Pending | — |
 | 2 | Domain + own web origin | Waiting for the owner's domain decision | — |
 | 8–18 | Beta-stable and parity | Pending | — |
 
-### Resume here (milestone 3, stopped 2026-11-12 on a usage limit)
-Not pushed: `main` is 1 ahead of origin (`4acd3b4`, truth pass); a local hook blocks `git push`, so the owner runs `git push origin main`. Until then the site still shows the APK link.
+### Milestone 3 record (remove contact, relay + web)
+Not pushed: `main` is 1 ahead of origin (`4acd3b4`, truth pass); a local hook blocks `git push`, so the owner runs `git push origin main`. Until then the site still shows the APK link. `beta-now` is local only.
 
-Done on `beta-now`:
 - Relay (`bcae705`) [integration test, `backend/security/contactRemoval.mongo.test.ts` 4 passed]: `DELETE /api/chat-link/:channel/routing/:address` is repeatable (200 again, 410 if the room is deleted), then deletes waiting mail for that address, withdraws its wake route and ejects its live socket. Mail sent to a self-revoked address is accepted and dropped with the normal "stored" ack (silent discard). The identity lookup still serves the removed side's pinned identity. Not deployed.
-- Service helpers (type-checked only, no tests yet): `readContactRemovalRequest`, `purgeRemovedConversation` (`service/src/crypto/modernConversation.ts`), `revokeContactRoute` (`service/src/crypto/contactRemoval.ts`, works from the vault alone so an outbox can retry after restart), `revokeRoutingOwnership` (`service/src/api/prekeys.ts`).
-
-Next steps, in order:
-1. `client/src/product/sessionStore.ts`: add a `removal-outbox` record (`product-session`), and let `removeConversationDescriptor` append an outbox entry `{roomId, controlCapability, address, routingProof, queuedAt}` in the same `compareAndSwapRecords` call as the tombstone. Add `readRemovalOutbox` and `completeRemoval`.
-2. `client/src/product/contactRemoval.ts`: `drainRemovalOutbox(storage, revoke)`; done on `'revoked'`/`'gone'`, otherwise keep and retry (on unlock, on `online`, with backoff); drop entries older than 30 days.
-3. `ChatContext`: `removeContact(roomId)` = tombstone + outbox first, close the room's live `ModernConversation` (`roomStates[roomId].conversation.close(false)`), `purgeRemovedConversation`, delete `product-messages`, `product-message-quarantine`, `product-file-details`, `product-remote-profile` and the mute entry, then drain. Point `deleteChannel` (header "Delete conversation", Settings `block`) and the sidebar "Remove" at it. Decision: Remove deletes this device's history for that chat (Archive is the option that keeps it); say so in the confirm text. Show "Removed, finishing on server" while the outbox is not empty.
-4. Tests: unit tests for the outbox and drain; a two-browser E2E (peer sends after removal, shows sent, never delivered; removed chat does not come back after reload).
-5. Then milestone 4 (Android, same relay endpoint; skip tombstoned rooms at join-after-unlock) and a relay release by the runbook.
+- Service: `readContactRemovalRequest`, `purgeRemovedConversation` (`service/src/crypto/modernConversation.ts`), `revokeContactRoute` (`service/src/crypto/contactRemoval.ts`, works from the vault alone so the outbox can retry after a restart).
+- Web: `removeContact(roomId)` in `ChatContext`. One vault transaction writes the tombstone, drops the chat from the list and queues the relay notice (`product-session/removal-outbox`); then the live conversation is closed, the session, keys, pinned identity, saved messages, file details and mute entry are deleted, and the outbox is drained (on unlock, on `online`, every 60 s while pending; abandoned after 30 days). "Removed. Finishing on the server…" shows while a notice is pending. Header "Remove contact", Settings "Remove contact" (was Block) and every Remove button use it.
+- Evidence: `client/src/product/contactRemoval.test.ts` 5 passed [unit test]; `e2e/remove-contact.spec.ts` 2 passed [two-browser E2E] (peer's later message stays "Sent", never "Delivered"; removed chat gone after reload; offline removal finishes later); full Jest 1347 passed; tsc, ESLint, production build clean.
+- Decisions made here: Remove deletes that chat's history on this device (Archive is the choice that keeps it), because nothing could show orphaned history. Removing your own unaccepted invitation does not delete the room; the invitation simply expires (24 h).
+- Finding for milestone 8: the default E2E relay runs with durable routing OFF, unlike production. `PLAYWRIGHT_DURABLE_ROUTING=true` turns it on (golden-path, modern-conversation and file-trust-gate pass with it); `remove-contact.spec.ts` skips without it. Consider making it the default.
+- Relay release needed before Android can use it: relay-only change, no migration, rollback = current production commit.
 
 ### Milestone 1 record
 - Site: the public APK download link, its hash line and install steps are removed from `site/index.html`; the page now says Android is a private beta. Takes effect when `main` is pushed (`pages.yml`).

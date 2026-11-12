@@ -92,16 +92,15 @@ test('expired, deleted, unknown and invalid disposable records stay separate and
     await expect(unavailable).not.toContainText('CONTACT_REGISTRY_MISSING');
     await expect(unavailable).toContainText('The invitation expired before it was accepted.');
     const invalid = unavailable.locator('.workspace-record').filter({ hasText: 'Invalid saved entry' });
-    await expect(invalid.getByRole('button', { name: /^(Archive|Remove) conversation/ })).toHaveCount(0);
-    await archive(alice, 'Bob', true, 'Remove'); // UX A5: an entry that can't open offers Remove (local archive)
-    const archived = alice.locator('details[aria-label="Archived conversations"]'); await archived.locator('summary').click();
-    await archived.getByRole('button', { name: 'Restore conversation Bob', exact: true }).click();
-    await expect(unavailable).toContainText('Bob'); await expect(unavailable).toContainText('This chat was closed on the server.');
-    const unknown = unavailable.locator('.workspace-record').filter({ hasText: 'saved data is missing' }).filter({ has: alice.getByRole('button', { name: /^Remove conversation/ }) });
-    alice.once('dialog', dialog => dialog.accept()); await unknown.getByRole('button', { name: /^Remove conversation/ }).click();
-    await archived.locator('summary').click();
-    await archived.getByRole('button', { name: /^Restore conversation Contact/ }).click();
-    await expect(unavailable).toContainText('Part of this chat’s saved data is missing, so it can’t open.');
+    await expect(invalid.getByRole('button', { name: /^(Archive conversation|Remove contact)/ })).toHaveCount(0);
+    // An entry that can't open offers Remove, which is a real removal: it does not come back and is not archived.
+    alice.once('dialog', dialog => dialog.accept());
+    await alice.getByRole('button', { name: 'Remove contact Bob', exact: true }).last().click();
+    await expect(unavailable).not.toContainText('This chat was closed on the server.');
+    await expect(alice.locator('details[aria-label="Archived conversations"]')).toHaveCount(0);
+    const unknown = unavailable.locator('.workspace-record').filter({ hasText: 'saved data is missing' }).filter({ has: alice.getByRole('button', { name: /^Remove contact/ }) });
+    alice.once('dialog', dialog => dialog.accept()); await unknown.getByRole('button', { name: /^Remove contact/ }).click();
+    await expect(unavailable).not.toContainText('00000091');
     const intact = await alice.evaluate(async ({ storageModule, persistenceModule, passphrase }) => {
       const { BrowserSecureStorage } = await import(/* @vite-ignore */ storageModule);
       const { IndexedDbVaultPersistence } = await import(/* @vite-ignore */ persistenceModule);

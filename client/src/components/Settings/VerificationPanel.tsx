@@ -141,7 +141,7 @@ export const VerificationPanel: React.FC<Props> = ({ label, ownFingerprint, cont
         <label className="code-by-text__paste"><span>Paste {name === 'your contact' ? 'their' : `${name}’s`} code</span><textarea aria-label="Their code" rows={3} placeholder="Paste the code here" value={qrInput} onChange={(event) => setQrInput(event.target.value)} /></label>
         <button className="btn btn--secondary" type="button" disabled={!peer || !qrInput.trim()} onClick={() => { scan(qrInput); setStep('scan'); }}>Check their code</button>
       </section>
-      {changed && <button type="button" className="btn btn--danger" onClick={() => block().catch(onError)}>Block conversation</button>}
+      {changed && <button type="button" className="btn btn--danger" onClick={() => block().catch(onError)}>Remove contact</button>}
       {checked && <button className="btn btn--secondary" type="button" onClick={() => unverify().catch(onError)}>Mark as not checked</button>}
       {checked && sessionHealth === 'unhealthy' && <><p>This saved encrypted session needs a checked renewal. Your history is kept.</p><label><input type="checkbox" checked={renewalConfirmed} onChange={(event) => setRenewalConfirmed(event.target.checked)} /> I compared the security number again on a call I trust</label><button className="btn btn--secondary" disabled={!renewalConfirmed} type="button" onClick={() => renew().catch(onError)}>Prepare renewal</button></>}
       {sessionHealth === 'renewal-pending' && <p>Ask your contact to prepare the renewal, then send a text message. Calls stay paused until it’s accepted.</p>}

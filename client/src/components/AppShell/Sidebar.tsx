@@ -38,7 +38,7 @@ const formatSidebarTime = (date?: Date): string => {
 };
 
 export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection, onNavigate, onNewConversation, onOpenConversation, onOpenSettings, settingsOpen = false }) => {
-  const { channelHash, messages, conversations, savedConversations = conversations, sessionHealth, profileDisplayName, protocolMode, unavailableConversations = [], pendingConversation, conversationOpenError, accountState, unreadCounts = {}, mutedChats = [], setChatMuted, notificationOffer, answerNotificationOffer } = useChat();
+  const { channelHash, messages, conversations, savedConversations = conversations, sessionHealth, profileDisplayName, protocolMode, unavailableConversations = [], pendingConversation, conversationOpenError, accountState, unreadCounts = {}, mutedChats = [], setChatMuted, notificationOffer, answerNotificationOffer, pendingRemovals = 0 } = useChat();
   // Item 4: nothing about contacts while locked. accountState becomes 'ready' only after vault.unlock()
   // succeeds (openModernVault), so names can appear during the rest of "Unlocking…" but never before.
   if (accountState === 'locked' || accountState === 'checking') return <LockedSidebar />;
@@ -106,6 +106,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isWelcomeActive, activeSection
             </li>;
           })}</ul>
         </section>}
+        {pendingRemovals > 0 && <p className="conversation-preview" role="status" data-testid="removal-pending">Removed. Finishing on the server…</p>}
         {groups.archived.length > 0 && <button className="invitation-local-action" type="button" onClick={() => onNavigate('contacts')}>Archived conversations ({groups.archived.length}) — manage in Contacts</button>}
       </div>
 

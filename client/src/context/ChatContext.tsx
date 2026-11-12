@@ -14,7 +14,7 @@ import { parseFileReference } from '@chat-e2ee/service';
  */
 
 import React, { createContext, useContext, ReactNode, useState, useCallback, useEffect, useRef, useMemo } from 'react';
-import { createChatInstance, utils, BrowserSecureStorage, IndexedDbVaultPersistence, ModernConversation, parseEncryptedMediaMessage, BrowserCallTransport, ProductionCallNegotiator, MultiplexedRelayConnection, ContactIdentityRegistry, ConversationModeStore } from '@chat-e2ee/service';
+import { createChatInstance, utils, BrowserSecureStorage, IndexedDbVaultPersistence, ModernConversation, parseEncryptedMediaMessage, BrowserCallTransport, ProductionCallNegotiator, MultiplexedRelayConnection, ContactIdentityRegistry, ConversationModeStore, readContactRemovalRequest, purgeRemovedConversation, revokeContactRoute } from '@chat-e2ee/service';
 import type { IChatE2EE, IE2ECall, CallLifecycleState, CallLifecycleUpdate, StoredContactIdentity, AuthenticatedCallComposition, EnrollmentRequest, EnrollmentApprovalPacket, DeviceControlEvent, LifecycleStateSnapshot, ModernConnectionDetails } from '@chat-e2ee/service';
 import { ChatContextType, InviteInfo, Message } from '../types/index';
 import { createMessage } from '../utils/messageHandling';
@@ -30,6 +30,7 @@ import { readPrivacyPreferences, writePrivacyPreferences, type PrivacyPreference
 import { deliverNotification } from '../product/notifications';
 import { addUnread, clearUnread, planIncomingMessage, shouldOfferNotificationPermission, tabTitle, totalUnread, type UnreadCounts } from '../product/alerts';
 import { readMutedChats, setChatMuted as persistChatMuted } from '../product/mutedChats';
+import { drainRemovalOutbox, purgeProductRecords } from '../product/contactRemoval';
 import { playMessageSound } from '../utils/sounds';
 import { prepareHeldTextRetry, prepareMessageAcceptance, readMessages, writeMessages } from '../product/messageStore';
 import { createRoomState, updateRoomState, type RoomState } from '../product/roomState';
@@ -1827,18 +1828,53 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
-  // Delete channel
+  // Remove contact. Order matters: the vault tombstone and the queued relay notice are written first, in one transaction,
+  // so a crash or an offline device can never leave a removed chat that comes back or a relay that was never told.
+  const [pendingRemovals, setPendingRemovals] = useState(0);
+  const finishRemovals = useCallback(async (storage: BrowserSecureStorage): Promise<void> => {
+    if (storage.isLocked()) return;
+    const remaining = await drainRemovalOutbox(storage, (entry) => revokeContactRoute(storage, loadVodozemacBindings, entry)).catch(() => undefined);
+    if (remaining !== undefined && historyVault.current === storage && !storage.isLocked()) setPendingRemovals(remaining);
+  }, []);
+  useEffect(() => {
+    if (!vault || accountState !== 'ready') { setPendingRemovals(0); return undefined; }
+    const attempt = () => { void finishRemovals(vault); };
+    attempt();
+    window.addEventListener('online', attempt);
+    const timer = window.setInterval(() => { if (pendingRemovalsRef.current > 0) attempt(); }, 60_000);
+    return () => { window.removeEventListener('online', attempt); window.clearInterval(timer); };
+  }, [vault, accountState, finishRemovals]);
+  const pendingRemovalsRef = useRef(pendingRemovals); pendingRemovalsRef.current = pendingRemovals;
+  const removeContact = useCallback(async (roomId: string): Promise<void> => {
+    const scope = plaintextSessionRef.current;
+    if (!vault || vault.isLocked() || !scope?.isCurrent()) throw new Error('Unlock this device to remove a contact.');
+    const descriptor = (await readConversationDescriptors(vault, false)).find((item) => item.roomId === roomId);
+    if (!descriptor) return;
+    const request = await readContactRemovalRequest(vault, roomId, descriptor.controlCapability);
+    await removeConversationDescriptor(vault, roomId, request);
+    if (request) setPendingRemovals((count) => count + 1);
+    const live = roomStatesRef.current[roomId]?.conversation;
+    if (live) await live.close(false).catch(() => undefined);
+    if (selectedConnection.current?.roomId === roomId) selectedConnection.current = undefined;
+    if (live && selectedConversation.current === live) selectedConversation.current = undefined;
+    muxRoomIds.current.delete(roomId); muxDetails.current.delete(roomId);
+    if (live) muxConversations.current.delete(live);
+    await purgeRemovedConversation(vault, roomId, descriptor.remoteAddress);
+    await purgeProductRecords(vault, roomId);
+    if (mutedChatsRef.current.includes(roomId)) setMutedChats(await persistChatMuted(vault, roomId, false).catch(() => mutedChatsRef.current));
+    setUnreadCounts((current) => clearUnread(current, roomId));
+    setRoomStates((current) => { const next = { ...current }; delete next[roomId]; return next; });
+    setUnavailableConversations((items) => items.filter((item) => item.roomId !== roomId));
+    if (openRoomRef.current === roomId) {
+      setModern(null); setModernCallComposition(null); setModernCallId(undefined); setProtocolMode('legacy'); setChannelHash(''); setIsConnected(false);
+    }
+    if (historyVault.current === vault && scope.isCurrent()) await refreshConversations(vault);
+    void finishRemovals(vault);
+  }, [vault, finishRemovals]);
+
   const deleteChannel = useCallback(async () => {
     if (protocolMode === 'modern') {
-      await modern?.delete();
-      if (vault && channelHash) { await removeConversationDescriptor(vault, channelHash); await refreshConversations(vault); }
-      setModern(null);
-      selectedConversation.current = undefined; selectedConnection.current = undefined;
-      setModernCallComposition(null);
-      setModernCallId(undefined);
-      setProtocolMode('legacy');
-      setChannelHash('');
-      if (channelHash) setRoomMessages(channelHash, []);
+      if (channelHash) await removeContact(channelHash);
       return;
     }
     if (!chat) return;
@@ -1851,7 +1887,7 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       debugError('Conversation deletion failed', err);
       throw err;
     }
-  }, [chat, channelHash, modern, protocolMode, vault]);
+  }, [chat, channelHash, protocolMode, removeContact]);
 
   const refreshCallHistory = useCallback(async (): Promise<void> => {
     if (!vault || accountState !== 'ready') { setCallHistory([]); return; }
@@ -1994,6 +2030,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     addMessage,
     setCallDuration,
     deleteChannel,
+    removeContact,
+    pendingRemovals,
     updateProfileDisplayName,
     setContactNickname,
     setPendingInvitationDismissed,

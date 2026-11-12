@@ -15,6 +15,7 @@ import './SecurityVisibility.css';
 import './ChatHeader.css';
 import { debugError } from '../../utils/debug';
 import { contactDisplayName } from '../../content/copy';
+import { removeContactConfirmation } from '../AppShell/ConversationArchiveButton';
 import { checkCopy, checkName, checkState } from '../../content/checkCopy';
 import { useOpenCheck } from '../../context/CheckContactContext';
 import { useBrowserOnline } from '../../hooks/useBrowserOnline';
@@ -70,14 +71,14 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({ onStartCall, onStartVide
   };
 
 const handleDelete = async () => {
-  if (!window.confirm('Are you sure you want to delete this secure channel? This cannot be undone.')) return;
+  if (!window.confirm(removeContactConfirmation(contactLabel))) return;
 
   try {
     await deleteChannel();
     window.location.hash = ''; // Clear URL hash
   } catch (err) {
     debugError('Conversation deletion failed', err);
-    alert('Could not delete this conversation. Please retry.');
+    alert('Could not remove this contact. Please retry.');
   }
 };
 
@@ -142,7 +143,7 @@ const handleDelete = async () => {
           <div className="chat-more-menu__panel">
             <button type="button" className="chat-more-menu__delete" onClick={handleDelete} disabled={!activeConversation}>
               <TrashIcon size={16} />
-              Delete conversation
+              Remove contact
             </button>
           </div>
         </details>

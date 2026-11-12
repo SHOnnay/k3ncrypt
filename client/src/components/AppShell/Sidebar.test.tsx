@@ -33,7 +33,7 @@ it('lists a chat that cannot open in plain words with Remove, without codes or t
   expect(html).toContain('Needs attention');
   expect(html).toContain('unavailable-conversation-action');
   expect(html).toContain('Part of this chat’s saved data is missing, so it can’t open.');
-  expect(html).toContain('aria-label="Remove conversation Saved friend"');
+  expect(html).toContain('aria-label="Remove contact Saved friend"');
   expect(html).not.toContain('CONTACT_REGISTRY_MISSING');
   expect(html).not.toContain('Technical details');
   expect(html).not.toContain('Unavailable Conversations');
