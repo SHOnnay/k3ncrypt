@@ -6,6 +6,7 @@ import { durableDeviceTrustAuthority } from '../../security/durableDeviceTrust';
 import type { DeviceAuthorizationProof } from '../../security/deviceTrust';
 import { bindVerifiedRouting, durableRoutingEnabled, RoutingAuthorizationError, routingOwnershipStore, routingContinuation } from '../../security/routingOwnership';
 import { purgeRemovedRoute } from '../../security/contactRemoval';
+import { countEvent } from '../../operations/metrics';
 import { validBundle } from './prekeys';
 
 const router = express.Router({ mergeParams: true });
@@ -76,6 +77,7 @@ router.delete('/:address', controlRateLimit, handler(async req => {
   const a = await proven(req, true); if (a.participant !== a.address) throw new RoutingAuthorizationError();
   await a.store.revoke(a.channel, a.address, a.routingProof, a.device, a.until);
   await purgeRemovedRoute(a.channel, a.address);
+  countEvent('contact_removed');
   return { status: 'revoked' };
 }));
 export default router;

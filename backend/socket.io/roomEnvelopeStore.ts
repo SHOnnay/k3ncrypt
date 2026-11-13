@@ -1,4 +1,5 @@
 import { durableRoutingEnabled, currentRoutingIdentity, routingOwnershipStore } from '../security/routingOwnership';
+import { countEvent } from '../operations/metrics';
 import { createHash } from 'crypto';
 import db from '../db';
 import { OFFLINE_MESSAGE_COLLECTION } from '../db/const';
@@ -11,11 +12,12 @@ export const roomEnvelopeDedupeKey = (channel: string, mailbox: string, sender: 
  * keys without rewriting rows, claims, ciphertext or terminal rejection records. */
 export const storeRoomEnvelope = async <T extends Record<string, unknown> & { channel: string; mailbox: string; sender: string; envelope: WireEnvelope }>(data: T): Promise<T & { discarded?: true }> => {
   if (durableRoutingEnabled()) {
-    if (!await currentRoutingIdentity(data.channel, data.sender, false)) throw new Error('Authenticated routing ownership is unavailable.');
+    if (!await currentRoutingIdentity(data.channel, data.sender, false)) { countEvent('envelope_refused'); throw new Error('Authenticated routing ownership is unavailable.'); }
     if (!await currentRoutingIdentity(data.channel, data.mailbox, false)) {
       // The recipient removed this contact. Accept and drop: nothing is stored, so nothing can be delivered or wake anyone,
       // and the sender is told the same thing as for any stored message.
-      if (await routingOwnershipStore()?.removedOwner(data.channel, data.mailbox)) return { ...data, discarded: true };
+      if (await routingOwnershipStore()?.removedOwner(data.channel, data.mailbox)) { countEvent('envelope_discarded_removed_contact'); return { ...data, discarded: true }; }
+      countEvent('envelope_refused');
       throw new Error('Authenticated routing ownership is unavailable.');
     }
   }
@@ -23,5 +25,7 @@ export const storeRoomEnvelope = async <T extends Record<string, unknown> & { ch
   const prior = await db.findOneFromDB<T>({ dedupeKey: priorMuxKey }, OFFLINE_MESSAGE_COLLECTION);
   if (prior) return prior;
   // The durable unique index arbitrates concurrent callers using this one key.
-  return db.storeOfflineMessage({ ...data, dedupeKey: roomEnvelopeDedupeKey(data.channel, data.mailbox, data.sender, data.envelope) });
+  const stored = await db.storeOfflineMessage({ ...data, dedupeKey: roomEnvelopeDedupeKey(data.channel, data.mailbox, data.sender, data.envelope) });
+  countEvent('envelope_stored');
+  return stored;
 };

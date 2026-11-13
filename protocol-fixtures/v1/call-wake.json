@@ -1,0 +1,21 @@
+{
+  "description": "Content-free call wake-up push. The relay builds it; Android accepts it. Exactly five string fields; anything else is ignored by the phone.",
+  "now": 2000,
+  "maxLifetimeMs": 45000,
+  "keys": ["createdAt", "eventId", "expiresAt", "type", "version"],
+  "accept": [
+    { "kind": "ring", "data": { "version": "1", "type": "call", "eventId": "0b6f2a54-3c1d-4e8a-9f10-2a3b4c5d6e7f", "createdAt": "1000", "expiresAt": "46000" } },
+    { "kind": "cancel", "data": { "version": "1", "type": "call-cancel", "eventId": "0b6f2a54-3c1d-4e8a-9f10-2a3b4c5d6e7f", "createdAt": "1500", "expiresAt": "46500" } }
+  ],
+  "reject": [
+    { "why": "carries a caller name", "data": { "version": "1", "type": "call", "eventId": "0b6f2a54-3c1d-4e8a-9f10-2a3b4c5d6e7f", "createdAt": "1000", "expiresAt": "46000", "caller": "Mum" } },
+    { "why": "carries a room id", "data": { "version": "1", "type": "call", "eventId": "0b6f2a54-3c1d-4e8a-9f10-2a3b4c5d6e7f", "createdAt": "1000", "expiresAt": "46000", "room": "1c7e3b65-4d2e-4f9b-8a21-3b4c5d6e7f80" } },
+    { "why": "message wake type", "data": { "version": "1", "type": "encrypted-activity", "eventId": "0b6f2a54-3c1d-4e8a-9f10-2a3b4c5d6e7f", "createdAt": "1000", "expiresAt": "46000" } },
+    { "why": "unknown version", "data": { "version": "2", "type": "call", "eventId": "0b6f2a54-3c1d-4e8a-9f10-2a3b4c5d6e7f", "createdAt": "1000", "expiresAt": "46000" } },
+    { "why": "id is not a canonical uuid", "data": { "version": "1", "type": "call", "eventId": "not-a-uuid", "createdAt": "1000", "expiresAt": "46000" } },
+    { "why": "lives longer than 45 s", "data": { "version": "1", "type": "call", "eventId": "0b6f2a54-3c1d-4e8a-9f10-2a3b4c5d6e7f", "createdAt": "1000", "expiresAt": "46001" } },
+    { "why": "already expired", "data": { "version": "1", "type": "call", "eventId": "0b6f2a54-3c1d-4e8a-9f10-2a3b4c5d6e7f", "createdAt": "100", "expiresAt": "2000" } },
+    { "why": "created in the future", "data": { "version": "1", "type": "call", "eventId": "0b6f2a54-3c1d-4e8a-9f10-2a3b4c5d6e7f", "createdAt": "9000", "expiresAt": "50000" } },
+    { "why": "missing expiry", "data": { "version": "1", "type": "call", "eventId": "0b6f2a54-3c1d-4e8a-9f10-2a3b4c5d6e7f", "createdAt": "1000" } }
+  ]
+}

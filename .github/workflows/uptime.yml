@@ -1,0 +1,31 @@
+name: Uptime check
+
+# Every 10 minutes: keeps the free relay instance awake and fails (GitHub emails the owner) when it is down or not ready.
+# No third-party monitor, no secrets; it only reads two public status endpoints.
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Health and readiness
+        run: |
+          set -eu
+          base="https://k3ncrypt.onrender.com"
+          # A sleeping instance needs up to a minute to wake: retry before calling it down.
+          for path in /api/health /api/ready; do
+            ok=0
+            for attempt in 1 2 3 4 5 6; do
+              code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$base$path" || true)
+              if [ "$code" = "200" ]; then ok=1; break; fi
+              sleep 15
+            done
+            echo "$path -> $code"
+            [ "$ok" = 1 ] || exit 1
+          done

@@ -3,6 +3,7 @@ import { STORAGE_FULL_MESSAGE, StorageFullError } from '../db/storageCaps';
 import { onSafe, type Ack } from './safeAck';
 import { recordAdmittedPushRoute } from '../push/privateWake';
 import { requestCallWake, validWakeId } from '../push/callWake';
+import { countEvent, countJoinRejection } from '../operations/metrics';
 import { randomUUID } from 'crypto';
 import getClientInstance from "./clients";
 import channelValid from "../api/chatHash/utils/validateChannel";
@@ -273,7 +274,7 @@ const connectionListener = (socket: CustomSocket, io) => {
   onSafe(socket, "chat-join", async (data: any, ack: Ack) => {
     if (!controlEventLimiter.consume(socket.id)) { ack({ error: 'Rate limit exceeded.' }); return; } // M3e
     if (socket.muxConnectionGeneration) { ack({ error: 'Legacy room join is unavailable on a multiplexed connection.' }); return; }
-    const rejectJoin = (error: string, code: string) => ack(process.env.NODE_ENV === 'production' ? { error } : { error, code });
+    const rejectJoin = (error: string, code: string) => { countJoinRejection(code); ack(process.env.NODE_ENV === 'production' ? { error } : { error, code }); };
     const { userID, channelID, controlCapability, routingProof, deviceAuthorizationProof, proofNonce, protocolFeatures } = data || {};
     const parsedFeatures = parseProtocolFeatures(protocolFeatures);
     if (!data || typeof data !== 'object' || Array.isArray(data) ||
@@ -383,6 +384,7 @@ const connectionListener = (socket: CustomSocket, io) => {
     const peerFeatures = await notifyRoomPeerFeatures(socket, channelID, userID, io);
     if (!currentLegacyOwner(socket)) { rejectJoin('Room owner changed; retry the connection.', 'room-transport-conflict'); return; }
     ack({ status: 'accepted', peerFeatures });
+    countEvent('join_accepted');
     if (socket.accountIdentityReference && socket.deviceId && socket.deviceTrustEpoch) {
       // Remembers which room route this device admitted, so a later wake-up can find its token. No-op unless push is configured.
       recordAdmittedPushRoute(db.getDatabase(), { account: socket.accountIdentityReference, device: socket.deviceId, epoch: socket.deviceTrustEpoch,
@@ -555,6 +557,7 @@ const connectionListener = (socket: CustomSocket, io) => {
     const room = socket.channelID; const recipient = raw.recipientRoutingId as string;
     const present = !!(legacyRoomOwner(room, recipient, io) ?? muxRoomOwner(room, recipient));
     ack({ status: 'accepted', peer: present ? 'present' : 'absent' });
+    if (kind === 'ring') countEvent('call_wake_requested');
     requestCallWake(db.getDatabase(), { room, recipient, callerAccount: socket.accountIdentityReference!, callerDevice: socket.deviceId!, wakeId: raw.wakeId as string, kind: kind as 'ring' | 'cancel' });
   });
 

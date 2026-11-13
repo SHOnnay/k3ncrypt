@@ -37,12 +37,36 @@ Local test notes (Windows):
 |---|---|---|---|
 | 1 | Truth pass | **Done 2026-11-12** (branch `chore/truth-pass`) | see below |
 | 3 | Remove-contact, relay + web | **Done 2026-11-12** on branch `beta-now` (= `main` + call-wake commits). Not deployed. | [integration test] [two-browser E2E] |
-| 4 | Remove-contact, Android | Next. Needs the relay change deployed first, then [physical device]. | — |
-| 5 | Call wake, web tests | Pending. Relay `34590d5` and web `f2d2d50` exist on local branch `feat/call-wake` (not pushed); web part is untested. | [read code] |
-| 6 | Call wake, Android | Pending | — |
-| 7 | Unread counts in the vault | Pending | — |
+| 4 | Remove-contact, Android | Code done (`195a763`, private repo `android/n1`). **Waits for the relay release and the phone.** | [unit test] only |
+| 5 | Call wake, web | **Done 2026-11-13** (`afd5f48`). Found and fixed: the wake was sent to the caller's own address, so it never worked. | [unit test] [two-browser E2E] |
+| 6 | Call wake, Android (callee and caller) | Code done (`e5b28ad`). **Waits for the relay release, `K3NCRYPT_CALL_WAKE_ENABLED=true` and the phone.** | [unit test] only |
+| 7 | Unread counts in the vault | Web done (`1b6dc07`) [two-browser E2E]; Android code done (`0576fbf`), waits for the phone | web done |
+| 10 | Android hardening on by default | Code done (`637405a`): screenshot block and app lock default on, toggles kept; version A7 `0.1.0-beta.30-a7` | [unit test] only |
+| 8 | E2E release gate | `scripts/e2e-gate.sh` (14 specs, fresh relay each, durable routing on). Needs 3 green passes in a row. | in progress |
 | 2 | Domain + own web origin | Waiting for the owner's domain decision | — |
-| 8–18 | Beta-stable and parity | Pending | — |
+| 9, 11–18 | Fixtures parity, mux, monitoring, parity features | Pending | — |
+
+### What is blocked on the owner (2026-11-13)
+1. **Push.** A local hook blocks `git push` for the agent. Nothing since `66b4acc` is on GitHub, so nothing can be deployed (Render builds from GitHub `main`). Run: `git -C C:/Users/onnoy/k3ncrypt push origin main beta-now` and `git -C C:/Users/onnoy/k3ncrypt-android push origin android/n1`. Then say whether `beta-now` may be fast-forwarded into `main` for the release.
+2. **Release B1 (relay + web, one Render deploy; they ship together from this repo).** No migration, no wire change that old clients cannot read (new relay events are additive; call wake stays OFF until step 3). Rollback = `66b4acc`. Runbook: maintenance on → deploy → `/api/health`, `/api/ready` → maintenance off → smoke test.
+3. **Call wake switch:** set `K3NCRYPT_CALL_WAKE_ENABLED=true` on Render only after B1 is live and the A7 APK is on the phone.
+4. **Phone session** (one USB session): the checklist in "Phone checklist A7" below.
+
+### Phone checklist A7 (after B1 is live)
+Build: `powershell -File android\scripts\build-release-apk.ps1 -Out C:\Users\onnoy\OneDrive\Desktop\K3NCRYPT-A7.apk`, then `adb install -r`. A second device or the web client is the other side. Record pass/fail and anything odd for each line.
+1. Upgrade install over A6 keeps chats and checks; Settings shows 0.1.0-beta.30-a7.
+2. Hardening: a screenshot inside a chat is blocked; after 60 s in the background the app asks for the device unlock; both toggles in Settings work.
+3. Unread: receive 3 messages in a chat that is not open, force-stop the app, reopen and unlock → badge still shows 3; open the chat → badge gone; reopen → still gone.
+4. Remove contact (from Contacts menu): chat disappears; "Removed. Finishing on the server…" goes away within seconds; force-stop and reopen → still gone. From the other side: send a message → it stays "Sent", never "Delivered"; call → rings out. The phone shows nothing and does not ring.
+5. Remove contact in airplane mode: chat disappears at once; turn the network back on, unlock → the "finishing" line clears.
+6. Call wake, app killed, screen locked: call from the other side → phone rings with "Incoming K3NCRYPT call / Unlock to see who is calling" (full screen or heads-up). Unlock to answer → "Connecting to your caller…" → normal incoming-call screen with the caller's name → Accept → two-way audio. Repeat 10 times; count successes.
+7. Same, but the caller cancels before the phone is unlocked → ringing stops, "Missed K3NCRYPT call" notification.
+8. Same, nobody touches the phone → ringing stops by itself after about 45 s, missed-call notification; the caller sees "No answer" after 60 s.
+9. Decline from the notification → ringing stops; the caller rings out.
+10. App in the background (not killed), phone unlocked: call → heads-up rings → tap → incoming-call screen appears without a new unlock.
+11. Phone calls a closed web tab or a second phone that is asleep: "Calling… their phone may need to wake"; cancel works; when the other side opens the app the call rings there.
+12. Android 14+: Settings → Apps → K3NCRYPT → "Full screen notifications": test line 6 with it on and with it off.
+13. Battery saver on: repeat line 6 once.
 
 ### Milestone 3 record (remove contact, relay + web)
 Not pushed: `main` is 1 ahead of origin (`4acd3b4`, truth pass); a local hook blocks `git push`, so the owner runs `git push origin main`. Until then the site still shows the APK link. `beta-now` is local only.
