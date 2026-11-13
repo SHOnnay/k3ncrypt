@@ -42,9 +42,14 @@ Local test notes (Windows):
 | 6 | Call wake, Android (callee and caller) | Code done (`e5b28ad`). **Waits for the relay release, `K3NCRYPT_CALL_WAKE_ENABLED=true` and the phone.** | [unit test] only |
 | 7 | Unread counts in the vault | Web done (`1b6dc07`) [two-browser E2E]; Android code done (`0576fbf`), waits for the phone | web done |
 | 10 | Android hardening on by default | Code done (`637405a`): screenshot block and app lock default on, toggles kept; version A7 `0.1.0-beta.30-a7` | [unit test] only |
-| 8 | E2E release gate | `scripts/e2e-gate.sh` (14 specs, fresh relay each, durable routing on). Needs 3 green passes in a row. | in progress |
+| 8 | E2E release gate | **Green 3 passes in a row, 2026-11-14**, on `47c3f5e`: `scripts/e2e-gate.sh 3` (14 specs, fresh relay each, durable routing on). Run it from a separate worktree: editing files in the checkout under test restarts its dev servers and makes specs fail (that is what the earlier red pass was). | [two-browser E2E] |
+| 9 | Shared fixtures | `call-wake.json` read by Jest and Kotlin; `scripts/check-fixtures.sh` keeps both repos' copies identical (now identical). File-receive gate parity: Android `AndroidFileOpenGateTest` already requires a checked contact. | [unit test] |
+| 12 | Monitoring | `GET /api/metrics` (needs `K3NCRYPT_METRICS_TOKEN` on Render, otherwise 404), identifier-free counters; `.github/workflows/uptime.yml` every 10 min. | [unit test] |
+| — | A7 APK built | `C:\Users\onnoy\OneDrive\Desktop\K3NCRYPT-A7.apk`, signer `65:E1:74:59…D2:CF`, sha256 `8586d657…a8be`. **Not installed, not published.** | — |
 | 2 | Domain + own web origin | Waiting for the owner's domain decision | — |
-| 9, 11–18 | Fixtures parity, mux, monitoring, parity features | Pending | — |
+| 11–13 | Multiplexed relay | Not started. Known gap: `e2e/mux-stage1b.spec.ts` fails at the reload handoff with `Room subscription rejected.` (see `docs/CONVERSATION_PERSISTENCE_REPAIR_ACCEPTANCE.md`). Beta limit stays: at most 8 chats connected at once on Android. | — |
+| 14–18 | Schema v2 + padding, replies/reactions, voice notes, TURN, backup v1 | Not started. Next session starts with 14 (design + fixtures only): extend `RoomMessageV1` kinds; today an unknown kind is a hard reject (`modernConversation.ts:1829`, `RoomMessageV1.kt`), so readers must ship first. | — |
+| D | Own web origin + build hash | Waiting for the domain decision. | — |
 
 ### What is blocked on the owner (2026-11-13)
 1. **Push.** A local hook blocks `git push` for the agent. Nothing since `66b4acc` is on GitHub, so nothing can be deployed (Render builds from GitHub `main`). Run: `git -C C:/Users/onnoy/k3ncrypt push origin main beta-now` and `git -C C:/Users/onnoy/k3ncrypt-android push origin android/n1`. Then say whether `beta-now` may be fast-forwarded into `main` for the release.
