@@ -32,6 +32,7 @@ import { deliverNotification } from '../product/notifications';
 import { addUnread, clearUnread, planIncomingMessage, shouldOfferNotificationPermission, tabTitle, totalUnread, type UnreadCounts } from '../product/alerts';
 import { readMutedChats, setChatMuted as persistChatMuted } from '../product/mutedChats';
 import { drainRemovalOutbox, purgeProductRecords } from '../product/contactRemoval';
+import { readUnread, sanitizeUnread, writeUnread } from '../product/unreadStore';
 import { playMessageSound } from '../utils/sounds';
 import { prepareHeldTextRetry, prepareMessageAcceptance, readMessages, writeMessages } from '../product/messageStore';
 import { createRoomState, updateRoomState, type RoomState } from '../product/roomState';
@@ -1921,7 +1922,23 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     document.addEventListener('visibilitychange', clearIfSeen);
     return () => document.removeEventListener('visibilitychange', clearIfSeen);
   }, [channelHash, unreadCounts]);
-  useEffect(() => { if (accountState !== 'ready') setUnreadCounts({}); }, [accountState]);
+  // Unread counts live in the encrypted vault, so they survive reload and restart and vanish from memory on lock.
+  const unreadLoadedFor = useRef<BrowserSecureStorage>();
+  useEffect(() => {
+    if (!vault || accountState !== 'ready') { unreadLoadedFor.current = undefined; setUnreadCounts({}); return undefined; }
+    let active = true;
+    void readUnread(vault).then((saved) => {
+      if (!active) return;
+      unreadLoadedFor.current = vault;
+      // Messages that arrived while the saved counts were loading are added, not lost.
+      setUnreadCounts((current) => sanitizeUnread(Object.fromEntries([...new Set([...Object.keys(saved), ...Object.keys(current)])].map((roomId) => [roomId, (saved[roomId] ?? 0) + (current[roomId] ?? 0)]))));
+    });
+    return () => { active = false; };
+  }, [vault, accountState]);
+  useEffect(() => {
+    if (!vault || accountState !== 'ready' || unreadLoadedFor.current !== vault || vault.isLocked()) return;
+    void writeUnread(vault, unreadCounts).catch(() => undefined);
+  }, [unreadCounts, vault, accountState]);
   const unreadTotal = totalUnread(unreadCounts);
   useEffect(() => {
     const base = document.title.replace(/^\(\d+\+?\)\s/, '');
