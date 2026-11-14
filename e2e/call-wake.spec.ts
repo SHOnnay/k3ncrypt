@@ -7,6 +7,19 @@ import { connectedPair } from './usabilityHelpers';
  */
 test.use({ launchOptions: { args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required'] } });
 const passphrase = 'alpha-family-existing-account-2026';
+// Production runs the multiplexed relay for checked contacts, so this spec must pass on both transports:
+//   PLAYWRIGHT_MUX_STAGE1=true npx playwright test e2e/call-wake.spec.ts
+const MUX = process.env.PLAYWRIGHT_MUX_STAGE1 === 'true';
+const JOIN = ['chat-join', 'mux-subscribe'], WAKE = ['call-wake', 'mux-call-wake'], SIGNAL = ['webrtc-signal', 'mux-send-signal'];
+const WAKE_KEYS = MUX ? ['deviceAuthorizationProof', 'kind', 'proofNonce', 'proofOperation', 'roomId', 'version', 'wakeId']
+  : ['deviceAuthorizationProof', 'kind', 'proofNonce', 'proofOperation', 'recipientRoutingId', 'version', 'wakeId'];
+/** A message each way gives the room the established session the multiplexed transport requires. */
+async function warmUp(alice: Page, bob: Page) {
+  for (const [from, to, text] of [[alice, bob, 'warm up one'], [bob, alice, 'warm up two']] as const) {
+    await from.locator('#msg-input').fill(text); await from.locator('#send-btn').click();
+    await expect(to.locator('#messages-area')).toContainText(text, { timeout: 30_000 });
+  }
+}
 async function startAudioCall(page: Page) {
   await page.getByRole('button', { name: 'Calls', exact: true }).click();
   const button = page.getByRole('button', { name: 'Start audio call', exact: true });
@@ -36,27 +49,29 @@ test('a call to a closed app waits, sends only a content-free wake request, and 
   const { a, b, alice, bob } = await connectedPair(browser);
   try {
     // A fresh socket for Alice, so every frame of the call is observed from the start.
+    await warmUp(alice, bob);
     const events = sentEvents(alice);
     await comeBack(alice);
     await expect(alice.locator('.chat-header')).toContainText('Bob', { timeout: 30_000 });
     await bob.goto('about:blank');
-    await expect.poll(() => events.some(([name]) => name === 'chat-join'), { timeout: 30_000 }).toBe(true);
+    await expect.poll(() => events.some(([name]) => JOIN.includes(name)), { timeout: 30_000 }).toBe(true);
     await alice.waitForTimeout(1_500);
 
     await startAudioCall(alice);
     await expect(alice.locator('#call-status')).toHaveText('Calling… their phone may need to wake', { timeout: 15_000 });
-    const wakes = events.filter(([name]) => name === 'call-wake');
+    const wakes = events.filter(([name]) => WAKE.includes(name));
     expect(wakes).toHaveLength(1);
     const ring = wakes[0][1];
-    expect(Object.keys(ring).sort()).toEqual(['deviceAuthorizationProof', 'kind', 'proofNonce', 'proofOperation', 'recipientRoutingId', 'version', 'wakeId']);
+    expect(Object.keys(ring).sort()).toEqual(WAKE_KEYS);
+    expect(wakes[0][0]).toBe(MUX ? 'mux-call-wake' : 'call-wake');
     expect(ring).toMatchObject({ version: 1, kind: 'ring', proofOperation: 'relay:signal' });
     expect(String(ring.wakeId)).toMatch(/^[0-9a-f-]{36}$/);
     // Nothing about the call itself has been sent yet.
-    expect(events.filter(([name]) => name === 'webrtc-signal')).toHaveLength(0);
+    expect(events.filter(([name]) => SIGNAL.includes(name))).toHaveLength(0);
 
     await comeBack(bob);
     await bob.getByRole('button', { name: 'Accept call', exact: true }).waitFor({ state: 'visible', timeout: 60_000 });
-    expect(events.filter(([name]) => name === 'webrtc-signal').length).toBeGreaterThan(0);
+    expect(events.filter(([name]) => SIGNAL.includes(name)).length).toBeGreaterThan(0);
     await bob.getByRole('button', { name: 'Accept call', exact: true }).click();
     await expect(alice.locator('#call-status')).toHaveText('Connected', { timeout: 60_000 });
     await alice.getByRole('button', { name: 'End call', exact: true }).click();
@@ -68,21 +83,22 @@ test('cancelling while waiting sends no invite and withdraws the wake request wi
   test.setTimeout(120_000);
   const { a, b, alice, bob } = await connectedPair(browser);
   try {
+    await warmUp(alice, bob);
     const events = sentEvents(alice);
     await comeBack(alice);
     await expect(alice.locator('.chat-header')).toContainText('Bob', { timeout: 30_000 });
     await bob.goto('about:blank');
-    await expect.poll(() => events.some(([name]) => name === 'chat-join'), { timeout: 30_000 }).toBe(true);
+    await expect.poll(() => events.some(([name]) => JOIN.includes(name)), { timeout: 30_000 }).toBe(true);
     await alice.waitForTimeout(1_500);
 
     await startAudioCall(alice);
     await expect(alice.locator('#call-status')).toHaveText('Calling… their phone may need to wake', { timeout: 15_000 });
     await alice.getByRole('button', { name: 'Cancel call', exact: true }).click();
     await expect(alice.locator('.call-info')).not.toBeVisible({ timeout: 10_000 });
-    await expect.poll(() => events.filter(([name]) => name === 'call-wake').length, { timeout: 10_000 }).toBe(2);
-    const [ring, cancel] = events.filter(([name]) => name === 'call-wake').map(([, payload]) => payload);
+    await expect.poll(() => events.filter(([name]) => WAKE.includes(name)).length, { timeout: 10_000 }).toBe(2);
+    const [ring, cancel] = events.filter(([name]) => WAKE.includes(name)).map(([, payload]) => payload);
     expect(cancel).toMatchObject({ kind: 'cancel', wakeId: ring.wakeId });
-    expect(events.filter(([name]) => name === 'webrtc-signal')).toHaveLength(0);
+    expect(events.filter(([name]) => SIGNAL.includes(name))).toHaveLength(0);
 
     // Bob returns later: no call is waiting for him, and Alice can call again straight away.
     await comeBack(bob);

@@ -1,5 +1,7 @@
 import { onSafe, type Ack } from './safeAck';
 import { recordAdmittedPushRoute } from '../push/privateWake';
+import { requestCallWake, validWakeId } from '../push/callWake';
+import { countEvent } from '../operations/metrics';
 import { authorizeCurrentRouting, bindVerifiedRouting, boundRoutingDevice, currentRoutingIdentity, durableRoutingEnabled } from '../security/routingOwnership';
 import { randomUUID } from 'crypto';
 import type { Server } from 'socket.io';
@@ -715,6 +717,28 @@ export const registerMultiplexedRelay = (socket: CustomSocket, io: MuxServer): v
     if (!await routeRoomSignal(socket, subscription.roomId, subscription.routingAddress, subscription.peerRoutingAddress, envelope, io)) { reject(); return; }
     ack({ version: MUX_PROTOCOL_VERSION, status: 'routed', roomId: subscription.roomId });
   }, ack, 'Multiplexed call signal rejected.'));
+
+  // Content-free incoming-call wake-up over the multiplexed relay. The recipient is this room's subscribed peer, never a
+  // client-supplied address. Same uniform answer and fire-and-forget push as the legacy `call-wake` event.
+  onSafe(socket, 'mux-call-wake', (payload: unknown, ack: Ack) => enqueue(socket, async () => {
+    const body = payload as Record<string, unknown> | null;
+    const roomId = body?.roomId;
+    const subscription = typeof roomId === 'string' ? await currentSubscription(socket, roomId) : undefined;
+    const reject = (): void => ack({ error: 'Multiplexed call wake rejected.' });
+    const kind = body?.kind;
+    if (!muxRelayEnabled() || !body || typeof body !== 'object' || Array.isArray(body) ||
+        !exactKeys(body, ['deviceAuthorizationProof', 'kind', 'proofNonce', 'proofOperation', 'roomId', 'version', 'wakeId']) || body.version !== MUX_PROTOCOL_VERSION ||
+        body.proofOperation !== 'relay:signal' || (kind !== 'ring' && kind !== 'cancel') || !validWakeId(body.wakeId) || !subscription ||
+        !socket.muxConnectionGeneration || !socket.accountIdentityReference || !socket.deviceId) { reject(); return; }
+    const resource: DeviceResourceContext = { conversationId: subscription.roomId, routingAddress: subscription.routingAddress,
+      peerRoutingAddress: subscription.peerRoutingAddress, connectionGeneration: subscription.connectionGeneration };
+    if (!await verifyMuxCarrier(socket, body as unknown as ProofCarrier, 'relay:signal', resource, false) || !await currentSubscription(socket, subscription.roomId)) { reject(); return; }
+    const present = !!(legacyRoomOwner(subscription.roomId, subscription.peerRoutingAddress, io) ?? muxRoomOwner(subscription.roomId, subscription.peerRoutingAddress));
+    ack({ version: MUX_PROTOCOL_VERSION, status: 'accepted', roomId: subscription.roomId, peer: present ? 'present' : 'absent' });
+    if (kind === 'ring') countEvent('call_wake_requested');
+    requestCallWake(db.getDatabase(), { room: subscription.roomId, recipient: subscription.peerRoutingAddress, callerAccount: socket.accountIdentityReference,
+      callerDevice: socket.deviceId, wakeId: body.wakeId as string, kind });
+  }, ack, 'Multiplexed call wake rejected.'));
 
   onSafe(socket, 'mux-mailbox-replay', (payload: unknown, ack: Ack) => enqueue(socket, async () => {
     const body = payload as Record<string, unknown> | null;

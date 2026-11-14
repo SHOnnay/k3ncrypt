@@ -386,6 +386,46 @@ export class MultiplexedRelayConnection {
     if (!room || body.connectionGeneration !== this.socket.id || body.connectionGeneration !== this.authenticatedGeneration ||
         body.subscriptionNonce !== room.nonce || body.peerRoutingAddress !== room.peerRoutingAddress || !room.expiresAt || room.expiresAt <= Date.now()) return;
     room.peerFeatures = new Set(body.peerFeatures as string[]);
+    // The relay sends this when the contact (re)joins the room: anyone waiting for a sleeping phone can go on.
+    const waiters = this.peerJoinWaiters.get(room.roomId);
+    if (waiters) for (const waiter of [...waiters]) waiter();
+  }
+
+  private readonly peerJoinWaiters = new Map<string, Set<() => void>>();
+
+  /** Resolves true when the contact joins this room, false on timeout or cancel. */
+  public waitForPeerJoin(roomId: string, timeoutMs: number): { promise: Promise<boolean>; cancel: () => void } {
+    let finish: (joined: boolean) => void = () => undefined;
+    const promise = new Promise<boolean>((resolve) => { finish = resolve; });
+    const waiters = this.peerJoinWaiters.get(roomId) ?? new Set<() => void>();
+    this.peerJoinWaiters.set(roomId, waiters);
+    const onJoin = (): void => done(true);
+    const timer = setTimeout(() => done(false), timeoutMs);
+    const done = (joined: boolean): void => { clearTimeout(timer); waiters.delete(onJoin); if (!waiters.size) this.peerJoinWaiters.delete(roomId); finish(joined); };
+    waiters.add(onJoin);
+    return { promise, cancel: () => done(false) };
+  }
+
+  /**
+   * Content-free call wake-up over the multiplexed relay. The relay takes the recipient from this room's own subscription,
+   * so nothing but the room, a random id and a one-time proof is sent. Any failure or slow answer is 'unknown'.
+   */
+  public async requestCallWake(roomId: string, kind: 'ring' | 'cancel', wakeId: string, timeoutMs = 1_500): Promise<'present' | 'absent' | 'unknown'> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const room = this.requireRoom(roomId);
+      await this.ensureAuthenticated();
+      const generation = this.socket.id;
+      if (!generation || generation !== this.authenticatedGeneration || !room.nonce || !room.expiresAt || room.expiresAt <= Date.now() || !this.proofProvider) return 'unknown';
+      const proof = await this.proofProvider.acquire('relay:signal', { conversationId: room.roomId, routingAddress: room.localRoutingAddress,
+        peerRoutingAddress: room.peerRoutingAddress, connectionGeneration: generation });
+      const response = await Promise.race([
+        this.emitAck('mux-call-wake', { version: MUX_RELAY_PROTOCOL_VERSION, roomId: room.roomId, kind, wakeId, ...proof, proofOperation: 'relay:signal' }),
+        new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), timeoutMs); }),
+      ]);
+      if (response?.status !== 'accepted' || response.roomId !== room.roomId) return 'unknown';
+      return response.peer === 'present' ? 'present' : response.peer === 'absent' ? 'absent' : 'unknown';
+    } catch { return 'unknown'; } finally { if (timer !== undefined) clearTimeout(timer); }
   }
 
   private async acceptRoomSuspended(payload: unknown): Promise<void> {
@@ -557,6 +597,11 @@ export class MultiplexedRoomTransportManager implements TransportManager, Transp
     return this.connection.sendEnvelope(this.roomId, channel, envelope, this.authenticatedMessageVersionFloor);
   }
   public activeTransport(): Transport { return this; }
+  public requestCallWake(kind: 'ring' | 'cancel', wakeId: string, recipientRoutingId: string, timeoutMs?: number): Promise<'present' | 'absent' | 'unknown'> {
+    if (recipientRoutingId !== this.peerRoutingAddress) return Promise.resolve('unknown');
+    return this.connection.requestCallWake(this.roomId, kind, wakeId, timeoutMs);
+  }
+  public waitForPeerJoin(timeoutMs: number): { promise: Promise<boolean>; cancel: () => void } { return this.connection.waitForPeerJoin(this.roomId, timeoutMs); }
   public connectionState(): TransportConnectionState { return this.connection.connectionState(); }
   public capabilities() { return { envelopes: true, blobs: false, localOnly: false }; }
   public readonly requiresRoomMessageV1 = true;
