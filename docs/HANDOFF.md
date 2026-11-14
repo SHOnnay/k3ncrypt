@@ -51,6 +51,18 @@ Local test notes (Windows):
 | 14–18 | Schema v2 + padding, replies/reactions, voice notes, TURN, backup v1 | Not started. Next session starts with 14 (design + fixtures only): extend `RoomMessageV1` kinds; today an unknown kind is a hard reject (`modernConversation.ts:1829`, `RoomMessageV1.kt`), so readers must ship first. | — |
 | D | Own web origin + build hash | Waiting for the domain decision. | — |
 
+### Release B1 record — live 2026-11-14 [production]
+- Production runs **`fe4e062`** (relay + web), deployed by commit id through the Render API. `origin/main` is still `4acd3b4`: the agent cannot push, so the owner must run `git -C C:/Users/onnoy/k3ncrypt push origin main` (local `main` is already at the release). Until then "deploy latest main" on Render would roll production back. Rollback target: `66b4acc`.
+- Backup before the release: `C:\Users\onnoy\k3ncrypt-secrets\backups\k3ncrypt-20261114T121614Z.ejsonl.gz` (15 collections, 1,386 documents, read back and counted, sha256 `7aa0f6f454ab…`). Format: gzip of EJSON lines, written by `k3ncrypt-secrets\backup.ps1` (there is no `mongodump` on this PC). The Mongo URI was not in Credential Manager, so the script read it from the Render service environment through the stored Render API key, in memory only.
+- Cutover: maintenance on → deploy → health 200, ready 200, every other route 503 → maintenance off → deploy → health 200, ready 200, `/` 200 with HSTS + CSP + COOP, new bundle served (remove-contact and call-wake copy present, no third-party origins), `/api/metrics` 404 without a token. No migration.
+- `K3NCRYPT_CALL_WAKE_ENABLED` is still unset (off). It is to be turned on only with A7 on the phone and the checklist running.
+- Live site `shonnay.github.io/k3ncrypt`: no APK link, no `.apk` mention.
+- Old GitHub Release assets: all three APKs downloaded to `C:\Users\onnoy\k3ncrypt-release-archive\<tag>\` (sizes verified) and deleted from GitHub. Releases and tags remain, with 0 assets.
+- ghcr.io `shonnay/k3ncrypt` (public, tags `main`, `nightly`): scanned all 9 layers (14,122 files) and the image config. No `.env`, key, keystore or credentials file; no secret-looking env names or build args; the only match is the system CA bundle. **Not deleted**: the `gh` token lacks `delete:packages`. Owner: GitHub → Packages → k3ncrypt → Package settings → Delete.
+- Helper scripts added outside the repos: `k3ncrypt-secrets\render.ps1` (status / env for the two safe flags / deploy / wait), `backup.ps1`, `smoke.ps1`, `archive-release-assets.sh`.
+- Phone session **not done**: the phone was plugged in but adb showed `unauthorized` (the "Allow USB debugging?" prompt needs a tap). A7 is not installed.
+- Domain: not chosen. Plan with the stop point before DNS: `docs/releases/DOMAIN_CUTOVER_PLAN.md`.
+
 ### What is blocked on the owner (2026-11-13)
 1. **Push.** A local hook blocks `git push` for the agent. Nothing since `66b4acc` is on GitHub, so nothing can be deployed (Render builds from GitHub `main`). Run: `git -C C:/Users/onnoy/k3ncrypt push origin main beta-now` and `git -C C:/Users/onnoy/k3ncrypt-android push origin android/n1`. Then say whether `beta-now` may be fast-forwarded into `main` for the release.
 2. **Release B1 (relay + web, one Render deploy; they ship together from this repo).** No migration, no wire change that old clients cannot read (new relay events are additive; call wake stays OFF until step 3). Rollback = `66b4acc`. Runbook: maintenance on → deploy → `/api/health`, `/api/ready` → maintenance off → smoke test.
