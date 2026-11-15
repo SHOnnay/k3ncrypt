@@ -410,7 +410,7 @@ export class MultiplexedRelayConnection {
    * Content-free call wake-up over the multiplexed relay. The relay takes the recipient from this room's own subscription,
    * so nothing but the room, a random id and a one-time proof is sent. Any failure or slow answer is 'unknown'.
    */
-  public async requestCallWake(roomId: string, kind: 'ring' | 'cancel', wakeId: string, timeoutMs = 1_500): Promise<'present' | 'absent' | 'unknown'> {
+  public async requestCallWake(roomId: string, kind: 'ring' | 'cancel', wakeId: string, timeoutMs = 4_000): Promise<'present' | 'absent' | 'unknown'> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const room = this.requireRoom(roomId);

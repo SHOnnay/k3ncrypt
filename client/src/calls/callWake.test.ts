@@ -64,6 +64,35 @@ describe('call wake-up for a contact whose phone may be closed', () => {
     expect(await pending).toBe('cancelled'); expect(c.value.waitForPeerJoin).not.toHaveBeenCalled();
   });
 
+  it('re-sends the invitation each time the contact joins while unanswered, and stops once the call settles', async () => {
+    const c = conversation('unknown'); const coordinator = new CallWakeCoordinator(() => 'wake-1');
+    expect(await coordinator.prepare(c.value, jest.fn())).toBe('invite');
+    const resend = jest.fn(async () => true);
+    const loop = coordinator.reinviteOnJoin(c.value, resend, 60_000);
+    await flush(); c.peerJoins(); await flush(); await flush();
+    expect(resend).toHaveBeenCalledTimes(1);
+    c.peerJoins(); await flush(); await flush();
+    expect(resend).toHaveBeenCalledTimes(2);
+    coordinator.settle();
+    expect(await loop).toBe(2);
+    c.peerJoins(); await flush();
+    expect(resend).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops re-sending when there is nothing left to re-send, when cancelled, or when a refused duplicate is followed by timeout', async () => {
+    const c = conversation('present'); const coordinator = new CallWakeCoordinator(() => 'wake-1');
+    await coordinator.prepare(c.value, jest.fn());
+    const done = coordinator.reinviteOnJoin(c.value, async () => false, 60_000);
+    await flush(); c.peerJoins(); expect(await done).toBe(0);
+    await coordinator.prepare(c.value, jest.fn());
+    const refused = jest.fn(async () => { throw new Error('duplicate'); });
+    const cancelled = coordinator.reinviteOnJoin(c.value, refused, 60_000);
+    await flush(); c.peerJoins(); await flush(); await flush();
+    expect(refused).toHaveBeenCalledTimes(1);
+    expect(coordinator.cancel()).toBe('invited');
+    expect(await cancelled).toBe(0);
+  });
+
   it('a new call replaces an old attempt, a settled call has nothing to cancel, and an old ring is not cancelled late', async () => {
     const first = conversation('absent'), second = conversation('present'); let n = 0; let clock = 0;
     const coordinator = new CallWakeCoordinator(() => `wake-${++n}`, () => clock);

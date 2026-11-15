@@ -1438,7 +1438,10 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     });
     if (decision === 'cancelled') return;
     if (decision === 'no-answer') { setCallActive(false); setCallLifecycleState('timeout'); setCallStatus('No answer'); return; }
-    if (mediaMode) await composition.invite(mediaMode); else await composition.invite();
+    const call = await composition.invite(mediaMode ?? 'audio', { keepRingingIfUndelivered: true });
+    // The relay keeps no call signals: if the contact was not really reachable when the invite went out (asleep, locked,
+    // or the wake answer was slow), send the same invitation again each time they join while the call is unanswered.
+    void callWake.current.reinviteOnJoin(conversation, () => composition.reinvite?.(call.callId) ?? Promise.resolve(false), Math.max(0, call.expiresAt - Date.now()));
   }, []);
 
   // Start call

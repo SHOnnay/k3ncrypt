@@ -41,7 +41,9 @@ export interface AuthenticatedCallComposition {
   readonly repository: MemoryCallRepository;
   /** Starts a call only after the authenticated identity binding is derived. */
   readonly assertVerifiedContact?: () => Promise<void>;
-  readonly invite: (mediaMode?: 'audio' | 'video') => Promise<CallSession>;
+  readonly invite: (mediaMode?: 'audio' | 'video', options?: { keepRingingIfUndelivered?: boolean }) => Promise<CallSession>;
+  /** Re-sends the invitation of an unanswered outgoing call (the contact just joined). False when nothing was sent. */
+  readonly reinvite?: (callId: string) => Promise<boolean>;
   readonly accept: (callId: string) => Promise<CallSession>;
   readonly reject: (callId: string) => Promise<CallSession>;
   readonly cancel: (callId: string) => Promise<CallSession>;
@@ -71,6 +73,8 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
   /** Calls milestone 2: media signals (offer, candidates) that arrive before the negotiator is attached. */
   const pendingMedia = new PendingSignals<CallSignal>();
   const sequences = new Map<string, number>();
+  /** The authenticated invite of each outgoing call, kept only to re-send it unchanged (see reinvite). */
+  const outgoing = new Map<string, CallSignal>();
   const endings = new Map<string, Promise<CallSession | undefined>>();
   const expiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const compositionStartedAt = Date.now();
@@ -87,7 +91,7 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
       if (!await input.identity.isParticipant(input.conversationId, participant.participantId) || await input.identity.getVerification(participant.participantId) !== 'verified') throw checkRequired('Verification required for calls.');
     }
   };
-  const sendEvent = async (session: CallSession, event: CallEvent, sequence: number, kind: CallSignalKind = 'control', payload?: unknown): Promise<void> => {
+  const sendEvent = async (session: CallSession, event: CallEvent, sequence: number, kind: CallSignalKind = 'control', payload?: unknown, onBuilt?: (signal: CallSignal) => void): Promise<CallSignal> => {
     // Ending a call only reduces access, so it never waits on a trust check.
     if (!TERMINAL_EVENTS.includes(event)) await assertVerifiedContact();
     if (event === 'heartbeat' || event === 'expire') {
@@ -112,7 +116,10 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
       expiresAt: event === 'invite' ? Math.min(session.expiresAt, now + CALL_SIGNAL_LIFETIME_MS) : now + CALL_SIGNAL_LIFETIME_MS,
       identityBinding: session.identityBinding,
     };
-    await signaling.send(session, { ...unsigned, payloadDigest: await signalDigest(unsigned) });
+    const signal: CallSignal = { ...unsigned, payloadDigest: await signalDigest(unsigned) };
+    onBuilt?.(signal);
+    await signaling.send(session, signal);
+    return signal;
   };
   const clearExpiry = (callId: string): void => {
     const timer = expiryTimers.get(callId);
@@ -225,7 +232,12 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
     try { updated = await service.event(signal.callId, signal.event); } catch { callSignalDiagnostic('call-state-transition-rejected'); throw new Error('Call state transition rejected.'); }
     notify(updated);
   });
-  const invite = async (mediaMode: 'audio' | 'video' = 'audio'): Promise<CallSession> => {
+  /**
+   * `keepRingingIfUndelivered`: the relay refused the invite because the contact is not in the room right now (asleep or
+   * locked phone). The call stays ringing until its normal expiry so `reinvite` can deliver the same invitation when they
+   * join. Trust checks still run first; only the transport failure is tolerated.
+   */
+  const invite = async (mediaMode: 'audio' | 'video' = 'audio', options: { keepRingingIfUndelivered?: boolean } = {}): Promise<CallSession> => {
     await assertVerifiedContact();
     if (activeCallId) throw new Error('Call already active or ringing.');
     const participants: readonly [CallParticipant, CallParticipant] = [
@@ -238,12 +250,28 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
     sequences.set(session.callId, 1);
     scheduleExpiry(session);
     notify(session);
-    try { await sendEvent(session, 'invite', 1); }
+    let built: CallSignal | undefined;
+    try { await sendEvent(session, 'invite', 1, 'control', undefined, (signal) => { built = signal; }); outgoing.set(session.callId, built!); }
     catch (error) {
+      if (options.keepRingingIfUndelivered && built) { outgoing.set(session.callId, built); return session; }
       try { const current = await service.get(session.callId); if (current && ['inviting', 'ringing'].includes(current.state)) notify(await service.event(session.callId, 'fail')); } catch { /* preserve original send failure */ }
       throw error;
     }
     return session;
+  };
+  /**
+   * The contact (re)joined the room while this outgoing call is still unanswered: their phone may have been asleep or
+   * locked when the first invite went out, and the relay keeps no call signals. Sends the identical, already
+   * authenticated invitation again (same nonce and expiry, freshly encrypted). A receiver that already has it rejects
+   * it as a replay; nothing new is created or extended. Returns whether it was sent.
+   */
+  const reinvite = async (callId: string): Promise<boolean> => {
+    const session = await service.get(callId);
+    const original = outgoing.get(callId);
+    if (!session || !original || activeCallId !== callId || !['inviting', 'ringing'].includes(session.state) || original.expiresAt <= Date.now()) return false;
+    await assertVerifiedContact();
+    await signalTransport.send(original);
+    return true;
   };
   const respond = async (callId: string, event: 'accept' | 'reject' | 'cancel'): Promise<CallSession> => {
     await assertVerifiedContact();
@@ -342,5 +370,5 @@ export const createAuthenticatedCallComposition = (input: AuthenticatedCallCompo
   };
   // Keep the transport listener alive for the lifetime of the composition.
   void unsubscribeSignals;
-  return Object.freeze({ assertVerifiedContact, service, signaling, signalTransport, repository, invite, accept: (id: string) => respond(id, 'accept'), reject: (id: string) => respond(id, 'reject'), cancel: (id: string) => respond(id, 'cancel'), end, terminateLocally, onCallUpdate, onProtocolIssue, watchVerification, sendMediaSignal, onMediaSignal });
+  return Object.freeze({ assertVerifiedContact, service, signaling, signalTransport, repository, invite, reinvite, accept: (id: string) => respond(id, 'accept'), reject: (id: string) => respond(id, 'reject'), cancel: (id: string) => respond(id, 'cancel'), end, terminateLocally, onCallUpdate, onProtocolIssue, watchVerification, sendMediaSignal, onMediaSignal });
 };

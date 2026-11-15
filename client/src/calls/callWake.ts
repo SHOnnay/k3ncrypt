@@ -56,7 +56,26 @@ export class CallWakeCoordinator {
     return attempt.phase === 'invited' ? 'invited' : 'stopped';
   }
 
-  /** The call connected or ended by other means: there is no ring left to cancel. */
-  settle(): void { if (this.attempt?.phase === 'invited') this.attempt = undefined; }
+  /**
+   * After the invite went out: each time the contact joins the room while this call is still the current, unanswered
+   * attempt, `resend` is called (it re-sends the same invitation). Stops when the call settles, is cancelled or replaced,
+   * when `resend` reports there is nothing left to re-send, or after `forMs`.
+   */
+  async reinviteOnJoin(conversation: WakeConversation, resend: () => Promise<boolean>, forMs: number): Promise<number> {
+    const attempt = this.attempt; let sent = 0;
+    const until = this.now() + forMs;
+    while (attempt && this.attempt === attempt && attempt.phase === 'invited' && this.now() < until) {
+      const waiter = conversation.waitForPeerJoin(until - this.now());
+      attempt.waiter = waiter;
+      const joined = await waiter.promise;
+      if (!joined || this.attempt !== attempt) break;
+      try { if (!await resend()) break; sent += 1; } catch { /* a duplicate is refused by the receiver; keep listening */ }
+    }
+    if (attempt) attempt.waiter = undefined;
+    return sent;
+  }
+
+  /** The call connected or ended by other means: there is no ring left to cancel, and nothing to re-send. */
+  settle(): void { if (this.attempt?.phase === 'invited') { this.attempt.waiter?.cancel(); this.attempt = undefined; } }
   get waiting(): boolean { return this.attempt?.phase === 'asking' || this.attempt?.phase === 'waiting'; }
 }

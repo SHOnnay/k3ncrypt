@@ -142,7 +142,7 @@ export class SocketIoRelayTransport implements Transport {
     }
 
     /** Fire-and-forget by design: the answer only says whether the peer is in the room right now; any failure is 'unknown'. */
-    public async requestCallWake(kind: 'ring' | 'cancel', wakeId: string, recipientRoutingId: string, timeoutMs = 1_500): Promise<'present' | 'absent' | 'unknown'> {
+    public async requestCallWake(kind: 'ring' | 'cancel', wakeId: string, recipientRoutingId: string, timeoutMs = 4_000): Promise<'present' | 'absent' | 'unknown'> {
         const desired = this.desiredConversation;
         // `desired.peerRoutingId` is this device's own address in the room (it is sent as userID on join), never the contact's.
         if (!desired || !this.proofProvider || !this.socket.connected || !recipientRoutingId || recipientRoutingId === desired.peerRoutingId) return 'unknown';

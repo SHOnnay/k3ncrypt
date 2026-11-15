@@ -150,6 +150,64 @@ describe('authenticated bidirectional call flow', () => {
     expect((await alice.service.get(outgoing.callId))?.state).toBe('accepted');
   });
 
+  it('an invite lost while the callee was away is re-sent when they join, and a duplicate never rings twice', async () => {
+    const transports = connectedTransports();
+    const alice = createAuthenticatedCallComposition({ session: session(), transport: transports.alice, conversationId, localIdentityId: 'alice-id', localParticipantId: 'alice', remoteParticipant: participant('bob', 'bob-id'), identity: identity('alice', 'bob'), deviceTrust });
+    const bob = createAuthenticatedCallComposition({ session: session(), transport: transports.bob, conversationId, localIdentityId: 'bob-id', localParticipantId: 'bob', remoteParticipant: participant('alice', 'alice-id'), identity: identity('bob', 'alice'), deviceTrust });
+    const bobStates: string[] = [];
+    bob.onCallUpdate((call) => bobStates.push(call.state));
+    // Bob's phone is asleep: nothing reaches him, as with the relay dropping a signal for an absent recipient.
+    const outgoing = await alice.invite();
+    expect(bobStates).toEqual([]);
+    // Bob wakes and joins; Alice's call is still unanswered, so the invitation goes again.
+    transports.connect(alice.signalTransport, bob.signalTransport);
+    expect(await alice.reinvite!(outgoing.callId)).toBe(true);
+    expect(bobStates).toEqual(['ringing']);
+    // A second join re-sends the same invitation: Bob's replay guard refuses it, so it never rings twice.
+    await alice.reinvite!(outgoing.callId).catch(() => 'refused as a replay by the receiver');
+    expect(bobStates).toEqual(['ringing']);
+    expect((await bob.service.get(outgoing.callId))?.state).toBe('ringing');
+    const accepted = await bob.accept(outgoing.callId);
+    expect(accepted.state).toBe('accepted');
+    // Once answered (or ended) there is nothing to re-send.
+    expect(await alice.reinvite!(outgoing.callId)).toBe(false);
+    await alice.cancel(outgoing.callId).catch(() => undefined);
+    expect(await alice.reinvite!(outgoing.callId)).toBe(false);
+  });
+
+  it('a relay refusal of the first invite keeps the call ringing only when asked, and the same invite is delivered on join', async () => {
+    let reachable = false;
+    const transports = connectedTransports();
+    const refusing: TransportManager = { ...transports.alice, sendEnvelope: async (channel, envelope) => {
+      if (!reachable) throw new Error('Mux relay did not route the encrypted call signal.');
+      return transports.alice.sendEnvelope(channel, envelope);
+    } };
+    const alice = createAuthenticatedCallComposition({ session: session(), transport: refusing, conversationId, localIdentityId: 'alice-id', localParticipantId: 'alice', remoteParticipant: participant('bob', 'bob-id'), identity: identity('alice', 'bob'), deviceTrust });
+    const bob = createAuthenticatedCallComposition({ session: session(), transport: transports.bob, conversationId, localIdentityId: 'bob-id', localParticipantId: 'bob', remoteParticipant: participant('alice', 'alice-id'), identity: identity('bob', 'alice'), deviceTrust });
+    const bobStates: string[] = [];
+    bob.onCallUpdate((call) => bobStates.push(call.state));
+    // Default behaviour is unchanged: an undeliverable invite fails the call.
+    await expect(alice.invite()).rejects.toThrow('did not route');
+    // With the option the call keeps ringing...
+    const ringing = await alice.invite('audio', { keepRingingIfUndelivered: true });
+    expect((await alice.service.get(ringing.callId))?.state).toBe('inviting');
+    // ...and the identical invitation reaches Bob once he is there.
+    reachable = true; transports.connect(alice.signalTransport, bob.signalTransport);
+    expect(await alice.reinvite!(ringing.callId)).toBe(true);
+    expect(bobStates).toEqual(['ringing']);
+    expect((await bob.service.get(ringing.callId))?.callId).toBe(ringing.callId);
+  });
+
+  it('only the caller re-sends, and never for an incoming call', async () => {
+    const transports = connectedTransports();
+    const alice = createAuthenticatedCallComposition({ session: session(), transport: transports.alice, conversationId, localIdentityId: 'alice-id', localParticipantId: 'alice', remoteParticipant: participant('bob', 'bob-id'), identity: identity('alice', 'bob'), deviceTrust });
+    const bob = createAuthenticatedCallComposition({ session: session(), transport: transports.bob, conversationId, localIdentityId: 'bob-id', localParticipantId: 'bob', remoteParticipant: participant('alice', 'alice-id'), identity: identity('bob', 'alice'), deviceTrust });
+    transports.connect(alice.signalTransport, bob.signalTransport);
+    const call = await alice.invite();
+    expect(await bob.reinvite!(call.callId)).toBe(false);
+    expect(await alice.reinvite!('00000000-0000-4000-8000-000000000000')).toBe(false);
+  });
+
   it('enforces one active call and does not let a second ringing invite replace it', async () => {
     const transports = connectedTransports();
     const alice = createAuthenticatedCallComposition({ session: session(), transport: transports.alice, conversationId, localIdentityId: 'alice-id', localParticipantId: 'alice', remoteParticipant: participant('bob', 'bob-id'), identity: identity('alice', 'bob'), deviceTrust });

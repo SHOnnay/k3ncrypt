@@ -79,6 +79,48 @@ test('a call to a closed app waits, sends only a content-free wake request, and 
   } finally { await a.close(); await b.close(); }
 });
 
+// Reproduces the 2026-11-15 phone failure: the wake answer never arrives (so the caller cannot know the contact is away),
+// the invite goes out at once and is lost, and the contact comes back later. The call must still ring there.
+test('an invite sent while the contact was away is re-sent when they come back, and the call connects', async ({ browser }) => {
+  test.setTimeout(180_000);
+  const { a, b, alice, bob } = await connectedPair(browser);
+  try {
+    await warmUp(alice, bob);
+    // Swallow Alice's wake requests (never acknowledged), as when the relay answers too slowly.
+    let swallowed = 0;
+    await alice.routeWebSocket(/\/socket\.io\//, (ws) => {
+      const server = ws.connectToServer();
+      ws.onMessage((message) => {
+        if (typeof message === 'string' && /^42\d*\["(mux-)?call-wake"/.test(message)) { swallowed += 1; return; }
+        server.send(message);
+      });
+      server.onMessage((message) => ws.send(message));
+    });
+    const events = sentEvents(alice);
+    await comeBack(alice);
+    await expect(alice.locator('.chat-header')).toContainText('Bob', { timeout: 30_000 });
+    await bob.goto('about:blank');
+    await alice.waitForTimeout(2_000);
+
+    await startAudioCall(alice);
+    await expect.poll(() => swallowed, { timeout: 15_000 }).toBeGreaterThan(0);
+    // Unknown presence never delays a call: the invite goes out now, and nobody receives it.
+    await expect.poll(() => events.filter(([name]) => SIGNAL.includes(name)).length, { timeout: 15_000 }).toBeGreaterThan(0);
+    const firstSends = events.filter(([name]) => SIGNAL.includes(name)).length;
+    await alice.waitForTimeout(3_000);
+
+    if (process.env.CALL_WAKE_DEBUG) console.log('BEFORE BOB', await alice.locator('#call-status').innerText().catch(() => 'none'), firstSends);
+    await comeBack(bob);
+    if (process.env.CALL_WAKE_DEBUG) setTimeout(async () => console.log('AFTER BOB', await alice.locator('#call-status').innerText().catch(() => 'none'), events.map(([n]) => n).filter((n) => !/message|replay|delivered|received/.test(n)).join(',')), 15_000);
+    await bob.getByRole('button', { name: 'Accept call', exact: true }).waitFor({ state: 'visible', timeout: 45_000 });
+    expect(events.filter(([name]) => SIGNAL.includes(name)).length).toBeGreaterThan(firstSends);
+    await bob.getByRole('button', { name: 'Accept call', exact: true }).click();
+    await expect(alice.locator('#call-status')).toHaveText('Connected', { timeout: 60_000 });
+    await alice.getByRole('button', { name: 'End call', exact: true }).click();
+    await expect(alice.locator('.call-info')).not.toBeVisible({ timeout: 20_000 });
+  } finally { await a.close(); await b.close(); }
+});
+
 test('cancelling while waiting sends no invite and withdraws the wake request with the same id', async ({ browser }) => {
   test.setTimeout(120_000);
   const { a, b, alice, bob } = await connectedPair(browser);
