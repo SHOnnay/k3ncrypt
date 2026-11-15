@@ -2,7 +2,7 @@ import { onSafe, type Ack } from './safeAck';
 import { recordAdmittedPushRoute } from '../push/privateWake';
 import { requestCallWake, validWakeId } from '../push/callWake';
 import { countEvent } from '../operations/metrics';
-import { authorizeCurrentRouting, bindVerifiedRouting, boundRoutingDevice, currentRoutingIdentity, durableRoutingEnabled } from '../security/routingOwnership';
+import { authorizeCurrentRouting, bindVerifiedRouting, boundRoutingDevice, currentRoutingIdentity, durableRoutingEnabled, routingOwnershipStore } from '../security/routingOwnership';
 import { randomUUID } from 'crypto';
 import type { Server } from 'socket.io';
 import db from '../db';
@@ -405,7 +405,9 @@ const cancelMailboxPump = (socket: CustomSocket, roomId: string): void => {
 };
 
 const currentRouteRecord = async (roomId: string, address: string): Promise<boolean> => {
-  if (durableRoutingEnabled()) return !!await currentRoutingIdentity(roomId, address);
+  // A participant who removed this contact left a tombstone. The remaining side must still be able to open the room
+  // exactly as if the other person were offline (its mail is accepted and dropped), or the removal would be announced.
+  if (durableRoutingEnabled()) return !!await currentRoutingIdentity(roomId, address) || !!await routingOwnershipStore()?.removedOwner(roomId, address);
   const record = await db.findOneFromDB<{ expiresAt?: Date }>({ channel: roomId, address }, PREKEY_COLLECTION);
   return record?.expiresAt instanceof Date && record.expiresAt.getTime() > Date.now();
 };

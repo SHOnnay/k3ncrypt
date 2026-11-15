@@ -48,6 +48,8 @@ test.describe('remove contact', () => {
     try {
       await alice.locator('#msg-input').fill('Before removal'); await alice.locator('#send-btn').click();
       await expect(bob.locator('#messages-area')).toContainText('Before removal');
+      await bob.locator('#msg-input').fill('Reply before removal'); await bob.locator('#send-btn').click();
+      await expect(alice.locator('#messages-area')).toContainText('Reply before removal');
       const confirmed = revoke(bob);
       await removeFromHeader(bob);
       expect((await confirmed).status()).toBe(200);
@@ -70,8 +72,16 @@ test.describe('remove contact', () => {
       expect(await vaultState(bob)).toEqual({ removed: 1, saved: 0, outbox: 0, leftovers: [] });
 
       // Alice reconnects and still sees an ordinary chat with someone who is not answering.
+      // After a reload the chat must open normally, not land under "Needs attention", and sending still just says "Sent".
+      // (Run with PLAYWRIGHT_MUX_STAGE1=true as well: production uses the multiplexed relay, which once refused this.)
       await unlock(alice);
-      await expect(alice.locator('.conversation-row').filter({ hasText: 'Bob' })).toHaveCount(1);
+      await expect(alice.locator('.conversation-row').filter({ hasText: 'Bob' })).toHaveCount(1, { timeout: 30_000 });
+      await alice.locator('.conversation-row').filter({ hasText: 'Bob' }).click();
+      await expect(alice.locator('.chat-header')).toContainText('Bob', { timeout: 30_000 });
+      await expect(alice.locator('.chat-header')).toContainText('Connected', { timeout: 30_000 });
+      await expect(alice.locator('.unavailable-list')).toHaveCount(0);
+      await alice.locator('#msg-input').fill('After reload'); await alice.locator('#send-btn').click();
+      await expect(alice.locator('.message.sent').filter({ hasText: 'After reload' }).locator('.message-delivery-details > summary')).toHaveText('Sent', { timeout: 20_000 });
     } finally { await a.close(); await b.close(); }
   });
 

@@ -9,6 +9,7 @@ cd "$(dirname "$0")/.."
 PASSES="${1:-1}"
 SPECS="golden-path modern-conversation check-contact file-trust-gate conversation-archive pending-invitation-ui unlock-progress
 remove-contact unread-persistence first-call call-usability call-after-switch call-history call-wake"
+MUX_SPECS="remove-contact call-wake call-usability conversation-persistence-mux"
 export PLAYWRIGHT_MONGO_URI="${PLAYWRIGHT_MONGO_URI:-mongodb://127.0.0.1:27117/?directConnection=true}"
 export PLAYWRIGHT_DURABLE_ROUTING=true
 if command -v powershell >/dev/null 2>&1 && [ -f scripts/local-mongo.ps1 ]; then powershell -NoProfile -File scripts/local-mongo.ps1 start >/dev/null; fi
@@ -22,6 +23,13 @@ for pass in $(seq 1 "$PASSES"); do
     if npx playwright test "e2e/$name.spec.ts" --project=chromium --workers=1 --timeout=120000 --reporter=line >"test-results-gate-$name.log" 2>&1; then
       rm -f "test-results-gate-$name.log"
     else failed="$failed $name"; fi
+  done
+  # Production runs the multiplexed relay for checked contacts. These specs must also pass that way; the phone session
+  # of 2026-11-14 found two faults that only exist on it.
+  for name in $MUX_SPECS; do
+    if PLAYWRIGHT_MUX_STAGE1=true npx playwright test "e2e/$name.spec.ts" --project=chromium --workers=1 --timeout=120000 --reporter=line >"test-results-gate-mux-$name.log" 2>&1; then
+      rm -f "test-results-gate-mux-$name.log"
+    else failed="$failed mux:$name"; fi
   done
   if [ -z "$failed" ]; then echo "pass $pass: GREEN"; else echo "pass $pass: RED -$failed"; status=1; fi
 done
