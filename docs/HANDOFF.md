@@ -63,6 +63,43 @@ Local test notes (Windows):
 - Phone session **not done**: the phone was plugged in but adb showed `unauthorized` (the "Allow USB debugging?" prompt needs a tap). A7 is not installed.
 - Domain: not chosen. Plan with the stop point before DNS: `docs/releases/DOMAIN_CUTOVER_PLAN.md`.
 
+### Phone session record — 2026-11-14/15 (owner away; agent alone with adb and a throwaway web test account)
+Setup: phone = OPPO CPH2719, Android 16. "The other side" = a throwaway web account on production driven by Playwright (`k3ncrypt-secrets\webpeer.cjs`); the phone UI is driven through adb (`ui.cjs`, `phone-*.sh`). The pairing was real: the same 30-digit number showed on both sides before "They match" was pressed on each.
+
+**Corrections to earlier statements in this file**
+- **The multiplexed relay is ON in production** (`K3NCRYPT_MUX_MESSAGE_DELIVERY=true`, `K3NCRYPT_MUX_PRODUCTION_OPT_IN=true`, and the `VITE_` twins). The web client uses it for every checked contact with a session. Android uses the legacy transport. The default E2E run has mux off, so it did not test what production runs; the gate now runs four specs with mux on as well.
+
+**Proven** [physical device] [production]
+| Checklist line | Result |
+|---|---|
+| 1 Upgrade A6 → A7 | Pass. `adb install -r`, version `0.1.0-beta.30-a7`, chats and checks kept, vault opened (unlock grace is enabled on this phone). |
+| 2 Screenshot block | Pass. The window is a secure surface and `screencap` produced no file. App-lock relock after 60 s was not separately observed: with grace enabled the vault reopens without a prompt. |
+| 3 Unread survives restart | Pass. Badge 2 for 2 delivered messages, still 2 after the process was killed and relaunched, gone after reading. |
+| 4 Remove contact (phone side) | Pass. Contact gone at once, "finishing" line cleared, still gone after kill + relaunch; the phone showed nothing and got no notification afterwards. |
+| 4 Remove contact (other side) | **Fail, fixed in `d207153`, not deployed.** Web showed the chat under "Needs attention — Couldn't connect": the multiplexed subscribe refused a room whose other participant was removed. |
+| 11 Phone calls a closed web client | Pass after a fix. "Calling… their phone may need to wake" → web opened → invite delivered → web accepted → Connected on both. The first invite send right after the contact joins can fail; Android now retries it (`b8e373e`, in the rebuilt A7 on the Desktop and on the phone). Cancel while waiting: pass, no invite sent. |
+| 6–10, 12, 13 Phone rings from a push | **Not proven.** With the flag on, a web call to a killed app produced only a generic "New encrypted activity" notification: the web caller is on the multiplexed relay, where call wake did not exist. Fixed in `7b6c2f6` (relay `mux-call-wake` + web), not deployed. **`K3NCRYPT_CALL_WAKE_ENABLED` was set back to `false`**, as instructed for a failed step. |
+| 5 Remove contact offline | Not run yet. |
+
+**Other findings**
+- Web: after a reload the open chat sometimes lands under "Needs attention" for that load and opens fine when clicked or on the next load (seen 3 times with the test account, roughly every other load). Not investigated.
+- The release on production (`fe4e062`) does not contain the three fixes above. They are local commits on `beta-now` (`7b6c2f6`, `d207153`) and in the private repo (`b8e373e`). **Nothing new can be deployed until the owner pushes `beta-now`/`main`.**
+- A7 on the Desktop was rebuilt (sha256 `6d5da590a5c6…`) with the invite retry; that build is on the phone.
+- Test leftovers: the web test account has one dead room with the phone (removed on the phone side). Its profile and passphrase are in `k3ncrypt-secrets\webpeer\` and can be deleted.
+
+### Release B2 and ring session — 2026-11-15
+- **B2 live on `d207153`** [production] (relay + web: multiplexed call wake, removed-contact room fix). Backup `k3ncrypt-20261115T091152Z.ejsonl.gz` (1,391 docs, verified). Rollback `fe4e062`. Gate green 1 pass including the four multiplexed specs.
+- **How multiplexing got turned on (inferred, no audit record):** Render's API keeps no env-change history. The likely change is the pair of `service_updated` deploys of `855096ed` on 2026-10-25 06:47 and 06:51 UTC (an env change in the dashboard triggers that kind of deploy), the same day as commit `d20f4e3` "preserve authenticated offline Mux sends". The gates were added 2026-10-09 (`fcf4e38`) with the runbook saying keep them off; the 2026-11-02 hotfix checklist expected them unset. The owner's Render dashboard Events page may show who changed it.
+- **Env vs this file:** all four mux vars `true` (this file said off); `K3NCRYPT_CALL_WAKE_ENABLED=false` again; `K3NCRYPT_METRICS_TOKEN` not set (metrics off). Everything else matches.
+- **Unlock grace:** not on by default in A7. It is on for anyone upgraded from A6, because A6 enabled grace at every unlock while app lock defaulted off, and the setting survives the upgrade. Consequence: app lock does not prompt until grace expires. Relock-with-grace-off retest still to do ("Lock now" turns grace off; needs the owner's unlock).
+- **Ring steps** [physical device] [production], new test contact checked by the owner (number 52485 07293 34055 31434 11159 54090):
+  - Step 8 (killed, locked, nobody answers): **pass.** Rang ~4 s after the call started ("Incoming K3NCRYPT call / Unlock to see who is calling"), stopped by itself, "Missed K3NCRYPT call" posted.
+  - Step 6 (unlock to answer): **fail.** Phone rang; the owner opened it (the activity started over the lock screen at 20:43:12 from the notification); no invite ever reached the phone (no `K3ncryptCall` lines at all). Web showed "Ringing..." at t=2 s, i.e. it did **not** wait for the phone: the wake request's answer was not "absent" (most likely "unknown" from the 1.5 s ack timeout on the multiplexed path), so the invite was sent at once to a phone whose vault was locked and whose sockets were closed (screen-off disconnects them), and the relay dropped it ("no receiver"). Nothing re-sends it when the phone rejoins.
+  - Full-screen ringing is not allowed on this phone: `appops USE_FULL_SCREEN_INTENT: default; rejectTime=…`. The heads-up fallback rang.
+  - **Flag set back to `false`.** Steps 7, 9, 10, 12, 13 not run; step 5 not run.
+  - Proposed fix (not started): (1) the caller re-sends the invite when the contact joins while the call is still ringing (web and Android); (2) raise the wake ack timeout to ~4 s and treat a timeout during the first seconds as "wait", not "call now"; (3) E2E: caller sees presence unknown, callee joins later, call still connects.
+- Test account kept on purpose: the ring steps must be re-run after the fix. Its passphrase and profile are only in `k3ncrypt-secrets\webpeer\`.
+
 ### What is blocked on the owner (2026-11-13)
 1. **Push.** A local hook blocks `git push` for the agent. Nothing since `66b4acc` is on GitHub, so nothing can be deployed (Render builds from GitHub `main`). Run: `git -C C:/Users/onnoy/k3ncrypt push origin main beta-now` and `git -C C:/Users/onnoy/k3ncrypt-android push origin android/n1`. Then say whether `beta-now` may be fast-forwarded into `main` for the release.
 2. **Release B1 (relay + web, one Render deploy; they ship together from this repo).** No migration, no wire change that old clients cannot read (new relay events are additive; call wake stays OFF until step 3). Rollback = `66b4acc`. Runbook: maintenance on → deploy → `/api/health`, `/api/ready` → maintenance off → smoke test.
