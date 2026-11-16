@@ -17,6 +17,14 @@ validateProductionConfig();
 process.on('unhandledRejection', (reason: unknown) => {
   operationalLog('error', 'unhandled_rejection', { errorType: reason instanceof Error ? reason.name : typeof reason });
 });
+// A crash must leave a line in the platform log before the process dies (Node then prints its own stack).
+process.on('uncaughtException', (error: unknown) => {
+  operationalLog('error', 'uncaught_exception', { errorType: error instanceof Error ? error.name : typeof error });
+  process.exit(1);
+});
+process.on('exit', (code: number) => {
+  operationalLog('info', 'process_exit', { code, uptimeSeconds: Math.round(process.uptime()), rssMb: Math.round(process.memoryUsage().rss / 1048576) });
+});
 void (async () => {
   await db.connectDb();
   const onListening = () => operationalLog('info', 'server_listening', { port: Number(PORT) });
