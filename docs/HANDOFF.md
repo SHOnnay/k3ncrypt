@@ -118,6 +118,25 @@ Setup: phone = OPPO CPH2719, Android 16. "The other side" = a throwaway web acco
 - **Relock with grace off: pass** [physical device]. 11:45 local "Lock now and revoke grace", 11:46 app unlock, more than 70 s away, 11:49 reopen asked for the app unlock and no chat showed before the fingerprint. Settings shows "App lock is on". The button is the second one in "App protection" at the top of Settings, always shown.
 - **Step 5 (remove contact offline): pass** [physical device] [production], with a second throwaway web account "K3 Test Remove" (kept in a local folder outside the repos). Invitation accepted on the phone (not checked); web message "step5 before removal" Delivered and shown. Wi-Fi and data off, then More → About contact → Remove contact (dialog named "Remove K3 Test Remove?") → Remove. Chat and contact rows gone at once while offline; "Finishing on the server" shown. Network restored and the app relaunched: still gone, finishing line cleared within about 2 minutes (still shown at +40 s). Still gone after force-stop and relaunch. The removed web account's next message stayed "Sent", never "Delivered"; no phone notification and nothing shown. The web side shows no removed or couldn't-connect hint.
 
+### Unattended ring session — 2026-11-16 afternoon (owner away)
+- Gate green on `8ae8ad8` (1 pass, incl. multiplexed specs and the new relay-restart spec on both transports) [two-browser E2E]. **Not deployed:** the agent cannot push. Production still runs `1d9c488`.
+- A7 rebuilt with `9238178` (sha256 `53d363fd49e6e1d8…`) and installed over the app (data kept). The reinstall ended unlock grace, so the app now needs the owner's device unlock.
+- **Call wake ON** via maintenance cutover on `1d9c488` (deploys `dep-dbtfb5brjlhs73f6btu0`, `dep-dbtfbtjm8hqs73ap3kog`; health and ready 200; maintenance off).
+- Ring steps [physical device] [production], caller = web account "K3 Test Caller", phone app killed and screen locked:
+  - Step 8 (nobody answers): **pass.** Rang ~4 s after the web call began, stopped by itself ~50 s later, "Missed K3NCRYPT call" posted. The full-screen ringing screen came up over the lock screen.
+  - Step 7 (caller cancels): **pass.** Ringing stopped after the cancel; missed-call notification posted again during the test.
+  - Step 9 (decline): **pass.** The ringing screen shows "Unlock to answer" and "Decline". Decline stopped the ringing at once and left no missed-call notice; the caller rang out ("Calling…", never told of the decline).
+  - Step 13 (battery saver on): **pass.** Rang, then missed after cancel. Battery saver set back off.
+  - 10-ring count: **10/10 rang**, each ~4–5 s after the web call began (web cancels after 20 s).
+  - Call wake **left ON**: no ring step failed.
+- **Waiting for the owner** (needs a fingerprint, an Answer tap, or a push):
+  1. Push: `git -C C:/Users/onnoy/k3ncrypt push origin beta-now` and `git -C C:/Users/onnoy/k3ncrypt-android push origin android/n1` (pre-push word check clean on both). Then release B4 = `abdb56a` (relay exit logging + call fixes; no migration, no wire change; rollback `1d9c488`).
+  2. Unlock K3NCRYPT once with the fingerprint (the reinstall ended grace).
+  3. Step 6 ×10 (answer and connect): app killed, screen locked, web calls, Answer → app unlock → incoming-call screen → Accept → two-way audio. Best after B4 is live.
+  4. Step 10 (app in the background, phone unlocked): heads-up → tap → incoming-call screen without a new unlock.
+  5. Step 12: Settings → Apps → K3NCRYPT → Full screen notifications off, repeat step 8 once, then turn it back on (a system setting the agent did not change).
+  6. After the checklist: delete both test accounts on production ("K3 Test Caller", "K3 Test Remove") and their local folders.
+
 ### What is blocked on the owner (2026-11-13)
 1. **Push.** A local hook blocks `git push` for the agent. Nothing since `66b4acc` is on GitHub, so nothing can be deployed (Render builds from GitHub `main`). Run: `git -C C:/Users/onnoy/k3ncrypt push origin main beta-now` and `git -C C:/Users/onnoy/k3ncrypt-android push origin android/n1`. Then say whether `beta-now` may be fast-forwarded into `main` for the release.
 2. **Release B1 (relay + web, one Render deploy; they ship together from this repo).** No migration, no wire change that old clients cannot read (new relay events are additive; call wake stays OFF until step 3). Rollback = `66b4acc`. Runbook: maintenance on → deploy → `/api/health`, `/api/ready` → maintenance off → smoke test.
