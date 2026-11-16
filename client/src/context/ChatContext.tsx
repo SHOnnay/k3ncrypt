@@ -340,6 +340,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if ((callReceiverEpochs.current.get(conversation) ?? 0) !== epoch || callConversationRooms.current.get(conversation) !== receiverRoomId) {
         throw new Error('Call receiver installation was superseded.');
       }
+      // A refresh during a live call returns the same composition (the conversation keeps it): keep its receiver too.
+      if (existing && existing.composition === composition) return existing;
       const receiver: ModernCallReceiver = { conversation, composition, stateUnsubscribe: () => undefined, protocolUnsubscribe: () => undefined };
       existing?.stateUnsubscribe();
       existing?.protocolUnsubscribe();

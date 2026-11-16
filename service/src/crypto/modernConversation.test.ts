@@ -1244,6 +1244,23 @@ it('cached call composition denies local unverify without mutating verification 
     await pair.alice.close(); await pair.bob.close();
 });
 
+// Regression (1-in-3 call-wake E2E, "Incoming call is unavailable"): a message-triggered refresh finished while a call
+// was live and swapped the composition, so later signals and the Accept went to one that never saw the call.
+it('a session-binding refresh keeps the composition while it holds a live call, and replaces it after', async () => {
+    const pair = await verifiedPeerPair();
+    try {
+        await pair.bob.sendWithReceipt('establish session');
+        await receiveFirstMessage(pair.alice, pair.bobTransport.sent[0], remoteAddress);
+        const first = await pair.alice.createAuthenticatedCallComposition();
+        const call = await first.invite('audio', { keepRingingIfUndelivered: true });
+        expect(first.repository.hasLiveCall()).toBe(true);
+        await expect(pair.alice.createAuthenticatedCallComposition(true)).resolves.toBe(first);
+        await first.cancel(call.callId).catch(() => first.terminateLocally(call.callId));
+        expect(first.repository.hasLiveCall()).toBe(false);
+        await expect(pair.alice.createAuthenticatedCallComposition(true)).resolves.not.toBe(first);
+    } finally { await pair.alice.close(); await pair.bob.close(); }
+});
+
 // Invariant: calls and file transfer require a verified, unchanged identity. Receiving
 // is file transfer too, so the receive workflow asks for verified authority (P0-1).
 it('file authority requires explicit unchanged verification; reset denies new files and opening received files', async () => {

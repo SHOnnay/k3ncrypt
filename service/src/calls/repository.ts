@@ -5,4 +5,6 @@ export class MemoryCallRepository implements CallRepository {
   async save(session: CallSession): Promise<void> { this.sessions.set(session.callId, structuredClone(session)); }
   async get(callId: string): Promise<CallSession | undefined> { const value = this.sessions.get(callId); return value ? structuredClone(value) : undefined; }
   async delete(callId: string): Promise<void> { this.sessions.delete(callId); }
+  /** True while any call here is not yet finished (inviting, ringing, connecting, connected...). */
+  hasLiveCall(): boolean { return [...this.sessions.values()].some((s) => !['rejected', 'cancelled', 'ended', 'expired', 'failed'].includes(s.state)); }
 }

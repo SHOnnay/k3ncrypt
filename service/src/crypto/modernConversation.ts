@@ -1472,6 +1472,9 @@ export class ModernConversation {
         if (!this.runtime.activeSessionId) {
             throw new Error('Send or receive a secure message before starting a call.');
         }
+        // A refresh must not replace a composition holding a live call: incoming signals follow the newest composition,
+        // so the ringing call would be stranded ("Incoming call is unavailable" on Accept). No await from here to the swap.
+        if (this.callComposition && this.callComposition.repository.hasLiveCall()) return this.callComposition;
         const localParticipant: CallParticipant = { participantId: this.localAddress, identityId: this.localIdentityId, verification: 'verified' };
         const remoteParticipant: CallParticipant = { participantId: this.remoteAddress, identityId: contact.identityId, verification: contact.verification };
         const identity = new VerifiedCallIdentityVerifier(
