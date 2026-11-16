@@ -95,6 +95,26 @@ describe('multiplexed relay connection Stage 1A', () => {
     await connection.close();
   });
 
+  // Relay restarted mid-call (2026-11-16 04:56Z): the phone resubscribed to the new relay first, so the caller never got a
+  // peer notice. The caller's own resubscription answer says the contact is there, and must release its wait.
+  it('a resubscription that finds the contact already back releases a caller waiting for them', async () => {
+    const socket = new FakeSocket();
+    const connection = new MultiplexedRelayConnection(socket as unknown as Socket);
+    const roomId = room('9');
+    const manager = connection.forRoom(roomId, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+    manager.setDeviceProofProvider(proofProvider()); manager.setProtocolFeatures(['room-message-v1']);
+    await manager.join(roomId, 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'control', 'route-proof');
+    const waiter = manager.waitForPeerJoin(60_000);
+    let released = false; void waiter.promise.then((joined) => { released = joined; });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(released).toBe(false); // The contact was already present before the wait: nothing new yet.
+    socket.connected = false; socket.trigger('disconnect');
+    socket.id = 'socket-generation-b'; socket.connected = true; socket.trigger('connect');
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    expect(released).toBe(true);
+    await connection.close();
+  });
+
   it('updates an existing room when the peer subscribes after initial negotiation', async () => {
     const socket = new FakeSocket();
     const connection = new MultiplexedRelayConnection(socket as unknown as Socket);

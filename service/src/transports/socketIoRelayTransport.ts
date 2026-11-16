@@ -163,10 +163,12 @@ export class SocketIoRelayTransport implements Transport {
         const promise = new Promise<boolean>((resolve) => { finish = resolve; });
         const onJoin = (): void => done(true);
         const timer = setTimeout(() => done(false), timeoutMs);
-        const done = (joined: boolean): void => { clearTimeout(timer); this.socket.off(WIRE_EVENTS.ON_ALICE_JOIN, onJoin); finish(joined); };
+        const done = (joined: boolean): void => { clearTimeout(timer); this.socket.off(WIRE_EVENTS.ON_ALICE_JOIN, onJoin); this.peerJoinWaiters.delete(onJoin); finish(joined); };
         this.socket.on(WIRE_EVENTS.ON_ALICE_JOIN, onJoin);
+        this.peerJoinWaiters.add(onJoin);
         return { promise, cancel: () => done(false) };
     }
+    private readonly peerJoinWaiters = new Set<() => void>();
 
     public peerSupportsFeature(feature: string): boolean {
         return this.peerProtocolFeatures.has(feature);
@@ -287,7 +289,12 @@ export class SocketIoRelayTransport implements Transport {
                 ...(this.advertisedProtocolFeatures.size ? { protocolFeatures: [...this.advertisedProtocolFeatures] } : {}),
             };
             const response = await this.emitWithAck<{ status: 'accepted'; peerFeatures?: unknown }>('chat-join', payload);
+            const wasPresent = this.peerProtocolFeatures.size > 0;
             this.peerProtocolFeatures = new Set(this.parsePeerFeatures(response?.peerFeatures));
+            // After a relay restart the contact may have rejoined first: the join answer is then the only sign they are back.
+            if (!wasPresent && this.peerProtocolFeatures.size > 0 && this.desiredConversation?.conversationId === desired.conversationId) {
+                for (const waiter of [...this.peerJoinWaiters]) waiter();
+            }
             if (this.desiredConversation?.conversationId !== desired.conversationId) {
                 throw new Error('Conversation changed before relay registration completed.');
             }

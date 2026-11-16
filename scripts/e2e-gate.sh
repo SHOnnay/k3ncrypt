@@ -31,6 +31,12 @@ for pass in $(seq 1 "$PASSES"); do
       rm -f "test-results-gate-mux-$name.log"
     else failed="$failed mux:$name"; fi
   done
+  # The relay is killed and restarted mid-call (Render's free plan replaces instances at will), on both transports.
+  for mode in mux legacy; do
+    if K3NCRYPT_RESTART_TEST_LEGACY=$([ "$mode" = legacy ] && echo true || echo false) npx playwright test -c playwright.restart.config.ts --reporter=line >"test-results-gate-restart-$mode.log" 2>&1; then
+      rm -f "test-results-gate-restart-$mode.log"
+    else failed="$failed restart:$mode"; fi
+  done
   if [ -z "$failed" ]; then echo "pass $pass: GREEN"; else echo "pass $pass: RED -$failed"; status=1; fi
 done
 exit "$status"

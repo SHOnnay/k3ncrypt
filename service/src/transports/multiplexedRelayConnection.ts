@@ -244,7 +244,10 @@ export class MultiplexedRelayConnection {
     }
     room.nonce = response.subscriptionNonce;
     room.expiresAt = response.expiresAt as number;
+    const wasPresent = room.peerFeatures.size > 0;
     room.peerFeatures = new Set(Array.isArray(response.peerFeatures) ? response.peerFeatures.filter((item): item is string => typeof item === 'string' && ALLOWED_FEATURES.has(item)) : []);
+    // After a relay restart the contact may have resubscribed first, so no peer notice will come: this answer is the sign.
+    if (!wasPresent && room.peerFeatures.size > 0) for (const waiter of [...(this.peerJoinWaiters.get(room.roomId) ?? [])]) waiter();
     room.renewalFailures = 0;
     room.nextRenewalAt = undefined;
     room.waitingForNetwork = false;
