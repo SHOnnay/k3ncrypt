@@ -185,13 +185,24 @@ Not pushed: `main` is 1 ahead of origin (`4acd3b4`, truth pass); a local hook bl
 4. Two-factor on GitHub, Render, Atlas, Firebase and DNS (owner action).
 5. Retention for `links`, `device_lifecycle`, `device_identity_registry`.
 
+## Session 2026-11-16/17 (B4, step 6, U1 proposal)
+- **B4 live on `81b1ca5`** [production]: relay exit logging, the receiver-refresh fix and the restart rejoin fix. Backup `k3ncrypt-20261116T142652Z` (1,409 docs, verified). Maintenance cutover, then health and ready returned 200, and the smoke check passed. Call wake is still ON. Rollback `1d9c488`.
+- Step 6: 4 out of 10 connected (see Known limits). It must be re-run by the owner, who answers with a fingerprint.
+- U1 (usability UI pass): proposal only, nothing built. The file is on the owner's Desktop as `K3NCRYPT-UI-proposal.html`. It covers loader, chat list, chat, call screen, call history (local, in the vault), contact info and settings, Android first and then web, with A/B options. The owner picks, then the build starts. The loader in A7 is Mark in motion for cold start, unlock and call connecting. Opening a chat, busy states and file transfer still use Material progress bars. Open question: the owner asked for a "spinning" mark, while the reference says "never a spinner" (option L1).
+
 ## Known limits and risks
-- Remove contact is only "hide" until milestones 3–4 land: the server-side revoke exists (`DELETE /api/chat-link/:channel/routing/:address`) but no client calls it [read code].
-- An incoming call while Android is in the background or closed does nothing until milestone 6 is proven [physical device].
+(Updated 2026-11-17 to match the evidence from the 2026-11-16/17 sessions.)
+- Remove contact works end to end, including offline removal: the contact disappears at once and stays gone after a force-stop, the removed side's messages stay "Sent" and are dropped in silence, and web shows no hint [physical device] [production].
+- Call wake is ON in production. With the app killed and the screen locked, it rang 10 out of 10. Caller cancels → Missed, unanswered → Missed, decline, and battery saver all passed [physical device] [production].
+- **Answer-and-connect is not reliable:** step 6 connected 4 out of 10 (2026-11-17). Calls 1–6 never rang, and their call messages got no relay delivery receipts. Calls 7–10 rang at about 4 s but took 17–28 s to reach "Connected". The cause is not investigated. Note that Answer needs the owner's fingerprint by design, so step 6 is an owner step: the adb taps used here are not a valid substitute.
+- Steps 10 (app in the background, phone unlocked) and 12 (full-screen notifications off/on) are not yet run.
+- App lock and FLAG_SECURE are on in A7. Relock with grace off passed, and the screenshot block passed [physical device]. File-receive gate parity with web still needs to be re-checked on `android/n1`.
+- The relay restarts without warning on Render's free plan: 2026-11-16 04:56Z, no deploy, 68 MB of 512 MB, no stack trace. It now logs the process exit (B4). The reconnect fix (B4) covers a peer that rejoins after a restart [two-browser E2E], but not the 2026-11-17 missed rings above.
 - Android: one socket per chat, at most 8 (1 foreground + 7 background). Relay caps: 10 sockets per proven device, 64 per IP.
-- Android hardening (FLAG_SECURE, app lock) is off; file-receive gate parity with web must be re-checked on `android/n1`.
-- No TURN (optional public STUN "connection helper" only). No backup: a lost phone is a lost identity.
-- Web users trust the host that serves the code (disclosed in the app).
+- No TURN. The decision is to use Cloudflare's free tier as the opt-in connection helper (not built). No backup: a lost phone is a lost identity.
+- No call history: the Calls tab shows only the current call. That is U1, proposed and waiting for the owner's choices.
+- Web: after a reload, a chat sometimes lands under "Needs attention" for that load. Not investigated.
+- Web users trust the host that serves the code (disclosed in the app). The web vault lives in the browser under the current address, so moving the domain later strands web users' vaults; decide the domain before family uses the web app.
 - Full sequential E2E is not green: three call specs fail only in the long run ("Ringing..."), pass alone; two mux specs are known gaps (mux is off in production).
 - Atlas Free 512 MB; rooms and devices are never deleted yet.
 - 200+ historical phase reports in `docs/` are not current; trust this file and the code.
